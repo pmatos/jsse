@@ -472,7 +472,7 @@ impl Interpreter {
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
-        use crate::interpreter::generator_transform::StateTerminator;
+        use crate::interpreter::generator_transform::{LoopControlTarget, StateTerminator};
 
         let Some(o) = (this)
             .as_object_id()
@@ -841,7 +841,7 @@ impl Interpreter {
                     {
                         pending_return = ret_val_opt.take();
                         let finally_state = current_try_stack[i].finally_state.unwrap();
-                        current_try_stack = current_try_stack[..i].to_vec();
+                        current_try_stack = current_try_stack[..=i].to_vec();
                         current_id = finally_state;
                         break;
                     }
@@ -1288,7 +1288,7 @@ impl Interpreter {
                         {
                             pending_return = ret_val_opt.take();
                             let finally_state = current_try_stack[i].finally_state.unwrap();
-                            current_try_stack = current_try_stack[..i].to_vec();
+                            current_try_stack = current_try_stack[..=i].to_vec();
                             current_id = finally_state;
                             break;
                         }
@@ -1380,31 +1380,72 @@ impl Interpreter {
                     return Completion::Throw(throw_val);
                 }
 
-                StateTerminator::Goto(next_state) => {
-                    if let Err(e) = self.align_generator_for_of_stack(
+                // Async-function transforms are currently the only machines
+                // that emit LoopControl. If a shared transform emits one for a
+                // generator, abrupt loop cleanup is identical to Goto.
+                StateTerminator::Goto(next_state)
+                | StateTerminator::LoopControl(LoopControlTarget {
+                    target_state: next_state,
+                    ..
+                }) => {
+                    if let Err(completion) = self.align_generator_for_of_stack(
                         o.id,
                         &mut for_of_stack,
+                        &mut current_try_stack,
                         &func_env,
                         *next_state,
                     ) {
-                        return Completion::Throw(e);
+                        match completion {
+                            Completion::Throw(error) => {
+                                // The driver marked the generator Executing at
+                                // entry. Restore a resumable snapshot before
+                                // handing the close failure to the ordinary
+                                // throw-resume path, which owns catch/finally
+                                // routing and terminal state transitions.
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: current_id,
+                                                },
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: current_try_stack,
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return self.generator_throw_state_machine(this, error);
+                            }
+                            Completion::Exit(code) => {
+                                self.generator_inline_iters.remove(&o.id);
+                                self.generator_for_of_stacks.remove(&o.id);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return Completion::Exit(code);
+                            }
+                            _ => unreachable!("for-of unwind returned a non-abrupt completion"),
+                        }
                     }
                     current_id = *next_state;
-                }
-
-                // Async-function transforms are the only machines that emit
-                // LoopControl. Preserve ordinary generator behavior if a
-                // shared transform ever produces one here.
-                StateTerminator::LoopControl(target) => {
-                    if let Err(e) = self.align_generator_for_of_stack(
-                        o.id,
-                        &mut for_of_stack,
-                        &func_env,
-                        target.target_state,
-                    ) {
-                        return Completion::Throw(e);
-                    }
-                    current_id = target.target_state;
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -1489,39 +1530,29 @@ impl Interpreter {
                         return Completion::Throw(exc);
                     }
                     if let Some(ret_val) = pending_return.take() {
-                        // Check for more enclosing try-finally blocks
-                        let mut ret_val_opt = Some(ret_val);
-                        for i in (0..current_try_stack.len()).rev() {
-                            if !current_try_stack[i].entered_finally
-                                && current_try_stack[i].finally_state.is_some()
-                            {
-                                pending_return = ret_val_opt.take();
-                                let finally_state = current_try_stack[i].finally_state.unwrap();
-                                current_try_stack = current_try_stack[..i].to_vec();
-                                current_id = finally_state;
-                                break;
-                            }
-                        }
-                        if ret_val_opt.is_none() {
-                            continue;
-                        }
-                        let ret_val = ret_val_opt.unwrap();
-                        // No more finally blocks — complete the generator
+                        // Re-enter the abrupt-return driver after each finally.
+                        // It uses loop `try_depth` boundaries to decide which
+                        // iteration environments close before the next outer
+                        // finally, and which remain until an inner finally has
+                        // finished.
+                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineGenerator {
                                 state_machine,
                                 func_env,
                                 is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: *after_state,
+                                },
                                 _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
+                                try_stack: current_try_stack,
                                 pending_binding: None,
                                 delegated_iterator: None,
                                 pending_exception: None,
                                 pending_return: None,
                             },
                         );
-                        return Completion::Normal(self.create_iter_result_object(ret_val, true));
+                        return self.generator_return_state_machine(this, ret_val);
                     }
                     current_id = *after_state;
                 }
@@ -2116,12 +2147,12 @@ impl Interpreter {
             func_env,
             is_strict,
             execution_state,
-            try_stack,
+            mut try_stack,
             delegated_iterator,
             ..
         }) = state
         {
-            match execution_state {
+            let suspended_state_id = match execution_state {
                 StateMachineExecutionState::Executing => {
                     return Completion::Throw(
                         self.create_type_error("Generator is already running"),
@@ -2147,8 +2178,8 @@ impl Interpreter {
                     );
                     return Completion::Normal(self.create_iter_result_object(value, true));
                 }
-                StateMachineExecutionState::SuspendedAtState { .. } => {}
-            }
+                StateMachineExecutionState::SuspendedAtState { state_id } => state_id,
+            };
 
             if let Some(ref deleg_info) = delegated_iterator {
                 let iterator = deleg_info.iterator.clone();
@@ -2304,19 +2335,95 @@ impl Interpreter {
                 }
             }
 
-            // Walk the try_stack to find a try with a finally block
-            let mut finally_idx = None;
-            for i in (0..try_stack.len()).rev() {
-                if !try_stack[i].entered_finally && try_stack[i].finally_state.is_some() {
-                    finally_idx = Some(i);
-                    break;
+            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                IteratorState::StateMachineGenerator {
+                    state_machine: state_machine.clone(),
+                    func_env: func_env.clone(),
+                    is_strict,
+                    execution_state: StateMachineExecutionState::Executing,
+                    _sent_value: JsValue::UNDEFINED,
+                    try_stack: try_stack.clone(),
+                    pending_binding: None,
+                    delegated_iterator: None,
+                    pending_exception: None,
+                    pending_return: None,
+                },
+            );
+
+            // A return injected at a suspended yield is the loop body's abrupt
+            // completion. Finalizers lexically inside the loop run before its
+            // iteration environment is disposed; finalizers surrounding the
+            // loop run after disposal and IteratorClose.
+            let finally_idx = (0..try_stack.len())
+                .rev()
+                .find(|&i| !try_stack[i].entered_finally && try_stack[i].finally_state.is_some());
+            let mut for_of_stack = self
+                .generator_for_of_stacks
+                .get(&o.id)
+                .cloned()
+                .unwrap_or_default();
+            let unwind_from = finally_idx.map_or(0, |handler_depth| {
+                for_of_stack
+                    .iter()
+                    .position(|loop_state| loop_state.try_depth > handler_depth)
+                    .unwrap_or(for_of_stack.len())
+            });
+            let return_completion = self.unwind_generator_for_of_loops(
+                o.id,
+                &mut for_of_stack,
+                &mut try_stack,
+                &func_env,
+                unwind_from,
+                Completion::Return(value.clone()),
+            );
+            let return_value = match return_completion {
+                Completion::Return(return_value) => return_value,
+                Completion::Throw(error) => {
+                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: suspended_state_id,
+                            },
+                            _sent_value: JsValue::UNDEFINED,
+                            try_stack,
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                            pending_return: None,
+                        },
+                    );
+                    return self.generator_throw_state_machine(this, error);
                 }
-            }
+                Completion::Exit(code) => {
+                    self.generator_inline_iters.remove(&o.id);
+                    self.generator_for_of_stacks.remove(&o.id);
+                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            _sent_value: JsValue::UNDEFINED,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                            pending_return: None,
+                        },
+                    );
+                    return Completion::Exit(code);
+                }
+                _ => value.clone(),
+            };
 
             if let Some(idx) = finally_idx {
                 let finally_state = try_stack[idx].finally_state.unwrap();
-                // Keep try_stack entries below the one we're entering finally for
-                let remaining_stack = try_stack[..idx].to_vec();
+                // Keep the selected entry until TryExit so EnterFinally marks
+                // and pops that context, not the surrounding one.
+                let remaining_stack = try_stack[..=idx].to_vec();
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineGenerator {
                         state_machine,
@@ -2330,7 +2437,7 @@ impl Interpreter {
                         pending_binding: None,
                         delegated_iterator: None,
                         pending_exception: None,
-                        pending_return: Some(value.clone()),
+                        pending_return: Some(return_value.clone()),
                     },
                 );
                 return self.generator_next_state_machine(this, JsValue::UNDEFINED);
@@ -3537,7 +3644,7 @@ impl Interpreter {
         resolve_fn: JsValue,
         reject_fn: JsValue,
     ) -> Completion {
-        use crate::interpreter::generator_transform::StateTerminator;
+        use crate::interpreter::generator_transform::{LoopControlTarget, StateTerminator};
 
         let Some(o) = (this)
             .as_object_id()
@@ -5496,35 +5603,49 @@ impl Interpreter {
                     return Completion::Normal(promise);
                 }
 
-                StateTerminator::Goto(next_state) => {
-                    if let Err(e) = self.align_generator_for_of_stack(
+                // Async-function transforms are currently the only machines
+                // that emit LoopControl. If a shared transform emits one for
+                // an async generator, cleanup is identical to Goto.
+                StateTerminator::Goto(next_state)
+                | StateTerminator::LoopControl(LoopControlTarget {
+                    target_state: next_state,
+                    ..
+                }) => {
+                    if let Err(completion) = self.align_generator_for_of_stack(
                         o.id,
                         &mut for_of_stack,
+                        &mut current_try_stack,
                         &func_env,
                         *next_state,
                     ) {
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
+                        );
+                        return match completion {
+                            Completion::Throw(error) => {
+                                let _ =
+                                    self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                                self.drain_microtasks();
+                                Completion::Normal(promise)
+                            }
+                            Completion::Exit(code) => Completion::Exit(code),
+                            _ => unreachable!("for-of unwind returned a non-abrupt completion"),
+                        };
                     }
                     current_id = *next_state;
-                }
-
-                // Async-function transforms are the only machines that emit
-                // LoopControl. Preserve ordinary async-generator behavior if
-                // a shared transform ever produces one here.
-                StateTerminator::LoopControl(target) => {
-                    if let Err(e) = self.align_generator_for_of_stack(
-                        o.id,
-                        &mut for_of_stack,
-                        &func_env,
-                        target.target_state,
-                    ) {
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    current_id = target.target_state;
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -7172,9 +7293,10 @@ impl Interpreter {
         &mut self,
         generator_id: u64,
         for_of_stack: &mut Vec<ForOfLoopState>,
+        try_stack: &mut Vec<TryContextInfo>,
         func_env: &EnvRef,
         target_state: usize,
-    ) -> Result<(), JsValue> {
+    ) -> Result<(), Completion> {
         // Jumping to a loop's `after_state` leaves that loop, so it closes;
         // jumping to its `head_state` is the next iteration, so it stays.
         let keep_len = if let Some(pos) = for_of_stack
@@ -7191,32 +7313,43 @@ impl Interpreter {
             for_of_stack.len()
         };
 
+        match self.unwind_generator_for_of_loops(
+            generator_id,
+            for_of_stack,
+            try_stack,
+            func_env,
+            keep_len,
+            Completion::Empty,
+        ) {
+            completion @ (Completion::Throw(_) | Completion::Exit(_)) => Err(completion),
+            _ => Ok(()),
+        }
+    }
+
+    /// Close transformed generator for-of loops from the inside out while
+    /// carrying the current completion through per-iteration disposal and
+    /// IteratorClose. Handlers lexically inside a loop have finished before
+    /// that loop closes, so discard them at the loop's recorded boundary.
+    fn unwind_generator_for_of_loops(
+        &mut self,
+        generator_id: u64,
+        for_of_stack: &mut Vec<ForOfLoopState>,
+        try_stack: &mut Vec<TryContextInfo>,
+        func_env: &EnvRef,
+        keep_len: usize,
+        mut completion: Completion,
+    ) -> Completion {
         while for_of_stack.len() > keep_len {
             let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
-            let mut error = None;
-            if let Some(env) = loop_state.iteration_env
-                && let Completion::Throw(e) = self.dispose_resources(&env, Completion::Empty)
-            {
-                error = Some(e);
-            }
-            // The borrow must end before `iterator_close_result` runs the
-            // user's `return` method, which may write bindings in this same
-            // environment.
-            let iterator = func_env.borrow().get(&loop_state.iter_var);
-            if let Some(iterator) = iterator {
-                let close_result = self.iterator_close_result(&iterator);
-                self.unroot_for_of_iterator(&iterator);
-                // A disposer error takes precedence over a close error.
-                error = error.or(close_result.err());
-            }
-            if let Some(e) = error {
-                self.sync_generator_for_of_stack(generator_id, for_of_stack);
-                return Err(e);
+            try_stack.truncate(loop_state.try_depth);
+            completion =
+                self.close_for_of_loop(loop_state, func_env, completion, Some(generator_id));
+            if matches!(completion, Completion::Exit(_)) {
+                break;
             }
         }
-
         self.sync_generator_for_of_stack(generator_id, for_of_stack);
-        Ok(())
+        completion
     }
 
     /// Mirrors the driver's local loop stack into the GC-visible map, so a

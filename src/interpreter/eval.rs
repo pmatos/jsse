@@ -8448,7 +8448,7 @@ impl Interpreter {
                     // loop remain available for a close failure.
                     try_stack.truncate(loop_state.try_depth);
                     unwind_completion =
-                        self.close_async_for_of_loop(loop_state, &func_env, unwind_completion);
+                        self.close_for_of_loop(loop_state, &func_env, unwind_completion, None);
                     match &unwind_completion {
                         Completion::Exit(code) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -9387,11 +9387,32 @@ impl Interpreter {
         }
     }
 
-    fn close_async_for_of_loop(
+    /// A transformed generator for-of is represented both by its loop-state
+    /// entry and by the inline-iterator fallback captured at suspension. Once
+    /// the loop-state unwinder closes it, discard the fallback copy so a later
+    /// `return()` does not call the iterator's `return` method twice.
+    fn remove_generator_inline_iterator(&mut self, generator_id: u64, iterator: &JsValue) {
+        let Some(iterator_id) = iterator.as_object_id() else {
+            return;
+        };
+        let remove_entry = self
+            .generator_inline_iters
+            .get_mut(&generator_id)
+            .is_some_and(|iterators| {
+                iterators.retain(|value| value.as_object_id() != Some(iterator_id));
+                iterators.is_empty()
+            });
+        if remove_entry {
+            self.generator_inline_iters.remove(&generator_id);
+        }
+    }
+
+    fn close_for_of_loop(
         &mut self,
         loop_state: ForOfLoopState,
         func_env: &EnvRef,
         completion: Completion,
+        generator_id: Option<u64>,
     ) -> Completion {
         let mut completion = match loop_state.iteration_env {
             Some(env) => self.dispose_resources(&env, completion),
@@ -9404,16 +9425,24 @@ impl Interpreter {
         if matches!(completion, Completion::Exit(_)) {
             if let Some(iterator) = iterator {
                 self.unroot_for_of_iterator(&iterator);
+                if let Some(generator_id) = generator_id {
+                    self.remove_generator_inline_iterator(generator_id, &iterator);
+                }
             }
             return completion;
         }
         if let Some(iterator) = iterator {
             let close_result = self.iterator_close_result(&iterator);
             self.unroot_for_of_iterator(&iterator);
+            if let Some(generator_id) = generator_id {
+                self.remove_generator_inline_iterator(generator_id, &iterator);
+            }
             if let Some(code) = self.pending_exit {
                 return Completion::Exit(code);
             }
-            if !completion.is_abrupt()
+            // IteratorClose preserves an existing throw completion, but a
+            // close failure replaces normal, break, continue, or return.
+            if !matches!(completion, Completion::Throw(_))
                 && let Err(error) = close_result
             {
                 completion = Completion::Throw(error);
@@ -9434,7 +9463,7 @@ impl Interpreter {
         mut completion: Completion,
     ) -> Completion {
         for loop_state in for_of_stack.drain(from..).rev() {
-            completion = self.close_async_for_of_loop(loop_state, func_env, completion);
+            completion = self.close_for_of_loop(loop_state, func_env, completion, None);
             if matches!(completion, Completion::Exit(_)) {
                 break;
             }

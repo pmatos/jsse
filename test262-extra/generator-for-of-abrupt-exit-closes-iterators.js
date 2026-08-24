@@ -116,3 +116,156 @@ assert.compareArray(
   ['iteration', 'finally'],
   'the finally block runs before the disposer error escapes'
 );
+
+// IteratorClose failures are abrupt completions of the loop and therefore
+// remain inside the generator's own control flow.
+function throwingCloseIterable() {
+  return {
+    [Symbol.iterator]: function () {
+      return {
+        next: function () {
+          return { value: 1, done: false };
+        },
+        return: function () {
+          throw new Test262Error('close');
+        },
+      };
+    },
+  };
+}
+
+function* catchesCloseError() {
+  try {
+    for (const value of throwingCloseIterable()) {
+      yield value;
+      break;
+    }
+  } catch (error) {
+    yield error.message;
+  }
+  yield 'resumed';
+}
+
+assert.compareArray(
+  [...catchesCloseError()],
+  [1, 'close', 'resumed'],
+  'the generator catches an IteratorClose failure and remains resumable'
+);
+
+function* doesNotCatchCloseError() {
+  for (const value of throwingCloseIterable()) {
+    yield value;
+    break;
+  }
+}
+
+var uncaughtClose = doesNotCatchCloseError();
+assert.sameValue(uncaughtClose.next().value, 1);
+assert.throws(
+  Test262Error,
+  function () {
+    uncaughtClose.next();
+  },
+  'an uncaught IteratorClose failure escapes'
+);
+assert.sameValue(
+  uncaughtClose.next().done,
+  true,
+  'an uncaught IteratorClose failure completes rather than wedges the generator'
+);
+
+// A return injected at a suspended yield first completes the loop body. An
+// inner finally therefore runs before per-iteration disposal and IteratorClose,
+// while a finally surrounding the loop runs afterwards.
+var returnEvents = [];
+var returnResource = {
+  [Symbol.dispose]: function () {
+    returnEvents.push('dispose');
+  },
+};
+var returnIterable = {
+  [Symbol.iterator]: function () {
+    return {
+      next: function () {
+        return { value: returnResource, done: false };
+      },
+      return: function () {
+        returnEvents.push('close');
+        return { done: true };
+      },
+    };
+  },
+};
+
+function* closesUsingIterationOnReturn() {
+  try {
+    for (using resource of returnIterable) {
+      try {
+        yield 'body';
+      } finally {
+        returnEvents.push('inner finally');
+      }
+    }
+  } finally {
+    returnEvents.push('outer finally');
+  }
+}
+
+var returned = closesUsingIterationOnReturn();
+assert.sameValue(returned.next().value, 'body');
+var returnResult = returned.return('return value');
+assert.sameValue(returnResult.value, 'return value');
+assert.sameValue(returnResult.done, true);
+assert.compareArray(
+  returnEvents,
+  ['inner finally', 'dispose', 'close', 'outer finally'],
+  'return disposes the active iteration and closes its iterator in spec order'
+);
+assert.sameValue(returned.next().done, true);
+
+// If abrupt return cleanup throws, that throw replaces the return completion
+// and can be handled by a catch surrounding the loop.
+var throwingReturnEvents = [];
+var throwingReturnResource = {
+  [Symbol.dispose]: function () {
+    throwingReturnEvents.push('dispose');
+    throw new Test262Error('return disposer');
+  },
+};
+var throwingReturnIterable = {
+  [Symbol.iterator]: function () {
+    return {
+      next: function () {
+        return { value: throwingReturnResource, done: false };
+      },
+      return: function () {
+        throwingReturnEvents.push('close');
+        return { done: true };
+      },
+    };
+  },
+};
+
+function* catchesReturnDisposerError() {
+  try {
+    for (using resource of throwingReturnIterable) {
+      yield 'body';
+    }
+  } catch (error) {
+    yield error.message;
+  }
+  yield 'resumed';
+}
+
+var throwingReturn = catchesReturnDisposerError();
+assert.sameValue(throwingReturn.next().value, 'body');
+var caughtReturnDisposer = throwingReturn.return('ignored return value');
+assert.sameValue(caughtReturnDisposer.value, 'return disposer');
+assert.sameValue(caughtReturnDisposer.done, false);
+assert.sameValue(throwingReturn.next().value, 'resumed');
+assert.sameValue(throwingReturn.next().done, true);
+assert.compareArray(
+  throwingReturnEvents,
+  ['dispose', 'close'],
+  'a disposer throw still closes the iterator before entering catch'
+);
