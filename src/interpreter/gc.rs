@@ -889,6 +889,10 @@ impl Interpreter {
                 }
             }
             ObjectKind::Promise(pd) => {
+                for (resolve, reject) in &pd.resolving_functions {
+                    Self::collect_value_roots(resolve, worklist);
+                    Self::collect_value_roots(reject, worklist);
+                }
                 match &pd.state {
                     PromiseState::Fulfilled(v) | PromiseState::Rejected(v) => {
                         Self::collect_value_roots(v, worklist);

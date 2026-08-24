@@ -801,6 +801,15 @@ impl Interpreter {
             let pin = JsValue::object(promise_id);
             self.pin_native_root(&resolve_fn, &pin);
             self.pin_native_root(&reject_fn, &pin);
+            if let Some(promise) = self.get_object_cell(promise_id) {
+                let mut promise = promise.borrow_mut();
+                if let Some(pd) = promise.promise_data_mut()
+                    && matches!(pd.state, PromiseState::Pending)
+                {
+                    pd.resolving_functions
+                        .push((resolve_fn.clone(), reject_fn.clone()));
+                }
+            }
         }
 
         (resolve_fn, reject_fn)
@@ -814,6 +823,7 @@ impl Interpreter {
                     return;
                 }
                 pd.state = PromiseState::Fulfilled(value.clone());
+                pd.resolving_functions.clear();
                 let reactions = std::mem::take(&mut pd.fulfill_reactions);
                 pd.reject_reactions.clear();
                 reactions
@@ -834,6 +844,7 @@ impl Interpreter {
                     return;
                 }
                 pd.state = PromiseState::Rejected(reason.clone());
+                pd.resolving_functions.clear();
                 let reactions = std::mem::take(&mut pd.reject_reactions);
                 pd.fulfill_reactions.clear();
                 reactions

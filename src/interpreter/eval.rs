@@ -546,10 +546,7 @@ impl Interpreter {
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
-                // Unroot only the operands we rooted (mirrors call_function_inner)
-                // so a persistent root a native builtin left alive during rval
-                // evaluation or operator coercion — e.g. Atomics.waitAsync or
-                // $262.agent.getReportAsync — is not dropped by a bulk truncate.
+                // Unroot only the operands rooted for this expression.
                 if let Some(ref r) = rroot {
                     self.gc_unroot_value(r);
                 }
@@ -5472,11 +5469,7 @@ impl Interpreter {
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
-                        // Unroot only what we pushed. A bulk truncate would also
-                        // drop persistent roots pushed by the builtin itself
-                        // (e.g. Atomics.waitAsync / $262.agent.getReportAsync
-                        // root resolve_fn for an async completion that runs
-                        // after this call returns).
+                        // Unroot the native call operands after the call returns.
                         for a in args.iter().rev() {
                             self.gc_unroot_value(a);
                         }

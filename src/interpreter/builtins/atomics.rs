@@ -573,7 +573,6 @@ impl Interpreter {
             } else {
                 let sab_info = get_sab_info(interp, &ta_val);
                 let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
-                interp.gc_root_value(&resolve_fn);
                 let gc_frame_promise = interp.gc_root_frame();
                 interp.gc_root_value(&promise_val);
 
@@ -639,7 +638,6 @@ impl Interpreter {
                                     &JsValue::UNDEFINED,
                                     &[result_val],
                                 );
-                                interp.gc_unroot_value(&resolve);
                                 if promise_id != 0 {
                                     pending_promise_ids.lock().unwrap().remove(&promise_id);
                                 }
@@ -663,7 +661,6 @@ impl Interpreter {
                         "value".to_string(),
                         PropertyDescriptor::data(promise_val.clone(), true, true, true),
                     );
-                // resolve_fn stays rooted until completion callback runs
                 interp.gc_unroot_frame(gc_frame_promise);
             }
             let id = result_id;

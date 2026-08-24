@@ -3829,6 +3829,10 @@ pub(crate) struct PromiseReaction {
 #[derive(Debug, Clone)]
 pub(crate) struct PromiseData {
     pub state: PromiseState,
+    /// Resolver pairs created for this promise while it is pending. Native
+    /// closures capture these values outside the traced Rust object graph, so
+    /// the promise owns the reverse edges until settlement.
+    pub resolving_functions: Vec<(JsValue, JsValue)>,
     pub fulfill_reactions: Vec<PromiseReaction>,
     pub reject_reactions: Vec<PromiseReaction>,
     pub is_handled: bool,
@@ -3838,6 +3842,7 @@ impl PromiseData {
     pub(crate) fn new() -> Self {
         Self {
             state: PromiseState::Pending,
+            resolving_functions: Vec::new(),
             fulfill_reactions: Vec::new(),
             reject_reactions: Vec::new(),
             is_handled: false,
