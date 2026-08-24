@@ -6,8 +6,13 @@
 //
 // Deterministic surfaces (util.format specifiers, byte-accurate stdout, the
 // count/group/assert output shapes) are asserted exactly. util.inspect is
-// best-effort (issue #230), so it is only smoke-tested structurally — never
-// byte-compared against Node.
+// best-effort (issue #230), so its assertions are mixed on purpose: the
+// hardening cases assert a MECHANISM (trap/getter counters staying at 0, the
+// descriptor path being taken) and are engine-independent, while the rendering
+// cases assert exact strings and are therefore Node-version-sensitive. Where a
+// rendering is known to differ across Node releases the assertion is gated on
+// `hasNodeHost` and labelled "(jsse only)", so stdout stays byte-identical
+// without claiming Node verified something it never ran.
 //
 // This file is not esbuild-bundled: scripts/run-node-shim-selftest.sh simply
 // concatenates the shim in front of it. On jsse the shim installs globalThis.util;
@@ -1152,10 +1157,12 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   if (hasNodeHost) {
     truthy(
       util.inspect(nestedProxy).indexOf("a: 1") !== -1,
-      "inspect safely unwraps nested Proxies"
+      "inspect safely unwraps nested Proxies (jsse only)"
     );
   } else {
-    ok("inspect safely unwraps nested Proxies");
+    // Name the line for what it is: on Node nothing is asserted here, and a
+    // reader of the output should not be told otherwise.
+    ok("inspect safely unwraps nested Proxies (jsse only)");
   }
   eq(proxyCalls, 0, "inspect invokes no nested Proxy traps");
 
@@ -1211,12 +1218,16 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   // `null` is safe to stringify despite `typeof null === "object"`. Suppress
   // Node's native data-valued stack so these fallback renderings agree across
   // engines and can be byte-compared.
-  var nullMessageError = new Error("m");
-  Object.defineProperty(nullMessageError, "stack", {
-    configurable: true,
-    get: undefined,
-    set: undefined,
-  });
+  function stripStack(err) {
+    Object.defineProperty(err, "stack", {
+      configurable: true,
+      get: undefined,
+      set: undefined,
+    });
+    return err;
+  }
+
+  var nullMessageError = stripStack(new Error("m"));
   nullMessageError.message = null;
   eq(
     util.inspect(nullMessageError),
@@ -1224,12 +1235,7 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "inspect stringifies a null Error message"
   );
 
-  var nullNameError = new Error("m");
-  Object.defineProperty(nullNameError, "stack", {
-    configurable: true,
-    get: undefined,
-    set: undefined,
-  });
+  var nullNameError = stripStack(new Error("m"));
   nullNameError.name = null;
   eq(
     util.inspect(nullNameError),

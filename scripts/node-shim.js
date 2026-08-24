@@ -54,6 +54,10 @@
   // diagnostic print. Split/join on a plain string separator is equivalent and
   // touches no user-replaceable hook.
   function replaceAll(s, needle, replacement) {
+    // The needle is absent from most strings; skip the array allocation then.
+    // `indexOf` with a string argument dispatches no user hook (only
+    // `String.prototype.search` consults %Symbol.search%).
+    if (stringIndexOf(s, needle) === -1) return s;
     return arrayJoin(stringSplit(s, needle), replacement);
   }
 
@@ -160,6 +164,18 @@
     symbolConstructor.prototype.toString
   );
   var stringSplit = functionCall.bind(stringConstructor.prototype.split);
+  var stringIndexOf = functionCall.bind(stringConstructor.prototype.indexOf);
+
+  // The wrapper families whose rendering is uniform: probe the internal slot,
+  // classify the prototype chain, emit "[Label: text]". BigInt and Symbol stay
+  // out on purpose — both gate their builtin rendering on a live @@hasInstance
+  // check, and Symbol's probe already yields a string, so folding them in would
+  // cost more variation flags than the table saves.
+  var BOXED_WRAPPERS = [
+    { label: "Number", probe: numberValueOf, prototype: numberPrototype },
+    { label: "String", probe: stringValueOf, prototype: stringPrototype },
+    { label: "Boolean", probe: booleanValueOf, prototype: booleanPrototype },
+  ];
 
   function tryApplyIntrinsic(intrinsic, value) {
     try {
@@ -218,15 +234,11 @@
   // that built-in family. Slot-bearing prototype objects also recognize the
   // corresponding chain from another realm without invoking @@hasInstance.
   function builtinPrototypeKind(
-    value,
+    startPrototype,
     intrinsicPrototype,
-    prototypeProbe,
-    startPrototype
+    prototypeProbe
   ) {
-    // [[Prototype]] is always an object or null, never undefined, so undefined
-    // unambiguously means "not supplied".
-    var current =
-      startPrototype === undefined ? prototypeOf(value) : startPrototype;
+    var current = startPrototype;
     if (current === UNKNOWN_PROTOTYPE) return "ordinary";
     if (current === null) return "null";
     try {
@@ -251,6 +263,10 @@
   // host floor is absent) and null for a revoked Proxy.
   function unwrapProxy(v) {
     if (!hostProxyTarget) return v;
+    // Unbounded on purpose, unlike every prototype walk below: a Proxy's
+    // [[ProxyTarget]] is fixed at construction and can never be made to point
+    // back at the Proxy, so a target chain is acyclic by construction and
+    // finite in the number of live Proxies.
     while (true) {
       var target = hostProxyTarget(v);
       if (target === undefined) return v;
@@ -301,22 +317,86 @@
     return "<" + count + " empty item" + (count === 1 ? "" : "s") + ">";
   }
 
-  function isLegacyWrapperPrototype(v) {
-    return (
-      v === numberPrototype || v === stringPrototype || v === booleanPrototype
-    );
-  }
-
   function primitiveString(value, fallback) {
     var type = typeof value;
     if (
-      (value !== null && type === "object") ||
-      type === "function" ||
-      type === "undefined"
+      value !== null &&
+      (type === "object" || type === "function" || type === "undefined")
     ) {
       return fallback;
     }
     return type === "symbol" ? symbolToString(value) : stringConstructor(value);
+  }
+
+  function errorField(v, key, fallback) {
+    return primitiveString(
+      dataDescriptorValue(findPropertyDescriptor(v, key)),
+      fallback
+    );
+  }
+
+  function renderError(v) {
+    // Test the raw descriptor value first. Stringifying a falsy primitive
+    // such as 0 or false would otherwise turn it into a truthy string and
+    // suppress the normal `[Error: message]` fallback.
+    var stackValue = dataDescriptorValue(findPropertyDescriptor(v, "stack"));
+    if (stackValue) {
+      var stack = primitiveString(stackValue, "");
+      if (stack) return stack;
+    }
+
+    var name = errorField(v, "name", "Error");
+    var message = errorField(v, "message", "");
+    var text = !name ? message : !message ? name : name + ": " + message;
+    return "[" + text + "]";
+  }
+
+  function renderNullPrototypeError(v) {
+    var name = errorField(v, "name", "Error") || "Error";
+    var message = errorField(v, "message", "");
+    return (
+      "[" + name + ": null prototype]" + (message ? ": " + message : "")
+    );
+  }
+
+  // Derive the "ClassName " prefix without a plain `v.constructor` get, which
+  // would invoke an accessor `constructor` or a Proxy get-trap — Node reads
+  // constructor metadata via the prototype chain, not by calling a getter. Use
+  // data descriptors only, and treat any exotic-trap throw as "no prefix".
+  function constructorName(v) {
+    try {
+      var ctor;
+      var own = objectGetOwnPropertyDescriptor(v, "constructor");
+      if (own) {
+        ctor = dataDescriptorValue(own);
+      } else {
+        var proto = unwrapProxy(objectGetPrototypeOf(v));
+        var pd = proto
+          ? objectGetOwnPropertyDescriptor(proto, "constructor")
+          : null;
+        if (pd) ctor = dataDescriptorValue(pd);
+      }
+      // Node's getConstructorName only accepts a callable `constructor` with
+      // a non-empty name; anything else yields no prefix at all (never a bare
+      // leading space).
+      ctor = unwrapProxy(ctor);
+      if (typeof ctor !== "function") return "";
+      // Node accepts a `constructor` only when the value is an INSTANCE of
+      // it, and a constructor's own `prototype` object never is. Rejecting
+      // that self-reference gives every intrinsic prototype Node's plain
+      // `{}` rendering without enumerating them one by one.
+      if (
+        dataDescriptorValue(
+          objectGetOwnPropertyDescriptor(ctor, "prototype")
+        ) === v
+      ) {
+        return "";
+      }
+      var name = functionName(ctor);
+      return name && name !== "Object" ? name + " " : "";
+    } catch (e) {
+      return "";
+    }
   }
 
   function inspect(value, opts) {
@@ -358,7 +438,7 @@
       // eight chain walks) is pure waste for the commonest object shape.
       var prototype = prototypeOf(v);
       if (prototype !== objectPrototype) {
-        var errorKind = builtinPrototypeKind(v, errorPrototype, null, prototype);
+        var errorKind = builtinPrototypeKind(prototype, errorPrototype, null);
         if (errorKind === "builtin") return renderError(v);
         if (errorKind === "null" && errorIsError && errorIsError(v)) {
           return renderNullPrototypeError(v);
@@ -366,7 +446,10 @@
         var boxed;
         // `get RegExp.prototype.source` uniquely does NOT throw for
         // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
-        // misreport the prototype itself as a RegExp. After detecting a genuine
+        // misreport the prototype itself as a RegExp. Only reachable when
+        // library code reparents %RegExp.prototype% — an unreparented one is a
+        // direct child of %Object.prototype% and never enters this block at
+        // all. After detecting a genuine
         // RegExp, classify its prototype chain before presentation: a reparented
         // RegExp must not dispatch ordinary `source`/`flags` gets through a user
         // object. Compose the standard rendering from captured slot getters.
@@ -376,10 +459,9 @@
             : tryApplyIntrinsic(regexpGetSource, v);
         if (boxed) {
           var regexpKind = builtinPrototypeKind(
-            v,
+            prototype,
             regexpPrototype,
-            regexpGetSource,
-            prototype
+            regexpGetSource
           );
           if (regexpKind === "builtin") return formatRegExp(v, boxed.value);
           if (regexpKind === "null") {
@@ -392,100 +474,70 @@
             ? "Invalid Date"
             : dateToISOString(v);
           var dateKind = builtinPrototypeKind(
-            v,
+            prototype,
             datePrototype,
-            dateGetTime,
-            prototype
+            dateGetTime
           );
           if (dateKind === "builtin") return dateText;
           if (dateKind === "null") {
             return "[Date: null prototype] " + dateText;
           }
         }
-        boxed = tryApplyIntrinsic(numberValueOf, v);
-        if (boxed) {
-          var numberText = render(boxed.value, depth);
-          var numberKind = builtinPrototypeKind(
-            v,
-            numberPrototype,
-            numberValueOf,
-            prototype
+        for (var w = 0; w < BOXED_WRAPPERS.length; w++) {
+          var wrapper = BOXED_WRAPPERS[w];
+          boxed = tryApplyIntrinsic(wrapper.probe, v);
+          if (!boxed) continue;
+          var wrapperText = render(boxed.value, depth);
+          var wrapperKind = builtinPrototypeKind(
+            prototype,
+            wrapper.prototype,
+            wrapper.probe
           );
-          if (numberKind === "builtin") return "[Number: " + numberText + "]";
-          if (numberKind === "null") {
-            return "[Number (null prototype): " + numberText + "]";
+          if (wrapperKind === "builtin") {
+            return "[" + wrapper.label + ": " + wrapperText + "]";
           }
-        }
-        boxed = tryApplyIntrinsic(stringValueOf, v);
-        if (boxed) {
-          var stringText = render(boxed.value, depth);
-          var stringKind = builtinPrototypeKind(
-            v,
-            stringPrototype,
-            stringValueOf,
-            prototype
-          );
-          if (stringKind === "builtin") return "[String: " + stringText + "]";
-          if (stringKind === "null") {
-            return "[String (null prototype): " + stringText + "]";
-          }
-        }
-        boxed = tryApplyIntrinsic(booleanValueOf, v);
-        if (boxed) {
-          var booleanText = render(boxed.value, depth);
-          var booleanKind = builtinPrototypeKind(
-            v,
-            booleanPrototype,
-            booleanValueOf,
-            prototype
-          );
-          if (booleanKind === "builtin") {
-            return "[Boolean: " + booleanText + "]";
-          }
-          if (booleanKind === "null") {
-            return "[Boolean (null prototype): " + booleanText + "]";
+          if (wrapperKind === "null") {
+            return (
+              "[" + wrapper.label + " (null prototype): " + wrapperText + "]"
+            );
           }
         }
         boxed = tryApplyIntrinsic(bigintValueOf, v);
         if (boxed) {
           var bigintText = render(boxed.value, depth);
           var bigintKind = builtinPrototypeKind(
-            v,
+            prototype,
             bigintPrototype,
-            bigintValueOf,
-            prototype
+            bigintValueOf
           );
           if (bigintKind === "null") {
             return "[BigInt (null prototype): " + bigintText + "]";
           }
-          if (bigintKind !== "builtin") boxed = null;
-        }
-        if (boxed) {
-          // Unlike the older wrappers above, Node's boxed BigInt/Symbol
-          // rendering intentionally observes a constructor's current
-          // @@hasInstance result. A false or throwing hook selects its generic
-          // object shape, but must not intercept the internal-slot probe.
-          return tryInstanceOf(v, bigintConstructor)
-            ? "[BigInt: " + bigintText + "]"
-            : "Object [BigInt] {}";
+          if (bigintKind === "builtin") {
+            // Unlike the wrappers above, Node's boxed BigInt/Symbol rendering
+            // intentionally observes a constructor's current @@hasInstance
+            // result. A false or throwing hook selects its generic object
+            // shape, but must not intercept the internal-slot probe.
+            return tryInstanceOf(v, bigintConstructor)
+              ? "[BigInt: " + bigintText + "]"
+              : "Object [BigInt] {}";
+          }
         }
         boxed = tryApplyIntrinsic(symbolToString, v);
         if (boxed) {
           var symbolKind = builtinPrototypeKind(
-            v,
+            prototype,
             symbolPrototype,
-            symbolToString,
-            prototype
+            symbolToString
           );
           if (symbolKind === "null") {
             return "[Symbol (null prototype): " + boxed.value + "]";
           }
-          if (symbolKind !== "builtin") boxed = null;
-        }
-        if (boxed) {
-          return tryInstanceOf(v, symbolConstructor)
-            ? "[Symbol: " + boxed.value + "]"
-            : "Object [Symbol] {}";
+          if (symbolKind === "builtin") {
+            return tryInstanceOf(v, symbolConstructor)
+              ? "[Symbol: " + boxed.value + "]"
+              : "Object [Symbol] {}";
+          }
         }
       }
 
@@ -526,11 +578,12 @@
       // data properties that are undefined-or-callable. Both may be undefined
       // (`defineProperty(o, k, { get: undefined, set: undefined })`); Node
       // renders that as the absent value, so it must fall through.
-      if (desc && !isDataDescriptor(desc)) {
+      if (desc && !objectHasOwnProperty(desc, "value")) {
         if (desc.get) return desc.set ? "[Getter/Setter]" : "[Getter]";
         if (desc.set) return "[Setter]";
+        return render(undefined, depth - 1);
       }
-      return render(dataDescriptorValue(desc), depth - 1);
+      return render(desc ? desc.value : undefined, depth - 1);
     }
 
     // Array length and elements are read from own descriptors on the unwrapped
@@ -566,68 +619,6 @@
       return "[ " + arrayJoin(parts, ", ") + " ]";
     }
 
-    function errorField(v, key, fallback) {
-      return primitiveString(
-        dataDescriptorValue(findPropertyDescriptor(v, key)),
-        fallback
-      );
-    }
-
-    function renderError(v) {
-      // Test the raw descriptor value first. Stringifying a falsy primitive
-      // such as 0 or false would otherwise turn it into a truthy string and
-      // suppress the normal `[Error: message]` fallback.
-      var stackValue = dataDescriptorValue(findPropertyDescriptor(v, "stack"));
-      if (stackValue) {
-        var stack = primitiveString(stackValue, "");
-        if (stack) return stack;
-      }
-
-      var name = errorField(v, "name", "Error");
-      var message = errorField(v, "message", "");
-      var text = !name ? message : !message ? name : name + ": " + message;
-      return "[" + text + "]";
-    }
-
-    function renderNullPrototypeError(v) {
-      var name = errorField(v, "name", "Error") || "Error";
-      var message = errorField(v, "message", "");
-      return (
-        "[" + name + ": null prototype]" + (message ? ": " + message : "")
-      );
-    }
-
-    // Derive the "ClassName " prefix without a plain `v.constructor` get, which
-    // would invoke an accessor `constructor` or a Proxy get-trap — Node reads
-    // constructor metadata via the prototype chain, not by calling a getter. Use
-    // data descriptors only, and treat any exotic-trap throw as "no prefix".
-    function constructorName(v) {
-      try {
-        // Match Node's ordinary-object presentation for these intrinsic
-        // prototype singletons instead of emitting `Number {}` and friends.
-        if (isLegacyWrapperPrototype(v)) return "";
-        var ctor;
-        var own = objectGetOwnPropertyDescriptor(v, "constructor");
-        if (own) {
-          ctor = dataDescriptorValue(own);
-        } else {
-          var proto = unwrapProxy(objectGetPrototypeOf(v));
-          var pd = proto
-            ? objectGetOwnPropertyDescriptor(proto, "constructor")
-            : null;
-          if (pd) ctor = dataDescriptorValue(pd);
-        }
-        // Node's getConstructorName only accepts a callable `constructor` with
-        // a non-empty name; anything else yields no prefix at all (never a bare
-        // leading space).
-        ctor = unwrapProxy(ctor);
-        if (typeof ctor !== "function") return "";
-        var name = functionName(ctor);
-        return name && name !== "Object" ? name + " " : "";
-      } catch (e) {
-        return "";
-      }
-    }
 
     return render(value, maxDepth);
   }
@@ -699,10 +690,6 @@
   })();
   var symbolToPrimitive = symbolConstructor.toPrimitive;
 
-  function hasOwnProperty(value, key) {
-    return objectHasOwnProperty(value, key);
-  }
-
   function returnFalse() {
     return false;
   }
@@ -711,8 +698,8 @@
   // prototype method is user-defined even when inherited, while coercion hooks
   // owned by a built-in prototype route through inspect.
   function hasBuiltInToString(value) {
-    var hasOwnToString = hasOwnProperty;
-    var hasOwnToPrimitive = hasOwnProperty;
+    var hasOwnToString = objectHasOwnProperty;
+    var hasOwnToPrimitive = objectHasOwnProperty;
 
     // Node reads [[ProxyTarget]] here before touching a single property, so
     // classification never dispatches a Proxy get trap. Do the same via the
@@ -724,13 +711,13 @@
 
     if (typeof value.toString !== "function") {
       if (typeof value[symbolToPrimitive] !== "function") return true;
-      if (hasOwnProperty(value, symbolToPrimitive)) return false;
+      if (objectHasOwnProperty(value, symbolToPrimitive)) return false;
       hasOwnToString = returnFalse;
-    } else if (hasOwnProperty(value, "toString")) {
+    } else if (objectHasOwnProperty(value, "toString")) {
       return false;
     } else if (typeof value[symbolToPrimitive] !== "function") {
       hasOwnToPrimitive = returnFalse;
-    } else if (hasOwnProperty(value, symbolToPrimitive)) {
+    } else if (objectHasOwnProperty(value, symbolToPrimitive)) {
       return false;
     }
 
@@ -761,11 +748,12 @@
     // as user-defined.
     if (pointer === null) return false;
 
-    var descriptor = objectGetOwnPropertyDescriptor(pointer, "constructor");
+    var ctor = dataDescriptorValue(
+      objectGetOwnPropertyDescriptor(pointer, "constructor")
+    );
     return (
-      descriptor !== undefined &&
-      typeof descriptor.value === "function" &&
-      builtInObjectNames[descriptor.value.name] === true
+      typeof ctor === "function" &&
+      builtInObjectNames[functionName(ctor)] === true
     );
   }
 

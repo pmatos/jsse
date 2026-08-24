@@ -70,6 +70,15 @@ metadata traversal unwraps a Proxy at every hop before inspecting it. Primitive
 Symbol formatting uses the captured intrinsic rather than a mutable prototype
 method.
 
+A candidate `constructor` is rejected when its own `prototype` is the value
+being inspected. Node's `getConstructorName` accepts a constructor only when
+the value is an *instance* of it, and a constructor's own `prototype` object
+never is, so every intrinsic prototype renders as a plain `{}` — matching Node
+for `Date.prototype`, `Error.prototype`, `RegExp.prototype` and any user
+class's `prototype`, not just the three legacy wrapper prototypes. An object
+that merely *inherits* from an intrinsic prototype is unaffected:
+`Object.create(RegExp.prototype)` still renders `RegExp {}`.
+
 Built-in presentation combines an internal-slot probe with a trap-free
 prototype-chain classifier. Reparenting a genuine Date, RegExp, or boxed
 primitive to an ordinary object selects the generic descriptor path; a direct
