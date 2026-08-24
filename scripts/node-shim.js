@@ -201,7 +201,11 @@
 
   function primitiveString(value, fallback) {
     var type = typeof value;
-    if (type === "object" || type === "function" || type === "undefined") {
+    if (
+      (value !== null && type === "object") ||
+      type === "function" ||
+      type === "undefined"
+    ) {
       return fallback;
     }
     return type === "symbol" ? symbolToString(value) : stringConstructor(value);

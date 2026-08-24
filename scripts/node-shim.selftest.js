@@ -1011,6 +1011,35 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "inspect invokes no Error stack/name/message getters"
   );
 
+  // `null` is safe to stringify despite `typeof null === "object"`. Suppress
+  // Node's native data-valued stack so these fallback renderings agree across
+  // engines and can be byte-compared.
+  var nullMessageError = new Error("m");
+  Object.defineProperty(nullMessageError, "stack", {
+    configurable: true,
+    get: undefined,
+    set: undefined,
+  });
+  nullMessageError.message = null;
+  eq(
+    util.inspect(nullMessageError),
+    "[Error: null]",
+    "inspect stringifies a null Error message"
+  );
+
+  var nullNameError = new Error("m");
+  Object.defineProperty(nullNameError, "stack", {
+    configurable: true,
+    get: undefined,
+    set: undefined,
+  });
+  nullNameError.name = null;
+  eq(
+    util.inspect(nullNameError),
+    "[null: m]",
+    "inspect stringifies a null Error name"
+  );
+
   // A hole has no own descriptor. Inspection must preserve it rather than
   // falling through to an inherited indexed getter.
   var inheritedReads = 0;
