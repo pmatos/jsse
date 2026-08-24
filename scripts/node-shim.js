@@ -101,6 +101,9 @@
   var objectIs = objectConstructor.is;
   var objectKeys = objectConstructor.keys;
   var objectPrototype = objectConstructor.prototype;
+  var numberPrototype = numberConstructor.prototype;
+  var stringPrototype = stringConstructor.prototype;
+  var booleanPrototype = booleanConstructor.prototype;
   var numberIsNaN = numberConstructor.isNaN;
   var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
   var dateToISOString = functionCall.bind(
@@ -199,6 +202,12 @@
     return "<" + count + " empty item" + (count === 1 ? "" : "s") + ">";
   }
 
+  function isLegacyWrapperPrototype(v) {
+    return (
+      v === numberPrototype || v === stringPrototype || v === booleanPrototype
+    );
+  }
+
   function primitiveString(value, fallback) {
     var type = typeof value;
     if (
@@ -280,11 +289,16 @@
       if (boxed) {
         return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
       }
-      boxed = tryApplyIntrinsic(numberValueOf, v);
+      // These three intrinsic prototypes carry the same internal slots as
+      // their boxed instances, but Node deliberately presents the prototype
+      // singletons as ordinary objects. Exact identity guards keep genuine
+      // wrappers (including cross-realm/reparented ones) on the slot path.
+      var legacyWrapperPrototype = isLegacyWrapperPrototype(v);
+      boxed = legacyWrapperPrototype ? null : tryApplyIntrinsic(numberValueOf, v);
       if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
-      boxed = tryApplyIntrinsic(stringValueOf, v);
+      boxed = legacyWrapperPrototype ? null : tryApplyIntrinsic(stringValueOf, v);
       if (boxed) return "[String: " + render(boxed.value, depth) + "]";
-      boxed = tryApplyIntrinsic(booleanValueOf, v);
+      boxed = legacyWrapperPrototype ? null : tryApplyIntrinsic(booleanValueOf, v);
       if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
       boxed = tryApplyIntrinsic(bigintValueOf, v);
       if (boxed) {
@@ -409,6 +423,9 @@
     // data descriptors only, and treat any exotic-trap throw as "no prefix".
     function constructorName(v) {
       try {
+        // Match Node's ordinary-object presentation for these intrinsic
+        // prototype singletons instead of emitting `Number {}` and friends.
+        if (isLegacyWrapperPrototype(v)) return "";
         var ctor;
         var own = objectGetOwnPropertyDescriptor(v, "constructor");
         if (own) {

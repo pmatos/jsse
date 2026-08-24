@@ -275,6 +275,21 @@ eq(
   "[Symbol: Symbol(wrapped)]",
   "%s Symbol wrapper"
 );
+eq(
+  util.inspect(Number.prototype),
+  "{}",
+  "inspect renders Number.prototype as an ordinary object"
+);
+eq(
+  util.inspect(String.prototype),
+  "{}",
+  "inspect renders String.prototype as an ordinary object"
+);
+eq(
+  util.inspect(Boolean.prototype),
+  "{}",
+  "inspect renders Boolean.prototype as an ordinary object"
+);
 (function () {
   var cases = [
     [
