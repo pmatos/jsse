@@ -108,17 +108,24 @@ are accepted, not bugs:
 - A function whose `name` is an accessor renders `[Function (anonymous)]`;
   Node reports `[Function: Dyn]` because it calls the getter. `functionName`
   reads an own *data* descriptor only.
-- An Error whose `message` has been replaced by an object renders `[Error]`;
-  Node renders `[Error: [object Object]]` by invoking the object's `toString`.
-  A `null` or falsy `message` still renders as Node does (`[Error: null]`).
+- An Error whose `message` has been replaced by an object renders `[Error]`,
+  dropping the message. Node invokes the object's `toString` and folds the
+  result into the rendering (`Error: [object Object]`, followed by the stack);
+  jsse on `main` produced `[Error: [object Object]]`. A `null` or falsy
+  `message` still renders as Node does (`[Error: null]`).
 - The `%s` path only classifies trap-free. Once classification answers
   "user-defined", `convS` coerces the original value, so a `toString`/
   `@@toPrimitive` hook — including a Proxy `get` trap — does run, as it does on
   Node.
 
 The no-`--node` fallback cannot read `[[ProxyTarget]]`, so reflection there
-still dispatches handler traps; its rendering matches the `--node` path but its
-trap counts do not.
+still dispatches handler traps *and* cannot see through a Proxy to the internal
+slot behind it. Its renderings therefore diverge from the `--node` path
+wherever a Proxy is involved: a Proxy-wrapped built-in falls back to the
+generic object shape (`Date {}`, `RegExp {}`, `Number {}` rather than the ISO
+string, `/x/g`, `[Number: 5]`), and a revoked Proxy throws out of `inspect`
+instead of rendering `<Revoked Proxy>`. Non-Proxy values render identically on
+both paths.
 
 ## Validation
 
