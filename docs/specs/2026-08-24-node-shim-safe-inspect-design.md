@@ -96,9 +96,12 @@ skipped for Array exotic objects: `ArrayCreate` and
 `[[BooleanData]]`, `[[BigIntData]]` or `[[SymbolData]]`, and every probe would
 only throw and be caught. The Error prototype-chain classification is *not*
 skipped, so `Reflect.construct(Array, [1, 2], Error)` still renders `[Error]`
-and an array whose chain contains a revoked Proxy still throws. Slot-bearing
-prototype objects retain cross-realm recognition where the built-in exposes
-such a slot.
+and an array whose chain contains a revoked Proxy still throws. Only the exact
+captured intrinsic prototype identifies a built-in family. An arbitrary boxed
+instance carries the same internal slot as its family's intrinsic prototype,
+so accepting any slot-bearing chain node would misclassify values that Node
+renders generically. The shim has no unforgeable, trap-free way to recognize a
+foreign realm's intrinsic prototype, so such chains also take the generic path.
 RegExps are formatted from the captured `source` and individual flag accessors;
 using the captured `RegExp.prototype.toString` would still perform ordinary
 `source` and `flags` gets and could invoke replacement accessors. Normal boxed
@@ -141,6 +144,10 @@ are accepted, not bugs:
   "user-defined", `convS` coerces the original value, so a `toString`/
   `@@toPrimitive` hook — including a Proxy `get` trap — does run, as it does on
   Node.
+- A built-in whose chain contains a foreign-realm intrinsic prototype renders
+  generically. Distinguishing that prototype from an arbitrary same-family
+  instance would require either forgeable JavaScript heuristics or more native
+  metadata; the shim chooses conservative generic rendering.
 
 The no-`--node` fallback cannot read `[[ProxyTarget]]`, so reflection there
 still dispatches handler traps *and* cannot see through a Proxy to the internal
@@ -159,8 +166,10 @@ nested Proxies, a Proxy in the prototype chain rather than as the inspected
 value, Error accessors, sparse arrays with inherited accessors, reparented
 RegExps with throwing `source`/`flags` getters, and replacement accessors on
 `RegExp.prototype`. Ordinary- and null-prototype cases cover Error, Date,
-RegExp, and every boxed primitive; a proxied replacement prototype verifies the
-classifier itself dispatches no handler trap.
+RegExp, and every boxed primitive. Same-family instances used as prototype
+objects verify they do not impersonate the captured intrinsic prototype; a
+proxied replacement prototype verifies the classifier itself dispatches no
+handler trap.
 Trap/getter counters prove the JSSE shim invokes none of them **for those
 cases**; the counters are evidence for the enumerated shapes, not a blanket
 proof, and the `%s` `toString`/`@@toPrimitive` presence reads noted above remain

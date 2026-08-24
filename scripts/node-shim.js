@@ -242,13 +242,10 @@
   // Classify a built-in's presentation from trap-free prototype metadata. A
   // genuine built-in can be reparented while retaining its internal slot, but
   // Node renders it generically unless its prototype chain still identifies
-  // that built-in family. Slot-bearing prototype objects also recognize the
-  // corresponding chain from another realm without invoking @@hasInstance.
-  function builtinPrototypeKind(
-    startPrototype,
-    intrinsicPrototype,
-    prototypeProbe
-  ) {
+  // that built-in family. Only the captured intrinsic prototype is decisive:
+  // an arbitrary same-family instance carries the same slot, so probing chain
+  // nodes would let it impersonate the intrinsic prototype.
+  function builtinPrototypeKind(startPrototype, intrinsicPrototype) {
     var current = startPrototype;
     if (current === UNKNOWN_PROTOTYPE) return "ordinary";
     if (current === REVOKED_PROXY) return "revoked";
@@ -257,12 +254,7 @@
       var hops = MAX_PROTOTYPE_HOPS;
       while (current !== null && current !== objectPrototype && hops-- > 0) {
         if (current === REVOKED_PROXY) return "revoked";
-        if (
-          current === intrinsicPrototype ||
-          (prototypeProbe && tryApplyIntrinsic(prototypeProbe, current))
-        ) {
-          return "builtin";
-        }
+        if (current === intrinsicPrototype) return "builtin";
         current = unwrapProxy(objectGetPrototypeOf(current));
       }
     } catch (e) {
@@ -466,7 +458,7 @@
         // report it too — but only this one throws. It must therefore stay
         // ahead of them all, and outside the `isArr` guard, so an array whose
         // chain contains a revoked Proxy still throws.
-        var errorKind = builtinPrototypeKind(prototype, errorPrototype, null);
+        var errorKind = builtinPrototypeKind(prototype, errorPrototype);
         if (errorKind === "revoked") {
           throw new typeErrorConstructor(
             "Cannot perform 'get' on a proxy that has been revoked"
@@ -502,11 +494,7 @@
             ? null
             : tryApplyIntrinsic(regexpGetSource, v);
         if (boxed) {
-          var regexpKind = builtinPrototypeKind(
-            prototype,
-            regexpPrototype,
-            regexpGetSource
-          );
+          var regexpKind = builtinPrototypeKind(prototype, regexpPrototype);
           if (regexpKind === "builtin") return formatRegExp(v, boxed.value);
           if (regexpKind === "null") {
             return "[RegExp: null prototype] " + formatRegExp(v, boxed.value);
@@ -517,11 +505,7 @@
           var dateText = numberIsNaN(boxed.value)
             ? "Invalid Date"
             : dateToISOString(v);
-          var dateKind = builtinPrototypeKind(
-            prototype,
-            datePrototype,
-            dateGetTime
-          );
+          var dateKind = builtinPrototypeKind(prototype, datePrototype);
           if (dateKind === "builtin") return dateText;
           if (dateKind === "null") {
             return "[Date: null prototype] " + dateText;
@@ -534,8 +518,7 @@
           var wrapperText = render(boxed.value, depth);
           var wrapperKind = builtinPrototypeKind(
             prototype,
-            wrapper.prototype,
-            wrapper.probe
+            wrapper.prototype
           );
           if (wrapperKind === "builtin") {
             return "[" + wrapper.label + ": " + wrapperText + "]";
@@ -551,8 +534,7 @@
           var bigintText = render(boxed.value, depth);
           var bigintKind = builtinPrototypeKind(
             prototype,
-            bigintPrototype,
-            bigintValueOf
+            bigintPrototype
           );
           if (bigintKind === "null") {
             return "[BigInt (null prototype): " + bigintText + "]";
@@ -571,8 +553,7 @@
         if (boxed) {
           var symbolKind = builtinPrototypeKind(
             prototype,
-            symbolPrototype,
-            symbolToString
+            symbolPrototype
           );
           if (symbolKind === "null") {
             return "[Symbol (null prototype): " + boxed.value + "]";

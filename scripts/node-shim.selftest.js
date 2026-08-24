@@ -320,11 +320,12 @@ eq(
 
   var regexpParent = /parent/m;
   var regexpChild = /child/dgimsuy;
+  Object.setPrototypeOf(regexpParent, {});
   Object.setPrototypeOf(regexpChild, regexpParent);
   eq(
     util.inspect(regexpChild),
-    "/child/dgimsuy",
-    "inspect recognizes a RegExp-slot prototype without instanceof"
+    "{}",
+    "inspect does not treat a same-family RegExp instance as the intrinsic prototype"
   );
   eq(
     util.inspect(new RegExp("unicode-sets", "v")),
@@ -429,6 +430,18 @@ eq(
       util.inspect(ordinary),
       item[2],
       "inspect renders an ordinary-reparented " + item[0] + " generically"
+    );
+
+    var slotBearingParent = item[1]();
+    Object.setPrototypeOf(slotBearingParent, {});
+    var slotBearingChild = item[1]();
+    Object.setPrototypeOf(slotBearingChild, slotBearingParent);
+    eq(
+      util.inspect(slotBearingChild),
+      item[2],
+      "inspect does not treat a same-family " +
+        item[0] +
+        " instance as the intrinsic prototype"
     );
 
     var nullPrototype = item[1]();
