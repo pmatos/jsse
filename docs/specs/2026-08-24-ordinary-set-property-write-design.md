@@ -38,6 +38,10 @@ differ, but their reached write must not.
 the canonical `[[Set]]` module. Its implementation dispatches module namespace,
 Proxy, TypedArray, Array length, accessors, receiver descriptors, and ordinary
 prototype recursion and returns the specification's Boolean success result.
+An internal outcome-preserving variant additionally records when the operation
+itself performed an own data-property write on the receiver. This path fact
+cannot be reconstructed from the descriptor after `[[Set]]`, because a setter
+or Proxy trap can redefine the property before returning.
 
 `eval.rs::set_object_with_key(base, key, value, strict)` is the existing
 ordinary-member `PutValue` adapter. It preserves the original base as receiver,
@@ -68,12 +72,16 @@ this seam and reimplement parts of `[[Set]]`.
 ## Design
 
 Add one private receiver-aware `PutValue` adapter in `eval.rs` with the logical
-interface `(base object id, key, value, receiver, strict) -> Result<bool,
-JsValue>`. It calls `set_object_property` exactly once, returns the success bit
-for the one caller that mirrors successful global-object writes, and translates
-a false result into the existing strict assignment diagnostic. The interface
-keeps strictness outside the object internal method, matching the specification:
-`[[Set]]` returns a Boolean; `PutValue` decides whether false throws.
+interface `(base object id, key, value, receiver, strict) ->
+Result<SetOutcome, JsValue>`. `SetOutcome` distinguishes rejection, success
+without a receiver data write, and a successful own data write on a particular
+receiver. The adapter calls the canonical property module exactly once, uses
+the success bit for strict assignment diagnostics, and lets the one caller that
+mirrors global object-record writes require the matching receiver-write
+outcome. Existing property callers retain a Boolean compatibility wrapper. The
+interface keeps strictness outside the object internal method, matching the
+specification: `[[Set]]` returns a Boolean; `PutValue` decides whether false
+throws.
 
 `set_object_with_key` remains the ordinary-member adapter. It captures the
 original value as receiver, boxes a primitive base, and delegates to the new
@@ -104,6 +112,12 @@ remain inside the canonical implementation. A thrown trap, setter, coercion,
 or exotic operation propagates unchanged. A false result is silent for sloppy
 References and becomes a `TypeError` for strict References.
 
+The internal outcome is selected at the branch that actually handles the set
+and is preserved through prototype recursion. Successful setters and Proxy
+traps do not report a receiver data write, even if their user code leaves a
+data descriptor behind. This keeps the evaluator's global-binding bridge from
+copying the assignment RHS over a value chosen by user code.
+
 When prototype recursion reaches the synthetic writable descriptor and the
 receiver is a module namespace exotic object, canonical `OrdinarySet` performs
 the receiver's `[[GetOwnProperty]]`-equivalent deferred-evaluation/TDZ check
@@ -128,6 +142,8 @@ Characterize behaviour through executable JavaScript, the public seam:
 - a deferred module namespace used as a super-property receiver;
 - primitive member References, especially logical assignment, retaining the
   primitive receiver;
+- own and inherited global setters, including a setter that replaces itself
+  with a data property before returning, not being mistaken for a data write;
 - the simple, compound, and logical assignment forms that reach `PutValue`.
 
 Run the custom characterization tests, the relevant test262 assignment,

@@ -1,4 +1,40 @@
 use super::*;
+
+/// The observable result of [[Set]] plus the internal write-path fact needed
+/// by the evaluator's global object-record bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SetOutcome {
+    Rejected,
+    Succeeded,
+    OwnDataWrite(u64),
+}
+
+impl SetOutcome {
+    pub(crate) fn succeeded(self) -> bool {
+        !matches!(self, Self::Rejected)
+    }
+
+    fn from_success(succeeded: bool) -> Self {
+        if succeeded {
+            Self::Succeeded
+        } else {
+            Self::Rejected
+        }
+    }
+
+    fn from_own_data_write(receiver_id: u64, succeeded: bool) -> Self {
+        if succeeded {
+            Self::OwnDataWrite(receiver_id)
+        } else {
+            Self::Rejected
+        }
+    }
+
+    pub(crate) fn wrote_own_data_property_on(self, receiver_id: u64) -> bool {
+        self == Self::OwnDataWrite(receiver_id)
+    }
+}
+
 impl Interpreter {
     /// Canonical [[Set]] entry point (§10.1.9 OrdinarySet + exotic dispatch).
     /// Handles proxy `set` trap, TypedArray integer-index element set,
@@ -13,15 +49,31 @@ impl Interpreter {
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<bool, JsValue> {
+        self.set_object_property_with_outcome(obj_id, key, value, receiver)
+            .map(SetOutcome::succeeded)
+    }
+
+    /// Canonical [[Set]] entry point retaining whether the operation itself
+    /// reached a successful own data-property write on the Receiver. A plain
+    /// Boolean cannot distinguish that path from a successful setter or Proxy
+    /// trap, and inspecting the descriptor after user code returns is racy with
+    /// a setter that redefines the property.
+    pub(crate) fn set_object_property_with_outcome<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        value: JsValue,
+        receiver: &JsValue,
+    ) -> Result<SetOutcome, JsValue> {
         // Module namespace exotic [[Set]] (§10.4.6.9) always rejects the set,
         // even though exported bindings have writable own data descriptors.
         if self
             .get_object_cell(obj_id)
             .is_some_and(|obj| obj.borrow().module_namespace().is_some())
         {
-            return Ok(false);
+            return Ok(SetOutcome::Rejected);
         }
-        self.proxy_set(obj_id, key, value, receiver)
+        self.proxy_set_with_outcome(obj_id, key, value, receiver)
     }
 
     /// Canonical [[DefineOwnProperty]] entry point.
@@ -697,6 +749,17 @@ impl Interpreter {
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<bool, JsValue> {
+        self.proxy_set_with_outcome(obj_id, key, value, receiver)
+            .map(SetOutcome::succeeded)
+    }
+
+    fn proxy_set_with_outcome<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        value: JsValue,
+        receiver: &JsValue,
+    ) -> Result<SetOutcome, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = self.symbol_key_to_jsvalue(key);
@@ -734,16 +797,16 @@ impl Interpreter {
                                 }
                             }
                         }
-                        Ok(true)
+                        Ok(SetOutcome::Succeeded)
                     } else {
-                        Ok(false)
+                        Ok(SetOutcome::Rejected)
                     }
                 }
                 Ok(None) => {
                     if let Some(target_id) = target_val.as_object_id() {
-                        return self.proxy_set(target_id, key, value, receiver);
+                        return self.proxy_set_with_outcome(target_id, key, value, receiver);
                     }
-                    Ok(false)
+                    Ok(SetOutcome::Rejected)
                 }
                 Err(e) => Err(e),
             }
@@ -771,7 +834,7 @@ impl Interpreter {
                         drop(obj_ref);
                         typed_array_set_index(&ta_clone, index as usize, &num_val);
                     }
-                    return Ok(true);
+                    return Ok(SetOutcome::Succeeded);
                 } else {
                     // Different receiver: if invalid index return true without coercing
                     let valid = {
@@ -780,7 +843,7 @@ impl Interpreter {
                         is_valid_integer_index(ta, index)
                     };
                     if !valid {
-                        return Ok(true);
+                        return Ok(SetOutcome::Succeeded);
                     }
                     // Valid index, different receiver: fall through to OrdinarySet below
                     // OrdinarySet will find writable data descriptor from TypedArray [[GetOwnProperty]],
@@ -797,16 +860,16 @@ impl Interpreter {
                     {
                         let setter = setter.clone();
                         match self.call_function(&setter, receiver, &[value]) {
-                            Completion::Normal(_) => return Ok(true),
+                            Completion::Normal(_) => return Ok(SetOutcome::Succeeded),
                             Completion::Throw(e) => return Err(e),
-                            _ => return Ok(true),
+                            _ => return Ok(SetOutcome::Succeeded),
                         }
                     }
-                    return Ok(false);
+                    return Ok(SetOutcome::Rejected);
                 }
                 // Data descriptor
                 if desc.writable == Some(false) {
-                    return Ok(false);
+                    return Ok(SetOutcome::Rejected);
                 }
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
                 let recv_id = receiver.as_object_id();
@@ -838,13 +901,21 @@ impl Interpreter {
                             get: None,
                             set: None,
                         };
-                        return self.array_set_length(obj_id as usize, val_desc);
+                        return self
+                            .array_set_length(obj_id as usize, val_desc)
+                            .map(|succeeded| SetOutcome::from_own_data_write(obj_id, succeeded));
                     }
                     self.gc_write_barrier_value(&obj, &value);
-                    return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
+                    let succeeded = obj.borrow_mut_untracked().set_property_value(key, value);
+                    return Ok(SetOutcome::from_own_data_write(obj_id, succeeded));
                 }
                 // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
                 if let Some(rid) = recv_id {
+                    let receiver_uses_proxy_define =
+                        self.get_object_cell(rid).is_some_and(|cell| {
+                            let b = cell.borrow();
+                            b.is_proxy() || b.is_proxy_revoked()
+                        });
                     let existing = self.proxy_get_own_property_descriptor(rid, key)?;
                     if existing.is_undefined() {
                         // CreateDataProperty(Receiver, P, V)
@@ -857,23 +928,28 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&desc);
-                        return self.proxy_define_own_property(
+                        let succeeded = self.proxy_define_own_property(
                             rid,
                             key.to_js_property_key(),
                             &desc_val,
-                        );
+                        )?;
+                        return Ok(if receiver_uses_proxy_define {
+                            SetOutcome::from_success(succeeded)
+                        } else {
+                            SetOutcome::from_own_data_write(rid, succeeded)
+                        });
                     } else {
                         // existingDescriptor found: check accessor or non-writable
                         let existing_desc = match self.to_property_descriptor(&existing) {
                             Ok(d) => d,
                             Err(Some(e)) => return Err(e),
-                            Err(None) => return Ok(false),
+                            Err(None) => return Ok(SetOutcome::Rejected),
                         };
                         if existing_desc.is_accessor_descriptor() {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         if existing_desc.writable == Some(false) {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         // [[DefineOwnProperty]](P, {Value: V})
                         let val_desc = crate::interpreter::types::PropertyDescriptor {
@@ -885,24 +961,29 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&val_desc);
-                        return self.proxy_define_own_property(
+                        let succeeded = self.proxy_define_own_property(
                             rid,
                             key.to_js_property_key(),
                             &desc_val,
-                        );
+                        )?;
+                        return Ok(if receiver_uses_proxy_define {
+                            SetOutcome::from_success(succeeded)
+                        } else {
+                            SetOutcome::from_own_data_write(rid, succeeded)
+                        });
                     }
                 }
                 // Receiver is not an Object: [[Set]] must return false, never
                 // fall back to writing the property onto `obj` itself — `obj`
                 // may be a shared prototype reached by walking up from the
                 // (non-object) receiver's own [[Prototype]] chain.
-                return Ok(false);
+                return Ok(SetOutcome::Rejected);
             }
             // No own property, walk prototype chain
             let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
-                return self.proxy_set(proto_id, key, value, receiver);
+                return self.proxy_set_with_outcome(proto_id, key, value, receiver);
             }
             // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
             // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
@@ -923,7 +1004,7 @@ impl Interpreter {
                 // necessarily rejects the new data property.
                 if is_module_namespace_recv {
                     self.check_namespace_tdz(recv_id, key)?;
-                    return Ok(false);
+                    return Ok(SetOutcome::Rejected);
                 }
                 if is_proxy_recv {
                     let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
@@ -938,22 +1019,23 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&create_desc);
-                        return self.proxy_define_own_property(
+                        let succeeded = self.proxy_define_own_property(
                             recv_id,
                             key.to_js_property_key(),
                             &desc_val,
-                        );
+                        )?;
+                        return Ok(SetOutcome::from_success(succeeded));
                     } else {
                         let existing_desc = match self.to_property_descriptor(&existing) {
                             Ok(d) => d,
                             Err(Some(e)) => return Err(e),
-                            Err(None) => return Ok(false),
+                            Err(None) => return Ok(SetOutcome::Rejected),
                         };
                         if existing_desc.is_accessor_descriptor() {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         if existing_desc.writable == Some(false) {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         let val_desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
@@ -964,25 +1046,27 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&val_desc);
-                        return self.proxy_define_own_property(
+                        let succeeded = self.proxy_define_own_property(
                             recv_id,
                             key.to_js_property_key(),
                             &desc_val,
-                        );
+                        )?;
+                        return Ok(SetOutcome::from_success(succeeded));
                     }
                 }
                 if let Some(recv_obj) = self.get_object_cell(recv_id) {
                     self.gc_write_barrier_value(recv_obj, &value);
-                    return Ok(recv_obj
+                    let succeeded = recv_obj
                         .borrow_mut_untracked()
-                        .set_property_value(key, value));
+                        .set_property_value(key, value);
+                    return Ok(SetOutcome::from_own_data_write(recv_id, succeeded));
                 }
             }
             // Receiver is not an Object (or resolved to no live object): [[Set]]
             // must return false, never fall back to writing onto `obj` itself.
-            Ok(false)
+            Ok(SetOutcome::Rejected)
         } else {
-            Ok(false)
+            Ok(SetOutcome::Rejected)
         }
     }
 

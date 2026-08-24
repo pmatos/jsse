@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
+use crate::interpreter::property::SetOutcome;
 
 mod access;
 mod generator_runtime;
@@ -3281,7 +3282,7 @@ impl Interpreter {
                         }
                     }
                     let strict = env.borrow().strict;
-                    let succeeded = match self.set_object_with_key_result(
+                    let set_outcome = match self.set_object_with_key_result(
                         obj_val.clone(),
                         &key,
                         final_val.clone(),
@@ -3290,15 +3291,15 @@ impl Interpreter {
                         Ok(succeeded) => succeeded,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if !succeeded && strict {
+                    if !set_outcome.succeeded() && strict {
                         return Completion::Throw(self.member_assignment_error(&obj_val, &key));
                     }
                     // The realm test comes before `as_str`, which validates the
                     // whole key as UTF-8: it is both cheaper and false for
                     // essentially every write in a real program.
-                    if succeeded
-                        && let Some(obj_id) = obj_val.as_object_id()
-                        && self.write_mirrors_global_binding(obj_id, &key)
+                    if let Some(obj_id) = obj_val.as_object_id()
+                        && set_outcome.wrote_own_data_property_on(obj_id)
+                        && self.is_realm_global_object(obj_id)
                         && let Some(key_str) = key.as_str()
                     {
                         self.sync_global_object_binding(obj_id, key_str, &final_val);
@@ -3762,7 +3763,7 @@ impl Interpreter {
         key: &K,
         val: JsValue,
         strict: bool,
-    ) -> Result<bool, JsValue> {
+    ) -> Result<SetOutcome, JsValue> {
         // §6.2.5.6 PutValue: [[Set]] is invoked on ToObject(base), but the
         // receiver argument stays the original base value. For a primitive
         // base that means the receiver is never an object, so OrdinarySet's
@@ -3778,14 +3779,14 @@ impl Interpreter {
             match self.to_object(&obj_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => return Ok(true),
+                _ => return Ok(SetOutcome::Succeeded),
             }
         } else {
             obj_val
         };
 
         let Some(base_id) = obj_val.as_object_id() else {
-            return Ok(true);
+            return Ok(SetOutcome::Succeeded);
         };
         self.put_value_to_property(base_id, key, val, &receiver, strict)
     }
@@ -3802,15 +3803,15 @@ impl Interpreter {
         val: JsValue,
         receiver: &JsValue,
         strict: bool,
-    ) -> Result<bool, JsValue> {
+    ) -> Result<SetOutcome, JsValue> {
         // Delegate to the canonical [[Set]] entry point: proxy `set` trap,
         // module-namespace reject, TypedArray integer-index set, accessor
         // setters, and the OrdinarySet prototype-chain walk all live in
         // `property.rs`. It is generic over the key, so only the error path
         // below needs an owned `JsPropertyKey` — converting here would allocate
         // on every write reached with a `&str` key.
-        let success = self.set_object_property(base_id, key, val, receiver)?;
-        if !success && strict {
+        let outcome = self.set_object_property_with_outcome(base_id, key, val, receiver)?;
+        if !outcome.succeeded() && strict {
             let key = key.to_js_property_key();
             // A non-object receiver never rejects because of a read-only
             // property: OrdinarySet bails at "Receiver is not an Object", and
@@ -3821,7 +3822,7 @@ impl Interpreter {
             }
             return Err(self.read_only_assignment_error(base_id, &key));
         }
-        Ok(success)
+        Ok(outcome)
     }
 
     /// The strict-mode TypeError for a [[Set]] rejected at OrdinarySet's
@@ -7749,26 +7750,12 @@ impl Interpreter {
         }
     }
 
-    /// Whether a just-succeeded [[Set]] of `key` on `obj_id` is one the global
-    /// environment must mirror: `obj_id` has to be some realm's global object
-    /// (the only case with a binding to mirror at all), and [[Set]] has to have
-    /// left the right-hand value there as an own data property. An accessor, a
-    /// Proxy trap, or an inherited setter can store something else — or nothing
-    /// — and copying the RHS into the binding would desynchronise the global
-    /// lexical scope from the object.
-    ///
-    /// The realm test is first: it is the cheap, highly selective one.
-    fn write_mirrors_global_binding(&self, obj_id: u64, key: &JsPropertyKey) -> bool {
+    /// Whether `obj_id` is some realm's global object — the only case in which
+    /// a property write has a global environment binding to mirror.
+    fn is_realm_global_object(&self, obj_id: u64) -> bool {
         self.realms
             .iter()
             .any(|realm| realm.global_object == Some(obj_id))
-            && self.get_object_cell(obj_id).is_some_and(|cell| {
-                let b = cell.borrow();
-                !b.is_proxy()
-                    && !b.is_proxy_revoked()
-                    && b.get_own_property(key)
-                        .is_some_and(|d| d.is_data_descriptor())
-            })
     }
 
     /// Sync a property set on an object to the corresponding global env binding,
