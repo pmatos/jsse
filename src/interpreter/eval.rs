@@ -8239,6 +8239,7 @@ impl Interpreter {
                 pending_binding: None,
                 pending_return: None,
                 saved_finally_exception: None,
+                pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
@@ -8285,6 +8286,7 @@ impl Interpreter {
             pending_binding,
             pending_return: saved_pending_return,
             saved_finally_exception: restored_saved_finally_exception,
+            pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
             reject_fn,
             for_of_stack: saved_for_of_stack,
@@ -8332,6 +8334,7 @@ impl Interpreter {
                 pending_binding: None,
                 pending_return: None,
                 saved_finally_exception: None,
+                pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: saved_for_of_stack.clone(),
@@ -8347,9 +8350,10 @@ impl Interpreter {
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<AsyncForOfLoopState> = saved_for_of_stack;
-        // A close failure may need to visit a catch/finally inside an enclosing
-        // loop before that loop itself can be closed.
-        let mut pending_for_of_unwind = saved_finally_exception.is_some();
+        // An abrupt completion may need to visit a catch/finally inside an
+        // enclosing loop before that loop itself can be closed. Keep that
+        // obligation across suspension until the handler completes normally.
+        let mut pending_for_of_unwind = restored_pending_for_of_unwind;
 
         // Helper: close the for-of loops from `$from` inward, surfacing an
         // abrupt completion from a disposer or an iterator `return` method.
@@ -8405,7 +8409,9 @@ impl Interpreter {
                     }
                 }
                 if let Completion::Throw(error) = unwind_completion {
-                    pending_for_of_unwind = true;
+                    pending_for_of_unwind = Some(PendingForOfUnwind {
+                        clear_at_state: None,
+                    });
                     pending_exception = Some(error);
                     continue;
                 }
@@ -8481,6 +8487,7 @@ impl Interpreter {
                     None,
                     pending_return.take(),
                     saved_finally_exception.take(),
+                    pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
                     &JsValue::UNDEFINED,
@@ -8506,6 +8513,7 @@ impl Interpreter {
                 // A throw produced while an intervening finally was handling
                 // a return replaces that return completion.
                 let return_was_replaced = pending_return.take().is_some();
+                let needs_for_of_unwind = return_was_replaced || pending_for_of_unwind.is_some();
                 // Genuine throws route through the async body's catch/finally
                 // handlers here. A `Completion::Exit` (issue #242) never becomes
                 // a `pending_exception`, so it is not routed and cannot be
@@ -8516,22 +8524,22 @@ impl Interpreter {
                         && !try_stack[i].entered_finally
                         && let Some(catch_state) = try_stack[i].catch_state
                     {
-                        handler = Some((i, catch_state, true));
+                        handler = Some((i, catch_state, true, try_stack[i]._after_state));
                         break;
                     }
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        handler = Some((i, finally_state, false));
+                        handler = Some((i, finally_state, false, try_stack[i]._after_state));
                         break;
                     }
                 }
 
-                if return_was_replaced || pending_for_of_unwind {
+                if needs_for_of_unwind {
                     // A return-replacing throw or an IteratorClose failure can
                     // retain enclosing loops until an intervening handler has
                     // run. Close only the loops crossed before the next handler.
-                    let unwind_from = handler.map_or(0, |(depth, _, _)| {
+                    let unwind_from = handler.map_or(0, |(depth, _, _, _)| {
                         for_of_stack
                             .iter()
                             .position(|loop_state| loop_state.try_depth > depth)
@@ -8552,7 +8560,17 @@ impl Interpreter {
                     }
                 }
 
-                if let Some((depth, state, is_catch)) = handler {
+                if needs_for_of_unwind {
+                    pending_for_of_unwind = if for_of_stack.is_empty() {
+                        None
+                    } else {
+                        handler.map(|(_, _, _, after_state)| PendingForOfUnwind {
+                            clear_at_state: Some(after_state),
+                        })
+                    };
+                }
+
+                if let Some((depth, state, is_catch, _)) = handler {
                     if is_catch {
                         try_stack.truncate(depth);
                     } else if return_was_replaced {
@@ -8661,6 +8679,7 @@ impl Interpreter {
                     None,
                     pending_return.take(),
                     saved_finally_exception.take(),
+                    pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
                     &yield_val,
@@ -8693,6 +8712,7 @@ impl Interpreter {
                                 sent_value_binding.clone(),
                                 pending_return.take(),
                                 saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
                                 &v,
@@ -8713,6 +8733,7 @@ impl Interpreter {
                         sent_value_binding.clone(),
                         pending_return.take(),
                         saved_finally_exception.take(),
+                        pending_for_of_unwind.take(),
                         &resolve_fn,
                         &reject_fn,
                         &await_val,
@@ -8754,6 +8775,12 @@ impl Interpreter {
                 }
 
                 StateTerminator::Goto(next) => {
+                    if pending_for_of_unwind
+                        .as_ref()
+                        .is_some_and(|pending| pending.clear_at_state == Some(next))
+                    {
+                        pending_for_of_unwind = None;
+                    }
                     // A transformed break is represented as a jump to the
                     // loop's after-state. Pop every for-of loop crossed by
                     // that jump so the enclosing iteration environment becomes
@@ -8815,9 +8842,14 @@ impl Interpreter {
                     }
                     // Restore any exception saved from before the finally block
                     if let Some(exc) = saved_finally_exception.take() {
-                        pending_for_of_unwind = true;
                         pending_exception = Some(exc);
                         continue;
+                    }
+                    if pending_for_of_unwind
+                        .as_ref()
+                        .is_some_and(|pending| pending.clear_at_state == Some(after_state))
+                    {
+                        pending_for_of_unwind = None;
                     }
                     current_id = after_state;
                 }
@@ -8826,7 +8858,6 @@ impl Interpreter {
                     body_state,
                     ref param,
                 } => {
-                    pending_for_of_unwind = false;
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
@@ -9051,6 +9082,7 @@ impl Interpreter {
                                 binding,
                                 pending_return.take(),
                                 saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
                                 &raw_result,
@@ -9264,6 +9296,7 @@ impl Interpreter {
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_return: Option<JsValue>,
         saved_finally_exception: Option<JsValue>,
+        pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         await_val: &JsValue,
@@ -9291,6 +9324,7 @@ impl Interpreter {
                 pending_binding: sent_value_binding,
                 pending_return,
                 saved_finally_exception,
+                pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: for_of_stack.to_vec(),

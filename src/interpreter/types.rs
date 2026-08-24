@@ -306,6 +306,14 @@ pub(crate) struct TryContextInfo {
     pub entered_finally: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PendingForOfUnwind {
+    /// State reached when the intervening handler completes normally. Until
+    /// then, a replacement abrupt completion must keep unwinding retained
+    /// enclosing loops.
+    pub clear_at_state: Option<usize>,
+}
+
 pub(crate) struct AsyncFunctionState {
     pub state_machine: Rc<GeneratorStateMachine>,
     pub func_env: EnvRef,
@@ -315,6 +323,7 @@ pub(crate) struct AsyncFunctionState {
     pub pending_binding: Option<SentValueBinding>,
     pub pending_return: Option<JsValue>,
     pub saved_finally_exception: Option<JsValue>,
+    pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
     pub for_of_stack: Vec<AsyncForOfLoopState>,

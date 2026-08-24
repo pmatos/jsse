@@ -103,6 +103,116 @@ async function innerCloseFailureReachesCatchBeforeOuterClose() {
   }
 }
 
+function replacementCloseIterator(log, name, error) {
+  return {
+    done: false,
+    [Symbol.iterator]: function () {
+      return this;
+    },
+    next: function () {
+      if (this.done) {
+        return { value: undefined, done: true };
+      }
+      this.done = true;
+      return { value: name, done: false };
+    },
+    return: function () {
+      log.push('close ' + name);
+      if (error !== undefined) {
+        throw error;
+      }
+      return { value: undefined, done: true };
+    }
+  };
+}
+
+var throwingCatchOrder = [];
+var throwingCatchOuter = replacementCloseIterator(throwingCatchOrder, 'outer');
+var throwingCatchInner = replacementCloseIterator(
+  throwingCatchOrder,
+  'inner',
+  'inner close before catch throw'
+);
+
+async function catchThrowContinuesRetainedUnwind() {
+  for (const outerValue of throwingCatchOuter) {
+    try {
+      for (const innerValue of throwingCatchInner) {
+        await null;
+        return outerValue + innerValue;
+      }
+      throwingCatchOrder.push('inner exhausted');
+    } catch (error) {
+      throwingCatchOrder.push('catch ' + error);
+      throw 'catch replacement';
+    }
+  }
+}
+
+var rejectingCatchOrder = [];
+var rejectingCatchOuter = replacementCloseIterator(rejectingCatchOrder, 'outer');
+var rejectingCatchInner = replacementCloseIterator(
+  rejectingCatchOrder,
+  'inner',
+  'inner close before catch rejection'
+);
+
+async function catchRejectedAwaitContinuesRetainedUnwind() {
+  for (const outerValue of rejectingCatchOuter) {
+    try {
+      for (const innerValue of rejectingCatchInner) {
+        await null;
+        return outerValue + innerValue;
+      }
+      rejectingCatchOrder.push('inner exhausted');
+    } catch (error) {
+      rejectingCatchOrder.push('catch ' + error);
+      await Promise.reject('catch rejection');
+    }
+  }
+}
+
+var normalCatchOrder = [];
+var normalCatchOuter = {
+  calls: 0,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return { value: 'outer', done: false };
+    }
+    normalCatchOrder.push('outer next');
+    throw 'outer next failure';
+  },
+  return: function () {
+    normalCatchOrder.push('incorrect outer close');
+    return { value: undefined, done: true };
+  }
+};
+var normalCatchInner = replacementCloseIterator(
+  normalCatchOrder,
+  'inner',
+  'inner close before normal catch'
+);
+
+async function normalCatchClearsRetainedUnwind() {
+  for (const outerValue of normalCatchOuter) {
+    try {
+      for (const innerValue of normalCatchInner) {
+        await null;
+        return outerValue + innerValue;
+      }
+      normalCatchOrder.push('inner exhausted');
+    } catch (error) {
+      normalCatchOrder.push('catch ' + error);
+      await null;
+    }
+    normalCatchOrder.push('after catch');
+  }
+}
+
 var finallyCloseOrder = [];
 
 function finallyCloseIterator(name, error) {
@@ -277,6 +387,54 @@ nestedDisposalErrors()
       'the close failure routes through the catch before outer loop unwinding'
     );
   })
+  .then(function () {
+    return catchThrowContinuesRetainedUnwind();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('throwing catch resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'catch replacement', 'the catch throw replaces the close failure');
+      assert.sameValue(
+        throwingCatchOrder.join(','),
+        'close inner,catch inner close before catch throw,close outer',
+        'the catch throw resumes retained outer loop unwinding'
+      );
+    }
+  )
+  .then(function () {
+    return catchRejectedAwaitContinuesRetainedUnwind();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('rejected await in catch resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'catch rejection', 'the rejected await replaces the close failure');
+      assert.sameValue(
+        rejectingCatchOrder.join(','),
+        'close inner,catch inner close before catch rejection,close outer',
+        'the retained unwind survives suspension in the catch'
+      );
+    }
+  )
+  .then(function () {
+    return normalCatchClearsRetainedUnwind();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('outer next failure resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'outer next failure', 'the later IteratorNext error rejects');
+      assert.sameValue(
+        normalCatchOrder.join(','),
+        'close inner,catch inner close before normal catch,after catch,outer next',
+        'normal catch completion clears retained unwind before IteratorNext'
+      );
+    }
+  )
   .then(function () {
     return innerCloseFailureRunsFinallyBeforeOuterClose();
   })
