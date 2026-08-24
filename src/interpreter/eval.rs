@@ -8206,6 +8206,15 @@ impl Interpreter {
             func_env.borrow_mut().declare(tv, BindingKind::Var);
         }
         for lv in &sm.local_vars {
+            if matches!(
+                lv.kind,
+                VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+            ) && lv.scope_depth > 0
+            {
+                // Nested lexical bindings are created by their transformed
+                // runtime scopes and must not leak into the function scope.
+                continue;
+            }
             if !func_env.borrow().bindings.contains_key(&lv.name) {
                 func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
             }
