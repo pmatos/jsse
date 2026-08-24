@@ -1162,7 +1162,7 @@ impl Interpreter {
                 let module_path =
                     Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
                 if let Some(ref path) = module_path {
-                    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let canon = path.canonicalize();
                     if let Some(module) = self.module_registry_get(&canon)
                         && let Some(ref cached) = module.borrow().cached_import_meta
                     {
@@ -1173,7 +1173,7 @@ impl Interpreter {
                 self.get_object_cell_expect(meta_id)
                     .borrow_mut()
                     .prototype_id = None;
-                if let Some(ref path) = module_path {
+                if let Some(path) = module_path.as_ref().and_then(ModuleKey::file_path) {
                     let url = format!("file://{}", path.display());
                     self.get_object_cell_expect(meta_id)
                         .borrow_mut()
@@ -1190,7 +1190,7 @@ impl Interpreter {
                 let id = meta_id;
                 let meta_val = JsValue::object(id);
                 if let Some(ref path) = module_path {
-                    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let canon = path.canonicalize();
                     if let Some(module) = self.module_registry_get(&canon) {
                         module.borrow_mut().cached_import_meta = Some(meta_val.clone());
                     }
@@ -1236,23 +1236,20 @@ impl Interpreter {
                 // import.defer() loads module without evaluation, returns deferred namespace
                 // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
                 let module_path = self.current_module_path.clone();
-                let resolved = match self.resolve_module_specifier(&source, module_path.as_deref())
-                {
+                let resolved = match self.resolve_module_specifier(
+                    &source,
+                    module_path.as_ref().and_then(ModuleKey::file_path),
+                ) {
                     Ok(r) => r,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                // The synthetic Module Source module has no text or bytes in any
-                // phase, so a typed request must be refused here too, exactly as
-                // import() and import.source() refuse it.
-                if let Some(itype) = defer_import_type
-                    && Self::is_module_source_path(&resolved)
-                {
-                    let err = self.module_source_type_error(itype);
-                    return self.create_rejected_promise(err);
-                }
-                match self.load_module_no_eval(&resolved) {
+                match self.load_module_for_type(
+                    &resolved,
+                    defer_import_type,
+                    super::ModuleLoadMode::Defer,
+                ) {
                     Ok(module) => {
-                        let resolved_canon = Self::canonicalize_module_path(&resolved);
+                        let resolved_canon = resolved.canonicalize();
                         self.evaluate_async_transitive_deps(&resolved_canon);
                         self.drain_microtasks();
                         let ns = self.create_deferred_module_namespace(&module);
@@ -1284,7 +1281,7 @@ impl Interpreter {
                 let referrer = self.current_module_path.clone();
                 match self.resolve_source_phase_target(
                     &source,
-                    referrer.as_deref(),
+                    referrer.as_ref().and_then(ModuleKey::file_path),
                     source_import_type,
                 ) {
                     Ok((_, Some(ms))) => self.create_resolved_promise(ms),
