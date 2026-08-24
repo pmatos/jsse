@@ -368,6 +368,16 @@ async function bodyThrowClosesBeforeCatchOutsideLoops() {
     }
   } catch (error) {
     bodyThrowOrder.push('catch ' + error);
+    try {
+      bodyThrowOrder.push('outer binding ' + outerValue);
+    } catch (scopeError) {
+      bodyThrowOrder.push('outer binding ' + scopeError.constructor.name);
+    }
+    try {
+      bodyThrowOrder.push('inner binding ' + innerValue);
+    } catch (scopeError) {
+      bodyThrowOrder.push('inner binding ' + scopeError.constructor.name);
+    }
     return 'caught';
   }
 }
@@ -611,8 +621,8 @@ nestedDisposalErrors()
     assert.sameValue(value, 'caught', 'the catch outside both loops handles the body throw');
     assert.sameValue(
       bodyThrowOrder.join(','),
-      'close inner,close outer,catch body throw',
-      'both loops close before a catch outside them runs'
+      'close inner,close outer,catch body throw,outer binding ReferenceError,inner binding ReferenceError',
+      'both loops close and discard their iteration bindings before an outside catch runs'
     );
   })
   .then(function () {
