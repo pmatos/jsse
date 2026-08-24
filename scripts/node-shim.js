@@ -111,11 +111,33 @@
   );
   var errorIsError = errorConstructor.isError;
   var errorPrototype = errorConstructor.prototype;
+  var regexpPrototype = regexpConstructor.prototype;
   var regexpGetSource = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpConstructor.prototype, "source").get
+    objectGetOwnPropertyDescriptor(regexpPrototype, "source").get
   );
-  var regexpToString = functionCall.bind(
-    regexpConstructor.prototype.toString
+  var regexpGetHasIndices = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "hasIndices").get
+  );
+  var regexpGetGlobal = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "global").get
+  );
+  var regexpGetIgnoreCase = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "ignoreCase").get
+  );
+  var regexpGetMultiline = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "multiline").get
+  );
+  var regexpGetDotAll = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "dotAll").get
+  );
+  var regexpGetUnicode = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "unicode").get
+  );
+  var regexpGetUnicodeSets = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "unicodeSets").get
+  );
+  var regexpGetSticky = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpPrototype, "sticky").get
   );
   var regexpExec = functionCall.bind(regexpConstructor.prototype.exec);
   var identifierKeyPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -146,6 +168,44 @@
     } catch (e) {
       return false;
     }
+  }
+
+  function formatRegExp(value, source) {
+    var flags = "";
+    if (regexpGetHasIndices(value)) flags += "d";
+    if (regexpGetGlobal(value)) flags += "g";
+    if (regexpGetIgnoreCase(value)) flags += "i";
+    if (regexpGetMultiline(value)) flags += "m";
+    if (regexpGetDotAll(value)) flags += "s";
+    if (regexpGetUnicode(value)) flags += "u";
+    if (regexpGetUnicodeSets(value)) flags += "v";
+    if (regexpGetSticky(value)) flags += "y";
+    return "/" + source + "/" + flags;
+  }
+
+  // Classify a RegExp's presentation from trap-free prototype metadata. A
+  // genuine RegExp can be reparented to an ordinary object while retaining its
+  // internal slot; Node renders that as an ordinary object, not by performing
+  // `source`/`flags` gets through the replacement prototype. A RegExp object in
+  // the chain also recognizes a foreign realm's %RegExp.prototype% without an
+  // `instanceof` or @@hasInstance call.
+  function regexpPrototypeKind(value) {
+    try {
+      var current = unwrapProxy(objectGetPrototypeOf(value));
+      if (current === null) return "null";
+      while (current !== null) {
+        if (
+          current === regexpPrototype ||
+          tryApplyIntrinsic(regexpGetSource, current)
+        ) {
+          return "regexp";
+        }
+        current = unwrapProxy(objectGetPrototypeOf(current));
+      }
+    } catch (e) {
+      // Exotic fallback: keep the value on the ordinary descriptor path.
+    }
+    return "ordinary";
   }
 
   // Walk a Proxy chain down to its non-Proxy target without dispatching to any
@@ -279,12 +339,21 @@
       var boxed;
       // `get RegExp.prototype.source` uniquely does NOT throw for
       // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
-      // misreport the prototype itself as a RegExp.
+      // misreport the prototype itself as a RegExp. After detecting a genuine
+      // RegExp, classify its prototype chain before presentation: a reparented
+      // RegExp must not dispatch ordinary `source`/`flags` gets through a user
+      // object. Compose the standard rendering from captured slot getters.
       boxed =
-        v === regexpConstructor.prototype
+        v === regexpPrototype
           ? null
           : tryApplyIntrinsic(regexpGetSource, v);
-      if (boxed) return regexpToString(v);
+      if (boxed) {
+        var regexpKind = regexpPrototypeKind(v);
+        if (regexpKind === "regexp") return formatRegExp(v, boxed.value);
+        if (regexpKind === "null") {
+          return "[RegExp: null prototype] " + formatRegExp(v, boxed.value);
+        }
+      }
       boxed = tryApplyIntrinsic(dateGetTime, v);
       if (boxed) {
         return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);

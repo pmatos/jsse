@@ -66,6 +66,15 @@ metadata traversal unwraps a Proxy at every hop before inspecting it. Primitive
 Symbol formatting uses the captured intrinsic rather than a mutable prototype
 method.
 
+RegExp rendering first probes the captured intrinsic `source` getter to verify
+the internal slot, then classifies the prototype chain without `instanceof` or
+ordinary property reads. An ordinary-object-reparented RegExp stays on the
+generic descriptor path, while a null-prototype RegExp receives Node's explicit
+`[RegExp: null prototype]` marker. Ordinary and cross-realm RegExps are formatted
+from the captured `source` and individual flag accessors; using the captured
+`RegExp.prototype.toString` would still perform ordinary `source` and `flags`
+gets and could invoke replacement accessors.
+
 `util.format`'s `%s` classification walk (`hasBuiltInToString`) decides whether
 a value carries a user-defined coercion hook or routes to `inspect`. It unwraps
 the value and then each prototype it visits, so a Proxy anywhere in the chain
@@ -89,7 +98,9 @@ there remains best-effort and catches exotic failures where possible.
 The cross-engine node-shim self-test covers array-target Proxies, throwing
 `getPrototypeOf`/`ownKeys`/`getOwnPropertyDescriptor`/`get` traps, revoked and
 nested Proxies, a Proxy in the prototype chain rather than as the inspected
-value, Error accessors, and sparse arrays with inherited accessors.
+value, Error accessors, sparse arrays with inherited accessors, reparented
+RegExps with throwing `source`/`flags` getters, and replacement accessors on
+`RegExp.prototype`.
 Trap/getter counters prove the JSSE shim invokes none of them **for those
 cases**; the counters are evidence for the enumerated shapes, not a blanket
 proof, and the `%s` `toString`/`@@toPrimitive` presence reads noted above remain

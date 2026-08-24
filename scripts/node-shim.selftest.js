@@ -232,21 +232,26 @@ eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
     var original = Object.getOwnPropertyDescriptor(RegExp.prototype, name);
     var sentinel = new Error("patched RegExp " + name);
     var caught;
+    var formatted;
+    var calls = 0;
     try {
       Object.defineProperty(RegExp.prototype, name, {
         configurable: true,
         get: function () {
+          calls++;
           throw sentinel;
         },
       });
       try {
-        util.format("%s", /re/g);
+        formatted = util.format("%s", /re/g);
       } catch (e) {
         caught = e;
       }
       truthy(
-        caught === sentinel,
-        "%s RegExp rethrows patched " + name + " accessor error"
+        hasNodeHost
+          ? caught === undefined && formatted === "/re/g" && calls === 0
+          : caught === sentinel,
+        "%s RegExp handles patched " + name + " accessor"
       );
     } finally {
       Object.defineProperty(RegExp.prototype, name, original);
@@ -255,12 +260,73 @@ eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
 
   checkThrowingAccessor("source");
   checkThrowingAccessor("flags");
+  checkThrowingAccessor("global");
 })();
 eq(
   util.format("%s", Object.create(RegExp.prototype)),
   "RegExp {}",
   "%s RegExp prototype spoof falls back to ordinary inspect"
 );
+(function () {
+  var reparented = /x/gi;
+  Object.setPrototypeOf(reparented, {});
+  eq(
+    util.inspect(reparented),
+    "{}",
+    "inspect renders an ordinary-reparented RegExp generically"
+  );
+
+  var nullPrototype = /x/gi;
+  Object.setPrototypeOf(nullPrototype, null);
+  eq(
+    util.inspect(nullPrototype),
+    "[RegExp: null prototype] /x/gi",
+    "inspect renders a null-prototype RegExp from internal slots"
+  );
+
+  var accessorCalls = 0;
+  var accessorPrototype = {};
+  Object.defineProperty(accessorPrototype, "source", {
+    configurable: true,
+    get: function () {
+      accessorCalls++;
+      throw new Error("reparented RegExp source getter called");
+    },
+  });
+  Object.defineProperty(accessorPrototype, "flags", {
+    configurable: true,
+    get: function () {
+      accessorCalls++;
+      throw new Error("reparented RegExp flags getter called");
+    },
+  });
+  var accessorReparented = /x/gi;
+  Object.setPrototypeOf(accessorReparented, accessorPrototype);
+  eq(
+    util.inspect(accessorReparented),
+    "{}",
+    "inspect does not format an ordinary-reparented RegExp through getters"
+  );
+  eq(
+    accessorCalls,
+    0,
+    "inspect invokes no reparented RegExp source or flags getters"
+  );
+
+  var regexpParent = /parent/m;
+  var regexpChild = /child/dgimsuy;
+  Object.setPrototypeOf(regexpChild, regexpParent);
+  eq(
+    util.inspect(regexpChild),
+    "/child/dgimsuy",
+    "inspect recognizes a RegExp-slot prototype without instanceof"
+  );
+  eq(
+    util.inspect(new RegExp("unicode-sets", "v")),
+    "/unicode-sets/v",
+    "inspect composes the unicode-sets RegExp flag from its internal slot"
+  );
+})();
 eq(
   util.format("%s", { toString: null, a: 1 }),
   "{ toString: null, a: 1 }",
