@@ -1025,6 +1025,21 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   );
   eq(inheritedReads, 0, "inspect does not read inherited array elements");
 
+  // An accessor descriptor may carry BOTH `get` and `set` as undefined. Node
+  // renders the absent value rather than a [Getter]/[Setter] marker, so this
+  // agrees across engines and is byte-compared.
+  var bothUndefined = {};
+  Object.defineProperty(bothUndefined, "x", {
+    get: undefined,
+    set: undefined,
+    enumerable: true,
+  });
+  eq(
+    util.inspect(bothUndefined),
+    "{ x: undefined }",
+    "inspect renders an all-undefined accessor as its absent value"
+  );
+
   // A Proxy in the PROTOTYPE CHAIN, not as the inspected value itself. The
   // `%s` classification walk used to reflect on each prototype directly, so a
   // proxied prototype ran getPrototypeOf/getOwnPropertyDescriptor traps during

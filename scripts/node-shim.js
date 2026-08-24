@@ -330,13 +330,12 @@
 
     function renderDescriptor(desc, depth) {
       // Not a data descriptor => an accessor one, whose `get`/`set` are own
-      // data properties that are undefined-or-callable.
+      // data properties that are undefined-or-callable. Both may be undefined
+      // (`defineProperty(o, k, { get: undefined, set: undefined })`); Node
+      // renders that as the absent value, so it must fall through.
       if (desc && !isDataDescriptor(desc)) {
-        return desc.get
-          ? desc.set
-            ? "[Getter/Setter]"
-            : "[Getter]"
-          : "[Setter]";
+        if (desc.get) return desc.set ? "[Getter/Setter]" : "[Getter]";
+        if (desc.set) return "[Setter]";
       }
       return render(dataDescriptorValue(desc), depth - 1);
     }
