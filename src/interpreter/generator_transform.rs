@@ -2035,6 +2035,7 @@ fn transform_try_statement(
     } else {
         None
     };
+    let clause_completion_state = finally_entry_state.unwrap_or(after_try);
 
     ctx.finalize_current_state(StateTerminator::TryEnter {
         try_state: try_body_state,
@@ -2050,11 +2051,9 @@ fn transform_try_statement(
     });
 
     ctx.current_state_id = try_body_state;
-    transform_statements(&try_stmt.block, ctx, after_try);
-    if let Some(fin_state) = finally_entry_state {
-        ctx.finalize_current_state(StateTerminator::Goto(fin_state));
-    } else {
-        ctx.finalize_current_state(StateTerminator::Goto(after_try));
+    transform_statements(&try_stmt.block, ctx, clause_completion_state);
+    if ctx.current_state_id != clause_completion_state {
+        ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
     }
 
     if let Some(ref info) = catch_info {
@@ -2067,17 +2066,16 @@ fn transform_try_statement(
 
         ctx.current_state_id = catch_body_state;
         if let Some(handler) = &try_stmt.handler {
-            transform_statements(&handler.body, ctx, after_try);
+            transform_statements(&handler.body, ctx, clause_completion_state);
         }
-        if let Some(fin_state) = finally_entry_state {
-            ctx.finalize_current_state(StateTerminator::Goto(fin_state));
-        } else {
-            ctx.finalize_current_state(StateTerminator::Goto(after_try));
+        if ctx.current_state_id != clause_completion_state {
+            ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
         }
     }
 
     if let Some(fin_entry_state) = finally_entry_state {
         let finally_body_state = ctx.new_state();
+        let finally_exit_state = ctx.new_state();
         ctx.current_state_id = fin_entry_state;
         ctx.finalize_current_state(StateTerminator::EnterFinally {
             body_state: finally_body_state,
@@ -2085,8 +2083,12 @@ fn transform_try_statement(
 
         ctx.current_state_id = finally_body_state;
         if let Some(finalizer) = &try_stmt.finalizer {
-            transform_statements(finalizer, ctx, after_try);
+            transform_statements(finalizer, ctx, finally_exit_state);
         }
+        if ctx.current_state_id != finally_exit_state {
+            ctx.finalize_current_state(StateTerminator::Goto(finally_exit_state));
+        }
+        ctx.current_state_id = finally_exit_state;
         ctx.finalize_current_state(StateTerminator::TryExit {
             after_state: after_try,
         });
