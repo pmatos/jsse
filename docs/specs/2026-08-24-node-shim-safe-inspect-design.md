@@ -37,8 +37,11 @@ enabled. It returns:
 - the active Proxy's target object without consulting the handler; or
 - `null` for a revoked Proxy.
 
-The shim captures this function with its other host primordials. At the start
-of object/function rendering it repeatedly unwraps active Proxies, returns
+The shim captures this function with its other host primordials, then
+immediately deletes the configurable global binding so subsequently evaluated
+library code cannot observe or call the Proxy-target seam. The closure retains
+the only reference needed by the formatter. At the start of object/function
+rendering it repeatedly unwraps active Proxies, returns
 `<Revoked Proxy>` for revoked ones, and only then performs type classification,
 descriptor lookup, enumeration, or prototype traversal. This mirrors the
 metadata access Node's native inspector has while keeping the hook too narrow
@@ -53,7 +56,10 @@ Error rendering uses data descriptors for `stack`, `name`, and `message`.
 Accessor descriptors shadow inherited values but are never called. The normal
 JSSE Error prototype stack accessor is therefore skipped, while its data-valued
 name and the instance's data-valued message still produce a readable
-`[Error: message]` fallback.
+`[Error: message]` fallback. A raw `stack` value is tested for truthiness before
+safe primitive stringification, preserving the fallback for `0`, `-0`, `0n`,
+`false`, and `NaN`. `null` remains a safely stringifiable primitive for `name`
+and `message`, despite JavaScript's historical `typeof null === "object"` result.
 
 Constructor and function names are read from data descriptors. Prototype
 metadata traversal unwraps a Proxy at every hop before inspecting it. Primitive
@@ -87,10 +93,19 @@ value, Error accessors, and sparse arrays with inherited accessors.
 Trap/getter counters prove the JSSE shim invokes none of them **for those
 cases**; the counters are evidence for the enumerated shapes, not a blanket
 proof, and the `%s` `toString`/`@@toPrimitive` presence reads noted above remain
-a known uncovered remainder. Node runs the
-same structural cases as the reference implementation. Rust host-floor tests
+a known uncovered remainder. The nested-Proxy rendering assertion runs only on
+JSSE because Node 24 and Node 26 differ in how many Proxy layers their native
+inspectors unwrap; the Node branch emits the same successful assertion line so
+the cross-check count and stdout stay identical. Node runs the other structural
+cases as the reference implementation. Rust host-floor tests
 verify the hook is gated, non-enumerable, unwraps without traps, and identifies
-revoked Proxies.
+revoked Proxies. The JavaScript self-test additionally verifies the captured
+hook is no longer globally reachable once the shim has initialized.
+
+String escaping continues to use captured `String.prototype.split` with
+primitive string separators. ECMAScript only consults `%Symbol.split%` when the
+separator is an Object, and JSSE implements the same object-only guard, so a
+library assignment to `String.prototype[Symbol.split]` cannot run on this path.
 
 Because this is a flag-gated harness feature rather than ECMAScript behavior,
 there is no targeted test262 area and no pass-count change expected. The full
