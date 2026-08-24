@@ -118,7 +118,8 @@ Add `test262-extra` async regressions covering:
 
 The review follow-up additionally covers an awaited break through `finally`,
 pending break across an await in `finally`, rejected await replacing the
-pending break, and labeled break/continue across nested `for-of` loops.
+pending break, break originating in a catch with an attached finalizer, and
+labeled break/continue across nested `for-of` loops.
 
 Run the focused regression, relevant upstream async-function and `for-of`
 test262 directories, the custom suite, and the repository's full quality gate.

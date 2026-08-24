@@ -8238,6 +8238,7 @@ impl Interpreter {
                 try_stack: vec![],
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: None,
                 saved_finally_exception: None,
                 pending_for_of_unwind: None,
                 resolve_fn,
@@ -8285,6 +8286,7 @@ impl Interpreter {
             mut try_stack,
             pending_binding,
             pending_return: saved_pending_return,
+            pending_loop_control: restored_pending_loop_control,
             saved_finally_exception: restored_saved_finally_exception,
             pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
@@ -8349,6 +8351,7 @@ impl Interpreter {
                 try_stack: try_stack.clone(),
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: restored_pending_loop_control,
                 saved_finally_exception: None,
                 pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
@@ -8363,6 +8366,7 @@ impl Interpreter {
         self.in_state_machine = true;
         let mut current_id = current_state;
         let mut pending_return: Option<JsValue> = saved_pending_return;
+        let mut pending_loop_control = restored_pending_loop_control;
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<AsyncForOfLoopState> = saved_for_of_stack;
@@ -8438,6 +8442,9 @@ impl Interpreter {
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
+                // A return produced by a finalizer replaces any loop-control
+                // completion that originally entered it.
+                pending_loop_control = None;
                 let mut routed_to = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_finally
@@ -8486,6 +8493,54 @@ impl Interpreter {
             }};
         }
 
+        // Helper: route an abrupt break/continue edge through every finally
+        // between its source and target. The target records the lexical stacks
+        // that remain active there, so iterator closing never depends on state
+        // id equality.
+        macro_rules! route_loop_control {
+            ($target:expr) => {{
+                let target = $target;
+
+                // A loop-control completion produced by a finalizer replaces
+                // the return, throw, or earlier loop-control completion that
+                // originally entered it.
+                pending_return = None;
+                saved_finally_exception = None;
+                pending_for_of_unwind = None;
+                pending_loop_control = Some(target);
+
+                let mut routed_to = None;
+                for i in (target.try_depth..try_stack.len()).rev() {
+                    if !try_stack[i].entered_finally
+                        && let Some(finally_state) = try_stack[i].finally_state
+                    {
+                        routed_to = Some((i, finally_state));
+                        break;
+                    }
+                }
+
+                // Loops nested inside the selected finally close before it;
+                // loops containing that finally remain until routing resumes.
+                // Never retain more loops than the target itself retains.
+                let handler_boundary = routed_to.map_or(target.for_of_depth, |(depth, _)| {
+                    for_of_stack
+                        .iter()
+                        .position(|loop_state| loop_state.try_depth > depth)
+                        .unwrap_or(for_of_stack.len())
+                        .max(target.for_of_depth)
+                });
+                debug_assert!(handler_boundary <= for_of_stack.len());
+                unwind_for_of!(handler_boundary.min(for_of_stack.len()));
+
+                if let Some((_, finally_state)) = routed_to {
+                    current_id = finally_state;
+                } else {
+                    pending_loop_control = None;
+                    current_id = target.target_state;
+                }
+            }};
+        }
+
         loop {
             // §10.4.4.3 Dispose step 3: async-dispose resources need Await(result),
             // which must truly suspend the async function. dispose_resources already
@@ -8502,6 +8557,7 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_return.take(),
+                    pending_loop_control.take(),
                     saved_finally_exception.take(),
                     pending_for_of_unwind.take(),
                     &resolve_fn,
@@ -8543,15 +8599,16 @@ impl Interpreter {
                 }
 
                 // A throw produced while an intervening finally was handling
-                // a return replaces that return completion.
-                let return_was_replaced = pending_return.take().is_some();
+                // another abrupt completion replaces that completion.
+                let pending_return_was_replaced = pending_return.take().is_some();
+                let pending_loop_control_was_replaced = pending_loop_control.take().is_some();
+                let pending_completion_was_replaced =
+                    pending_return_was_replaced || pending_loop_control_was_replaced;
                 // §14.7.5.6: any abrupt body completion leaving a for-of closes
                 // its iterator, so every still-active loop crossed on the way to
                 // the handler unwinds — not just the ones a previous unwind
                 // retained.
-                let needs_for_of_unwind = return_was_replaced
-                    || pending_for_of_unwind.is_some()
-                    || !for_of_stack.is_empty();
+                let needs_for_of_unwind = !for_of_stack.is_empty();
                 // Genuine throws route through the async body's catch/finally
                 // handlers here. A `Completion::Exit` (issue #242) never becomes
                 // a `pending_exception`, so it is not routed and cannot be
@@ -8610,8 +8667,18 @@ impl Interpreter {
 
                 if let Some((depth, state, is_catch, _)) = handler {
                     if is_catch {
-                        try_stack.truncate(depth);
-                    } else if return_was_replaced {
+                        // A catch-only context is finished once its handler is
+                        // selected, but try-catch-finally must retain this
+                        // context so abrupt control from the catch still routes
+                        // through its attached finalizer. EnterCatch marks it
+                        // entered, preventing the catch from handling itself.
+                        let retained_depth = if try_stack[depth].finally_state.is_some() {
+                            depth + 1
+                        } else {
+                            depth
+                        };
+                        try_stack.truncate(retained_depth);
+                    } else if pending_completion_was_replaced {
                         // Drop the completed inner finally contexts so
                         // EnterFinally marks the handler selected above.
                         try_stack.truncate(depth + 1);
@@ -8716,6 +8783,7 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_return.take(),
+                    pending_loop_control.take(),
                     saved_finally_exception.take(),
                     pending_for_of_unwind.take(),
                     &resolve_fn,
@@ -8749,6 +8817,7 @@ impl Interpreter {
                                 &try_stack,
                                 sent_value_binding.clone(),
                                 pending_return.take(),
+                                pending_loop_control.take(),
                                 saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
@@ -8770,6 +8839,7 @@ impl Interpreter {
                         &try_stack,
                         sent_value_binding.clone(),
                         pending_return.take(),
+                        pending_loop_control.take(),
                         saved_finally_exception.take(),
                         pending_for_of_unwind.take(),
                         &resolve_fn,
@@ -8819,17 +8889,11 @@ impl Interpreter {
                     {
                         pending_for_of_unwind = None;
                     }
-                    // A transformed break is represented as a jump to the
-                    // loop's after-state. Pop every for-of loop crossed by
-                    // that jump so the enclosing iteration environment becomes
-                    // active again.
-                    if let Some(exit_pos) = for_of_stack
-                        .iter()
-                        .position(|loop_state| loop_state.after_state == next)
-                    {
-                        unwind_for_of!(exit_pos);
-                    }
                     current_id = next;
+                }
+
+                StateTerminator::LoopControl(target) => {
+                    route_loop_control!(target);
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -8881,6 +8945,10 @@ impl Interpreter {
                     // Restore any exception saved from before the finally block
                     if let Some(exc) = saved_finally_exception.take() {
                         pending_exception = Some(exc);
+                        continue;
+                    }
+                    if let Some(target) = pending_loop_control.take() {
+                        route_loop_control!(target);
                         continue;
                     }
                     if pending_for_of_unwind
@@ -9120,6 +9188,7 @@ impl Interpreter {
                                 &try_stack,
                                 binding,
                                 pending_return.take(),
+                                pending_loop_control.take(),
                                 saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
@@ -9337,6 +9406,7 @@ impl Interpreter {
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_return: Option<JsValue>,
+        pending_loop_control: Option<crate::interpreter::generator_transform::LoopControlTarget>,
         saved_finally_exception: Option<JsValue>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
@@ -9365,6 +9435,7 @@ impl Interpreter {
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
                 pending_return,
+                pending_loop_control,
                 saved_finally_exception,
                 pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),

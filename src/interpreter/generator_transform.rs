@@ -32,6 +32,7 @@ pub(crate) enum StateTerminator {
     Return(Option<Expression>),
     Throw(Expression),
     Goto(usize),
+    LoopControl(LoopControlTarget),
     ConditionalGoto {
         condition: Expression,
         true_state: usize,
@@ -86,6 +87,18 @@ pub(crate) enum StateTerminator {
         sent_value_binding: Option<SentValueBinding>,
     },
     Completed,
+}
+
+/// State-machine target for an abrupt `break` or `continue` completion.
+///
+/// The depths describe the execution context that remains active at
+/// `target_state`, allowing the async-function driver to run intervening
+/// finalizers and close only the `for-of` iterators crossed by the jump.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopControlTarget {
+    pub target_state: usize,
+    pub try_depth: usize,
+    pub for_of_depth: usize,
 }
 
 /// Clear IC sites in a sent-value binding pattern (the destructuring target of
@@ -159,6 +172,7 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
             }
         }
         StateTerminator::Goto(_)
+        | StateTerminator::LoopControl(_)
         | StateTerminator::TryExit { .. }
         | StateTerminator::EnterFinally { .. }
         | StateTerminator::Completed => {}
@@ -202,9 +216,11 @@ struct TransformContext {
     analysis: GeneratorAnalysis,
     yield_counter: usize,
     temp_counter: usize,
-    break_targets: HashMap<Option<String>, usize>,
-    continue_targets: HashMap<Option<String>, usize>,
+    break_targets: HashMap<Option<String>, LoopControlTarget>,
+    continue_targets: HashMap<Option<String>, LoopControlTarget>,
     try_stack: Vec<TryInfo>,
+    for_of_depth: usize,
+    iteration_labels: Vec<String>,
     temp_vars: Vec<String>,
     is_async: bool,
     detect_for_await: bool,
@@ -231,6 +247,8 @@ impl TransformContext {
             break_targets: HashMap::new(),
             continue_targets: HashMap::new(),
             try_stack: Vec::new(),
+            for_of_depth: 0,
+            iteration_labels: Vec::new(),
             temp_vars: Vec::new(),
             is_async,
             detect_for_await: false,
@@ -285,6 +303,42 @@ impl TransformContext {
 
     fn emit_statement(&mut self, stmt: Statement) {
         self.current_statements.push(stmt);
+    }
+
+    fn loop_control_target(&self, target_state: usize, for_of_depth: usize) -> LoopControlTarget {
+        LoopControlTarget {
+            target_state,
+            try_depth: self.try_stack.len(),
+            for_of_depth,
+        }
+    }
+
+    fn install_labeled_continue_targets(
+        &mut self,
+        labels: &[String],
+        target: LoopControlTarget,
+    ) -> Vec<(String, Option<LoopControlTarget>)> {
+        labels
+            .iter()
+            .cloned()
+            .map(|label| {
+                let previous = self.continue_targets.insert(Some(label.clone()), target);
+                (label, previous)
+            })
+            .collect()
+    }
+
+    fn restore_labeled_continue_targets(
+        &mut self,
+        previous: Vec<(String, Option<LoopControlTarget>)>,
+    ) {
+        for (label, target) in previous {
+            if let Some(target) = target {
+                self.continue_targets.insert(Some(label), target);
+            } else {
+                self.continue_targets.remove(&Some(label));
+            }
+        }
     }
 }
 
@@ -478,6 +532,18 @@ fn stmt_has_break_or_continue(stmt: &Statement) -> bool {
     }
 }
 
+fn labels_iteration_statement(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::While(_)
+        | Statement::DoWhile(_)
+        | Statement::For(_)
+        | Statement::ForIn(_)
+        | Statement::ForOf(_) => true,
+        Statement::Labeled(_, inner) => labels_iteration_statement(inner),
+        _ => false,
+    }
+}
+
 fn expr_has_suspension(expr: &Expression, is_async: bool) -> bool {
     if is_async {
         expr_contains_suspension(expr)
@@ -637,12 +703,17 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Break(label) => {
-            let target = label
-                .as_ref()
-                .and_then(|l| ctx.break_targets.get(&Some(l.clone())).copied())
-                .or_else(|| ctx.break_targets.get(&None).copied());
-            if let Some(target_state) = target {
-                ctx.finalize_current_state(StateTerminator::Goto(target_state));
+            let target = match label {
+                Some(label) => ctx.break_targets.get(&Some(label.clone())).copied(),
+                None => ctx.break_targets.get(&None).copied(),
+            };
+            if let Some(target) = target {
+                let terminator = if ctx.is_async && ctx.detect_for_await {
+                    StateTerminator::LoopControl(target)
+                } else {
+                    StateTerminator::Goto(target.target_state)
+                };
+                ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
                 ctx.emit_statement(stmt.clone());
@@ -650,12 +721,17 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Continue(label) => {
-            let target = label
-                .as_ref()
-                .and_then(|l| ctx.continue_targets.get(&Some(l.clone())).copied())
-                .or_else(|| ctx.continue_targets.get(&None).copied());
-            if let Some(target_state) = target {
-                ctx.finalize_current_state(StateTerminator::Goto(target_state));
+            let target = match label {
+                Some(label) => ctx.continue_targets.get(&Some(label.clone())).copied(),
+                None => ctx.continue_targets.get(&None).copied(),
+            };
+            if let Some(target) = target {
+                let terminator = if ctx.is_async && ctx.detect_for_await {
+                    StateTerminator::LoopControl(target)
+                } else {
+                    StateTerminator::Goto(target.target_state)
+                };
+                ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
                 ctx.emit_statement(stmt.clone());
@@ -1601,8 +1677,13 @@ fn transform_while_statement(
 
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
-    let prev_break = ctx.break_targets.insert(None, after_loop);
-    let prev_continue = ctx.continue_targets.insert(None, test_state);
+    let iteration_labels = std::mem::take(&mut ctx.iteration_labels);
+    let break_target = ctx.loop_control_target(after_loop, ctx.for_of_depth);
+    let continue_target = ctx.loop_control_target(test_state, ctx.for_of_depth);
+    let prev_break = ctx.break_targets.insert(None, break_target);
+    let prev_continue = ctx.continue_targets.insert(None, continue_target);
+    let labeled_continues =
+        ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     ctx.current_state_id = test_state;
     if expr_has_suspension(&while_stmt.test, ctx.is_async) {
@@ -1646,6 +1727,8 @@ fn transform_while_statement(
     } else {
         ctx.continue_targets.remove(&None);
     }
+    ctx.restore_labeled_continue_targets(labeled_continues);
+    ctx.iteration_labels = iteration_labels;
 
     ctx.current_state_id = after_loop;
 }
@@ -1666,8 +1749,13 @@ fn transform_do_while_statement(
 
     ctx.finalize_current_state(StateTerminator::Goto(body_state));
 
-    let prev_break = ctx.break_targets.insert(None, after_loop);
-    let prev_continue = ctx.continue_targets.insert(None, test_state);
+    let iteration_labels = std::mem::take(&mut ctx.iteration_labels);
+    let break_target = ctx.loop_control_target(after_loop, ctx.for_of_depth);
+    let continue_target = ctx.loop_control_target(test_state, ctx.for_of_depth);
+    let prev_break = ctx.break_targets.insert(None, break_target);
+    let prev_continue = ctx.continue_targets.insert(None, continue_target);
+    let labeled_continues =
+        ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     ctx.current_state_id = body_state;
     if stmt_has_suspension(&do_while_stmt.body, ctx.is_async, ctx.detect_for_await)
@@ -1711,6 +1799,8 @@ fn transform_do_while_statement(
     } else {
         ctx.continue_targets.remove(&None);
     }
+    ctx.restore_labeled_continue_targets(labeled_continues);
+    ctx.iteration_labels = iteration_labels;
 
     ctx.current_state_id = after_loop;
 }
@@ -1755,8 +1845,13 @@ fn transform_for_statement(
 
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
-    let prev_break = ctx.break_targets.insert(None, after_loop);
-    let prev_continue = ctx.continue_targets.insert(None, update_state);
+    let iteration_labels = std::mem::take(&mut ctx.iteration_labels);
+    let break_target = ctx.loop_control_target(after_loop, ctx.for_of_depth);
+    let continue_target = ctx.loop_control_target(update_state, ctx.for_of_depth);
+    let prev_break = ctx.break_targets.insert(None, break_target);
+    let prev_continue = ctx.continue_targets.insert(None, continue_target);
+    let labeled_continues =
+        ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     ctx.current_state_id = test_state;
     if let Some(test) = &for_stmt.test {
@@ -1814,6 +1909,8 @@ fn transform_for_statement(
     } else {
         ctx.continue_targets.remove(&None);
     }
+    ctx.restore_labeled_continue_targets(labeled_continues);
+    ctx.iteration_labels = iteration_labels;
 
     ctx.current_state_id = after_loop;
 }
@@ -1845,8 +1942,13 @@ fn transform_for_of_statement(
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
 
-    let prev_break = ctx.break_targets.insert(None, after_loop);
-    let prev_continue = ctx.continue_targets.insert(None, head_state);
+    let iteration_labels = std::mem::take(&mut ctx.iteration_labels);
+    let break_target = ctx.loop_control_target(after_loop, ctx.for_of_depth);
+    let continue_target = ctx.loop_control_target(head_state, ctx.for_of_depth + 1);
+    let prev_break = ctx.break_targets.insert(None, break_target);
+    let prev_continue = ctx.continue_targets.insert(None, continue_target);
+    let labeled_continues =
+        ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     // If the iterable expression contains a suspension point, evaluate it first
     let iterable_expr = if expr_has_suspension(&for_of_stmt.right, ctx.is_async) {
@@ -1879,6 +1981,7 @@ fn transform_for_of_statement(
     });
 
     ctx.current_state_id = body_state;
+    ctx.for_of_depth += 1;
     if stmt_has_suspension(&for_of_stmt.body, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(&for_of_stmt.body, ctx, head_state);
         if ctx.current_state_id != head_state {
@@ -1888,6 +1991,7 @@ fn transform_for_of_statement(
         ctx.emit_statement(*for_of_stmt.body.clone());
         ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
+    ctx.for_of_depth -= 1;
 
     if let Some(prev) = prev_break {
         ctx.break_targets.insert(None, prev);
@@ -1899,6 +2003,8 @@ fn transform_for_of_statement(
     } else {
         ctx.continue_targets.remove(&None);
     }
+    ctx.restore_labeled_continue_targets(labeled_continues);
+    ctx.iteration_labels = iteration_labels;
 
     ctx.current_state_id = after_loop;
 }
@@ -2001,7 +2107,8 @@ fn transform_switch_statement(
         after_state
     };
 
-    let prev_break = ctx.break_targets.insert(None, after_switch);
+    let break_target = ctx.loop_control_target(after_switch, ctx.for_of_depth);
+    let prev_break = ctx.break_targets.insert(None, break_target);
 
     let mut temp_discriminant = switch_stmt.discriminant.clone();
     if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
@@ -2083,8 +2190,14 @@ fn transform_labeled_statement(
         after_state
     };
 
-    ctx.break_targets
-        .insert(Some(label.to_string()), after_labeled);
+    let break_target = ctx.loop_control_target(after_labeled, ctx.for_of_depth);
+    let previous_break = ctx
+        .break_targets
+        .insert(Some(label.to_string()), break_target);
+    let labels_iteration = labels_iteration_statement(stmt);
+    if labels_iteration {
+        ctx.iteration_labels.push(label.to_string());
+    }
 
     if stmt_has_suspension(stmt, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(stmt, ctx, after_labeled);
@@ -2092,7 +2205,15 @@ fn transform_labeled_statement(
         ctx.emit_statement(stmt.clone());
     }
 
-    ctx.break_targets.remove(&Some(label.to_string()));
+    if labels_iteration {
+        ctx.iteration_labels.pop();
+    }
+    if let Some(previous_break) = previous_break {
+        ctx.break_targets
+            .insert(Some(label.to_string()), previous_break);
+    } else {
+        ctx.break_targets.remove(&Some(label.to_string()));
+    }
     ctx.finalize_current_state(StateTerminator::Goto(after_labeled));
     ctx.current_state_id = after_labeled;
 }

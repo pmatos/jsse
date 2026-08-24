@@ -3693,6 +3693,7 @@ impl Interpreter {
                 try_stack: vec![],
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: None,
                 saved_finally_exception: None,
                 pending_for_of_unwind: None,
                 resolve_fn,

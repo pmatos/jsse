@@ -1,6 +1,8 @@
 use crate::ast::*;
 use crate::interpreter::PropertyMap;
-use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
+use crate::interpreter::generator_transform::{
+    GeneratorStateMachine, LoopControlTarget, SentValueBinding,
+};
 use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
@@ -322,6 +324,7 @@ pub(crate) struct AsyncFunctionState {
     pub try_stack: Vec<TryContextInfo>,
     pub pending_binding: Option<SentValueBinding>,
     pub pending_return: Option<JsValue>,
+    pub pending_loop_control: Option<LoopControlTarget>,
     pub saved_finally_exception: Option<JsValue>,
     pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
