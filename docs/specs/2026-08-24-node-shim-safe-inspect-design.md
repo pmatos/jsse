@@ -74,10 +74,17 @@ A candidate `constructor` is rejected when its own `prototype` is the value
 being inspected. Node's `getConstructorName` accepts a constructor only when
 the value is an *instance* of it, and a constructor's own `prototype` object
 never is, so every intrinsic prototype renders as a plain `{}` — matching Node
-for `Date.prototype`, `Error.prototype`, `RegExp.prototype` and any user
-class's `prototype`, not just the three legacy wrapper prototypes. An object
-that merely *inherits* from an intrinsic prototype is unaffected:
+for `Date.prototype`, `Error.prototype`, `RegExp.prototype` and a base class's
+`prototype`, not just the three legacy wrapper prototypes. An object that
+merely *inherits* from an intrinsic prototype is unaffected:
 `Object.create(RegExp.prototype)` still renders `RegExp {}`.
+
+Rejection is where the shim stops, whereas Node keeps walking the chain for
+another accepted constructor. A *derived* class's prototype is the visible
+difference: Node renders `class B extends A {}`'s `B.prototype` as `A {}`,
+because `B.prototype instanceof A` holds one hop up, while the shim renders
+`{}`. Reproducing that needs the `instanceof` call this design exists to
+avoid, so the shorter prefix is accepted.
 
 Built-in presentation combines an internal-slot probe with a trap-free
 prototype-chain classifier. Reparenting a genuine Date, RegExp, or boxed

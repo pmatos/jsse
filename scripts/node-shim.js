@@ -120,33 +120,32 @@
   var errorIsError = errorConstructor.isError;
   var errorPrototype = errorConstructor.prototype;
   var regexpPrototype = regexpConstructor.prototype;
-  var regexpGetSource = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "source").get
-  );
-  var regexpGetHasIndices = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "hasIndices").get
-  );
-  var regexpGetGlobal = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "global").get
-  );
-  var regexpGetIgnoreCase = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "ignoreCase").get
-  );
-  var regexpGetMultiline = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "multiline").get
-  );
-  var regexpGetDotAll = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "dotAll").get
-  );
-  var regexpGetUnicode = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "unicode").get
-  );
-  var regexpGetUnicodeSets = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "unicodeSets").get
-  );
-  var regexpGetSticky = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpPrototype, "sticky").get
-  );
+
+  // Captured defensively rather than as `descriptor.get`: on a host missing any
+  // one of these accessors that read throws from inside this IIFE, before
+  // `process` and `console` are installed, so a single absent flag would cost
+  // every library test its diagnostic output instead of one rendered letter.
+  function intrinsicGetter(target, key) {
+    var desc = objectGetOwnPropertyDescriptor(target, key);
+    if (!desc || isDataDescriptor(desc)) return null;
+    return typeof desc.get === "function" ? functionCall.bind(desc.get) : null;
+  }
+
+  // Null when the host lacks the accessor: `tryApplyIntrinsic` then rejects the
+  // slot probe and the value falls to the ordinary descriptor path.
+  var regexpGetSource = intrinsicGetter(regexpPrototype, "source");
+
+  // Node's flag order. A getter this host lacks contributes no letter.
+  var REGEXP_FLAGS = [
+    { letter: "d", get: intrinsicGetter(regexpPrototype, "hasIndices") },
+    { letter: "g", get: intrinsicGetter(regexpPrototype, "global") },
+    { letter: "i", get: intrinsicGetter(regexpPrototype, "ignoreCase") },
+    { letter: "m", get: intrinsicGetter(regexpPrototype, "multiline") },
+    { letter: "s", get: intrinsicGetter(regexpPrototype, "dotAll") },
+    { letter: "u", get: intrinsicGetter(regexpPrototype, "unicode") },
+    { letter: "v", get: intrinsicGetter(regexpPrototype, "unicodeSets") },
+    { letter: "y", get: intrinsicGetter(regexpPrototype, "sticky") },
+  ];
   var regexpExec = functionCall.bind(regexpConstructor.prototype.exec);
   var arrayPop = functionCall.bind(arrayConstructor.prototype.pop);
   var stringCharCodeAt = functionCall.bind(
@@ -198,19 +197,20 @@
 
   function formatRegExp(value, source) {
     var flags = "";
-    if (regexpGetHasIndices(value)) flags += "d";
-    if (regexpGetGlobal(value)) flags += "g";
-    if (regexpGetIgnoreCase(value)) flags += "i";
-    if (regexpGetMultiline(value)) flags += "m";
-    if (regexpGetDotAll(value)) flags += "s";
-    if (regexpGetUnicode(value)) flags += "u";
-    if (regexpGetUnicodeSets(value)) flags += "v";
-    if (regexpGetSticky(value)) flags += "y";
+    for (var i = 0; i < REGEXP_FLAGS.length; i++) {
+      var entry = REGEXP_FLAGS[i];
+      if (entry.get && entry.get(value)) flags += entry.letter;
+    }
     return "/" + source + "/" + flags;
   }
 
   // Prototype chains are acyclic in practice, but a Proxy defeats
   // OrdinarySetPrototypeOf's cycle check, so every walk below is bounded.
+  // Exhausting the bound always degrades to the walk's not-found result
+  // ("ordinary" / null / false), never to a verdict read off whichever chain
+  // node the last hop happened to land on. A chain deeper than this therefore
+  // classifies as if it ended there, which diverges from Node; no finite bound
+  // avoids that, and only a pathological chain reaches it.
   var MAX_PROTOTYPE_HOPS = 1000;
 
   // Sentinel for a [[Prototype]] read that threw — an exotic object in the
@@ -590,7 +590,7 @@
       // data properties that are undefined-or-callable. Both may be undefined
       // (`defineProperty(o, k, { get: undefined, set: undefined })`); Node
       // renders that as the absent value, so it must fall through.
-      if (desc && !objectHasOwnProperty(desc, "value")) {
+      if (desc && !isDataDescriptor(desc)) {
         if (desc.get) return desc.set ? "[Getter/Setter]" : "[Getter]";
         if (desc.set) return "[Setter]";
         return render(undefined, depth - 1);
@@ -601,6 +601,10 @@
     // Array length and elements are read from own descriptors on the unwrapped
     // target. A missing descriptor is a hole, never an invitation to read
     // through Array.prototype (which could invoke an inherited getter).
+    // Probing every index is O(length); the O(elements) own-index-key form is
+    // blocked on jsse#516 (Object.getOwnPropertyNames/Reflect.ownKeys omit
+    // index keys assigned after array creation, so every element of a
+    // push-built array would render as a hole).
     function renderArray(v, depth) {
       var length = dataDescriptorValue(
         objectGetOwnPropertyDescriptor(v, "length")
@@ -742,11 +746,14 @@
     var hops = MAX_PROTOTYPE_HOPS;
     try {
       do {
+        // Exhausting the bound means the owner was not found, exactly as
+        // reaching a null [[Prototype]] does; falling out of the loop with a
+        // non-null pointer would instead classify off an arbitrary chain node.
+        if (hops-- <= 0) return false;
         pointer = unwrapProxy(objectGetPrototypeOf(pointer));
         if (pointer === REVOKED_PROXY) return false;
       } while (
         pointer !== null &&
-        hops-- > 0 &&
         !hasOwnToString(pointer, "toString") &&
         !hasOwnToPrimitive(pointer, symbolToPrimitive)
       );
