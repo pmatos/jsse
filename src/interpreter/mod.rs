@@ -344,7 +344,7 @@ pub(crate) struct Interpreter {
     /// or leave a function body (or the top-level program). The evaluator uses
     /// this handle to read and write per-body IC slots without threading it
     /// through every recursive call.
-    pub(crate) current_ic_handle: ic_store::BodyStoreHandle,
+    pub(crate) current_ic_handle: Option<ic_store::BodyStoreHandle>,
     /// Current JS call nesting depth. Incremented on entry to every function
     /// invocation (`call_function_inner`) and decremented as the stack unwinds.
     /// When it crosses the depth limits a catchable `RangeError` is thrown
@@ -617,7 +617,7 @@ impl Interpreter {
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
             ic_store: ic_store::IcStore::new(),
-            current_ic_handle: ic_store::BodyStoreHandle(0),
+            current_ic_handle: None,
             call_depth: 0,
             overflow_armed: true,
             tco_suppress_depth: 0,
@@ -3537,8 +3537,7 @@ impl Interpreter {
         self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
 
-        let prev_ic_handle = self.current_ic_handle;
-        self.current_ic_handle = self.ic_store.for_body(&program.body);
+        let prev_ic_handle = self.enter_ic_body(&program.body);
 
         let mut err = None;
         for item in &program.module_items {
@@ -3564,7 +3563,7 @@ impl Interpreter {
             }
         }
         module.borrow_mut().program_ast = None;
-        self.current_ic_handle = prev_ic_handle;
+        self.leave_ic_body(prev_ic_handle);
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
         match err {

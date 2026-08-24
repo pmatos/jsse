@@ -11,11 +11,9 @@ impl Interpreter {
     /// top-level scripts, function bodies, `eval` programs, and dynamically
     /// created functions. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        let handle = self.ic_store.for_body(body);
-        let prev = self.current_ic_handle;
-        self.current_ic_handle = handle;
+        let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), env, None);
-        self.current_ic_handle = prev;
+        self.leave_ic_body(prev);
         result
     }
 
@@ -28,9 +26,7 @@ impl Interpreter {
     /// semantics would corrupt those bindings. Returns the last statement's
     /// completion value (eval's result), matching PerformEval / PerformShadowRealmEval.
     pub(crate) fn exec_eval_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        let handle = self.ic_store.for_body(body);
-        let prev = self.current_ic_handle;
-        self.current_ic_handle = handle;
+        let prev = self.enter_ic_body(body);
         let mut last = Completion::Empty;
         for stmt in body.as_slice() {
             self.gc_root_completion(&last);
@@ -46,7 +42,7 @@ impl Interpreter {
                 }
             }
         }
-        self.current_ic_handle = prev;
+        self.leave_ic_body(prev);
         last
     }
 
