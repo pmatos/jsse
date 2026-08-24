@@ -8341,18 +8341,42 @@ impl Interpreter {
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
-                let mut routed = false;
+                let mut routed_to = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        pending_return = Some(ret_val.clone());
-                        current_id = finally_state;
-                        routed = true;
+                        routed_to = Some((i, finally_state));
                         break;
                     }
                 }
-                if !routed {
+                // §14.7.5.6: a return completion leaving a for-of closes its
+                // iterator and disposes its iteration environment. Only the
+                // loops nested inside the intercepting `finally` unwind now —
+                // a `finally` lexically inside a loop runs first, and that
+                // loop closes once the return resumes past it.
+                let unwind_from = match routed_to {
+                    Some((depth, _)) => for_of_stack
+                        .iter()
+                        .position(|loop_state| loop_state.try_depth > depth)
+                        .unwrap_or(for_of_stack.len()),
+                    None => 0,
+                };
+                match self.unwind_async_for_of_loops(&mut for_of_stack, unwind_from, &func_env) {
+                    Err(exit) => {
+                        self.scheduler.remove_async_function_state(async_id);
+                        return exit;
+                    }
+                    Ok(Some(e)) => {
+                        pending_exception = Some(e);
+                        continue;
+                    }
+                    Ok(None) => {}
+                }
+                if let Some((_, finally_state)) = routed_to {
+                    pending_return = Some(ret_val);
+                    current_id = finally_state;
+                } else {
                     let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
                     match disp {
                         Completion::Return(v) => {
@@ -8501,43 +8525,24 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Return(v) => {
-                    let v = v.clone();
-                    // Close any active for-of iterators on return
-                    let mut unwind_error = None;
-                    for loop_state in for_of_stack.drain(..).rev() {
-                        match self.close_async_for_of_loop(loop_state, &func_env) {
-                            Completion::Throw(e) if unwind_error.is_none() => {
-                                unwind_error = Some(e)
-                            }
-                            Completion::Exit(code) => {
-                                self.scheduler.remove_async_function_state(async_id);
-                                return Completion::Exit(code);
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(e) = unwind_error {
-                        pending_exception = Some(e);
-                        continue;
-                    }
-                    route_return!(v);
+                    // route_return! closes the active for-of iterators first.
+                    route_return!(v.clone());
                     continue;
                 }
                 Completion::Break(label, _) => {
                     // Close iterator for the innermost matching for-of loop
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let loop_state = for_of_stack.remove(pos);
-                        let after_state = loop_state.after_state;
-                        match self.close_async_for_of_loop(loop_state, &func_env) {
-                            Completion::Throw(e) => {
+                        let after_state = for_of_stack[pos].after_state;
+                        match self.unwind_async_for_of_loops(&mut for_of_stack, pos, &func_env) {
+                            Err(exit) => {
+                                self.scheduler.remove_async_function_state(async_id);
+                                return exit;
+                            }
+                            Ok(Some(e)) => {
                                 pending_exception = Some(e);
                                 continue;
                             }
-                            Completion::Exit(code) => {
-                                self.scheduler.remove_async_function_state(async_id);
-                                return Completion::Exit(code);
-                            }
-                            _ => {}
+                            Ok(None) => {}
                         }
                         current_id = after_state;
                         continue;
@@ -8671,23 +8676,17 @@ impl Interpreter {
                         .iter()
                         .position(|loop_state| loop_state.after_state == next)
                     {
-                        let exited: Vec<_> = for_of_stack.drain(exit_pos..).rev().collect();
-                        let mut unwind_error = None;
-                        for loop_state in exited {
-                            match self.close_async_for_of_loop(loop_state, &func_env) {
-                                Completion::Throw(e) if unwind_error.is_none() => {
-                                    unwind_error = Some(e)
-                                }
-                                Completion::Exit(code) => {
-                                    self.scheduler.remove_async_function_state(async_id);
-                                    return Completion::Exit(code);
-                                }
-                                _ => {}
+                        match self.unwind_async_for_of_loops(&mut for_of_stack, exit_pos, &func_env)
+                        {
+                            Err(exit) => {
+                                self.scheduler.remove_async_function_state(async_id);
+                                return exit;
                             }
-                        }
-                        if let Some(e) = unwind_error {
-                            pending_exception = Some(e);
-                            continue;
+                            Ok(Some(e)) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                            Ok(None) => {}
                         }
                     }
                     current_id = next;
@@ -8877,6 +8876,7 @@ impl Interpreter {
                         iter_var: iter_var.clone(),
                         head_state,
                         after_state: forinit_after,
+                        try_depth: try_stack.len(),
                         outer_env: term_env,
                         iteration_env: None,
                     });
@@ -8891,10 +8891,26 @@ impl Interpreter {
                     is_await,
                     ..
                 } => {
-                    let loop_pos = for_of_stack
+                    // A head reached without its entry would mean the driver's
+                    // unwinding dropped it; rebuild one rather than abort.
+                    let loop_pos = match for_of_stack
                         .iter()
                         .rposition(|loop_state| loop_state.iter_var == *iter_var)
-                        .expect("for-of head must have an active loop state");
+                    {
+                        Some(pos) => pos,
+                        None => {
+                            debug_assert!(false, "for-of head without an active loop state");
+                            for_of_stack.push(AsyncForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                head_state: current_id,
+                                after_state,
+                                try_depth: try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            for_of_stack.len() - 1
+                        }
+                    };
 
                     // Dispose resources from previous iteration (for using/await using)
                     if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take() {
@@ -8991,22 +9007,7 @@ impl Interpreter {
                             .borrow()
                             .get(iter_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        self.gc_unroot_value(&iterator);
-                        if let Some(o) = iterator
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            let id = o.id;
-                            self.pending_iter_close.retain(|v| {
-                                if let Some(ov) =
-                                    (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                {
-                                    ov.id != id
-                                } else {
-                                    true
-                                }
-                            });
-                        }
+                        self.unroot_async_for_of_iterator(&iterator);
                         for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
@@ -9088,6 +9089,14 @@ impl Interpreter {
         }
     }
 
+    fn unroot_async_for_of_iterator(&mut self, iterator: &JsValue) {
+        self.gc_unroot_value(iterator);
+        if let Some(iterator_id) = iterator.as_object_id() {
+            self.pending_iter_close
+                .retain(|value| value.as_object_id() != Some(iterator_id));
+        }
+    }
+
     fn close_async_for_of_loop(
         &mut self,
         loop_state: AsyncForOfLoopState,
@@ -9097,13 +9106,12 @@ impl Interpreter {
             self.dispose_resources(&env, Completion::Empty)
         });
 
-        if let Some(iterator) = func_env.borrow().get(&loop_state.iter_var) {
+        // The borrow must end before `iterator_close_result` runs the user's
+        // `return` method, which may write bindings in this same environment.
+        let iterator = func_env.borrow().get(&loop_state.iter_var);
+        if let Some(iterator) = iterator {
             let close_result = self.iterator_close_result(&iterator);
-            self.gc_unroot_value(&iterator);
-            if let Some(iterator_id) = iterator.as_object_id() {
-                self.pending_iter_close
-                    .retain(|value| value.as_object_id() != Some(iterator_id));
-            }
+            self.unroot_async_for_of_iterator(&iterator);
             if !completion.is_abrupt()
                 && let Err(error) = close_result
             {
@@ -9112,6 +9120,27 @@ impl Interpreter {
         }
 
         completion
+    }
+
+    /// Closes every active for-of loop from `from` to the innermost, inner to
+    /// outer. Returns the first (innermost) disposal or iterator-close error,
+    /// or `Err(Completion::Exit)` when a disposer called `__host_exit`.
+    fn unwind_async_for_of_loops(
+        &mut self,
+        for_of_stack: &mut Vec<AsyncForOfLoopState>,
+        from: usize,
+        func_env: &EnvRef,
+    ) -> Result<Option<JsValue>, Completion> {
+        let exited: Vec<_> = for_of_stack.drain(from..).rev().collect();
+        let mut unwind_error = None;
+        for loop_state in exited {
+            match self.close_async_for_of_loop(loop_state, func_env) {
+                Completion::Throw(e) if unwind_error.is_none() => unwind_error = Some(e),
+                Completion::Exit(code) => return Err(Completion::Exit(code)),
+                _ => {}
+            }
+        }
+        Ok(unwind_error)
     }
 
     fn async_fn_complete(

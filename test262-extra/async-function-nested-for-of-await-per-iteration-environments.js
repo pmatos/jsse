@@ -13,6 +13,7 @@ info: |
   for-of loops must therefore retain the complete chain of active iteration
   environments, including declarations made in the outer loop body.
 flags: [async]
+includes: [compareArray.js]
 features: [async-functions]
 ---*/
 

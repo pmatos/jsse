@@ -9,6 +9,7 @@ info: |
   when the loop began. AsyncBlockStart and Await resume module evaluation with
   that complete execution-context state.
 flags: [module]
+includes: [compareArray.js]
 features: [async-functions, top-level-await]
 ---*/
 

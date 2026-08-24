@@ -326,6 +326,10 @@ pub(crate) struct AsyncForOfLoopState {
     pub(crate) iter_var: String,
     pub(crate) head_state: usize,
     pub(crate) after_state: usize,
+    /// Depth of the driver's try stack when the loop began, so an abrupt
+    /// completion can tell a `finally` lexically inside the loop (which runs
+    /// before IteratorClose) from one outside it (which runs after).
+    pub(crate) try_depth: usize,
     /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
     pub(crate) outer_env: EnvRef,
     /// The current lexical head's per-iteration environment, when any.
