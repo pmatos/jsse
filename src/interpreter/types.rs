@@ -337,10 +337,8 @@ pub(crate) struct AsyncForOfLoopState {
 }
 
 impl AsyncForOfLoopState {
-    pub(crate) fn effective_env(&self) -> EnvRef {
-        self.iteration_env
-            .clone()
-            .unwrap_or_else(|| self.outer_env.clone())
+    pub(crate) fn effective_env(&self) -> &EnvRef {
+        self.iteration_env.as_ref().unwrap_or(&self.outer_env)
     }
 }
 
