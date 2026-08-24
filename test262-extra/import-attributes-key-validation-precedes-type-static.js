@@ -13,7 +13,7 @@ flags: [module]
 features: [import-attributes]
 ---*/
 
-import value from './import-attributes-javascript-dep.mjs' with {
+import value from './import-attributes-javascript-dep_FIXTURE.mjs' with {
   type: 'bogus',
   unsupportedKey: 'value'
 };

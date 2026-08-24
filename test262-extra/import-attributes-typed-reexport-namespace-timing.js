@@ -10,7 +10,7 @@ flags: [module]
 features: [import-attributes, json-modules]
 ---*/
 
-import { jsonDefault, seenDuringLoad } from './import-attributes-typed-reexport-namespace-timing-dep.mjs';
+import { jsonDefault, seenDuringLoad } from './import-attributes-typed-reexport-namespace-timing-dep_FIXTURE.mjs';
 
 assert.sameValue(jsonDefault.answer, 42, 'the typed re-export exposes the parsed JSON');
 assert.notSameValue(seenDuringLoad, undefined, 'the self-import namespace resolved the typed re-export');

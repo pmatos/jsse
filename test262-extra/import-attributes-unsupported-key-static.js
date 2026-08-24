@@ -10,4 +10,4 @@ flags: [module]
 features: [import-attributes]
 ---*/
 
-import value from './import-attributes-javascript-dep.mjs' with { unsupportedKey: 'value' };
+import value from './import-attributes-javascript-dep_FIXTURE.mjs' with { unsupportedKey: 'value' };

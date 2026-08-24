@@ -12,7 +12,7 @@ features: [dynamic-import, import-attributes, top-level-await]
 
 async function rejection(options) {
   try {
-    await import('./import-attributes-javascript-dep.mjs', options);
+    await import('./import-attributes-javascript-dep_FIXTURE.mjs', options);
   } catch (error) {
     return error;
   }

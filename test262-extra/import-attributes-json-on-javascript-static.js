@@ -11,4 +11,4 @@ flags: [module]
 features: [import-attributes, json-modules]
 ---*/
 
-import value from './import-attributes-javascript-dep.mjs' with { type: 'json' };
+import value from './import-attributes-javascript-dep_FIXTURE.mjs' with { type: 'json' };

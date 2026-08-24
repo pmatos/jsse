@@ -10,7 +10,7 @@ features: [dynamic-import, import-attributes, json-modules, top-level-await]
 ---*/
 
 let error = null;
-const specifier = './import-attributes-javascript-dep.mjs';
+const specifier = './import-attributes-javascript-dep_FIXTURE.mjs';
 const options = { with: { type: 'json' } };
 try {
   await import(specifier, options);

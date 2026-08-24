@@ -9,8 +9,8 @@ flags: [module]
 features: [import-attributes, json-modules]
 ---*/
 
-import direct from './import-attributes-valid-json-dep.mjs' with { type: 'json' };
-import reexported, { jsonNamespace } from './import-attributes-json-reexport-dep.mjs';
+import direct from './import-attributes-valid-json-dep_FIXTURE.mjs' with { type: 'json' };
+import reexported, { jsonNamespace } from './import-attributes-json-reexport-dep_FIXTURE.mjs';
 
 if (
   direct.answer !== 42 ||

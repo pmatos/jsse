@@ -10,7 +10,7 @@ flags: [module]
 features: [import-attributes, json-modules]
 ---*/
 
-import { jsonNamespace, jsonDefault, localShadow } from './import-attributes-typed-reexport-binding-isolation-dep.mjs';
+import { jsonNamespace, jsonDefault, localShadow } from './import-attributes-typed-reexport-binding-isolation-dep_FIXTURE.mjs';
 
 assert.sameValue(localShadow, 'local-shadow', 'the local declaration keeps its own value');
 assert.sameValue(typeof jsonNamespace, 'object', 'the star re-export resolves to a namespace');

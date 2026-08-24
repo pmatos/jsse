@@ -9,13 +9,13 @@ flags: [module]
 features: [import-attributes, json-modules, ShadowRealm]
 ---*/
 
-import parsed from './import-attributes-valid-json-dep.mjs' with { type: 'json' };
+import parsed from './import-attributes-valid-json-dep_FIXTURE.mjs' with { type: 'json' };
 
 assert.sameValue(parsed instanceof Object, true, 'the outer realm parses into its own intrinsics');
 
 const realm = new ShadowRealm();
 const check = await realm.importValue(
-  './import-attributes-json-module-realm-isolation-dep.mjs',
+  './import-attributes-json-module-realm-isolation-dep_FIXTURE.mjs',
   'parsedIsOwnRealmObject'
 );
 

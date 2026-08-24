@@ -11,7 +11,7 @@ features: [dynamic-import, import-attributes, top-level-await]
 
 let error;
 try {
-  await import('./import-attributes-request-order-dep.mjs');
+  await import('./import-attributes-request-order-dep_FIXTURE.mjs');
 } catch (caught) {
   error = caught;
 }

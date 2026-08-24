@@ -8,7 +8,7 @@ flags: [module]
 features: [dynamic-import, import-attributes, json-modules, top-level-await]
 ---*/
 
-const specifier = './import-attributes-valid-json-dep.mjs';
+const specifier = './import-attributes-valid-json-dep_FIXTURE.mjs';
 const options = { with: { type: 'json' } };
 const namespace = await import(specifier, options);
 if (namespace.default.answer !== 42) {
