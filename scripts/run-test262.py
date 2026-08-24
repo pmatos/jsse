@@ -657,12 +657,22 @@ def _uncollected_mjs(path: Path) -> list[Path]:
             return [path]
         return []
     if path.is_dir():
-        return sorted(f for f in path.rglob("*.mjs") if not _is_fixture(f))
+        return [f for f in path.rglob("*.mjs") if not _is_fixture(f)]
     return []
 
 
-def _raise_for_uncollected_mjs(paths: list[Path]) -> None:
-    uncollected = sorted({f for path in paths for f in _uncollected_mjs(path)})
+def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
+    # The test262 submodule is third-party and must never be modified, so its
+    # own .mjs files (e.g. tools/) can't act on the "rename it" remedy below.
+    upstream = test262_dir.resolve()
+    uncollected = sorted(
+        {
+            f
+            for path in paths
+            for f in _uncollected_mjs(path)
+            if not f.resolve().is_relative_to(upstream)
+        }
+    )
     if not uncollected:
         return
 
@@ -678,7 +688,7 @@ def _raise_for_uncollected_mjs(paths: list[Path]) -> None:
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     if paths:
         selected = [Path(p) for p in paths]
-        _raise_for_uncollected_mjs(selected)
+        _raise_for_uncollected_mjs(selected, test262_dir)
         tests = []
         for path in selected:
             if path.is_file() and path.suffix == ".js":
@@ -689,15 +699,14 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
                 )
         return sorted(tests)
 
+    # The default corpus lives entirely inside the read-only test262 submodule,
+    # so there is nothing there the .mjs naming guard could ask an author to fix.
     test_dir = test262_dir / "test"
     tests = []
-    default_dirs = []
     for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
-            default_dirs.append(d)
             tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
-    _raise_for_uncollected_mjs(default_dirs)
     return sorted(tests)
 
 

@@ -17,6 +17,11 @@ recognizes module tests through test262 frontmatter. Executable `.mjs` files in
   contains a non-fixture `.mjs` file, raise a collection error that explains
   how to name executable module tests and fixtures.
 - Permit `_FIXTURE.mjs` files in selected directories without collecting them.
+- Exempt anything under the `test262/` submodule from the guard. It is
+  third-party and must never be modified, so a rename is not an available
+  remedy there; the guard only polices first-party test directories.
+- Teach `scripts/run-custom-tests.py` the same `_FIXTURE` predicate, so both
+  runners agree on which module files are fixtures rather than tests.
 
 This uses the existing `compute_scenarios()` and `JsseAdapter` module path,
 which passes `--module` and supplies the test262 harness as preludes. It also
@@ -33,7 +38,7 @@ run. The message lists every offending `.mjs` path and directs authors to use a
 ## Validation
 
 - Add runner tests for rejecting an explicit non-fixture `.mjs` path, rejecting
-  one nested in a selected directory, and allowing `_FIXTURE.mjs` dependencies.
+  one nested in a selected directory, allowing `_FIXTURE.mjs` dependencies, and
+  never aborting on a `.mjs` inside the `test262/` submodule.
 - Run the Python runner tests and `test262-extra/` in normal and bytecode modes.
 - Run the repository's Rust quality gate and full test262 regression suite.
-

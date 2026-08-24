@@ -170,6 +170,18 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("Files:   1", result.stdout)
 
+    def test_test262_submodule_mjs_does_not_block_collection(self):
+        tools_dir = self.test262 / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "generator.mjs").write_text("", encoding="utf-8")
+
+        result = self.run_runner(
+            self.write_engine(0), "--fail-on-failures", paths=("test262",)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("would not be collected", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
