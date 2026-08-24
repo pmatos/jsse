@@ -726,11 +726,11 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let exec_env = for_of_stack
+            let term_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -892,7 +892,6 @@ impl Interpreter {
                 return Completion::Normal(self.create_iter_result_object(ret_val, true));
             }
 
-            let term_env = exec_env;
             match &terminator {
                 StateTerminator::Yield {
                     value,
@@ -1872,11 +1871,7 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             };
-                            let needs_iteration_env = matches!(
-                                left,
-                                ForInOfLeft::Variable(decl)
-                                    if !matches!(decl.kind, VarKind::Var)
-                            );
+                            let needs_iteration_env = Self::for_of_head_lexical(left).is_some();
                             let outer_env = for_of_stack[loop_pos].outer_env.clone();
                             let bind_env = if needs_iteration_env {
                                 let iteration_env = Environment::new(Some(outer_env));
@@ -1897,11 +1892,7 @@ impl Interpreter {
                                         }
                                     };
                                     if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) {
-                                        let hint = if decl.kind == VarKind::AwaitUsing {
-                                            DisposeHint::Async
-                                        } else {
-                                            DisposeHint::Sync
-                                        };
+                                        let hint = DisposeHint::for_var_kind(decl.kind);
                                         if let Err(e) =
                                             self.add_disposable_resource(&bind_env, &val, hint)
                                         {
@@ -4504,11 +4495,11 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let exec_env = for_of_stack
+            let term_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -4722,7 +4713,6 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
 
-            let term_env = exec_env;
             match &terminator {
                 StateTerminator::Yield {
                     value,
@@ -6127,11 +6117,7 @@ impl Interpreter {
                                     return Completion::Normal(promise);
                                 }
                             };
-                            let needs_iteration_env = matches!(
-                                left,
-                                ForInOfLeft::Variable(decl)
-                                    if !matches!(decl.kind, VarKind::Var)
-                            );
+                            let needs_iteration_env = Self::for_of_head_lexical(left).is_some();
                             let outer_env = for_of_stack[loop_pos].outer_env.clone();
                             let bind_env = if needs_iteration_env {
                                 let iteration_env = Environment::new(Some(outer_env));
@@ -6152,11 +6138,7 @@ impl Interpreter {
                                         }
                                     };
                                     if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) {
-                                        let hint = if decl.kind == VarKind::AwaitUsing {
-                                            DisposeHint::Async
-                                        } else {
-                                            DisposeHint::Sync
-                                        };
+                                        let hint = DisposeHint::for_var_kind(decl.kind);
                                         if let Err(e) =
                                             self.add_disposable_resource(&bind_env, &val, hint)
                                         {
@@ -7193,6 +7175,8 @@ impl Interpreter {
         func_env: &EnvRef,
         target_state: usize,
     ) -> Result<(), JsValue> {
+        // Jumping to a loop's `after_state` leaves that loop, so it closes;
+        // jumping to its `head_state` is the next iteration, so it stays.
         let keep_len = if let Some(pos) = for_of_stack
             .iter()
             .rposition(|loop_state| loop_state.after_state == target_state)
@@ -7209,25 +7193,21 @@ impl Interpreter {
 
         while for_of_stack.len() > keep_len {
             let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
-            let mut error = match loop_state.iteration_env {
-                Some(env) => match self.dispose_resources(&env, Completion::Empty) {
-                    Completion::Throw(e) => Some(e),
-                    _ => None,
-                },
-                None => None,
-            };
+            let mut error = None;
+            if let Some(env) = loop_state.iteration_env
+                && let Completion::Throw(e) = self.dispose_resources(&env, Completion::Empty)
+            {
+                error = Some(e);
+            }
             // The borrow must end before `iterator_close_result` runs the
             // user's `return` method, which may write bindings in this same
             // environment.
             let iterator = func_env.borrow().get(&loop_state.iter_var);
             if let Some(iterator) = iterator {
                 let close_result = self.iterator_close_result(&iterator);
-                self.unroot_async_for_of_iterator(&iterator);
-                if error.is_none()
-                    && let Err(e) = close_result
-                {
-                    error = Some(e);
-                }
+                self.unroot_for_of_iterator(&iterator);
+                // A disposer error takes precedence over a close error.
+                error = error.or(close_result.err());
             }
             if let Some(e) = error {
                 self.sync_generator_for_of_stack(generator_id, for_of_stack);
@@ -7244,10 +7224,18 @@ impl Interpreter {
     /// driver still holds.
     fn sync_generator_for_of_stack(&mut self, generator_id: u64, for_of_stack: &[ForOfLoopState]) {
         if for_of_stack.is_empty() {
-            self.generator_for_of_stacks.remove(&generator_id);
+            // Generators with no for-of hit this on every state transition;
+            // skip hashing the id when the table holds nothing to remove.
+            if !self.generator_for_of_stacks.is_empty() {
+                self.generator_for_of_stacks.remove(&generator_id);
+            }
         } else {
-            self.generator_for_of_stacks
-                .insert(generator_id, for_of_stack.to_vec());
+            let slot = self
+                .generator_for_of_stacks
+                .entry(generator_id)
+                .or_default();
+            slot.clear();
+            slot.extend_from_slice(for_of_stack);
         }
     }
 }

@@ -8652,7 +8652,7 @@ impl Interpreter {
                     let loop_state = for_of_stack.remove(pos);
                     let iterator = func_env.borrow().get(&loop_state.iter_var);
                     if let Some(iterator) = iterator {
-                        self.unroot_async_for_of_iterator(&iterator);
+                        self.unroot_for_of_iterator(&iterator);
                     }
                 }
 
@@ -8763,11 +8763,11 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let exec_env = for_of_stack
+            let term_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
             self.in_state_machine = saved_in_state_machine;
             // `__host_exit` in the async body (issue #242) propagates out as
             // `Completion::Exit` instead of settling the result promise; the
@@ -8852,7 +8852,6 @@ impl Interpreter {
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            let term_env = exec_env;
             match terminator {
                 StateTerminator::Await {
                     value,
@@ -9263,7 +9262,7 @@ impl Interpreter {
                             .borrow()
                             .get(iter_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        self.unroot_async_for_of_iterator(&iterator);
+                        self.unroot_for_of_iterator(&iterator);
                         for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
@@ -9275,7 +9274,7 @@ impl Interpreter {
                                 continue;
                             }
                         };
-                        let needs_iter_env = matches!(left, ForInOfLeft::Variable(decl) if !matches!(decl.kind, VarKind::Var));
+                        let needs_iter_env = Self::for_of_head_lexical(left).is_some();
                         let outer_env = for_of_stack[loop_pos].outer_env.clone();
                         let bind_env = if needs_iter_env {
                             let ie = Environment::new(Some(outer_env));
@@ -9289,11 +9288,9 @@ impl Interpreter {
                                 let is_using =
                                     matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
                                 if is_using {
-                                    let hint = if decl.kind == VarKind::AwaitUsing {
-                                        crate::interpreter::types::DisposeHint::Async
-                                    } else {
-                                        crate::interpreter::types::DisposeHint::Sync
-                                    };
+                                    let hint = crate::interpreter::types::DisposeHint::for_var_kind(
+                                        decl.kind,
+                                    );
                                     if let Err(e) =
                                         self.add_disposable_resource(&bind_env, &value, hint)
                                     {
@@ -9346,17 +9343,30 @@ impl Interpreter {
         }
     }
 
+    /// The declaration and `BindingKind` of a lexical for-in/of head, or
+    /// `None` when the head is not lexical (`var`, or an assignment pattern).
+    /// A lexical head is exactly the case that needs a TDZ head environment
+    /// and a fresh per-iteration environment.
+    pub(crate) fn for_of_head_lexical(
+        left: &ForInOfLeft,
+    ) -> Option<(&VariableDeclaration, BindingKind)> {
+        let ForInOfLeft::Variable(decl) = left else {
+            return None;
+        };
+        let kind = match decl.kind {
+            VarKind::Var => return None,
+            VarKind::Let => BindingKind::Let,
+            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
+        };
+        Some((decl, kind))
+    }
+
     /// §14.7.5.12 ForIn/OfHeadEvaluation steps 1-2: the lexical head's names
     /// are in TDZ while the iterable expression is evaluated, in a temporary
     /// environment that no loop iteration ever uses.
     fn for_of_head_tdz_env(left: &ForInOfLeft, env: &EnvRef) -> EnvRef {
-        let ForInOfLeft::Variable(decl) = left else {
+        let Some((decl, binding_kind)) = Self::for_of_head_lexical(left) else {
             return env.clone();
-        };
-        let binding_kind = match decl.kind {
-            VarKind::Var => return env.clone(),
-            VarKind::Let => BindingKind::Let,
-            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
         };
         let head_env = Environment::new(Some(env.clone()));
         let mut tdz_names = Vec::new();
@@ -9369,7 +9379,7 @@ impl Interpreter {
         head_env
     }
 
-    fn unroot_async_for_of_iterator(&mut self, iterator: &JsValue) {
+    fn unroot_for_of_iterator(&mut self, iterator: &JsValue) {
         self.gc_unroot_value(iterator);
         if let Some(iterator_id) = iterator.as_object_id() {
             self.pending_iter_close
@@ -9393,13 +9403,13 @@ impl Interpreter {
         let iterator = func_env.borrow().get(&loop_state.iter_var);
         if matches!(completion, Completion::Exit(_)) {
             if let Some(iterator) = iterator {
-                self.unroot_async_for_of_iterator(&iterator);
+                self.unroot_for_of_iterator(&iterator);
             }
             return completion;
         }
         if let Some(iterator) = iterator {
             let close_result = self.iterator_close_result(&iterator);
-            self.unroot_async_for_of_iterator(&iterator);
+            self.unroot_for_of_iterator(&iterator);
             if let Some(code) = self.pending_exit {
                 return Completion::Exit(code);
             }

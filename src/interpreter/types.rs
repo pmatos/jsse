@@ -341,6 +341,8 @@ pub(crate) struct ForOfLoopState {
     /// Depth of the driver's try stack when the loop began, so an abrupt
     /// completion can tell a `finally` lexically inside the loop (which runs
     /// before IteratorClose) from one outside it (which runs after).
+    /// Only the async-function driver's unwinder reads this; the generator
+    /// drivers record it but do not yet consult it.
     pub(crate) try_depth: usize,
     /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
     pub(crate) outer_env: EnvRef,
@@ -741,6 +743,18 @@ pub(crate) struct Environment {
 pub(crate) enum DisposeHint {
     Sync,
     Async,
+}
+
+impl DisposeHint {
+    /// The hint a `using` / `await using` declaration disposes its resources
+    /// with. Non-`using` kinds never reach this.
+    pub(crate) fn for_var_kind(kind: VarKind) -> Self {
+        if kind == VarKind::AwaitUsing {
+            Self::Async
+        } else {
+            Self::Sync
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
