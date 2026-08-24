@@ -24,6 +24,7 @@ try {
 } catch (e) {
   err = e;
 }
-if (!(err instanceof SyntaxError)) {
-  throw new Error('a static `import source` of a module with a missing transitive dependency should fail to link with a SyntaxError (shallow source-phase load), got: ' + err);
-}
+assert(
+  err instanceof SyntaxError,
+  'a static `import source` of a module with a missing transitive dependency should fail to link with a SyntaxError (shallow source-phase load), got: ' + err
+);

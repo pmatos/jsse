@@ -31,32 +31,20 @@ var iteratorToStringTagSetter = Object.getOwnPropertyDescriptor(
   Symbol.toStringTag
 ).set;
 
-function assertTypeError(setter, value, label) {
-  var caught;
-  try {
-    setter.call(ns, value);
-  } catch (error) {
-    caught = error;
-  }
-  if (!(caught instanceof TypeError)) {
-    throw new Test262Error(label + ": expected TypeError, got " + caught);
-  }
-}
+assert.throws(TypeError, function () {
+  errorStackSetter.call(ns, "updated stack");
+}, "Error.prototype.stack");
+assert.throws(TypeError, function () {
+  iteratorConstructorSetter.call(ns, "updated constructor");
+}, "Iterator.prototype.constructor");
+assert.throws(TypeError, function () {
+  iteratorToStringTagSetter.call(ns, "updated tag");
+}, "Iterator.prototype[Symbol.toStringTag]");
 
-assertTypeError(errorStackSetter, "updated stack", "Error.prototype.stack");
-assertTypeError(iteratorConstructorSetter, "updated constructor", "Iterator.prototype.constructor");
-assertTypeError(
-  iteratorToStringTagSetter,
-  "updated tag",
-  "Iterator.prototype[Symbol.toStringTag]"
+assert.sameValue(ns.stack, "original stack", "the exported stack binding was changed");
+assert.sameValue(
+  ns.constructor,
+  "original constructor",
+  "the exported constructor binding was changed"
 );
-
-if (ns.stack !== "original stack") {
-  throw new Test262Error("the exported stack binding was changed");
-}
-if (ns.constructor !== "original constructor") {
-  throw new Test262Error("the exported constructor binding was changed");
-}
-if (ns[Symbol.toStringTag] !== "Module") {
-  throw new Test262Error("the namespace toStringTag was changed");
-}
+assert.sameValue(ns[Symbol.toStringTag], "Module", "the namespace toStringTag was changed");

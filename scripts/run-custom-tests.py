@@ -18,7 +18,7 @@ def _is_fixture(p: Path) -> bool:
 
 def _collect_tests(root: Path) -> list[Path]:
     files = list(root.rglob("*.js")) + list(root.rglob("*.mjs"))
-    # Skip files imported as modules by other tests (named *_FIXTURE.js/.mjs).
+    # Skip files imported as modules by other tests.
     return sorted(p for p in files if not _is_fixture(p))
 
 

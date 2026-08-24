@@ -26,9 +26,7 @@ globalThis.evaluations = [];
 
 import defer * as ns from "./import-defer-super-property-set_FIXTURE.mjs";
 
-if (globalThis.evaluations.length !== 0) {
-  throw new Test262Error("import defer should not pre-evaluate");
-}
+assert.sameValue(globalThis.evaluations.length, 0, "import defer should not pre-evaluate");
 
 // (1)/(2): exported key — triggers evaluation, throws TypeError, binding unchanged.
 {
@@ -40,17 +38,13 @@ if (globalThis.evaluations.length !== 0) {
       super[key] = 14;
     }
   }
-  let caught;
-  try { new B(); } catch (e) { caught = e; }
-  if (globalThis.evaluations.length === 0) {
-    throw new Test262Error("super[exported] = should trigger deferred evaluation");
-  }
-  if (!(caught instanceof TypeError)) {
-    throw new Test262Error("expected TypeError on strict super-set of exported, got " + caught);
-  }
-  if (ns.exported !== 3) {
-    throw new Test262Error("ns.exported must remain 3 after rejected [[Set]], got " + ns.exported);
-  }
+  assert.throws(TypeError, function () { new B(); }, "strict super-set of exported");
+  assert.notSameValue(
+    globalThis.evaluations.length,
+    0,
+    "super[exported] = should trigger deferred evaluation"
+  );
+  assert.sameValue(ns.exported, 3, "ns.exported must remain 3 after rejected [[Set]]");
 }
 
 // (3)/(4): non-exported key — no new property, no re-evaluation.
@@ -64,17 +58,13 @@ if (globalThis.evaluations.length !== 0) {
       super[key] = 7;
     }
   }
-  let caught;
-  try { new B(); } catch (e) { caught = e; }
-  if (!(caught instanceof TypeError)) {
-    throw new Test262Error("expected TypeError on strict super-set of notExported, got " + caught);
-  }
-  if ("notExported" in ns) {
-    throw new Test262Error("ns.notExported must not be created on rejected [[Set]]");
-  }
-  if (globalThis.evaluations.length !== before) {
-    throw new Test262Error("evaluation must not re-run after first trigger");
-  }
+  assert.throws(TypeError, function () { new B(); }, "strict super-set of notExported");
+  assert(!("notExported" in ns), "ns.notExported must not be created on rejected [[Set]]");
+  assert.sameValue(
+    globalThis.evaluations.length,
+    before,
+    "evaluation must not re-run after first trigger"
+  );
 }
 
 // (5): symbol-like key — TypeError, no spurious evaluation re-run.
@@ -87,12 +77,10 @@ if (globalThis.evaluations.length !== 0) {
       super[Symbol.iterator] = function*() {};
     }
   }
-  let caught;
-  try { new B(); } catch (e) { caught = e; }
-  if (!(caught instanceof TypeError)) {
-    throw new Test262Error("expected TypeError on strict super-set of Symbol.iterator, got " + caught);
-  }
-  if (globalThis.evaluations.length !== before) {
-    throw new Test262Error("symbol-like super-set must not re-evaluate");
-  }
+  assert.throws(TypeError, function () { new B(); }, "strict super-set of Symbol.iterator");
+  assert.sameValue(
+    globalThis.evaluations.length,
+    before,
+    "symbol-like super-set must not re-evaluate"
+  );
 }

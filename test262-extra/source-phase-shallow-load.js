@@ -22,6 +22,7 @@ try {
 } catch (e) {
   err = e;
 }
-if (!(err instanceof SyntaxError)) {
-  throw new Error('import.source() of a module with a missing transitive dependency should reject with a SyntaxError (shallow source-phase load), got: ' + err);
-}
+assert(
+  err instanceof SyntaxError,
+  'import.source() of a module with a missing transitive dependency should reject with a SyntaxError (shallow source-phase load), got: ' + err
+);

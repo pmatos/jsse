@@ -652,13 +652,8 @@ class TestCollectionError(Exception):
 
 
 def _uncollected_mjs(path: Path) -> list[Path]:
-    if path.is_file():
-        if path.suffix == ".mjs" and not _is_fixture(path):
-            return [path]
-        return []
-    if path.is_dir():
-        return [f for f in path.rglob("*.mjs") if not _is_fixture(f)]
-    return []
+    candidates = [path] if path.is_file() else path.rglob("*.mjs")
+    return [f for f in candidates if f.suffix == ".mjs" and not _is_fixture(f)]
 
 
 def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
@@ -681,7 +676,7 @@ def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
         "non-fixture .mjs files would not be collected:\n"
         f"  {formatted}\n"
         "Rename executable module tests to .js and add flags: [module], or "
-        "name imported dependencies *_FIXTURE.mjs."
+        "name imported dependencies *_FIXTURE.js/.mjs."
     )
 
 

@@ -31,18 +31,17 @@ import * as ns from './source-phase-reexport_FIXTURE.mjs';
 // `export *` is unambiguous: both resolve to the same [[Module]] + ~source~.
 import { mod } from './source-phase-reexport-star_FIXTURE.mjs';
 
-if (!(x instanceof $262.AbstractModuleSource)) {
-  throw new Error('named re-exported source binding should be a %AbstractModuleSource% instance');
-}
-if (!(ns.x instanceof $262.AbstractModuleSource)) {
-  throw new Error('namespace [[Get]] of a re-exported source binding should be a %AbstractModuleSource% instance');
-}
-if (ns.x !== x) {
-  throw new Error('the named and namespace views should observe the same [[ModuleSource]]');
-}
-if (!(mod instanceof $262.AbstractModuleSource)) {
-  throw new Error('unambiguous double star re-export should resolve to a %AbstractModuleSource% instance');
-}
-if (mod !== x) {
-  throw new Error('all re-exports of the same `<module source>` should observe the same [[ModuleSource]]');
-}
+assert(
+  x instanceof $262.AbstractModuleSource,
+  'named re-exported source binding should be a %AbstractModuleSource% instance'
+);
+assert(
+  ns.x instanceof $262.AbstractModuleSource,
+  'namespace [[Get]] of a re-exported source binding should be a %AbstractModuleSource% instance'
+);
+assert.sameValue(ns.x, x, 'the named and namespace views should observe the same [[ModuleSource]]');
+assert(
+  mod instanceof $262.AbstractModuleSource,
+  'unambiguous double star re-export should resolve to a %AbstractModuleSource% instance'
+);
+assert.sameValue(mod, x, 'all re-exports of the same `<module source>` should observe the same [[ModuleSource]]');

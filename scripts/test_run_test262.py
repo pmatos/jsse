@@ -7,31 +7,32 @@ import textwrap
 import unittest
 from pathlib import Path
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNNER = REPO_ROOT / "scripts" / "run-test262.py"
+
+
+def frontmatter(*lines: str) -> str:
+    body = "\n".join(lines)
+    return f"/*---\n{body}\n---*/\n"
 
 
 class RunTest262ExitStatusTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.test262 = self.root / "test262"
-        test_dir = self.test262 / "test"
-        test_dir.mkdir(parents=True)
-        self.test_file = test_dir / "sample.js"
-        self.test_file.write_text(
-            textwrap.dedent(
-                """\
-                /*---
-                flags: [raw]
-                ---*/
-                """
-            ),
-            encoding="utf-8",
+        self.test_file = self.write_file(
+            "test262/test/sample.js", frontmatter("flags: [raw]")
         )
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def write_file(self, relpath: str, content: str = "") -> Path:
+        path = self.root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
 
     def write_engine(self, exit_code: int) -> Path:
         engine = self.root / f"engine_exit_{exit_code}.py"
@@ -122,9 +123,7 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
 
     def test_explicit_non_fixture_mjs_is_rejected(self):
-        extra_dir = self.root / "test262-extra"
-        extra_dir.mkdir()
-        (extra_dir / "module-test.mjs").write_text("", encoding="utf-8")
+        self.write_file("test262-extra/module-test.mjs")
 
         result = self.run_runner(
             self.write_engine(0), paths=("test262-extra/module-test.mjs",)
@@ -136,10 +135,7 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertIn("flags: [module]", result.stderr)
 
     def test_directory_with_non_fixture_mjs_is_rejected(self):
-        extra_dir = self.root / "test262-extra"
-        nested_dir = extra_dir / "nested"
-        nested_dir.mkdir(parents=True)
-        (nested_dir / "module-test.mjs").write_text("", encoding="utf-8")
+        self.write_file("test262-extra/nested/module-test.mjs")
 
         result = self.run_runner(self.write_engine(0), paths=("test262-extra",))
 
@@ -147,19 +143,8 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertIn("test262-extra/nested/module-test.mjs", result.stderr)
 
     def test_directory_allows_mjs_fixtures(self):
-        extra_dir = self.root / "test262-extra"
-        extra_dir.mkdir()
-        (extra_dir / "module-test.js").write_text(
-            textwrap.dedent(
-                """\
-                /*---
-                flags: [module]
-                ---*/
-                """
-            ),
-            encoding="utf-8",
-        )
-        (extra_dir / "dep_FIXTURE.mjs").write_text("", encoding="utf-8")
+        self.write_file("test262-extra/module-test.js", frontmatter("flags: [module]"))
+        self.write_file("test262-extra/dep_FIXTURE.mjs")
 
         result = self.run_runner(
             self.write_engine(0),
@@ -171,9 +156,7 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertIn("Files:   1", result.stdout)
 
     def test_test262_submodule_mjs_does_not_block_collection(self):
-        tools_dir = self.test262 / "tools"
-        tools_dir.mkdir(parents=True)
-        (tools_dir / "generator.mjs").write_text("", encoding="utf-8")
+        self.write_file("test262/tools/generator.mjs")
 
         result = self.run_runner(
             self.write_engine(0), "--fail-on-failures", paths=("test262",)

@@ -24,12 +24,11 @@ try {
 } catch (e) {
   evalErr = e;
 }
-if (evalErr === null) {
-  throw new Error('plain import of a throwing module should reject');
-}
-if (evalErr instanceof SyntaxError) {
-  throw new Error('plain import should reject with the thrown error, not a SyntaxError');
-}
+assert.notSameValue(evalErr, null, 'plain import of a throwing module should reject');
+assert(
+  !(evalErr instanceof SyntaxError),
+  'plain import should reject with the thrown error, not a SyntaxError'
+);
 
 // import.source() of the same module must reject with the source-phase
 // SyntaxError, NOT replay the cached evaluation error.
@@ -39,6 +38,7 @@ try {
 } catch (e) {
   srcErr = e;
 }
-if (!(srcErr instanceof SyntaxError)) {
-  throw new Error('import.source() after a cached evaluation error should reject with a SyntaxError, got: ' + srcErr);
-}
+assert(
+  srcErr instanceof SyntaxError,
+  'import.source() after a cached evaluation error should reject with a SyntaxError, got: ' + srcErr
+);
