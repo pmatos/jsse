@@ -50,8 +50,10 @@ therefore invokes **jsse with `--node`** so those primitives exist (never Node â
 it has no such flag and doesn't need one). The shim is guarded to be a complete
 no-op on real Node, where `process`, the full `console`, and `require('util')`
 already exist; that inertness is what lets the identical bundle run on Node as
-the reference oracle. When the floor is absent (jsse without `--node`) each
-surface degrades to a pure-JS fallback.
+the reference oracle. The shim captures `__host_proxy_target` and immediately
+removes its configurable global binding, keeping the Proxy abstraction bypass
+private from subsequently evaluated library code. When the floor is absent
+(jsse without `--node`) each surface degrades to a pure-JS fallback.
 
 ## Running
 

@@ -33,6 +33,9 @@
   var hostExit = typeof __host_exit !== "undefined" ? __host_exit : null;
   var hostProxyTarget =
     typeof __host_proxy_target !== "undefined" ? __host_proxy_target : null;
+  // This metadata escape hatch exists only for the shim. Keep the captured
+  // closure private so bundled library code cannot bypass Proxy handlers.
+  if (hostProxyTarget) delete globalThis.__host_proxy_target;
   var fallbackConsoleLog = console.log;
 
   var NS_PER_SEC = 1000000000;
