@@ -50,6 +50,14 @@ enum DestructLRef {
     Super(u64, JsPropertyKey, JsValue, bool),
 }
 
+/// Result of pre-evaluating a possible member target for destructuring.
+/// Suspension is distinct from the optional-reference channel so callers
+/// cannot mistake a yielded evaluation for a non-member target.
+enum MemberLhsRef {
+    Ref(Option<DestructLRef>),
+    Suspended(JsValue),
+}
+
 impl Interpreter {
     /// §2.1.1.1 EvaluateImportCall: evaluate an import call's options expression
     /// without inspecting the resulting value. The raw value must survive the
@@ -4223,21 +4231,16 @@ impl Interpreter {
         result
     }
 
-    /// Evaluate a member expression as an LHS reference (base object + key string).
-    /// Returns Ok(Some((base, key))) for member expressions,
-    /// Ok(None) for non-member expressions (handled lazily),
-    /// Err(e) if evaluation throws.
-    /// Sets *yield_val if a yield is encountered.
     /// Evaluate a member expression as an lref (Reference) for destructuring.
-    /// Returns base + key info — ToPropertyKey is deferred to PutValue time per spec.
+    /// Returns base + key info or suspension explicitly; ToPropertyKey is
+    /// deferred to PutValue time per spec.
     fn eval_member_lhs_ref(
         &mut self,
         target: &Expression,
         env: &EnvRef,
-        yield_val: &mut Option<JsValue>,
-    ) -> Result<Option<DestructLRef>, JsValue> {
+    ) -> Result<MemberLhsRef, JsValue> {
         let Expression::Member(obj_expr, prop, _) = target else {
-            return Ok(None);
+            return Ok(MemberLhsRef::Ref(None));
         };
 
         // Handle super.prop / super[expr]
@@ -4248,11 +4251,8 @@ impl Interpreter {
                     let raw_key = match self.eval_expr(key_expr, env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),
-                        Completion::Yield(v) => {
-                            *yield_val = Some(v);
-                            return Ok(None);
-                        }
-                        _ => return Ok(None),
+                        Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
+                        _ => return Ok(MemberLhsRef::Ref(None)),
                     };
                     self.to_property_key(&raw_key)?
                 }
@@ -4265,42 +4265,39 @@ impl Interpreter {
                 .ok_or_else(|| self.create_type_error("No super class"))?;
             let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
-            return Ok(Some(DestructLRef::Super(
+            return Ok(MemberLhsRef::Ref(Some(DestructLRef::Super(
                 super_base_id,
                 key,
                 this_val,
                 strict,
-            )));
+            ))));
         }
 
         let base = match self.eval_expr(obj_expr, env) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
-            Completion::Yield(v) => {
-                *yield_val = Some(v);
-                return Ok(None);
-            }
-            _ => return Ok(None),
+            Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
+            _ => return Ok(MemberLhsRef::Ref(None)),
         };
 
         match prop {
-            MemberProperty::Dot(name) => Ok(Some(DestructLRef::Member(
+            MemberProperty::Dot(name) => Ok(MemberLhsRef::Ref(Some(DestructLRef::Member(
                 base,
                 JsValue::string(JsString::from_str(name)),
-            ))),
+            )))),
             MemberProperty::Computed(key_expr) => {
                 let raw_key = match self.eval_expr(key_expr, env) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    Completion::Yield(v) => {
-                        *yield_val = Some(v);
-                        return Ok(None);
-                    }
-                    _ => return Ok(None),
+                    Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
+                    _ => return Ok(MemberLhsRef::Ref(None)),
                 };
-                Ok(Some(DestructLRef::Member(base, raw_key)))
+                Ok(MemberLhsRef::Ref(Some(DestructLRef::Member(base, raw_key))))
             }
-            MemberProperty::Private(name) => Ok(Some(DestructLRef::Private(base, name.clone()))),
+            MemberProperty::Private(name) => Ok(MemberLhsRef::Ref(Some(DestructLRef::Private(
+                base,
+                name.clone(),
+            )))),
         }
     }
 
@@ -4342,16 +4339,17 @@ impl Interpreter {
                 }
                 Some(Expression::Spread(inner)) => {
                     // §13.15.5.4 AssignmentRestElement: evaluate LHS ref BEFORE collecting
-                    let precomp = match self.eval_member_lhs_ref(inner, env, &mut yield_val) {
-                        Ok(r) => r,
+                    let precomp = match self.eval_member_lhs_ref(inner, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => {
+                            yield_val = Some(v);
+                            break;
+                        }
                         Err(e) => {
                             error = Some(e);
                             break;
                         }
                     };
-                    if yield_val.is_some() {
-                        break;
-                    }
 
                     // Collect remaining iterator values into rest array
                     let mut rest = Vec::new();
@@ -4432,16 +4430,17 @@ impl Interpreter {
                         };
 
                     // §13.15.5.4: evaluate LHS reference BEFORE stepping the iterator
-                    let precomp = match self.eval_member_lhs_ref(target, env, &mut yield_val) {
-                        Ok(r) => r,
+                    let precomp = match self.eval_member_lhs_ref(target, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => {
+                            yield_val = Some(v);
+                            break;
+                        }
                         Err(e) => {
                             error = Some(e);
                             break;
                         }
                     };
-                    if yield_val.is_some() {
-                        break;
-                    }
 
                     let item = if done {
                         JsValue::UNDEFINED
@@ -4673,14 +4672,11 @@ impl Interpreter {
 
                     // §13.15.5.6 step 1: evaluate lref (base + key expression)
                     // before GetV. ToPropertyKey is deferred to PutValue time.
-                    let mut yield_val: Option<JsValue> = None;
-                    let pre_ref = match self.eval_member_lhs_ref(target, env, &mut yield_val) {
-                        Ok(r) => r,
+                    let pre_ref = match self.eval_member_lhs_ref(target, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
                         Err(e) => return Completion::Throw(e),
                     };
-                    if let Some(yv) = yield_val {
-                        return Completion::Yield(yv);
-                    }
 
                     // Get property via get_object_property (invokes getters/Proxy)
                     let val = if let Some(o) = obj_val
