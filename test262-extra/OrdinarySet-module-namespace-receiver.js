@@ -30,7 +30,7 @@ esid: sec-ordinarysetwithowndescriptor
 flags: [module]
 ---*/
 
-import * as ns from "./OrdinarySet-module-namespace-receiver-dep.mjs";
+import * as ns from "./OrdinarySet-module-namespace-receiver_FIXTURE.mjs";
 
 // The home object's prototype is the [[Set]] holder; `this` is the receiver.
 // A null-prototype holder makes OrdinarySet reach the synthetic writable
