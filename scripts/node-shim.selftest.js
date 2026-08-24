@@ -626,6 +626,26 @@ eq(
   "Number {}",
   "%s Number prototype spoof falls back to ordinary inspect"
 );
+// The %s classification tail reads `constructor.value.name` as an ORDINARY
+// get, unlike the descriptor-only reads elsewhere in the shim. Tightening it
+// would reroute this value to String(v) and print "[object Object]"; Node
+// invokes the accessor and routes to inspect, so the shim must too.
+(function () {
+  var original = Object.getOwnPropertyDescriptor(Object, "name");
+  Object.defineProperty(Object, "name", {
+    configurable: true,
+    get: function () {
+      return "Object";
+    },
+  });
+  var formatted;
+  try {
+    formatted = util.format("%s", { a: 1 });
+  } finally {
+    Object.defineProperty(Object, "name", original);
+  }
+  eq(formatted, "{ a: 1 }", "%s routes via an accessor constructor name");
+})();
 eq(
   util.format("%s", Object.create(String.prototype)),
   "String {}",

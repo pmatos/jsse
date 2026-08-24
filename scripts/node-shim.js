@@ -748,12 +748,15 @@
     // as user-defined.
     if (pointer === null) return false;
 
-    var ctor = dataDescriptorValue(
-      objectGetOwnPropertyDescriptor(pointer, "constructor")
-    );
+    // Deliberately an ordinary `.value`/`.name` read, NOT the descriptor
+    // helpers used elsewhere: routing here decides whether `%s` reaches
+    // inspect at all, and tightening it to data-descriptor lookups would
+    // change which values Node-compatibly route there. See the design doc.
+    var descriptor = objectGetOwnPropertyDescriptor(pointer, "constructor");
     return (
-      typeof ctor === "function" &&
-      builtInObjectNames[functionName(ctor)] === true
+      descriptor !== undefined &&
+      typeof descriptor.value === "function" &&
+      builtInObjectNames[descriptor.value.name] === true
     );
   }
 
