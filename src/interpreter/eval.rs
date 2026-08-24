@@ -8238,11 +8238,12 @@ impl Interpreter {
                 try_stack: vec![],
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: None,
                 saved_finally_exception: None,
+                pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
-                for_of_iter_env: None,
                 module_path: None,
             },
         );
@@ -8285,16 +8286,33 @@ impl Interpreter {
             mut try_stack,
             pending_binding,
             pending_return: saved_pending_return,
+            pending_loop_control: restored_pending_loop_control,
             saved_finally_exception: restored_saved_finally_exception,
+            pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
             reject_fn,
             for_of_stack: saved_for_of_stack,
-            for_of_iter_env: saved_for_of_iter_env,
             module_path: async_module_path,
         } = state;
 
         if let Some(ref mp) = async_module_path {
             self.current_module_path = Some(mp.clone());
+        }
+
+        // §14.7.5.6 step 6.b: `Await(nextResult)` rejecting sets the iterator
+        // record's [[Done]] and returns without performing IteratorClose. The
+        // `<iter>__await` temp is only ever bound by a `for await` head, so a
+        // rejection resumed into it identifies that loop's protocol failure.
+        let mut for_of_protocol_failure: Option<String> = None;
+        if is_error
+            && let Some(ref binding) = pending_binding
+            && let SentValueBindingKind::Variable(name) = &binding.kind
+            && let Some(iter_var) = name.strip_suffix("__await")
+            && saved_for_of_stack
+                .iter()
+                .any(|loop_state| loop_state.iter_var == iter_var)
+        {
+            for_of_protocol_failure = Some(iter_var.to_string());
         }
 
         if let Some(binding) = pending_binding {
@@ -8333,11 +8351,12 @@ impl Interpreter {
                 try_stack: try_stack.clone(),
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: restored_pending_loop_control,
                 saved_finally_exception: None,
+                pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: saved_for_of_stack.clone(),
-                for_of_iter_env: saved_for_of_iter_env.clone(),
                 module_path: async_module_path.clone(),
             },
         );
@@ -8347,27 +8366,111 @@ impl Interpreter {
         self.in_state_machine = true;
         let mut current_id = current_state;
         let mut pending_return: Option<JsValue> = saved_pending_return;
+        let mut pending_loop_control = restored_pending_loop_control;
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
-        let mut for_of_stack: Vec<(String, usize, usize)> = saved_for_of_stack; // (iter_var, head_state, after_state)
-        let mut for_of_iter_env: Option<Rc<RefCell<Environment>>> = saved_for_of_iter_env;
+        let mut for_of_stack: Vec<AsyncForOfLoopState> = saved_for_of_stack;
+        // An abrupt completion may need to visit a catch/finally inside an
+        // enclosing loop before that loop itself can be closed. Keep that
+        // obligation across suspension until the handler completes normally.
+        let mut pending_for_of_unwind = restored_pending_for_of_unwind;
+
+        // Helper: close the for-of loops from `$from` inward, surfacing an
+        // abrupt completion from a disposer or an iterator `return` method.
+        macro_rules! unwind_for_of {
+            ($from:expr) => {
+                let unwind_from = $from;
+                let mut unwind_completion = Completion::Empty;
+                while for_of_stack.len() > unwind_from {
+                    let Some(loop_state) = for_of_stack.pop() else {
+                        break;
+                    };
+                    // Handlers entered inside this loop have already completed
+                    // before its IteratorClose runs. Handlers surrounding the
+                    // loop remain available for a close failure.
+                    try_stack.truncate(loop_state.try_depth);
+                    unwind_completion =
+                        self.close_async_for_of_loop(loop_state, &func_env, unwind_completion);
+                    match &unwind_completion {
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(*code);
+                        }
+                        Completion::Throw(_) => {
+                            let handler_depth =
+                                try_stack
+                                    .iter()
+                                    .enumerate()
+                                    .rev()
+                                    .find_map(|(depth, handler)| {
+                                        if !handler.entered_catch
+                                            && !handler.entered_finally
+                                            && handler.catch_state.is_some()
+                                        {
+                                            Some(depth)
+                                        } else if !handler.entered_finally
+                                            && handler.finally_state.is_some()
+                                        {
+                                            Some(depth)
+                                        } else {
+                                            None
+                                        }
+                                    });
+                            let reached_unwind_boundary = for_of_stack.len() == unwind_from;
+                            let handler_precedes_next_loop = !reached_unwind_boundary
+                                && for_of_stack.last().is_some_and(|next_loop| {
+                                    handler_depth.is_some_and(|depth| depth >= next_loop.try_depth)
+                                });
+                            if reached_unwind_boundary || handler_precedes_next_loop {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Completion::Throw(error) = unwind_completion {
+                    pending_for_of_unwind = Some(PendingForOfUnwind {
+                        clear_at_state: None,
+                    });
+                    pending_exception = Some(error);
+                    continue;
+                }
+            };
+        }
 
         // Helper: route a return through finally blocks in try_stack
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
-                let mut routed = false;
+                // A return produced by a finalizer replaces any loop-control
+                // completion that originally entered it.
+                pending_loop_control = None;
+                let mut routed_to = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        pending_return = Some(ret_val.clone());
-                        current_id = finally_state;
-                        routed = true;
+                        routed_to = Some((i, finally_state));
                         break;
                     }
                 }
-                if !routed {
+                // §14.7.5.6: a return completion leaving a for-of closes its
+                // iterator and disposes its iteration environment. Only the
+                // loops nested inside the intercepting `finally` unwind now —
+                // a `finally` lexically inside a loop runs first, and that
+                // loop closes once the return resumes past it.
+                let unwind_from = match routed_to {
+                    Some((depth, _)) => for_of_stack
+                        .iter()
+                        .position(|loop_state| loop_state.try_depth > depth)
+                        .unwrap_or(for_of_stack.len()),
+                    None => 0,
+                };
+                unwind_for_of!(unwind_from);
+                if let Some((_, finally_state)) = routed_to {
+                    pending_return = Some(ret_val);
+                    current_id = finally_state;
+                } else {
                     let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
                     match disp {
                         Completion::Return(v) => {
@@ -8390,6 +8493,54 @@ impl Interpreter {
             }};
         }
 
+        // Helper: route an abrupt break/continue edge through every finally
+        // between its source and target. The target records the lexical stacks
+        // that remain active there, so iterator closing never depends on state
+        // id equality.
+        macro_rules! route_loop_control {
+            ($target:expr) => {{
+                let target = $target;
+
+                // A loop-control completion produced by a finalizer replaces
+                // the return, throw, or earlier loop-control completion that
+                // originally entered it.
+                pending_return = None;
+                saved_finally_exception = None;
+                pending_for_of_unwind = None;
+                pending_loop_control = Some(target);
+
+                let mut routed_to = None;
+                for i in (target.try_depth..try_stack.len()).rev() {
+                    if !try_stack[i].entered_finally
+                        && let Some(finally_state) = try_stack[i].finally_state
+                    {
+                        routed_to = Some((i, finally_state));
+                        break;
+                    }
+                }
+
+                // Loops nested inside the selected finally close before it;
+                // loops containing that finally remain until routing resumes.
+                // Never retain more loops than the target itself retains.
+                let handler_boundary = routed_to.map_or(target.for_of_depth, |(depth, _)| {
+                    for_of_stack
+                        .iter()
+                        .position(|loop_state| loop_state.try_depth > depth)
+                        .unwrap_or(for_of_stack.len())
+                        .max(target.for_of_depth)
+                });
+                debug_assert!(handler_boundary <= for_of_stack.len());
+                unwind_for_of!(handler_boundary.min(for_of_stack.len()));
+
+                if let Some((_, finally_state)) = routed_to {
+                    current_id = finally_state;
+                } else {
+                    pending_loop_control = None;
+                    current_id = target.target_state;
+                }
+            }};
+        }
+
         loop {
             // §10.4.4.3 Dispose step 3: async-dispose resources need Await(result),
             // which must truly suspend the async function. dispose_resources already
@@ -8406,12 +8557,13 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_return.take(),
+                    pending_loop_control.take(),
                     saved_finally_exception.take(),
+                    pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
                     &JsValue::UNDEFINED,
                     &for_of_stack,
-                    for_of_iter_env.clone(),
                 );
                 return Completion::Normal(JsValue::UNDEFINED);
             }
@@ -8428,36 +8580,114 @@ impl Interpreter {
                     terminator,
                     StateTerminator::EnterCatch { .. } | StateTerminator::EnterFinally { .. }
                 )
-                && let Some(exc) = pending_exception.take()
+                && let Some(mut exc) = pending_exception.take()
             {
+                // §14.7.5.6 steps 6.b–6.g: an abrupt completion raised by the
+                // iterator protocol itself (IteratorStep, `Await(nextResult)`,
+                // IteratorValue) sets [[Done]] and skips IteratorClose, so drop
+                // that loop's entry without calling its `return` method.
+                if let Some(failed_iter_var) = for_of_protocol_failure.take()
+                    && let Some(pos) = for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == failed_iter_var)
+                {
+                    let loop_state = for_of_stack.remove(pos);
+                    let iterator = func_env.borrow().get(&loop_state.iter_var);
+                    if let Some(iterator) = iterator {
+                        self.unroot_async_for_of_iterator(&iterator);
+                    }
+                }
+
+                // A throw produced while an intervening finally was handling
+                // another abrupt completion replaces that completion.
+                let pending_return_was_replaced = pending_return.take().is_some();
+                let pending_loop_control_was_replaced = pending_loop_control.take().is_some();
+                let pending_completion_was_replaced =
+                    pending_return_was_replaced || pending_loop_control_was_replaced;
+                // §14.7.5.6: any abrupt body completion leaving a for-of closes
+                // its iterator, so every still-active loop crossed on the way to
+                // the handler unwinds — not just the ones a previous unwind
+                // retained.
+                let needs_for_of_unwind = !for_of_stack.is_empty();
                 // Genuine throws route through the async body's catch/finally
                 // handlers here. A `Completion::Exit` (issue #242) never becomes
                 // a `pending_exception`, so it is not routed and cannot be
                 // caught — it is handled at the body-execution site below.
-                let mut handled = false;
+                let mut handler = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_catch
                         && !try_stack[i].entered_finally
                         && let Some(catch_state) = try_stack[i].catch_state
                     {
-                        try_stack.truncate(i);
-                        pending_exception = Some(exc.clone());
-                        current_id = catch_state;
-                        handled = true;
+                        handler = Some((i, catch_state, true, try_stack[i]._after_state));
                         break;
                     }
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        pending_exception = Some(exc.clone());
-                        current_id = finally_state;
-                        handled = true;
+                        handler = Some((i, finally_state, false, try_stack[i]._after_state));
                         break;
                     }
                 }
-                if handled {
+
+                if needs_for_of_unwind {
+                    // A return-replacing throw or an IteratorClose failure can
+                    // retain enclosing loops until an intervening handler has
+                    // run. Close only the loops crossed before the next handler.
+                    let unwind_from = handler.map_or(0, |(depth, _, _, _)| {
+                        for_of_stack
+                            .iter()
+                            .position(|loop_state| loop_state.try_depth > depth)
+                            .unwrap_or(for_of_stack.len())
+                    });
+                    match self.unwind_async_for_of_loops(
+                        &mut for_of_stack,
+                        unwind_from,
+                        &func_env,
+                        Completion::Throw(exc),
+                    ) {
+                        Completion::Throw(error) => exc = error,
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        _ => unreachable!("unwinding a throw must stay abrupt"),
+                    }
+                }
+
+                if needs_for_of_unwind {
+                    pending_for_of_unwind = if for_of_stack.is_empty() {
+                        None
+                    } else {
+                        handler.map(|(_, _, _, after_state)| PendingForOfUnwind {
+                            clear_at_state: Some(after_state),
+                        })
+                    };
+                }
+
+                if let Some((depth, state, is_catch, _)) = handler {
+                    if is_catch {
+                        // A catch-only context is finished once its handler is
+                        // selected, but try-catch-finally must retain this
+                        // context so abrupt control from the catch still routes
+                        // through its attached finalizer. EnterCatch marks it
+                        // entered, preventing the catch from handling itself.
+                        let retained_depth = if try_stack[depth].finally_state.is_some() {
+                            depth + 1
+                        } else {
+                            depth
+                        };
+                        try_stack.truncate(retained_depth);
+                    } else if pending_completion_was_replaced {
+                        // Drop the completed inner finally contexts so
+                        // EnterFinally marks the handler selected above.
+                        try_stack.truncate(depth + 1);
+                    }
+                    pending_exception = Some(exc);
+                    current_id = state;
                     continue;
                 }
+
                 let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
                 // A disposer that called `__host_exit` (issue #242) propagates
                 // out uncatchably instead of rejecting the promise.
@@ -8475,8 +8705,11 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let exec_env = for_of_iter_env.as_ref().unwrap_or(&func_env);
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, exec_env);
+            let exec_env = for_of_stack
+                .last()
+                .map_or(&func_env, AsyncForOfLoopState::effective_env)
+                .clone();
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
             self.in_state_machine = saved_in_state_machine;
             // `__host_exit` in the async body (issue #242) propagates out as
             // `Completion::Exit` instead of settling the result promise; the
@@ -8514,81 +8747,23 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Return(v) => {
-                    let v = v.clone();
-                    // Close any active for-of iterators on return
-                    for (iv, _, _) in for_of_stack.drain(..) {
-                        if let Some(iter) = func_env.borrow().get(&iv) {
-                            let _ = self.iterator_close_result(&iter);
-                            self.gc_unroot_value(&iter);
-                            if let Some(o) =
-                                iter.as_object_id().map(|id| crate::types::JsObject { id })
-                            {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let Some(ov) =
-                                        (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                    {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    route_return!(v);
+                    // route_return! closes the active for-of iterators first.
+                    route_return!(v.clone());
                     continue;
                 }
                 Completion::Break(label, _) => {
                     // Close iterator for the innermost matching for-of loop
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let (iv, _, after) = for_of_stack.remove(pos);
-                        if let Some(iter) = func_env.borrow().get(&iv) {
-                            if let Err(e) = self.iterator_close_result(&iter) {
-                                pending_exception = Some(e);
-                                self.gc_unroot_value(&iter);
-                                if let Some(o) =
-                                    iter.as_object_id().map(|id| crate::types::JsObject { id })
-                                {
-                                    let id = o.id;
-                                    self.pending_iter_close.retain(|v| {
-                                        if let Some(ov) = (v)
-                                            .as_object_id()
-                                            .map(|id| crate::types::JsObject { id })
-                                        {
-                                            ov.id != id
-                                        } else {
-                                            true
-                                        }
-                                    });
-                                }
-                                continue;
-                            }
-                            self.gc_unroot_value(&iter);
-                            if let Some(o) =
-                                iter.as_object_id().map(|id| crate::types::JsObject { id })
-                            {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let Some(ov) =
-                                        (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                    {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
-                        }
-                        current_id = after;
+                        let after_state = for_of_stack[pos].after_state;
+                        unwind_for_of!(pos);
+                        current_id = after_state;
                         continue;
                     }
                 }
                 Completion::Continue(label, _) => {
                     // Jump to head_state for the innermost matching for-of loop
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let (_, head, _) = for_of_stack[pos].clone();
-                        current_id = head;
+                        current_id = for_of_stack[pos].head_state;
                         continue;
                     }
                 }
@@ -8608,17 +8783,18 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_return.take(),
+                    pending_loop_control.take(),
                     saved_finally_exception.take(),
+                    pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
                     &yield_val,
                     &for_of_stack,
-                    for_of_iter_env.clone(),
                 );
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            let term_env = for_of_iter_env.as_ref().unwrap_or(&func_env).clone();
+            let term_env = exec_env;
             match terminator {
                 StateTerminator::Await {
                     value,
@@ -8641,12 +8817,13 @@ impl Interpreter {
                                 &try_stack,
                                 sent_value_binding.clone(),
                                 pending_return.take(),
+                                pending_loop_control.take(),
                                 saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
                                 &v,
                                 &for_of_stack,
-                                for_of_iter_env.clone(),
                             );
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
@@ -8662,12 +8839,13 @@ impl Interpreter {
                         &try_stack,
                         sent_value_binding.clone(),
                         pending_return.take(),
+                        pending_loop_control.take(),
                         saved_finally_exception.take(),
+                        pending_for_of_unwind.take(),
                         &resolve_fn,
                         &reject_fn,
                         &await_val,
                         &for_of_stack,
-                        for_of_iter_env.clone(),
                     );
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
@@ -8705,7 +8883,17 @@ impl Interpreter {
                 }
 
                 StateTerminator::Goto(next) => {
+                    if pending_for_of_unwind
+                        .as_ref()
+                        .is_some_and(|pending| pending.clear_at_state == Some(next))
+                    {
+                        pending_for_of_unwind = None;
+                    }
                     current_id = next;
+                }
+
+                StateTerminator::LoopControl(target) => {
+                    route_loop_control!(target);
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -8758,6 +8946,16 @@ impl Interpreter {
                     if let Some(exc) = saved_finally_exception.take() {
                         pending_exception = Some(exc);
                         continue;
+                    }
+                    if let Some(target) = pending_loop_control.take() {
+                        route_loop_control!(target);
+                        continue;
+                    }
+                    if pending_for_of_unwind
+                        .as_ref()
+                        .is_some_and(|pending| pending.clear_at_state == Some(after_state))
+                    {
+                        pending_for_of_unwind = None;
                     }
                     current_id = after_state;
                 }
@@ -8835,43 +9033,30 @@ impl Interpreter {
                 } => {
                     // §14.7.5.12 ForIn/OfHeadEvaluation: create TDZ bindings
                     // before evaluating the iterable expression
-                    let mut tdz_names: Vec<String> = Vec::new();
-                    let mut tdz_saved: Vec<(String, Option<(JsValue, bool)>)> = Vec::new();
-                    if let ForInOfLeft::Variable(decl) = left
+                    let iterable_env = if let ForInOfLeft::Variable(decl) = left
                         && !matches!(decl.kind, VarKind::Var)
                     {
+                        let head_env = Environment::new(Some(term_env.clone()));
+                        let mut tdz_names = Vec::new();
                         if let Some(d) = decl.declarations.first() {
                             d.pattern.bound_names(&mut tdz_names);
                         }
-                        // Save current binding state, then declare as uninitialized
-                        for name in &tdz_names {
-                            let saved = {
-                                let env = func_env.borrow();
-                                env.bindings
-                                    .get(name)
-                                    .map(|b| (b.value.clone(), b.initialized))
-                            };
-                            tdz_saved.push((name.clone(), saved));
-                            func_env.borrow_mut().declare(name, BindingKind::Let);
-                            // declare sets initialized=false for Let, creating TDZ
-                        }
-                    }
-
-                    let iterable_result = self.eval_expr(iterable, &func_env);
-
-                    // Restore bindings after iterable evaluation
-                    for (name, saved) in &tdz_saved {
-                        if let Some((val, initialized)) = saved {
-                            let mut env = func_env.borrow_mut();
-                            if let Some(b) = env.bindings.get_mut(name) {
-                                b.value = val.clone();
-                                b.initialized = *initialized;
-                                b.kind = BindingKind::Var;
+                        let binding_kind = match decl.kind {
+                            VarKind::Let => BindingKind::Let,
+                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+                                BindingKind::Const
                             }
-                        } else {
-                            func_env.borrow_mut().bindings.remove(name);
+                            VarKind::Var => unreachable!(),
+                        };
+                        for name in &tdz_names {
+                            head_env.borrow_mut().declare(name, binding_kind);
                         }
-                    }
+                        head_env
+                    } else {
+                        term_env.clone()
+                    };
+
+                    let iterable_result = self.eval_expr(iterable, &iterable_env);
 
                     let iterable_val = match iterable_result {
                         Completion::Normal(v) => v,
@@ -8901,7 +9086,14 @@ impl Interpreter {
                     self.gc_root_value(&iterator);
                     self.pending_iter_close.push(iterator.clone());
                     self.env_set(&func_env, iter_var, iterator).ok();
-                    for_of_stack.push((iter_var.clone(), head_state, forinit_after));
+                    for_of_stack.push(AsyncForOfLoopState {
+                        iter_var: iter_var.clone(),
+                        head_state,
+                        after_state: forinit_after,
+                        try_depth: try_stack.len(),
+                        outer_env: term_env,
+                        iteration_env: None,
+                    });
                     current_id = head_state;
                 }
 
@@ -8913,18 +9105,40 @@ impl Interpreter {
                     is_await,
                     ..
                 } => {
+                    // A head reached without its entry would mean the driver's
+                    // unwinding dropped it; rebuild one rather than abort.
+                    let loop_pos = match for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                    {
+                        Some(pos) => pos,
+                        None => {
+                            debug_assert!(false, "for-of head without an active loop state");
+                            for_of_stack.push(AsyncForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                head_state: current_id,
+                                after_state,
+                                try_depth: try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            for_of_stack.len() - 1
+                        }
+                    };
+
                     // Dispose resources from previous iteration (for using/await using)
-                    let disp_env = for_of_iter_env.take().unwrap_or_else(|| func_env.clone());
-                    let disp = self.dispose_resources(&disp_env, Completion::Empty);
-                    if let Completion::Exit(code) = disp {
-                        // A disposer that called `__host_exit` (issue #242)
-                        // propagates out uncatchably.
-                        self.scheduler.remove_async_function_state(async_id);
-                        return Completion::Exit(code);
-                    }
-                    if let Completion::Throw(e) = disp {
-                        pending_exception = Some(e);
-                        continue;
+                    if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take() {
+                        let disp = self.dispose_resources(&disp_env, Completion::Empty);
+                        if let Completion::Exit(code) = disp {
+                            // A disposer that called `__host_exit` (issue #242)
+                            // propagates out uncatchably.
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        if let Completion::Throw(e) = disp {
+                            pending_exception = Some(e);
+                            continue;
+                        }
                     }
 
                     // For `for await`, use a temp var to distinguish first
@@ -8950,6 +9164,7 @@ impl Interpreter {
                             let raw_result = match self.iterator_next(&iterator) {
                                 Ok(v) => v,
                                 Err(e) => {
+                                    for_of_protocol_failure = Some(iter_var.clone());
                                     pending_exception = Some(e);
                                     continue;
                                 }
@@ -8973,12 +9188,13 @@ impl Interpreter {
                                 &try_stack,
                                 binding,
                                 pending_return.take(),
+                                pending_loop_control.take(),
                                 saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
                                 &raw_result,
                                 &for_of_stack,
-                                for_of_iter_env.clone(),
                             );
                             self.in_state_machine = saved_in_state_machine;
                             return Completion::Normal(JsValue::UNDEFINED);
@@ -8991,6 +9207,7 @@ impl Interpreter {
                         match self.iterator_next(&iterator) {
                             Ok(v) => v,
                             Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
                                 continue;
                             }
@@ -8999,6 +9216,7 @@ impl Interpreter {
                     let done = match self.iterator_complete(&step_result) {
                         Ok(d) => d,
                         Err(e) => {
+                            for_of_protocol_failure = Some(iter_var.clone());
                             pending_exception = Some(e);
                             continue;
                         }
@@ -9008,39 +9226,26 @@ impl Interpreter {
                             .borrow()
                             .get(iter_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        self.gc_unroot_value(&iterator);
-                        if let Some(o) = iterator
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            let id = o.id;
-                            self.pending_iter_close.retain(|v| {
-                                if let Some(ov) =
-                                    (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                {
-                                    ov.id != id
-                                } else {
-                                    true
-                                }
-                            });
-                        }
-                        for_of_stack.retain(|e| e.0 != *iter_var);
+                        self.unroot_async_for_of_iterator(&iterator);
+                        for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
                         let value = match self.iterator_value(&step_result) {
                             Ok(v) => v,
                             Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
                                 continue;
                             }
                         };
                         let needs_iter_env = matches!(left, ForInOfLeft::Variable(decl) if !matches!(decl.kind, VarKind::Var));
+                        let outer_env = for_of_stack[loop_pos].outer_env.clone();
                         let bind_env = if needs_iter_env {
-                            let ie = Environment::new(Some(func_env.clone()));
-                            for_of_iter_env = Some(ie.clone());
+                            let ie = Environment::new(Some(outer_env));
+                            for_of_stack[loop_pos].iteration_env = Some(ie.clone());
                             ie
                         } else {
-                            func_env.clone()
+                            outer_env
                         };
                         let bind_result = match left {
                             ForInOfLeft::Variable(decl) => {
@@ -9077,13 +9282,13 @@ impl Interpreter {
                                 }
                             }
                             ForInOfLeft::Pattern(p) => {
-                                match self.assign_to_for_pattern(p, value, &func_env) {
+                                match self.assign_to_for_pattern(p, value, &bind_env) {
                                     Completion::Normal(_) | Completion::Empty => Ok(()),
                                     Completion::Throw(e) => Err(e),
                                     _ => Ok(()),
                                 }
                             }
-                            ForInOfLeft::Expression(e) => self.assign_to_expr(e, value, &func_env),
+                            ForInOfLeft::Expression(e) => self.assign_to_expr(e, value, &bind_env),
                         };
                         if let Err(e) = bind_result {
                             pending_exception = Some(e);
@@ -9102,6 +9307,69 @@ impl Interpreter {
                 }
             }
         }
+    }
+
+    fn unroot_async_for_of_iterator(&mut self, iterator: &JsValue) {
+        self.gc_unroot_value(iterator);
+        if let Some(iterator_id) = iterator.as_object_id() {
+            self.pending_iter_close
+                .retain(|value| value.as_object_id() != Some(iterator_id));
+        }
+    }
+
+    fn close_async_for_of_loop(
+        &mut self,
+        loop_state: AsyncForOfLoopState,
+        func_env: &EnvRef,
+        completion: Completion,
+    ) -> Completion {
+        let mut completion = match loop_state.iteration_env {
+            Some(env) => self.dispose_resources(&env, completion),
+            None => completion,
+        };
+
+        // The borrow must end before `iterator_close_result` runs the user's
+        // `return` method, which may write bindings in this same environment.
+        let iterator = func_env.borrow().get(&loop_state.iter_var);
+        if matches!(completion, Completion::Exit(_)) {
+            if let Some(iterator) = iterator {
+                self.unroot_async_for_of_iterator(&iterator);
+            }
+            return completion;
+        }
+        if let Some(iterator) = iterator {
+            let close_result = self.iterator_close_result(&iterator);
+            self.unroot_async_for_of_iterator(&iterator);
+            if let Some(code) = self.pending_exit {
+                return Completion::Exit(code);
+            }
+            if !completion.is_abrupt()
+                && let Err(error) = close_result
+            {
+                completion = Completion::Throw(error);
+            }
+        }
+
+        completion
+    }
+
+    /// Closes every active for-of loop from `from` to the innermost, inner to
+    /// outer, carrying each loop's resulting completion into the next outer
+    /// iteration disposal.
+    fn unwind_async_for_of_loops(
+        &mut self,
+        for_of_stack: &mut Vec<AsyncForOfLoopState>,
+        from: usize,
+        func_env: &EnvRef,
+        mut completion: Completion,
+    ) -> Completion {
+        for loop_state in for_of_stack.drain(from..).rev() {
+            completion = self.close_async_for_of_loop(loop_state, func_env, completion);
+            if matches!(completion, Completion::Exit(_)) {
+                break;
+            }
+        }
+        completion
     }
 
     fn async_fn_complete(
@@ -9138,12 +9406,13 @@ impl Interpreter {
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_return: Option<JsValue>,
+        pending_loop_control: Option<crate::interpreter::generator_transform::LoopControlTarget>,
         saved_finally_exception: Option<JsValue>,
+        pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         await_val: &JsValue,
-        for_of_stack: &[(String, usize, usize)],
-        for_of_iter_env: Option<Rc<RefCell<Environment>>>,
+        for_of_stack: &[AsyncForOfLoopState],
     ) {
         let promise = self.promise_resolve_value(await_val);
         let promise_id = if let Some(o) = (promise)
@@ -9166,11 +9435,12 @@ impl Interpreter {
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
                 pending_return,
+                pending_loop_control,
                 saved_finally_exception,
+                pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: for_of_stack.to_vec(),
-                for_of_iter_env,
                 module_path: self.module_async_info.get(&async_id).cloned(),
             },
         );

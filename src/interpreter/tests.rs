@@ -3510,6 +3510,88 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_from_async_loop_disposer_skips_iterator_close() {
+        // Async functions with a suspension point use the transformed for-of
+        // path. If iteration disposal exits, IteratorClose must not invoke the
+        // iterator's user-defined return() afterward.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.cleanup = "no";
+            const iter = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                if (this.done) return { done: true };
+                this.done = true;
+                return {
+                  value: { [Symbol.dispose]() { __host_exit(3); } },
+                  done: false,
+                };
+              },
+              return() { globalThis.cleanup = "ran"; return { done: true }; },
+            };
+            async function f() {
+              for (using resource of iter) {
+                await null;
+                return 1;
+              }
+            }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_inner_async_iterator_close_skips_outer_cleanup() {
+        // An exit requested by an inner iterator's return() must stop the
+        // transformed unwind before it invokes an outer iterator's return().
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.innerCleanup = "no";
+            globalThis.outerCleanup = "no";
+            const outer = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                if (this.done) return { done: true };
+                this.done = true;
+                return { value: 1, done: false };
+              },
+              return() { globalThis.outerCleanup = "ran"; return { done: true }; },
+            };
+            const inner = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                if (this.done) return { done: true };
+                this.done = true;
+                return { value: 2, done: false };
+              },
+              return() {
+                globalThis.innerCleanup = "ran";
+                __host_exit(4);
+                return { done: true };
+              },
+            };
+            async function f() {
+              for (const outerValue of outer) {
+                for (const innerValue of inner) {
+                  await null;
+                  return outerValue + innerValue;
+                }
+              }
+            }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "innerCleanup"), "ran");
+        assert_eq!(global_string(&interp, "outerCleanup"), "no");
+    }
+
+    #[test]
     fn host_exit_skips_using_disposal() {
         // A pending exit must not run Symbol.dispose from a `using` declaration.
         let (interp, _c) = run_node_script(

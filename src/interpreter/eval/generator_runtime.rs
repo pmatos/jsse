@@ -1373,6 +1373,13 @@ impl Interpreter {
                     current_id = *next_state;
                 }
 
+                // Async-function transforms are the only machines that emit
+                // LoopControl. Preserve ordinary generator behavior if a
+                // shared transform ever produces one here.
+                StateTerminator::LoopControl(target) => {
+                    current_id = target.target_state;
+                }
+
                 StateTerminator::ConditionalGoto {
                     condition,
                     true_state,
@@ -5356,6 +5363,13 @@ impl Interpreter {
 
                 StateTerminator::Goto(next_state) => {
                     current_id = *next_state;
+                }
+
+                // Async-function transforms are the only machines that emit
+                // LoopControl. Preserve ordinary async-generator behavior if
+                // a shared transform ever produces one here.
+                StateTerminator::LoopControl(target) => {
+                    current_id = target.target_state;
                 }
 
                 StateTerminator::ConditionalGoto {

@@ -1,6 +1,8 @@
 use crate::ast::*;
 use crate::interpreter::PropertyMap;
-use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
+use crate::interpreter::generator_transform::{
+    GeneratorStateMachine, LoopControlTarget, SentValueBinding,
+};
 use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
@@ -306,6 +308,14 @@ pub(crate) struct TryContextInfo {
     pub entered_finally: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PendingForOfUnwind {
+    /// State reached when the intervening handler completes normally. Until
+    /// then, a replacement abrupt completion must keep unwinding retained
+    /// enclosing loops.
+    pub clear_at_state: Option<usize>,
+}
+
 pub(crate) struct AsyncFunctionState {
     pub state_machine: Rc<GeneratorStateMachine>,
     pub func_env: EnvRef,
@@ -314,12 +324,34 @@ pub(crate) struct AsyncFunctionState {
     pub try_stack: Vec<TryContextInfo>,
     pub pending_binding: Option<SentValueBinding>,
     pub pending_return: Option<JsValue>,
+    pub pending_loop_control: Option<LoopControlTarget>,
     pub saved_finally_exception: Option<JsValue>,
+    pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
-    pub for_of_stack: Vec<(String, usize, usize)>,
-    pub for_of_iter_env: Option<EnvRef>,
+    pub for_of_stack: Vec<AsyncForOfLoopState>,
     pub module_path: Option<super::ModuleKey>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AsyncForOfLoopState {
+    pub(crate) iter_var: String,
+    pub(crate) head_state: usize,
+    pub(crate) after_state: usize,
+    /// Depth of the driver's try stack when the loop began, so an abrupt
+    /// completion can tell a `finally` lexically inside the loop (which runs
+    /// before IteratorClose) from one outside it (which runs after).
+    pub(crate) try_depth: usize,
+    /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
+    pub(crate) outer_env: EnvRef,
+    /// The current lexical head's per-iteration environment, when any.
+    pub(crate) iteration_env: Option<EnvRef>,
+}
+
+impl AsyncForOfLoopState {
+    pub(crate) fn effective_env(&self) -> &EnvRef {
+        self.iteration_env.as_ref().unwrap_or(&self.outer_env)
+    }
 }
 
 #[derive(Debug, Clone)]
