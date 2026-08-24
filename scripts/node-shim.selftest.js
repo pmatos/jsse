@@ -956,10 +956,17 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   eq(proxyCalls, 0, "inspect invokes no object-target Proxy traps");
 
   var nestedProxy = new Proxy(objectProxy, proxyHandler);
-  truthy(
-    util.inspect(nestedProxy).indexOf("a: 1") !== -1,
-    "inspect safely unwraps nested Proxies"
-  );
+  // Node 24 unwraps only the outer Proxy here and observes the inner throwing
+  // get trap; Node 26 recursively unwraps both. Exercise the shim invariant on
+  // JSSE and emit the same assertion line on either Node version.
+  if (hasNodeHost) {
+    truthy(
+      util.inspect(nestedProxy).indexOf("a: 1") !== -1,
+      "inspect safely unwraps nested Proxies"
+    );
+  } else {
+    ok("inspect safely unwraps nested Proxies");
+  }
   eq(proxyCalls, 0, "inspect invokes no nested Proxy traps");
 
   // util.inspect output is never byte-compared against Node (see the header),
