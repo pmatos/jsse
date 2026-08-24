@@ -703,6 +703,11 @@ impl Interpreter {
         let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
+        let mut for_of_stack = self
+            .generator_for_of_stacks
+            .get(&o.id)
+            .cloned()
+            .unwrap_or_default();
 
         loop {
             let terminator = state_machine.states[current_id].terminator.clone();
@@ -721,7 +726,11 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &func_env);
+            let exec_env = for_of_stack
+                .last()
+                .map_or(&func_env, ForOfLoopState::effective_env)
+                .clone();
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -743,6 +752,8 @@ impl Interpreter {
                 } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
+                self.generator_for_of_stacks
+                    .insert(o.id, for_of_stack.clone());
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineGenerator {
                         state_machine: state_machine.clone(),
@@ -882,6 +893,7 @@ impl Interpreter {
                 return Completion::Normal(self.create_iter_result_object(ret_val, true));
             }
 
+            let term_env = exec_env;
             match &terminator {
                 StateTerminator::Yield {
                     value,
@@ -890,7 +902,7 @@ impl Interpreter {
                     sent_value_binding,
                 } => {
                     let yield_val = if let Some(expr) = value {
-                        let mut _result = self.eval_expr(expr, &func_env);
+                        let mut _result = self.eval_expr(expr, &term_env);
                         while let Completion::TailCall { func, this, args } = _result {
                             _result = self.call_function(&func, &this, &args);
                         }
@@ -1161,14 +1173,14 @@ impl Interpreter {
                             if let Some(binding) = sent_value_binding {
                                 match &binding.kind {
                                     SentValueBindingKind::Variable(name) => {
-                                        self.env_set(&func_env, name, value.clone()).ok();
+                                        self.env_set(&term_env, name, value.clone()).ok();
                                     }
                                     SentValueBindingKind::Pattern(pattern) => {
                                         let _ = self.bind_pattern(
                                             pattern,
                                             value.clone(),
                                             BindingKind::Var,
-                                            &func_env,
+                                            &term_env,
                                         );
                                     }
                                     SentValueBindingKind::Discard
@@ -1215,6 +1227,8 @@ impl Interpreter {
                     } else {
                         self.generator_inline_iters.insert(o.id, pending);
                     }
+                    self.generator_for_of_stacks
+                        .insert(o.id, for_of_stack.clone());
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
                             state_machine,
@@ -1236,7 +1250,7 @@ impl Interpreter {
 
                 StateTerminator::Return(expr) => {
                     let ret_val = if let Some(e) = expr {
-                        let mut result = self.eval_expr(e, &func_env);
+                        let mut result = self.eval_expr(e, &term_env);
                         while let Completion::TailCall { func, this, args } = result {
                             result = self.call_function(&func, &this, &args);
                         }
@@ -1333,7 +1347,7 @@ impl Interpreter {
 
                 StateTerminator::Throw(expr) => {
                     let throw_val = {
-                        let mut result = self.eval_expr(expr, &func_env);
+                        let mut result = self.eval_expr(expr, &term_env);
                         while let Completion::TailCall { func, this, args } = result {
                             result = self.call_function(&func, &this, &args);
                         }
@@ -1370,6 +1384,14 @@ impl Interpreter {
                 }
 
                 StateTerminator::Goto(next_state) => {
+                    if let Err(e) = self.align_generator_for_of_stack(
+                        o.id,
+                        &mut for_of_stack,
+                        &func_env,
+                        *next_state,
+                    ) {
+                        return Completion::Throw(e);
+                    }
                     current_id = *next_state;
                 }
 
@@ -1377,6 +1399,14 @@ impl Interpreter {
                 // LoopControl. Preserve ordinary generator behavior if a
                 // shared transform ever produces one here.
                 StateTerminator::LoopControl(target) => {
+                    if let Err(e) = self.align_generator_for_of_stack(
+                        o.id,
+                        &mut for_of_stack,
+                        &func_env,
+                        target.target_state,
+                    ) {
+                        return Completion::Throw(e);
+                    }
                     current_id = target.target_state;
                 }
 
@@ -1385,7 +1415,7 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &func_env) {
+                    let cond_val = match self.eval_expr(condition, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             obj_rc.borrow_mut().kind =
@@ -1506,7 +1536,7 @@ impl Interpreter {
                     let exception_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
                     if let Some(pattern) = param {
                         let _ =
-                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &func_env);
+                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &term_env);
                     }
                     current_id = *body_state;
                 }
@@ -1524,7 +1554,7 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &func_env) {
+                    let disc_val = match self.eval_expr(discriminant, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             obj_rc.borrow_mut().kind =
@@ -1549,7 +1579,7 @@ impl Interpreter {
 
                     let mut matched = false;
                     for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &func_env) {
+                        let case_val = match self.eval_expr(&case.test, &term_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 obj_rc.borrow_mut().kind =
@@ -1586,12 +1616,38 @@ impl Interpreter {
                     iterable,
                     iter_var,
                     next_var: _,
-                    left: _,
+                    left,
                     head_state,
-                    after_state: _,
+                    after_state: forinit_after,
                     is_await: _,
                 } => {
-                    let iterable_val = match self.eval_expr(iterable, &func_env) {
+                    // §14.7.5.5: lexical head names are in TDZ while the RHS
+                    // is evaluated, but that temporary environment is not the
+                    // environment used by any loop iteration.
+                    let iterable_env = if let ForInOfLeft::Variable(decl) = left
+                        && !matches!(decl.kind, VarKind::Var)
+                    {
+                        let head_env = Environment::new(Some(term_env.clone()));
+                        let mut tdz_names = Vec::new();
+                        if let Some(d) = decl.declarations.first() {
+                            d.pattern.bound_names(&mut tdz_names);
+                        }
+                        let binding_kind = match decl.kind {
+                            VarKind::Let => BindingKind::Let,
+                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+                                BindingKind::Const
+                            }
+                            VarKind::Var => unreachable!(),
+                        };
+                        for name in &tdz_names {
+                            head_env.borrow_mut().declare(name, binding_kind);
+                        }
+                        head_env
+                    } else {
+                        term_env.clone()
+                    };
+
+                    let iterable_val = match self.eval_expr(iterable, &iterable_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             if let Some(try_info) = current_try_stack.pop() {
@@ -1664,6 +1720,16 @@ impl Interpreter {
                             deletable: false,
                         },
                     );
+                    for_of_stack.push(ForOfLoopState {
+                        iter_var: iter_var.clone(),
+                        head_state: *head_state,
+                        after_state: *forinit_after,
+                        try_depth: current_try_stack.len(),
+                        outer_env: term_env.clone(),
+                        iteration_env: None,
+                    });
+                    self.generator_for_of_stacks
+                        .insert(o.id, for_of_stack.clone());
                     current_id = *head_state;
                 }
 
@@ -1675,6 +1741,32 @@ impl Interpreter {
                     after_state,
                     is_await: _,
                 } => {
+                    let loop_pos = match for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                    {
+                        Some(pos) => pos,
+                        None => {
+                            debug_assert!(false, "for-of head without an active loop state");
+                            for_of_stack.push(ForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                head_state: current_id,
+                                after_state: *after_state,
+                                try_depth: current_try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            for_of_stack.len() - 1
+                        }
+                    };
+
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Completion::Throw(e) =
+                            self.dispose_resources(&iteration_env, Completion::Empty)
+                    {
+                        return Completion::Throw(e);
+                    }
+
                     let iterator = func_env
                         .borrow()
                         .bindings
@@ -1731,6 +1823,13 @@ impl Interpreter {
                                     }
                                 });
                             }
+                            for_of_stack.remove(loop_pos);
+                            if for_of_stack.is_empty() {
+                                self.generator_for_of_stacks.remove(&o.id);
+                            } else {
+                                self.generator_for_of_stacks
+                                    .insert(o.id, for_of_stack.clone());
+                            }
                             current_id = *after_state;
                         }
                         Ok(false) => {
@@ -1767,6 +1866,22 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             };
+                            let needs_iteration_env = matches!(
+                                left,
+                                ForInOfLeft::Variable(decl)
+                                    if !matches!(decl.kind, VarKind::Var)
+                            );
+                            let outer_env = for_of_stack[loop_pos].outer_env.clone();
+                            let bind_env = if needs_iteration_env {
+                                let iteration_env = Environment::new(Some(outer_env));
+                                for_of_stack[loop_pos].iteration_env = Some(iteration_env.clone());
+                                self.generator_for_of_stacks
+                                    .insert(o.id, for_of_stack.clone());
+                                iteration_env
+                            } else {
+                                outer_env
+                            };
+
                             match left {
                                 ForInOfLeft::Variable(decl) => {
                                     let kind = match decl.kind {
@@ -1776,9 +1891,23 @@ impl Interpreter {
                                             crate::interpreter::types::BindingKind::Const
                                         }
                                     };
+                                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) {
+                                        let hint = if decl.kind == VarKind::AwaitUsing {
+                                            DisposeHint::Async
+                                        } else {
+                                            DisposeHint::Sync
+                                        };
+                                        if let Err(e) =
+                                            self.add_disposable_resource(&bind_env, &val, hint)
+                                        {
+                                            self.iterator_close(&iterator, e.clone());
+                                            self.gc_unroot_value(&iterator);
+                                            return Completion::Throw(e);
+                                        }
+                                    }
                                     if let Some(d) = decl.declarations.first()
                                         && let Err(e) =
-                                            self.bind_pattern(&d.pattern, val, kind, &func_env)
+                                            self.bind_pattern(&d.pattern, val, kind, &bind_env)
                                     {
                                         self.iterator_close(&iterator, e.clone());
                                         self.gc_unroot_value(&iterator);
@@ -1814,7 +1943,7 @@ impl Interpreter {
                                     }
                                 }
                                 ForInOfLeft::Pattern(pat) => {
-                                    match self.assign_to_for_pattern(pat, val, &func_env) {
+                                    match self.assign_to_for_pattern(pat, val, &term_env) {
                                         Completion::Normal(_) | Completion::Empty => {}
                                         Completion::Throw(e) => {
                                             self.iterator_close(&iterator, e.clone());
@@ -4224,6 +4353,11 @@ impl Interpreter {
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
         let mut check_abrupt_on_resume = check_abrupt_on_resume;
+        let mut for_of_stack = self
+            .generator_for_of_stacks
+            .get(&o.id)
+            .cloned()
+            .unwrap_or_default();
         loop {
             if check_abrupt_on_resume {
                 check_abrupt_on_resume = false;
@@ -4365,7 +4499,11 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &func_env);
+            let exec_env = for_of_stack
+                .last()
+                .map_or(&func_env, ForOfLoopState::effective_env)
+                .clone();
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -4541,6 +4679,8 @@ impl Interpreter {
                 } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
+                self.generator_for_of_stacks
+                    .insert(o.id, for_of_stack.clone());
                 // Any Completion::Yield from exec_statements is an inline yield:
                 // it came from a loop body or complex control flow that isn't
                 // decomposed by the state machine transformer. Use InlineYield
@@ -4578,6 +4718,7 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
 
+            let term_env = exec_env;
             match &terminator {
                 StateTerminator::Yield {
                     value,
@@ -4586,7 +4727,7 @@ impl Interpreter {
                     sent_value_binding,
                 } => {
                     let yield_val = if let Some(expr) = value {
-                        match self.eval_expr(expr, &func_env) {
+                        match self.eval_expr(expr, &term_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 // Route genuine throws through the try-stack for
@@ -5109,7 +5250,7 @@ impl Interpreter {
                 StateTerminator::Return(expr) => {
                     if let Some(e) = expr {
                         // return expr; — §13.10.1 step 3: Await(exprValue)
-                        let mut result = self.eval_expr(e, &func_env);
+                        let mut result = self.eval_expr(e, &term_env);
                         while let Completion::TailCall { func, this, args } = result {
                             result = self.call_function(&func, &this, &args);
                         }
@@ -5317,7 +5458,7 @@ impl Interpreter {
 
                 StateTerminator::Throw(expr) => {
                     let throw_val = {
-                        let mut result = self.eval_expr(expr, &func_env);
+                        let mut result = self.eval_expr(expr, &term_env);
                         while let Completion::TailCall { func, this, args } = result {
                             result = self.call_function(&func, &this, &args);
                         }
@@ -5362,6 +5503,16 @@ impl Interpreter {
                 }
 
                 StateTerminator::Goto(next_state) => {
+                    if let Err(e) = self.align_generator_for_of_stack(
+                        o.id,
+                        &mut for_of_stack,
+                        &func_env,
+                        *next_state,
+                    ) {
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
                     current_id = *next_state;
                 }
 
@@ -5369,6 +5520,16 @@ impl Interpreter {
                 // LoopControl. Preserve ordinary async-generator behavior if
                 // a shared transform ever produces one here.
                 StateTerminator::LoopControl(target) => {
+                    if let Err(e) = self.align_generator_for_of_stack(
+                        o.id,
+                        &mut for_of_stack,
+                        &func_env,
+                        target.target_state,
+                    ) {
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
                     current_id = target.target_state;
                 }
 
@@ -5377,7 +5538,7 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &func_env) {
+                    let cond_val = match self.eval_expr(condition, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             self.generator_inline_iters.remove(&o.id);
@@ -5504,7 +5665,7 @@ impl Interpreter {
                     let exception_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
                     if let Some(pattern) = param {
                         let _ =
-                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &func_env);
+                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &term_env);
                     }
                     current_id = *body_state;
                 }
@@ -5522,7 +5683,7 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &func_env) {
+                    let disc_val = match self.eval_expr(discriminant, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             self.generator_inline_iters.remove(&o.id);
@@ -5556,7 +5717,7 @@ impl Interpreter {
 
                     let mut matched = false;
                     for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &func_env) {
+                        let case_val = match self.eval_expr(&case.test, &term_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 self.generator_inline_iters.remove(&o.id);
@@ -5602,12 +5763,35 @@ impl Interpreter {
                     iterable,
                     iter_var,
                     next_var: _,
-                    left: _,
+                    left,
                     head_state,
-                    after_state: _,
+                    after_state: forinit_after,
                     is_await,
                 } => {
-                    let iterable_val = match self.eval_expr(iterable, &func_env) {
+                    let iterable_env = if let ForInOfLeft::Variable(decl) = left
+                        && !matches!(decl.kind, VarKind::Var)
+                    {
+                        let head_env = Environment::new(Some(term_env.clone()));
+                        let mut tdz_names = Vec::new();
+                        if let Some(d) = decl.declarations.first() {
+                            d.pattern.bound_names(&mut tdz_names);
+                        }
+                        let binding_kind = match decl.kind {
+                            VarKind::Let => BindingKind::Let,
+                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+                                BindingKind::Const
+                            }
+                            VarKind::Var => unreachable!(),
+                        };
+                        for name in &tdz_names {
+                            head_env.borrow_mut().declare(name, binding_kind);
+                        }
+                        head_env
+                    } else {
+                        term_env.clone()
+                    };
+
+                    let iterable_val = match self.eval_expr(iterable, &iterable_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             if let Some(try_info) = current_try_stack.pop() {
@@ -5729,6 +5913,16 @@ impl Interpreter {
                             deletable: false,
                         },
                     );
+                    for_of_stack.push(ForOfLoopState {
+                        iter_var: iter_var.clone(),
+                        head_state: *head_state,
+                        after_state: *forinit_after,
+                        try_depth: current_try_stack.len(),
+                        outer_env: term_env.clone(),
+                        iteration_env: None,
+                    });
+                    self.generator_for_of_stacks
+                        .insert(o.id, for_of_stack.clone());
                     current_id = *head_state;
                 }
 
@@ -5740,6 +5934,34 @@ impl Interpreter {
                     after_state,
                     is_await,
                 } => {
+                    let loop_pos = match for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                    {
+                        Some(pos) => pos,
+                        None => {
+                            debug_assert!(false, "for-of head without an active loop state");
+                            for_of_stack.push(ForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                head_state: current_id,
+                                after_state: *after_state,
+                                try_depth: current_try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            for_of_stack.len() - 1
+                        }
+                    };
+
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Completion::Throw(e) =
+                            self.dispose_resources(&iteration_env, Completion::Empty)
+                    {
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+
                     let iterator = func_env
                         .borrow()
                         .bindings
@@ -5845,6 +6067,13 @@ impl Interpreter {
                                     }
                                 });
                             }
+                            for_of_stack.remove(loop_pos);
+                            if for_of_stack.is_empty() {
+                                self.generator_for_of_stacks.remove(&o.id);
+                            } else {
+                                self.generator_for_of_stacks
+                                    .insert(o.id, for_of_stack.clone());
+                            }
                             current_id = *after_state;
                         }
                         Ok(false) => {
@@ -5885,6 +6114,22 @@ impl Interpreter {
                                     return Completion::Normal(promise);
                                 }
                             };
+                            let needs_iteration_env = matches!(
+                                left,
+                                ForInOfLeft::Variable(decl)
+                                    if !matches!(decl.kind, VarKind::Var)
+                            );
+                            let outer_env = for_of_stack[loop_pos].outer_env.clone();
+                            let bind_env = if needs_iteration_env {
+                                let iteration_env = Environment::new(Some(outer_env));
+                                for_of_stack[loop_pos].iteration_env = Some(iteration_env.clone());
+                                self.generator_for_of_stacks
+                                    .insert(o.id, for_of_stack.clone());
+                                iteration_env
+                            } else {
+                                outer_env
+                            };
+
                             match left {
                                 ForInOfLeft::Variable(decl) => {
                                     let kind = match decl.kind {
@@ -5894,9 +6139,29 @@ impl Interpreter {
                                             crate::interpreter::types::BindingKind::Const
                                         }
                                     };
+                                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) {
+                                        let hint = if decl.kind == VarKind::AwaitUsing {
+                                            DisposeHint::Async
+                                        } else {
+                                            DisposeHint::Sync
+                                        };
+                                        if let Err(e) =
+                                            self.add_disposable_resource(&bind_env, &val, hint)
+                                        {
+                                            self.iterator_close(&iterator, e.clone());
+                                            self.gc_unroot_value(&iterator);
+                                            let _ = self.call_function(
+                                                &reject_fn,
+                                                &JsValue::UNDEFINED,
+                                                &[e],
+                                            );
+                                            self.drain_microtasks();
+                                            return Completion::Normal(promise);
+                                        }
+                                    }
                                     if let Some(d) = decl.declarations.first()
                                         && let Err(e) =
-                                            self.bind_pattern(&d.pattern, val, kind, &func_env)
+                                            self.bind_pattern(&d.pattern, val, kind, &bind_env)
                                     {
                                         self.iterator_close(&iterator, e.clone());
                                         self.gc_unroot_value(&iterator);
@@ -5939,7 +6204,7 @@ impl Interpreter {
                                     }
                                 }
                                 ForInOfLeft::Pattern(pat) => {
-                                    match self.assign_to_for_pattern(pat, val, &func_env) {
+                                    match self.assign_to_for_pattern(pat, val, &term_env) {
                                         Completion::Normal(_) | Completion::Empty => {}
                                         Completion::Throw(e) => {
                                             self.iterator_close(&iterator, e.clone());
@@ -6091,7 +6356,7 @@ impl Interpreter {
                     resume_state,
                     sent_value_binding,
                 } => {
-                    let await_val = match self.eval_expr(value, &func_env) {
+                    let await_val = match self.eval_expr(value, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             pending_exception = Some(e);
@@ -6907,5 +7172,53 @@ impl Interpreter {
         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exception]);
         self.drain_microtasks();
         Completion::Normal(promise)
+    }
+
+    fn align_generator_for_of_stack(
+        &mut self,
+        generator_id: u64,
+        for_of_stack: &mut Vec<ForOfLoopState>,
+        func_env: &EnvRef,
+        target_state: usize,
+    ) -> Result<(), JsValue> {
+        let keep_len = if let Some(pos) = for_of_stack
+            .iter()
+            .rposition(|loop_state| loop_state.after_state == target_state)
+        {
+            pos
+        } else if let Some(pos) = for_of_stack
+            .iter()
+            .rposition(|loop_state| loop_state.head_state == target_state)
+        {
+            pos + 1
+        } else {
+            for_of_stack.len()
+        };
+
+        while for_of_stack.len() > keep_len {
+            let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
+            if let Some(iteration_env) = loop_state.iteration_env
+                && let Completion::Throw(e) =
+                    self.dispose_resources(&iteration_env, Completion::Empty)
+            {
+                return Err(e);
+            }
+            if let Some(iterator) = func_env.borrow().get(&loop_state.iter_var) {
+                self.iterator_close_result(&iterator)?;
+                self.gc_unroot_value(&iterator);
+                if let Some(iterator_id) = iterator.as_object_id() {
+                    self.pending_iter_close
+                        .retain(|value| value.as_object_id() != Some(iterator_id));
+                }
+            }
+        }
+
+        if for_of_stack.is_empty() {
+            self.generator_for_of_stacks.remove(&generator_id);
+        } else {
+            self.generator_for_of_stacks
+                .insert(generator_id, for_of_stack.clone());
+        }
+        Ok(())
     }
 }

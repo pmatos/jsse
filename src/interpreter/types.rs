@@ -329,12 +329,12 @@ pub(crate) struct AsyncFunctionState {
     pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
-    pub for_of_stack: Vec<AsyncForOfLoopState>,
+    pub for_of_stack: Vec<ForOfLoopState>,
     pub module_path: Option<super::ModuleKey>,
 }
 
 #[derive(Clone)]
-pub(crate) struct AsyncForOfLoopState {
+pub(crate) struct ForOfLoopState {
     pub(crate) iter_var: String,
     pub(crate) head_state: usize,
     pub(crate) after_state: usize,
@@ -348,7 +348,7 @@ pub(crate) struct AsyncForOfLoopState {
     pub(crate) iteration_env: Option<EnvRef>,
 }
 
-impl AsyncForOfLoopState {
+impl ForOfLoopState {
     pub(crate) fn effective_env(&self) -> &EnvRef {
         self.iteration_env.as_ref().unwrap_or(&self.outer_env)
     }

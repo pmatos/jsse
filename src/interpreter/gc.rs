@@ -352,6 +352,14 @@ impl Interpreter {
                 Self::collect_value_roots(val, &mut roots);
             }
         }
+        for for_of_stack in self.generator_for_of_stacks.values() {
+            for loop_state in for_of_stack {
+                Self::collect_env_roots(&loop_state.outer_env, &mut roots, &mut seen_envs);
+                if let Some(ref env) = loop_state.iteration_env {
+                    Self::collect_env_roots(env, &mut roots, &mut seen_envs);
+                }
+            }
+        }
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
@@ -632,6 +640,7 @@ impl Interpreter {
         self.function_realm_map.remove(&id);
         self.iterator_next_cache.remove(&id);
         self.generator_inline_iters.remove(&id);
+        self.generator_for_of_stacks.remove(&id);
     }
 
     fn gc_collect_major(&mut self) {

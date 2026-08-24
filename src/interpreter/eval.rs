@@ -8427,7 +8427,7 @@ impl Interpreter {
         let mut pending_loop_control = restored_pending_loop_control;
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
-        let mut for_of_stack: Vec<AsyncForOfLoopState> = saved_for_of_stack;
+        let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
         // An abrupt completion may need to visit a catch/finally inside an
         // enclosing loop before that loop itself can be closed. Keep that
         // obligation across suspension until the handler completes normally.
@@ -8765,7 +8765,7 @@ impl Interpreter {
             self.in_state_machine = true;
             let exec_env = for_of_stack
                 .last()
-                .map_or(&func_env, AsyncForOfLoopState::effective_env)
+                .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
             let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &exec_env);
             self.in_state_machine = saved_in_state_machine;
@@ -9144,7 +9144,7 @@ impl Interpreter {
                     self.gc_root_value(&iterator);
                     self.pending_iter_close.push(iterator.clone());
                     self.env_set(&func_env, iter_var, iterator).ok();
-                    for_of_stack.push(AsyncForOfLoopState {
+                    for_of_stack.push(ForOfLoopState {
                         iter_var: iter_var.clone(),
                         head_state,
                         after_state: forinit_after,
@@ -9172,7 +9172,7 @@ impl Interpreter {
                         Some(pos) => pos,
                         None => {
                             debug_assert!(false, "for-of head without an active loop state");
-                            for_of_stack.push(AsyncForOfLoopState {
+                            for_of_stack.push(ForOfLoopState {
                                 iter_var: iter_var.clone(),
                                 head_state: current_id,
                                 after_state,
@@ -9377,7 +9377,7 @@ impl Interpreter {
 
     fn close_async_for_of_loop(
         &mut self,
-        loop_state: AsyncForOfLoopState,
+        loop_state: ForOfLoopState,
         func_env: &EnvRef,
         completion: Completion,
     ) -> Completion {
@@ -9416,7 +9416,7 @@ impl Interpreter {
     /// iteration disposal.
     fn unwind_async_for_of_loops(
         &mut self,
-        for_of_stack: &mut Vec<AsyncForOfLoopState>,
+        for_of_stack: &mut Vec<ForOfLoopState>,
         from: usize,
         func_env: &EnvRef,
         mut completion: Completion,
@@ -9470,7 +9470,7 @@ impl Interpreter {
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         await_val: &JsValue,
-        for_of_stack: &[AsyncForOfLoopState],
+        for_of_stack: &[ForOfLoopState],
     ) {
         let promise = self.promise_resolve_value(await_val);
         let promise_id = if let Some(o) = (promise)
