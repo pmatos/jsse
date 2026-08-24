@@ -103,7 +103,7 @@ impl Interpreter {
             return Err(self.create_type_error("The 'with' option must be an object"));
         };
 
-        let mut itype = None;
+        let mut attrs = Vec::new();
         for k in crate::interpreter::helpers::enumerable_own_keys(self, with_id)? {
             let v = match self.get_object_property(with_id, &k, &wv) {
                 Completion::Normal(v) => v,
@@ -113,12 +113,11 @@ impl Interpreter {
             let Some(sv) = (v).as_string() else {
                 return Err(self.create_type_error("Import attribute values must be strings"));
             };
-            // Every value is string-checked, so keep going past "type".
-            if k.eq_str("type") {
-                itype = super::ImportModuleType::from_attr_value(&sv.to_rust_string());
-            }
+            // Every value must be read and string-checked before
+            // AllImportAttributesSupported examines the collected keys.
+            attrs.push((k.to_string(), sv.to_rust_string()));
         }
-        Ok(itype)
+        self.dynamic_import_module_type(&attrs)
     }
 
     fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> String {
@@ -1241,16 +1240,11 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                // The synthetic Module Source module has no text or bytes in any
-                // phase, so a typed request must be refused here too, exactly as
-                // import() and import.source() refuse it.
-                if let Some(itype) = defer_import_type
-                    && Self::is_module_source_path(&resolved)
-                {
-                    let err = self.module_source_type_error(itype);
-                    return self.create_rejected_promise(err);
-                }
-                match self.load_module_no_eval(&resolved) {
+                let loaded = match defer_import_type {
+                    Some(itype) => self.load_typed_module(&resolved, itype),
+                    None => self.load_module_no_eval(&resolved),
+                };
+                match loaded {
                     Ok(module) => {
                         let resolved_canon = Self::canonicalize_module_path(&resolved);
                         self.evaluate_async_transitive_deps(&resolved_canon);

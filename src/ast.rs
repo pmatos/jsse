@@ -220,6 +220,7 @@ pub(crate) enum ExportDeclaration {
     Named {
         specifiers: Vec<ExportSpecifier>,
         source: Option<String>,
+        attributes: Vec<(String, String)>,
         declaration: Option<Box<Statement>>,
     },
     Default(Box<Expression>),
@@ -228,6 +229,7 @@ pub(crate) enum ExportDeclaration {
     All {
         exported: Option<String>,
         source: String,
+        attributes: Vec<(String, String)>,
     },
 }
 

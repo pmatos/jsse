@@ -405,12 +405,9 @@ impl Interpreter {
                 }
             };
 
-        // Text/bytes synthetic modules: load and resolve immediately
-        if let Some(ref itype) = import_type {
-            let module = match itype {
-                super::ImportModuleType::Text => self.load_text_module(&resolved),
-                super::ImportModuleType::Bytes => self.load_bytes_module(&resolved),
-            };
+        // Typed synthetic modules load and resolve immediately.
+        if let Some(itype) = import_type {
+            let module = self.load_typed_module(&resolved, itype);
             return match module {
                 Ok(m) => {
                     let ns = self.create_module_namespace(&m);

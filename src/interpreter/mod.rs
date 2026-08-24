@@ -43,18 +43,19 @@ mod scheduler;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+const SUPPORTED_IMPORT_ATTRIBUTE_KEYS: &[&str] = &["type"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ImportModuleType {
+    Json,
     Text,
     Bytes,
 }
 
 impl ImportModuleType {
-    /// The `type` import-attribute values jsse serves synthetic modules for.
-    /// `None` covers both an unknown type and one jsse decides another way
-    /// (`"json"` is chosen by file extension — see #475).
     fn from_attr_value(value: &str) -> Option<Self> {
         match value {
+            "json" => Some(Self::Json),
             "text" => Some(Self::Text),
             "bytes" => Some(Self::Bytes),
             _ => None,
@@ -63,17 +64,38 @@ impl ImportModuleType {
 
     fn attr_value(self) -> &'static str {
         match self {
+            Self::Json => "json",
             Self::Text => "text",
             Self::Bytes => "bytes",
         }
     }
 }
 
+enum ImportAttributeError {
+    UnsupportedKey(String),
+    UnsupportedType(String),
+}
+
+fn validated_import_module_type(
+    attrs: &[(String, String)],
+) -> Result<Option<ImportModuleType>, ImportAttributeError> {
+    let mut import_type = None;
+    for (key, value) in attrs {
+        if !SUPPORTED_IMPORT_ATTRIBUTE_KEYS.contains(&key.as_str()) {
+            return Err(ImportAttributeError::UnsupportedKey(key.clone()));
+        }
+        if key == "type" {
+            let Some(parsed) = ImportModuleType::from_attr_value(value) else {
+                return Err(ImportAttributeError::UnsupportedType(value.clone()));
+            };
+            import_type = Some(parsed);
+        }
+    }
+    Ok(import_type)
+}
+
 fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
-    attrs
-        .iter()
-        .find(|(key, _)| key == "type")
-        .and_then(|(_, value)| ImportModuleType::from_attr_value(value))
+    validated_import_module_type(attrs).ok().flatten()
 }
 
 pub(crate) struct Interpreter {
@@ -1032,14 +1054,62 @@ impl Interpreter {
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
 
-    /// The host has no text or bytes to hand back for a Module Source module, in
-    /// any import phase. Built in one place so the source phase and the
+    /// The host has no JSON, text, or bytes to hand back for a Module Source
+    /// module, in any import phase. Built in one place so the source phase and the
     /// evaluation phase cannot report an unsatisfiable request differently.
     fn module_source_type_error(&mut self, itype: ImportModuleType) -> JsValue {
         self.create_type_error(&format!(
             "Module '{MODULE_SOURCE_SPECIFIER}' has no {} representation",
             itype.attr_value()
         ))
+    }
+
+    fn dynamic_import_module_type(
+        &mut self,
+        attrs: &[(String, String)],
+    ) -> Result<Option<ImportModuleType>, JsValue> {
+        validated_import_module_type(attrs).map_err(|error| match error {
+            ImportAttributeError::UnsupportedKey(key) => {
+                self.create_type_error(&format!("Unsupported import attribute '{key}'"))
+            }
+            ImportAttributeError::UnsupportedType(value) => {
+                self.create_type_error(&format!("Unsupported module type '{value}'"))
+            }
+        })
+    }
+
+    fn validate_static_import_attributes(&mut self, program: &Program) -> Result<(), JsValue> {
+        for item in &program.module_items {
+            let attrs = match item {
+                ModuleItem::ImportDeclaration(import) => Some(import.attributes.as_slice()),
+                ModuleItem::ExportDeclaration(ExportDeclaration::All { attributes, .. })
+                | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    source: Some(_),
+                    attributes,
+                    ..
+                }) => Some(attributes.as_slice()),
+                _ => None,
+            };
+            let Some(attrs) = attrs else {
+                continue;
+            };
+            if let Err(error) = validated_import_module_type(attrs) {
+                return Err(match error {
+                    // InnerModuleLoading turns a failed
+                    // AllImportAttributesSupported check into SyntaxError.
+                    ImportAttributeError::UnsupportedKey(key) => self.create_error(
+                        "SyntaxError",
+                        &format!("Unsupported import attribute '{key}'"),
+                    ),
+                    // The `type` key is supported, so an unsupported value is a
+                    // host-loading failure rather than the key-list check.
+                    ImportAttributeError::UnsupportedType(value) => {
+                        self.create_type_error(&format!("Unsupported module type '{value}'"))
+                    }
+                });
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -2013,6 +2083,11 @@ impl Interpreter {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
 
+        if let Err(error) = self.validate_static_import_attributes(program) {
+            self.current_module_path = prev_module_path;
+            return Completion::Throw(error);
+        }
+
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         {
@@ -2075,6 +2150,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -2118,27 +2194,24 @@ impl Interpreter {
                         import_module_type(&import.attributes),
                     )
                 }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false, None)
-                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                    source,
+                    attributes,
+                    ..
+                }) => (Some(source.as_str()), false, import_module_type(attributes)),
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
+                    attributes,
                     ..
-                }) => (Some(source.as_str()), false, None),
+                }) => (Some(source.as_str()), false, import_module_type(attributes)),
                 _ => (None, false, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
                     match import_type {
-                        Some(ImportModuleType::Text) => {
-                            if let Err(e) = self.load_text_module(&resolved) {
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                        Some(ImportModuleType::Bytes) => {
-                            if let Err(e) = self.load_bytes_module(&resolved) {
+                        Some(itype) => {
+                            if let Err(e) = self.load_typed_module(&resolved, itype) {
                                 self.current_module_path = prev_module_path;
                                 return Completion::Throw(e);
                             }
@@ -2165,9 +2238,17 @@ impl Interpreter {
         // Second pass: process re-exports (export * from) — before imports
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
@@ -2192,9 +2273,11 @@ impl Interpreter {
                 if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     specifiers,
                     source: Some(source),
+                    attributes,
                     ..
                 }) = item
-                    && let Err(e) = self.validate_named_reexports(canon_path, source, specifiers)
+                    && let Err(e) =
+                        self.validate_named_reexports(canon_path, source, attributes, specifiers)
                 {
                     Self::cache_module_error(&loaded_module, &e);
                     self.current_module_path = prev_module_path;
@@ -2253,10 +2336,10 @@ impl Interpreter {
 
         let itype = import_module_type(&import.attributes);
 
-        // Text/bytes imports use synthetic module registry
-        if let Some(ref it) = itype {
+        // Typed imports use the synthetic module registry.
+        if let Some(it) = itype {
             let canon = Self::canonicalize_module_path(&resolved);
-            let key = (canon, it.clone());
+            let key = (canon, it);
             let loaded = self
                 .synthetic_module_registry
                 .get(&key)
@@ -2284,7 +2367,26 @@ impl Interpreter {
                         env.borrow_mut().declare(local, BindingKind::Const);
                         env.borrow_mut().initialize_binding(local, ns);
                     }
-                    _ => {}
+                    ImportSpecifier::Named { imported, local } => {
+                        let Some(val) = loaded.borrow().exports.get(imported).cloned() else {
+                            return Err(self.create_error(
+                                "SyntaxError",
+                                &format!(
+                                    "Module '{}' has no export named '{}'",
+                                    loaded.borrow().path.display(),
+                                    imported
+                                ),
+                            ));
+                        };
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        env.borrow_mut().initialize_binding(local, val);
+                    }
+                    ImportSpecifier::DeferredNamespace(local) => {
+                        let ns = self.create_deferred_module_namespace(&loaded);
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        env.borrow_mut().initialize_binding(local, ns);
+                    }
+                    ImportSpecifier::SourcePhase(_) => unreachable!(),
                 }
             }
             return Ok(());
@@ -2477,20 +2579,29 @@ impl Interpreter {
         &mut self,
         source: &str,
         exported_as: Option<&String>,
+        attributes: &[(String, String)],
         module: &Rc<RefCell<LoadedModule>>,
     ) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
         let resolved = self.resolve_module_specifier(source, module_path.as_deref())?;
-        let source_module = self.load_module(&resolved)?;
+        let import_type = import_module_type(attributes);
+        let source_module = match import_type {
+            Some(itype) => self.load_typed_module(&resolved, itype)?,
+            None => self.load_module(&resolved)?,
+        };
 
         if let Some(name) = exported_as {
             // export * as ns from './mod' - create namespace object
             let ns = self.create_module_namespace(&source_module);
             module.borrow_mut().exports.insert(name.clone(), ns.clone());
-            module
-                .borrow_mut()
-                .export_bindings
-                .insert(name.clone(), format!("*ns:{}", source));
+            module.borrow_mut().export_bindings.insert(
+                name.clone(),
+                if import_type.is_some() {
+                    name.clone()
+                } else {
+                    format!("*ns:{source}")
+                },
+            );
             // Store in module env so indirect bindings can reference it
             let mod_env = module.borrow().env.clone();
             mod_env.borrow_mut().declare(name, BindingKind::Const);
@@ -2656,6 +2767,13 @@ impl Interpreter {
             return Ok(self.get_or_create_module_source_module());
         }
 
+        // This host also supports untyped `.json` requests. Route them through
+        // the same typed loader so extension- and attribute-selected requests
+        // observe one ParseJSONModule result.
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            return self.load_json_module(path);
+        }
+
         let canon_path = Self::canonicalize_module_path(path);
 
         // Check if module is already loaded
@@ -2670,71 +2788,6 @@ impl Interpreter {
                 existing.borrow_mut().deferred_only = false;
             }
             return Ok(existing);
-        }
-
-        // Handle JSON modules: parse JSON and expose as default export
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let source = std::fs::read_to_string(path).map_err(|e| {
-                JsValue::string(JsString::from_str(&format!(
-                    "Cannot read module '{}': {}",
-                    path.display(),
-                    e
-                )))
-            })?;
-            let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _other => {
-                    return Err(JsValue::string(JsString::from_str(&format!(
-                        "JSON parse error in '{}'",
-                        path.display()
-                    ))));
-                }
-            };
-            let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
-            module_env.borrow_mut().strict = true;
-            let loaded_module = Rc::new(RefCell::new(LoadedModule {
-                path: canon_path.clone(),
-                env: module_env.clone(),
-                exports: {
-                    let mut m = HashMap::new();
-                    m.insert("default".to_string(), parsed.clone());
-                    m
-                },
-                export_bindings: {
-                    let mut m = HashMap::new();
-                    m.insert("default".to_string(), "*default*".to_string());
-                    m
-                },
-                cached_namespace: None,
-                cached_deferred_namespace: None,
-                cached_import_meta: None,
-                error: None,
-                namespace_imports: HashMap::new(),
-                source_imports: HashMap::new(),
-                module_source: None,
-                star_export_sources: Vec::new(),
-                evaluated: true,
-                is_evaluating: false,
-                deferred_only: false,
-                has_tla: false,
-                program_ast: None,
-                async_evaluation_order: None,
-                pending_async_dependencies: 0,
-                async_parent_modules: Vec::new(),
-                cycle_root: None,
-                top_level_capability: None,
-                dfs_index: None,
-                dfs_ancestor_index: None,
-            }));
-            module_env
-                .borrow_mut()
-                .declare("*default*", BindingKind::Const);
-            module_env
-                .borrow_mut()
-                .initialize_binding("*default*", parsed);
-            self.module_registry_insert(canon_path.clone(), loaded_module.clone());
-            return Ok(loaded_module);
         }
 
         // Read and parse the module
@@ -2762,6 +2815,8 @@ impl Interpreter {
                 return Err(self.create_error("SyntaxError", &e.message.to_string()));
             }
         };
+
+        self.validate_static_import_attributes(&program)?;
 
         // Create module environment
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
@@ -2818,6 +2873,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -2899,24 +2955,24 @@ impl Interpreter {
                         import_module_type(&import.attributes),
                     )
                 }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false, None)
-                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                    source,
+                    attributes,
+                    ..
+                }) => (Some(source.as_str()), false, import_module_type(attributes)),
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
+                    attributes,
                     ..
-                }) => (Some(source.as_str()), false, None),
+                }) => (Some(source.as_str()), false, import_module_type(attributes)),
                 _ => (None, false, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
                     match itype {
-                        Some(ImportModuleType::Text) => {
-                            self.load_text_module(&resolved)?;
-                        }
-                        Some(ImportModuleType::Bytes) => {
-                            self.load_bytes_module(&resolved)?;
+                        Some(itype) => {
+                            self.load_typed_module(&resolved, itype)?;
                         }
                         None if is_deferred => {
                             self.load_module_no_eval(&resolved)?;
@@ -2936,9 +2992,17 @@ impl Interpreter {
         // Second pass: process re-exports (export * from) — before imports
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
@@ -2964,9 +3028,11 @@ impl Interpreter {
                 if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     specifiers,
                     source: Some(source),
+                    attributes,
                     ..
                 }) = item
-                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon, source, attributes, specifiers)
                 {
                     self.current_module_path = prev_path;
                     Self::cache_module_error(&loaded_module, &e);
@@ -3035,6 +3101,8 @@ impl Interpreter {
             }
         };
 
+        self.validate_static_import_attributes(&program)?;
+
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         module_env.borrow_mut().module_path = Some(canon_path.clone());
@@ -3090,6 +3158,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -3132,21 +3201,23 @@ impl Interpreter {
                     Some(import.source.as_str()),
                     import_module_type(&import.attributes),
                 ),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), None)
-                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                    source,
+                    attributes,
+                    ..
+                }) => (Some(source.as_str()), import_module_type(attributes)),
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
+                    attributes,
                     ..
-                }) => (Some(source.as_str()), None),
+                }) => (Some(source.as_str()), import_module_type(attributes)),
                 _ => (None, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
                     let result = match itype {
-                        Some(ImportModuleType::Text) => self.load_text_module(&resolved),
-                        Some(ImportModuleType::Bytes) => self.load_bytes_module(&resolved),
+                        Some(itype) => self.load_typed_module(&resolved, itype),
                         None => self.load_module_no_eval(&resolved),
                     };
                     if let Err(e) = result {
@@ -3161,9 +3232,17 @@ impl Interpreter {
 
         // Process re-exports
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
@@ -3191,9 +3270,11 @@ impl Interpreter {
                 if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     specifiers,
                     source: Some(source),
+                    attributes,
                     ..
                 }) = item
-                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon, source, attributes, specifiers)
                 {
                     self.loading_deferred = prev_loading_deferred;
                     self.current_module_path = prev_path;
@@ -3257,6 +3338,49 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }))
+    }
+
+    fn load_typed_module(
+        &mut self,
+        path: &Path,
+        import_type: ImportModuleType,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        match import_type {
+            ImportModuleType::Json => self.load_json_module(path),
+            ImportModuleType::Text => self.load_text_module(path),
+            ImportModuleType::Bytes => self.load_bytes_module(path),
+        }
+    }
+
+    fn load_json_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        if Self::is_module_source_path(path) {
+            return Err(self.module_source_type_error(ImportModuleType::Json));
+        }
+        let canon = Self::canonicalize_module_path(path);
+        let key = (canon.clone(), ImportModuleType::Json);
+        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+            return Ok(existing.clone());
+        }
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            JsValue::string(JsString::from_str(&format!(
+                "Cannot read module '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+        let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
+            Completion::Normal(value) => value,
+            Completion::Throw(error) => return Err(error),
+            _ => {
+                return Err(self.create_error(
+                    "SyntaxError",
+                    &format!("JSON parse error in '{}'", path.display()),
+                ));
+            }
+        };
+        let module = self.create_synthetic_default_module(canon, parsed);
+        self.synthetic_module_registry.insert(key, module.clone());
+        Ok(module)
     }
 
     fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
@@ -3693,13 +3817,26 @@ impl Interpreter {
                         .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
                     (Some(import.source.as_str()), is_defer)
                 }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                    source,
+                    attributes,
+                    ..
+                }) => {
+                    if import_module_type(attributes).is_some() {
+                        continue;
+                    }
                     (Some(source.as_str()), false)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
+                    attributes,
                     ..
-                }) => (Some(source.as_str()), false),
+                }) => {
+                    if import_module_type(attributes).is_some() {
+                        continue;
+                    }
+                    (Some(source.as_str()), false)
+                }
                 _ => (None, false),
             };
             if let Some(spec) = specifier
@@ -4039,13 +4176,26 @@ impl Interpreter {
                         }
                         Some(import.source.as_str())
                     }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                        source,
+                        attributes,
+                        ..
+                    }) => {
+                        if import_module_type(attributes).is_some() {
+                            continue;
+                        }
                         Some(source.as_str())
                     }
                     ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                         source: Some(source),
+                        attributes,
                         ..
-                    }) => Some(source.as_str()),
+                    }) => {
+                        if import_module_type(attributes).is_some() {
+                            continue;
+                        }
+                        Some(source.as_str())
+                    }
                     _ => None,
                 };
                 if let Some(spec) = specifier
@@ -4121,13 +4271,26 @@ impl Interpreter {
                         }
                         Some(import.source.as_str())
                     }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                        source,
+                        attributes,
+                        ..
+                    }) => {
+                        if import_module_type(attributes).is_some() {
+                            continue;
+                        }
                         Some(source.as_str())
                     }
                     ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                         source: Some(source),
+                        attributes,
                         ..
-                    }) => Some(source.as_str()),
+                    }) => {
+                        if import_module_type(attributes).is_some() {
+                            continue;
+                        }
+                        Some(source.as_str())
+                    }
                     _ => None,
                 };
                 if let Some(spec) = specifier
@@ -4146,9 +4309,43 @@ impl Interpreter {
         &mut self,
         current_module: &Path,
         source: &str,
+        attributes: &[(String, String)],
         specifiers: &[ExportSpecifier],
     ) -> Result<(), JsValue> {
         let resolved = self.resolve_module_specifier(source, Some(current_module))?;
+
+        if let Some(itype) = import_module_type(attributes) {
+            let loaded = self.load_typed_module(&resolved, itype)?;
+            for spec in specifiers {
+                let Some(value) = loaded.borrow().exports.get(&spec.local).cloned() else {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Module '{}' has no export named '{}'",
+                            loaded.borrow().path.display(),
+                            spec.local
+                        ),
+                    ));
+                };
+
+                // Typed synthetic-module exports are immutable after creation.
+                // Materialize the indirect re-export as an internal binding so
+                // later ResolveExport walks do not lose this request's type and
+                // reload the resource as ordinary source text.
+                if let Some(current) = self.module_registry_get(current_module) {
+                    let binding = format!("*synthetic-reexport:{}*", spec.exported);
+                    let env = current.borrow().env.clone();
+                    env.borrow_mut().declare(&binding, BindingKind::Const);
+                    env.borrow_mut().initialize_binding(&binding, value.clone());
+                    let mut current = current.borrow_mut();
+                    current.exports.insert(spec.exported.clone(), value);
+                    current
+                        .export_bindings
+                        .insert(spec.exported.clone(), binding);
+                }
+            }
+            return Ok(());
+        }
 
         for spec in specifiers {
             let mut visited = HashSet::new();
@@ -4416,21 +4613,27 @@ impl Interpreter {
             ExportDeclaration::Named {
                 specifiers,
                 source,
+                attributes,
                 declaration,
             } => {
                 if let Some(src) = source {
                     // Re-export: get values from source module
                     let module_path = self.current_module_path.clone();
                     if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref())
-                        && let Ok(source_mod) = self.load_module(&resolved)
                     {
-                        let source_exports = source_mod.borrow().exports.clone();
-                        for spec in specifiers {
-                            if let Some(val) = source_exports.get(&spec.local) {
-                                module
-                                    .borrow_mut()
-                                    .exports
-                                    .insert(spec.exported.clone(), val.clone());
+                        let source_mod = match import_module_type(attributes) {
+                            Some(itype) => self.load_typed_module(&resolved, itype),
+                            None => self.load_module(&resolved),
+                        };
+                        if let Ok(source_mod) = source_mod {
+                            let source_exports = source_mod.borrow().exports.clone();
+                            for spec in specifiers {
+                                if let Some(val) = source_exports.get(&spec.local) {
+                                    module
+                                        .borrow_mut()
+                                        .exports
+                                        .insert(spec.exported.clone(), val.clone());
+                                }
                             }
                         }
                     }
@@ -4871,6 +5074,7 @@ impl Interpreter {
                 specifiers,
                 source,
                 declaration,
+                ..
             } => {
                 if let Some(src) = source {
                     // Re-export: export { x } from './mod'
