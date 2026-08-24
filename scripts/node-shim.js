@@ -143,7 +143,13 @@
     objectGetOwnPropertyDescriptor(regexpPrototype, "sticky").get
   );
   var regexpExec = functionCall.bind(regexpConstructor.prototype.exec);
+  var arrayPop = functionCall.bind(arrayConstructor.prototype.pop);
+  var stringCharCodeAt = functionCall.bind(
+    stringConstructor.prototype.charCodeAt
+  );
+  var stringSlice = functionCall.bind(stringConstructor.prototype.slice);
   var identifierKeyPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+  var circularMessagePattern = /circular/i;
   var numberValueOf = functionCall.bind(numberConstructor.prototype.valueOf);
   var stringValueOf = functionCall.bind(stringConstructor.prototype.valueOf);
   var booleanValueOf = functionCall.bind(
@@ -186,16 +192,46 @@
     return "/" + source + "/" + flags;
   }
 
+  // Prototype chains are acyclic in practice, but a Proxy defeats
+  // OrdinarySetPrototypeOf's cycle check, so every walk below is bounded.
+  var MAX_PROTOTYPE_HOPS = 1000;
+
+  // Sentinel for a [[Prototype]] read that threw — an exotic object in the
+  // no-host fallback. Distinct from every value a real chain can hold.
+  var UNKNOWN_PROTOTYPE = {};
+
+  // The unwrapped [[Prototype]] of `v`. Read once per value and threaded into
+  // every builtinPrototypeKind() call below, so classifying eight built-in
+  // families costs one metadata read rather than eight — and, in the no-host
+  // fallback where `v` may still be a Proxy, one getPrototypeOf trap.
+  function prototypeOf(v) {
+    try {
+      return unwrapProxy(objectGetPrototypeOf(v));
+    } catch (e) {
+      return UNKNOWN_PROTOTYPE;
+    }
+  }
+
   // Classify a built-in's presentation from trap-free prototype metadata. A
   // genuine built-in can be reparented while retaining its internal slot, but
   // Node renders it generically unless its prototype chain still identifies
   // that built-in family. Slot-bearing prototype objects also recognize the
   // corresponding chain from another realm without invoking @@hasInstance.
-  function builtinPrototypeKind(value, intrinsicPrototype, prototypeProbe) {
+  function builtinPrototypeKind(
+    value,
+    intrinsicPrototype,
+    prototypeProbe,
+    startPrototype
+  ) {
+    // [[Prototype]] is always an object or null, never undefined, so undefined
+    // unambiguously means "not supplied".
+    var current =
+      startPrototype === undefined ? prototypeOf(value) : startPrototype;
+    if (current === UNKNOWN_PROTOTYPE) return "ordinary";
+    if (current === null) return "null";
     try {
-      var current = unwrapProxy(objectGetPrototypeOf(value));
-      if (current === null) return "null";
-      while (current !== null && current !== objectPrototype) {
+      var hops = MAX_PROTOTYPE_HOPS;
+      while (current !== null && current !== objectPrototype && hops-- > 0) {
         if (
           current === intrinsicPrototype ||
           (prototypeProbe && tryApplyIntrinsic(prototypeProbe, current))
@@ -239,7 +275,8 @@
   function findPropertyDescriptor(v, key) {
     try {
       var current = v;
-      while (current !== null) {
+      var hops = MAX_PROTOTYPE_HOPS;
+      while (current !== null && hops-- > 0) {
         current = unwrapProxy(current);
         if (current === null) return null;
         var desc = objectGetOwnPropertyDescriptor(current, key);
@@ -315,128 +352,146 @@
 
       // Objects.
       if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
-      var errorKind = builtinPrototypeKind(v, errorPrototype, null);
-      if (errorKind === "builtin") return renderError(v);
-      if (errorKind === "null" && errorIsError(v)) {
-        return renderNullPrototypeError(v);
-      }
-      var boxed;
-      // `get RegExp.prototype.source` uniquely does NOT throw for
-      // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
-      // misreport the prototype itself as a RegExp. After detecting a genuine
-      // RegExp, classify its prototype chain before presentation: a reparented
-      // RegExp must not dispatch ordinary `source`/`flags` gets through a user
-      // object. Compose the standard rendering from captured slot getters.
-      boxed =
-        v === regexpPrototype
-          ? null
-          : tryApplyIntrinsic(regexpGetSource, v);
-      if (boxed) {
-        var regexpKind = builtinPrototypeKind(
-          v,
-          regexpPrototype,
-          regexpGetSource
-        );
-        if (regexpKind === "builtin") return formatRegExp(v, boxed.value);
-        if (regexpKind === "null") {
-          return "[RegExp: null prototype] " + formatRegExp(v, boxed.value);
+      // Every builtinPrototypeKind() answer for a direct child of
+      // %Object.prototype% is "ordinary" — its walk body never runs — so the
+      // whole built-in classification below (seven throwing slot probes and
+      // eight chain walks) is pure waste for the commonest object shape.
+      var prototype = prototypeOf(v);
+      if (prototype !== objectPrototype) {
+        var errorKind = builtinPrototypeKind(v, errorPrototype, null, prototype);
+        if (errorKind === "builtin") return renderError(v);
+        if (errorKind === "null" && errorIsError && errorIsError(v)) {
+          return renderNullPrototypeError(v);
         }
-      }
-      boxed = tryApplyIntrinsic(dateGetTime, v);
-      if (boxed) {
-        var dateText = numberIsNaN(boxed.value)
-          ? "Invalid Date"
-          : dateToISOString(v);
-        var dateKind = builtinPrototypeKind(v, datePrototype, dateGetTime);
-        if (dateKind === "builtin") return dateText;
-        if (dateKind === "null") {
-          return "[Date: null prototype] " + dateText;
+        var boxed;
+        // `get RegExp.prototype.source` uniquely does NOT throw for
+        // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
+        // misreport the prototype itself as a RegExp. After detecting a genuine
+        // RegExp, classify its prototype chain before presentation: a reparented
+        // RegExp must not dispatch ordinary `source`/`flags` gets through a user
+        // object. Compose the standard rendering from captured slot getters.
+        boxed =
+          v === regexpPrototype
+            ? null
+            : tryApplyIntrinsic(regexpGetSource, v);
+        if (boxed) {
+          var regexpKind = builtinPrototypeKind(
+            v,
+            regexpPrototype,
+            regexpGetSource,
+            prototype
+          );
+          if (regexpKind === "builtin") return formatRegExp(v, boxed.value);
+          if (regexpKind === "null") {
+            return "[RegExp: null prototype] " + formatRegExp(v, boxed.value);
+          }
         }
-      }
-      boxed = tryApplyIntrinsic(numberValueOf, v);
-      if (boxed) {
-        var numberText = render(boxed.value, depth);
-        var numberKind = builtinPrototypeKind(
-          v,
-          numberPrototype,
-          numberValueOf
-        );
-        if (numberKind === "builtin") return "[Number: " + numberText + "]";
-        if (numberKind === "null") {
-          return "[Number (null prototype): " + numberText + "]";
+        boxed = tryApplyIntrinsic(dateGetTime, v);
+        if (boxed) {
+          var dateText = numberIsNaN(boxed.value)
+            ? "Invalid Date"
+            : dateToISOString(v);
+          var dateKind = builtinPrototypeKind(
+            v,
+            datePrototype,
+            dateGetTime,
+            prototype
+          );
+          if (dateKind === "builtin") return dateText;
+          if (dateKind === "null") {
+            return "[Date: null prototype] " + dateText;
+          }
         }
-      }
-      boxed = tryApplyIntrinsic(stringValueOf, v);
-      if (boxed) {
-        var stringText = render(boxed.value, depth);
-        var stringKind = builtinPrototypeKind(
-          v,
-          stringPrototype,
-          stringValueOf
-        );
-        if (stringKind === "builtin") return "[String: " + stringText + "]";
-        if (stringKind === "null") {
-          return "[String (null prototype): " + stringText + "]";
+        boxed = tryApplyIntrinsic(numberValueOf, v);
+        if (boxed) {
+          var numberText = render(boxed.value, depth);
+          var numberKind = builtinPrototypeKind(
+            v,
+            numberPrototype,
+            numberValueOf,
+            prototype
+          );
+          if (numberKind === "builtin") return "[Number: " + numberText + "]";
+          if (numberKind === "null") {
+            return "[Number (null prototype): " + numberText + "]";
+          }
         }
-      }
-      boxed = tryApplyIntrinsic(booleanValueOf, v);
-      if (boxed) {
-        var booleanText = render(boxed.value, depth);
-        var booleanKind = builtinPrototypeKind(
-          v,
-          booleanPrototype,
-          booleanValueOf
-        );
-        if (booleanKind === "builtin") {
-          return "[Boolean: " + booleanText + "]";
+        boxed = tryApplyIntrinsic(stringValueOf, v);
+        if (boxed) {
+          var stringText = render(boxed.value, depth);
+          var stringKind = builtinPrototypeKind(
+            v,
+            stringPrototype,
+            stringValueOf,
+            prototype
+          );
+          if (stringKind === "builtin") return "[String: " + stringText + "]";
+          if (stringKind === "null") {
+            return "[String (null prototype): " + stringText + "]";
+          }
         }
-        if (booleanKind === "null") {
-          return "[Boolean (null prototype): " + booleanText + "]";
+        boxed = tryApplyIntrinsic(booleanValueOf, v);
+        if (boxed) {
+          var booleanText = render(boxed.value, depth);
+          var booleanKind = builtinPrototypeKind(
+            v,
+            booleanPrototype,
+            booleanValueOf,
+            prototype
+          );
+          if (booleanKind === "builtin") {
+            return "[Boolean: " + booleanText + "]";
+          }
+          if (booleanKind === "null") {
+            return "[Boolean (null prototype): " + booleanText + "]";
+          }
         }
-      }
-      boxed = tryApplyIntrinsic(bigintValueOf, v);
-      if (boxed) {
-        var bigintText = render(boxed.value, depth);
-        var bigintKind = builtinPrototypeKind(
-          v,
-          bigintPrototype,
-          bigintValueOf
-        );
-        if (bigintKind === "null") {
-          return "[BigInt (null prototype): " + bigintText + "]";
+        boxed = tryApplyIntrinsic(bigintValueOf, v);
+        if (boxed) {
+          var bigintText = render(boxed.value, depth);
+          var bigintKind = builtinPrototypeKind(
+            v,
+            bigintPrototype,
+            bigintValueOf,
+            prototype
+          );
+          if (bigintKind === "null") {
+            return "[BigInt (null prototype): " + bigintText + "]";
+          }
+          if (bigintKind !== "builtin") boxed = null;
         }
-        if (bigintKind !== "builtin") boxed = null;
-      }
-      if (boxed) {
-        // Unlike the older wrappers above, Node's boxed BigInt/Symbol
-        // rendering intentionally observes a constructor's current
-        // @@hasInstance result. A false or throwing hook selects its generic
-        // object shape, but must not intercept the internal-slot probe.
-        return tryInstanceOf(v, bigintConstructor)
-          ? "[BigInt: " + bigintText + "]"
-          : "Object [BigInt] {}";
-      }
-      boxed = tryApplyIntrinsic(symbolToString, v);
-      if (boxed) {
-        var symbolKind = builtinPrototypeKind(
-          v,
-          symbolPrototype,
-          symbolToString
-        );
-        if (symbolKind === "null") {
-          return "[Symbol (null prototype): " + boxed.value + "]";
+        if (boxed) {
+          // Unlike the older wrappers above, Node's boxed BigInt/Symbol
+          // rendering intentionally observes a constructor's current
+          // @@hasInstance result. A false or throwing hook selects its generic
+          // object shape, but must not intercept the internal-slot probe.
+          return tryInstanceOf(v, bigintConstructor)
+            ? "[BigInt: " + bigintText + "]"
+            : "Object [BigInt] {}";
         }
-        if (symbolKind !== "builtin") boxed = null;
-      }
-      if (boxed) {
-        return tryInstanceOf(v, symbolConstructor)
-          ? "[Symbol: " + boxed.value + "]"
-          : "Object [Symbol] {}";
+        boxed = tryApplyIntrinsic(symbolToString, v);
+        if (boxed) {
+          var symbolKind = builtinPrototypeKind(
+            v,
+            symbolPrototype,
+            symbolToString,
+            prototype
+          );
+          if (symbolKind === "null") {
+            return "[Symbol (null prototype): " + boxed.value + "]";
+          }
+          if (symbolKind !== "builtin") boxed = null;
+        }
+        if (boxed) {
+          return tryInstanceOf(v, symbolConstructor)
+            ? "[Symbol: " + boxed.value + "]"
+            : "Object [Symbol] {}";
+        }
       }
 
       if (depth < 0) return arrayIsArray(v) ? "[Array]" : "[Object]";
 
-      seen.push(v);
+      arrayPush(seen, v);
       var out;
       try {
         if (arrayIsArray(v)) {
@@ -453,7 +508,7 @@
             var k = keys[j];
             var label = isIdentifierKey(k) ? k : quoteString(k);
             var memberDesc = objectGetOwnPropertyDescriptor(v, k);
-            parts.push(label + ": " + renderDescriptor(memberDesc, depth));
+            arrayPush(parts, label + ": " + renderDescriptor(memberDesc, depth));
           }
           var ctorName = constructorName(v);
           out = parts.length
@@ -461,7 +516,7 @@
             : ctorName + "{}";
         }
       } finally {
-        seen.pop();
+        arrayPop(seen);
       }
       return out;
     }
@@ -659,9 +714,11 @@
     var hasOwnToString = hasOwnProperty;
     var hasOwnToPrimitive = hasOwnProperty;
 
-    // Node reads [[ProxyTarget]] here before touching a single property, so a
-    // Proxy's get trap never runs for `%s`. Do the same via the host floor; a
-    // revoked Proxy has no coercion hook at all, so it routes to inspect.
+    // Node reads [[ProxyTarget]] here before touching a single property, so
+    // classification never dispatches a Proxy get trap. Do the same via the
+    // host floor; a revoked Proxy has no coercion hook at all, so it routes to
+    // inspect. (When classification answers "user-defined", `convS` still
+    // coerces the ORIGINAL value, so the trap runs there — on Node too.)
     value = unwrapProxy(value);
     if (value === null) return true;
 
@@ -683,11 +740,13 @@
     // fire the trap here — so a `--node` cross-check difference on a
     // prototype-chain Proxy is expected, not a regression.
     var pointer = value;
+    var hops = MAX_PROTOTYPE_HOPS;
     try {
       do {
         pointer = unwrapProxy(objectGetPrototypeOf(pointer));
       } while (
         pointer !== null &&
+        hops-- > 0 &&
         !hasOwnToString(pointer, "toString") &&
         !hasOwnToPrimitive(pointer, symbolToPrimitive)
       );
@@ -718,7 +777,7 @@
     if (v === null) return "null";
     if (t === "undefined") return "undefined";
     if (t === "boolean") return String(v);
-    if (t === "symbol") return v.toString();
+    if (t === "symbol") return symbolToString(v);
     if (t === "function") return inspect(v, { depth: 0 });
     return hasBuiltInToString(v) ? inspect(v, { depth: 0 }) : String(v);
   }
@@ -753,7 +812,8 @@
       // "Converting circular structure to JSON"; its BigInt/toJSON errors do not
       // mention "circular", so matching the message is safe here (the shim is
       // inert on Node, so this only ever sees jsse's error text).
-      if (e && /circular/i.test(String(e.message))) return "[Circular]";
+      if (e && regexpExec(circularMessagePattern, stringConstructor(e.message)))
+        return "[Circular]";
       throw e;
     }
   }
@@ -765,9 +825,12 @@
       // No format string: inspect every argument, join with a space.
       var pieces = [];
       for (var i = 0; i < args.length; i++) {
-        pieces.push(typeof args[i] === "string" ? args[i] : inspect(args[i]));
+        arrayPush(
+          pieces,
+          typeof args[i] === "string" ? args[i] : inspect(args[i])
+        );
       }
-      return pieces.join(" ");
+      return arrayJoin(pieces, " ");
     }
     // A lone string argument is returned verbatim — Node performs no specifier
     // substitution unless there is at least one argument to format, so e.g.
@@ -781,10 +844,10 @@
     var f = first;
     var n = f.length;
     for (var p = 0; p < n - 1; p++) {
-      if (f.charCodeAt(p) !== 37 /* % */) continue;
-      var next = f.charCodeAt(p + 1);
+      if (stringCharCodeAt(f, p) !== 37 /* % */) continue;
+      var next = stringCharCodeAt(f, p + 1);
       if (next === 37 /* %% */) {
-        out += f.slice(lastPos, p) + "%";
+        out += stringSlice(f, lastPos, p) + "%";
         lastPos = p + 2;
         p++;
         continue;
@@ -804,12 +867,12 @@
         }
       }
       if (repl !== null) {
-        out += f.slice(lastPos, p) + repl;
+        out += stringSlice(f, lastPos, p) + repl;
         lastPos = p + 2;
         p++;
       }
     }
-    out += f.slice(lastPos);
+    out += stringSlice(f, lastPos);
 
     // Trailing arguments beyond the specifiers are appended, space-separated.
     for (; argIndex < args.length; argIndex++) {

@@ -99,6 +99,27 @@ available on the path covered by the acceptance criterion. The documented
 plain-jsse fallback has no native capability to identify a Proxy; reflection
 there remains best-effort and catches exotic failures where possible.
 
+## Deliberate divergences from Node
+
+Node reaches a few of its outputs by invoking exactly the user code this design
+exists to avoid, so refusing to call it necessarily changes the rendering. These
+are accepted, not bugs:
+
+- A function whose `name` is an accessor renders `[Function (anonymous)]`;
+  Node reports `[Function: Dyn]` because it calls the getter. `functionName`
+  reads an own *data* descriptor only.
+- An Error whose `message` has been replaced by an object renders `[Error]`;
+  Node renders `[Error: [object Object]]` by invoking the object's `toString`.
+  A `null` or falsy `message` still renders as Node does (`[Error: null]`).
+- The `%s` path only classifies trap-free. Once classification answers
+  "user-defined", `convS` coerces the original value, so a `toString`/
+  `@@toPrimitive` hook — including a Proxy `get` trap — does run, as it does on
+  Node.
+
+The no-`--node` fallback cannot read `[[ProxyTarget]]`, so reflection there
+still dispatches handler traps; its rendering matches the `--node` path but its
+trap counts do not.
+
 ## Validation
 
 The cross-engine node-shim self-test covers array-target Proxies, throwing

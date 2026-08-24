@@ -3389,6 +3389,10 @@ mod node_host_tests {
               const d = Object.getOwnPropertyDescriptor(globalThis, name);
               if (!d) throw new Error(name + " missing");
               if (d.enumerable) throw new Error(name + " is enumerable");
+              // node-shim.js deletes __host_proxy_target under "use strict" to
+              // keep the Proxy-metadata seam private; a non-configurable
+              // binding would make that delete throw and kill the prelude.
+              if (!d.configurable) throw new Error(name + " is not configurable");
               if (typeof globalThis[name] !== "function") throw new Error(name + " not a function");
               if (Object.keys(globalThis).includes(name)) throw new Error(name + " shows in keys");
             }
