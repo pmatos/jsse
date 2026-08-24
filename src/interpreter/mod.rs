@@ -883,7 +883,6 @@ impl Interpreter {
             0,
             |interp, _this, _args| {
                 let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
-                interp.gc_root_value(&resolve_fn);
 
                 let immediate_report = {
                     let (ref reports_lock, _) = *interp.agent_reports;
@@ -892,7 +891,6 @@ impl Interpreter {
                 if let Some(report) = immediate_report {
                     let report_val = JsValue::string(JsString::from_str(&report));
                     let _ = interp.call_function(&resolve_fn, &JsValue::UNDEFINED, &[report_val]);
-                    interp.gc_unroot_value(&resolve_fn);
                     return Completion::Normal(promise_val);
                 }
 
@@ -932,7 +930,6 @@ impl Interpreter {
                         .push(Box::new(move |interp: &mut Interpreter| {
                             let _ =
                                 interp.call_function(&resolve, &JsValue::UNDEFINED, &[report_val]);
-                            interp.gc_unroot_value(&resolve);
                             if promise_id != 0 {
                                 pending_promise_ids.lock().unwrap().remove(&promise_id);
                             }
