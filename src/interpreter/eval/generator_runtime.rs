@@ -833,63 +833,24 @@ impl Interpreter {
                 return disp;
             }
             if let Completion::Return(v) = stmt_result {
-                // Check try_stack for enclosing finally blocks before completing
-                let mut ret_val_opt = Some(v);
-                for i in (0..current_try_stack.len()).rev() {
-                    if !current_try_stack[i].entered_finally
-                        && current_try_stack[i].finally_state.is_some()
-                    {
-                        pending_return = ret_val_opt.take();
-                        let finally_state = current_try_stack[i].finally_state.unwrap();
-                        current_try_stack = current_try_stack[..=i].to_vec();
-                        current_id = finally_state;
-                        break;
-                    }
-                }
-                if ret_val_opt.is_none() {
-                    continue;
-                }
-                let v = ret_val_opt.unwrap();
-                // §27.5.3.3: DisposeResources when generator returns
-                let disp = self.dispose_resources(&func_env, Completion::Return(v));
-                let ret_val = match disp {
-                    Completion::Return(v) => v,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        self.generator_inline_iters.remove(&o.id);
-                        return Completion::Throw(e);
-                    }
-                    _ => JsValue::UNDEFINED,
-                };
+                self.sync_generator_for_of_stack(o.id, &for_of_stack);
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineGenerator {
                         state_machine,
                         func_env,
                         is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
+                        execution_state: StateMachineExecutionState::SuspendedAtState {
+                            state_id: current_id,
+                        },
                         _sent_value: JsValue::UNDEFINED,
-                        try_stack: vec![],
+                        try_stack: current_try_stack,
                         pending_binding: None,
                         delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
+                        pending_exception: pending_exception.take(),
+                        pending_return: pending_return.take(),
                     },
                 );
-                self.generator_inline_iters.remove(&o.id);
-                return Completion::Normal(self.create_iter_result_object(ret_val, true));
+                return self.generator_return_state_machine(this, v);
             }
 
             match &terminator {
@@ -1280,66 +1241,28 @@ impl Interpreter {
                         JsValue::UNDEFINED
                     };
 
-                    // Check try_stack for enclosing finally blocks before completing
-                    let mut ret_val_opt = Some(ret_val);
-                    for i in (0..current_try_stack.len()).rev() {
-                        if !current_try_stack[i].entered_finally
-                            && current_try_stack[i].finally_state.is_some()
-                        {
-                            pending_return = ret_val_opt.take();
-                            let finally_state = current_try_stack[i].finally_state.unwrap();
-                            current_try_stack = current_try_stack[..=i].to_vec();
-                            current_id = finally_state;
-                            break;
-                        }
-                    }
-                    if ret_val_opt.is_none() {
-                        continue;
-                    }
-                    let ret_val = ret_val_opt.unwrap();
-
-                    // §27.5.3.3: DisposeResources when generator completes via return
-                    let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
-                    let ret_val = match disp {
-                        Completion::Return(v) => v,
-                        Completion::Throw(e) => {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            self.generator_inline_iters.remove(&o.id);
-                            return Completion::Throw(e);
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
-
+                    // A source-level return is the same abrupt completion as
+                    // one injected through Generator.prototype.return. Reuse
+                    // that path so inner finalizers, per-iteration disposal,
+                    // IteratorClose, and outer finalizers keep their ordering.
+                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
                             state_machine,
                             func_env,
                             is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: current_id,
+                            },
                             _sent_value: JsValue::UNDEFINED,
-                            try_stack: vec![],
+                            try_stack: current_try_stack,
                             pending_binding: None,
                             delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
+                            pending_exception: pending_exception.take(),
+                            pending_return: pending_return.take(),
                         },
                     );
-                    self.generator_inline_iters.remove(&o.id);
-                    return Completion::Normal(self.create_iter_result_object(ret_val, true));
+                    return self.generator_return_state_machine(this, ret_val);
                 }
 
                 StateTerminator::Throw(expr) => {
@@ -4556,76 +4479,124 @@ impl Interpreter {
                 }
                 // Check pending_return before executing state (handles .return() with no try/catch)
                 if let Some(ret_val) = pending_return.take() {
-                    if current_try_stack.is_empty() {
-                        if let Some(iters) = self.generator_inline_iters.remove(&o.id) {
-                            for iter in iters {
-                                if let Err(e) = self.iterator_close_result(&iter) {
-                                    self.generator_inline_iters.remove(&o.id);
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine,
-                                                func_env,
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::Completed,
-                                                _sent_value: JsValue::UNDEFINED,
-                                                try_stack: vec![],
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    let _ =
-                                        self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                    self.drain_microtasks();
-                                    return Completion::Normal(promise);
-                                }
-                            }
-                        }
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let promise_id = if let Some(po) = (promise)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            po.id
-                        } else {
-                            0
-                        };
-                        return self.async_generator_await_return(ret_val, promise_id);
-                    }
-                    // Has try/finally — route to finally handler
-                    let mut return_handled = false;
-                    for i in (0..current_try_stack.len()).rev() {
-                        if !current_try_stack[i].entered_finally
-                            && let Some(finally_state) = current_try_stack[i].finally_state
-                        {
-                            pending_return = Some(ret_val.clone());
-                            current_id = finally_state;
-                            return_handled = true;
-                            break;
-                        }
-                    }
-                    if return_handled {
+                    // A yield can suspend while evaluating a destructuring
+                    // pattern. Those expression-level iterators are inside
+                    // every lexical finally and for-of loop, so close them
+                    // before unwinding either. A close failure replaces the
+                    // injected return and must enter the generator's handlers.
+                    let active_for_of_iterator_ids: Vec<u64> = for_of_stack
+                        .iter()
+                        .filter_map(|loop_state| {
+                            func_env
+                                .borrow()
+                                .get(&loop_state.iter_var)
+                                .and_then(|iterator| iterator.as_object_id())
+                        })
+                        .collect();
+                    let inline_close_error = self
+                        .generator_inline_iters
+                        .remove(&o.id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|iterator| {
+                            iterator.as_object_id().is_none_or(|iterator_id| {
+                                !active_for_of_iterator_ids.contains(&iterator_id)
+                            })
+                        })
+                        .find_map(|iterator| self.iterator_close_result(&iterator).err());
+                    if let Some(error) = inline_close_error {
+                        pending_exception = Some(error);
+                        check_abrupt_on_resume = true;
                         continue;
                     }
-                    // No finally — just propagate
-                    pending_return = Some(ret_val);
+
+                    let finally_idx = (0..current_try_stack.len()).rev().find(|&i| {
+                        !current_try_stack[i].entered_finally
+                            && current_try_stack[i].finally_state.is_some()
+                    });
+                    let unwind_from = finally_idx.map_or(0, |handler_depth| {
+                        for_of_stack
+                            .iter()
+                            .position(|loop_state| loop_state.try_depth > handler_depth)
+                            .unwrap_or(for_of_stack.len())
+                    });
+                    let return_completion = self.unwind_generator_for_of_loops(
+                        o.id,
+                        &mut for_of_stack,
+                        &mut current_try_stack,
+                        &func_env,
+                        unwind_from,
+                        Completion::Return(ret_val),
+                    );
+                    let return_value = match return_completion {
+                        Completion::Return(value) => value,
+                        Completion::Throw(error) => {
+                            pending_exception = Some(error);
+                            check_abrupt_on_resume = true;
+                            continue;
+                        }
+                        Completion::Exit(code) => {
+                            self.generator_inline_iters.remove(&o.id);
+                            self.generator_for_of_stacks.remove(&o.id);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        _sent_value: JsValue::UNDEFINED,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                        pending_return: None,
+                                    },
+                                );
+                            return Completion::Exit(code);
+                        }
+                        _ => JsValue::UNDEFINED,
+                    };
+
+                    if let Some(idx) = finally_idx {
+                        let finally_state = current_try_stack[idx].finally_state.unwrap();
+                        current_try_stack = current_try_stack[..=idx].to_vec();
+                        pending_return = Some(return_value);
+                        current_id = finally_state;
+                        continue;
+                    }
+
+                    let completion =
+                        self.dispose_resources(&func_env, Completion::Return(return_value));
+                    self.generator_inline_iters.remove(&o.id);
+                    self.generator_for_of_stacks.remove(&o.id);
+                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            _sent_value: JsValue::UNDEFINED,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                            pending_return: None,
+                        },
+                    );
+                    return match completion {
+                        Completion::Return(value) => {
+                            let promise_id = promise.as_object_id().unwrap_or(0);
+                            self.async_generator_await_return(value, promise_id)
+                        }
+                        Completion::Throw(error) => {
+                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                            self.drain_microtasks();
+                            Completion::Normal(promise)
+                        }
+                        Completion::Exit(code) => Completion::Exit(code),
+                        _ => unreachable!("disposing an async return changed its completion kind"),
+                    };
                 }
             } // end if check_abrupt_on_resume
 
@@ -4722,75 +4693,26 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
             if let Completion::Return(v) = stmt_result {
-                // §27.6.3.3: DisposeResources when async generator returns
-                let disp = self.dispose_resources(&func_env, Completion::Return(v));
-                let v = match disp {
-                    Completion::Return(v) => v,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    _ => JsValue::UNDEFINED,
-                };
-                let awaited = match self.await_value(&v) {
-                    Completion::Normal(av) => av,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    _ => JsValue::UNDEFINED,
-                };
-                self.generator_inline_iters.remove(&o.id);
+                self.sync_generator_for_of_stack(o.id, &for_of_stack);
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineAsyncGenerator {
                         state_machine,
                         func_env,
                         is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
+                        execution_state: StateMachineExecutionState::SuspendedAtState {
+                            state_id: current_id,
+                        },
                         _sent_value: JsValue::UNDEFINED,
-                        try_stack: vec![],
+                        try_stack: current_try_stack,
                         pending_binding: None,
                         delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
+                        pending_exception: pending_exception.take(),
+                        pending_return: pending_return.take(),
                     },
                 );
-                let iter_result = self.create_iter_result_object(awaited, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
+                return self.async_generator_return_state_machine_with_promise(
+                    this, v, promise, resolve_fn, reject_fn,
+                );
             }
             if let Completion::Yield(yield_val) = stmt_result {
                 let _is_destructuring = self.destructuring_yield;
@@ -5435,6 +5357,89 @@ impl Interpreter {
                             }
                         };
 
+                        if current_try_stack.iter().any(|try_info| {
+                            !try_info.entered_finally && try_info.finally_state.is_some()
+                        }) {
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state:
+                                            StateMachineExecutionState::SuspendedAtState {
+                                                state_id: current_id,
+                                            },
+                                        _sent_value: JsValue::UNDEFINED,
+                                        try_stack: current_try_stack,
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: pending_exception.take(),
+                                        pending_return: pending_return.take(),
+                                    },
+                                );
+                            return self.async_generator_return_state_machine_with_promise(
+                                this, ret_val, promise, resolve_fn, reject_fn,
+                            );
+                        }
+
+                        let return_completion = self.unwind_generator_for_of_loops(
+                            o.id,
+                            &mut for_of_stack,
+                            &mut current_try_stack,
+                            &func_env,
+                            0,
+                            Completion::Return(ret_val),
+                        );
+                        let ret_val = match return_completion {
+                            Completion::Return(value) => value,
+                            Completion::Throw(error) => {
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: current_id,
+                                                },
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: current_try_stack,
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return self.async_generator_throw_state_machine_with_promise(
+                                    this, error, promise, resolve_fn, reject_fn,
+                                );
+                            }
+                            Completion::Exit(code) => {
+                                self.generator_inline_iters.remove(&o.id);
+                                self.generator_for_of_stacks.remove(&o.id);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return Completion::Exit(code);
+                            }
+                            _ => JsValue::UNDEFINED,
+                        };
+
                         // §27.6.3.3: DisposeResources
                         let disp =
                             self.dispose_resources(&func_env, Completion::Return(ret_val.clone()));
@@ -5551,8 +5556,93 @@ impl Interpreter {
                         return Completion::Normal(promise);
                     } else {
                         // return; — no expression, no Await per §13.10.1
+                        if current_try_stack.iter().any(|try_info| {
+                            !try_info.entered_finally && try_info.finally_state.is_some()
+                        }) {
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state:
+                                            StateMachineExecutionState::SuspendedAtState {
+                                                state_id: current_id,
+                                            },
+                                        _sent_value: JsValue::UNDEFINED,
+                                        try_stack: current_try_stack,
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: pending_exception.take(),
+                                        pending_return: pending_return.take(),
+                                    },
+                                );
+                            return self.async_generator_return_state_machine_with_promise(
+                                this,
+                                JsValue::UNDEFINED,
+                                promise,
+                                resolve_fn,
+                                reject_fn,
+                            );
+                        }
+                        let return_completion = self.unwind_generator_for_of_loops(
+                            o.id,
+                            &mut for_of_stack,
+                            &mut current_try_stack,
+                            &func_env,
+                            0,
+                            Completion::Return(JsValue::UNDEFINED),
+                        );
+                        let return_value = match return_completion {
+                            Completion::Return(value) => value,
+                            Completion::Throw(error) => {
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: current_id,
+                                                },
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: current_try_stack,
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return self.async_generator_throw_state_machine_with_promise(
+                                    this, error, promise, resolve_fn, reject_fn,
+                                );
+                            }
+                            Completion::Exit(code) => {
+                                self.generator_inline_iters.remove(&o.id);
+                                self.generator_for_of_stacks.remove(&o.id);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return Completion::Exit(code);
+                            }
+                            _ => JsValue::UNDEFINED,
+                        };
                         let disp = self
-                            .dispose_resources(&func_env, Completion::Return(JsValue::UNDEFINED));
+                            .dispose_resources(&func_env, Completion::Return(return_value.clone()));
                         match disp {
                             Completion::Return(_) => {}
                             Completion::Throw(e) => {
@@ -5593,7 +5683,7 @@ impl Interpreter {
                                 pending_return: None,
                             },
                         );
-                        let iter_result = self.create_iter_result_object(JsValue::UNDEFINED, true);
+                        let iter_result = self.create_iter_result_object(return_value, true);
                         let _ =
                             self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
                         return Completion::Normal(promise);
@@ -5785,33 +5875,10 @@ impl Interpreter {
                         return Completion::Normal(promise);
                     }
                     if let Some(ret_val) = pending_return.take() {
-                        if current_try_stack.is_empty() {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let iter_result = self.create_iter_result_object(ret_val, true);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::UNDEFINED,
-                                &[iter_result],
-                            );
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
                         pending_return = Some(ret_val);
+                        check_abrupt_on_resume = true;
+                        current_id = *after_state;
+                        continue;
                     }
                     current_id = *after_state;
                 }
