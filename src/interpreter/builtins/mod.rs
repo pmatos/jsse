@@ -8052,21 +8052,27 @@ impl Interpreter {
                 let old_realm = interp.current_realm_id;
                 interp.current_realm_id = eval_realm_id;
 
-                let module_path =
-                    match interp.resolve_module_specifier(&specifier, referrer.as_deref()) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            interp.current_realm_id = old_realm;
-                            let err = interp.create_error_in_realm(
-                                caller_realm_id,
-                                "TypeError",
-                                "ShadowRealm importValue: cannot resolve module",
-                            );
-                            return interp.create_rejected_promise(err);
-                        }
-                    };
+                let module_path = match interp.resolve_module_specifier(
+                    &specifier,
+                    referrer.as_ref().and_then(ModuleKey::file_path),
+                ) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        interp.current_realm_id = old_realm;
+                        let err = interp.create_error_in_realm(
+                            caller_realm_id,
+                            "TypeError",
+                            "ShadowRealm importValue: cannot resolve module",
+                        );
+                        return interp.create_rejected_promise(err);
+                    }
+                };
 
-                let module = match interp.load_module(&module_path) {
+                let module = match interp.load_module_for_type(
+                    &module_path,
+                    None,
+                    super::ModuleLoadMode::Evaluate,
+                ) {
                     Ok(m) => m,
                     Err(_) => {
                         interp.current_realm_id = old_realm;
@@ -8078,7 +8084,7 @@ impl Interpreter {
                         return interp.create_rejected_promise(err);
                     }
                 };
-                let resolved_canon = Interpreter::canonicalize_module_path(&module_path);
+                let resolved_canon = module_path.canonicalize();
                 let mut stack = vec![];
                 if interp
                     .inner_module_evaluation(&resolved_canon, &mut stack, 0)

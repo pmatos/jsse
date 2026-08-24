@@ -244,7 +244,7 @@ impl Interpreter {
                     match self.resolve_module_export_value(
                         binding_name,
                         &ns_data.env,
-                        module_path.as_deref(),
+                        module_path.as_ref(),
                         key_str,
                     ) {
                         Ok(val) => return Completion::Normal(val),

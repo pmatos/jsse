@@ -7,7 +7,7 @@ impl Interpreter {
         &mut self,
         binding_name: &str,
         env: &crate::interpreter::types::EnvRef,
-        module_path: Option<&std::path::Path>,
+        module_path: Option<&ModuleKey>,
         original_key: &str,
     ) -> Result<JsValue, JsValue> {
         self.resolve_module_export_value_inner(
@@ -23,12 +23,12 @@ impl Interpreter {
         &mut self,
         binding_name: &str,
         env: &crate::interpreter::types::EnvRef,
-        module_path: Option<&std::path::Path>,
+        module_path: Option<&ModuleKey>,
         original_key: &str,
-        visited: &mut HashSet<(std::path::PathBuf, String)>,
+        visited: &mut HashSet<(ModuleKey, String)>,
     ) -> Result<JsValue, JsValue> {
         if let Some(mp) = module_path {
-            let key = (mp.to_path_buf(), binding_name.to_string());
+            let key = (mp.clone(), binding_name.to_string());
             if visited.contains(&key) {
                 return Err(self.create_reference_error(&format!(
                     "Cannot access '{}' before initialization",
@@ -58,8 +58,9 @@ impl Interpreter {
                 let source = &rest[..colon_idx];
                 let export_name = &rest[colon_idx + 1..];
                 if let Some(mp) = module_path
-                    && let Ok(resolved) = self.resolve_module_specifier(source, Some(mp))
-                    && let Ok(source_mod) = self.load_module(&resolved)
+                    && let Ok(resolved) = self.resolve_module_specifier(source, mp.file_path())
+                    && let Ok(source_mod) =
+                        self.load_module_for_type(&resolved, None, super::ModuleLoadMode::Evaluate)
                 {
                     let source_ref = source_mod.borrow();
                     let source_env = source_ref.env.clone();
@@ -140,8 +141,12 @@ impl Interpreter {
                         let export_name = &rest[colon_idx + 1..];
                         if let Some(ref module_path) = ns_data.module_path
                             && let Ok(resolved) =
-                                self.resolve_module_specifier(source, Some(module_path))
-                            && let Ok(source_mod) = self.load_module(&resolved)
+                                self.resolve_module_specifier(source, module_path.file_path())
+                            && let Ok(source_mod) = self.load_module_for_type(
+                                &resolved,
+                                None,
+                                super::ModuleLoadMode::Evaluate,
+                            )
                         {
                             let source_ref = source_mod.borrow();
                             if let Some(binding) = source_ref.export_bindings.get(export_name) {
@@ -397,20 +402,22 @@ impl Interpreter {
         specifier: &str,
         import_type: Option<super::ImportModuleType>,
     ) -> Completion {
-        let resolved =
-            match self.resolve_module_specifier(specifier, self.current_module_path.as_deref()) {
-                Ok(p) => p,
-                Err(e) => {
-                    return self.create_rejected_promise(e);
-                }
-            };
+        let resolved = match self.resolve_module_specifier(
+            specifier,
+            self.current_module_path
+                .as_ref()
+                .and_then(ModuleKey::file_path),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                return self.create_rejected_promise(e);
+            }
+        };
 
         // Text/bytes synthetic modules: load and resolve immediately
-        if let Some(ref itype) = import_type {
-            let module = match itype {
-                super::ImportModuleType::Text => self.load_text_module(&resolved),
-                super::ImportModuleType::Bytes => self.load_bytes_module(&resolved),
-            };
+        if import_type.is_some() {
+            let module =
+                self.load_module_for_type(&resolved, import_type, super::ModuleLoadMode::Evaluate);
             return match module {
                 Ok(m) => {
                     let ns = self.create_module_namespace(&m);
@@ -422,13 +429,14 @@ impl Interpreter {
 
         // If we're NOT inside a static module load, load synchronously
         if self.static_module_load_depth == 0 {
-            let module = match self.load_module(&resolved) {
-                Ok(m) => m,
-                Err(e) => {
-                    return self.create_rejected_promise(e);
-                }
-            };
-            let resolved_canon = Interpreter::canonicalize_module_path(&resolved);
+            let module =
+                match self.load_module_for_type(&resolved, None, super::ModuleLoadMode::Evaluate) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return self.create_rejected_promise(e);
+                    }
+                };
+            let resolved_canon = resolved.canonicalize();
             let mut stack = vec![];
             if let Err(ref e) = self.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
                 for m_path in &stack {
@@ -459,9 +467,13 @@ impl Interpreter {
         self.scheduler.enqueue_microtask((
             vec![promise_root, resolve_root.clone(), reject_root.clone()],
             Box::new(move |interp: &mut Interpreter| {
-                match interp.load_module(&resolved_path) {
+                match interp.load_module_for_type(
+                    &resolved_path,
+                    None,
+                    super::ModuleLoadMode::Evaluate,
+                ) {
                     Ok(m) => {
-                        let resolved_canon = Interpreter::canonicalize_module_path(&resolved_path);
+                        let resolved_canon = resolved_path.canonicalize();
                         let mut stack = vec![];
                         if let Err(ref e) =
                             interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
@@ -553,7 +565,7 @@ impl Interpreter {
             let m = module.borrow();
             m.cycle_root
                 .clone()
-                .unwrap_or_else(|| Interpreter::canonicalize_module_path(&m.path))
+                .unwrap_or_else(|| m.path.canonicalize())
         };
         let root_module = self
             .module_registry_get(&root_path)
