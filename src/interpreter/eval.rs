@@ -8341,16 +8341,21 @@ impl Interpreter {
         // abrupt completion from a disposer or an iterator `return` method.
         macro_rules! unwind_for_of {
             ($from:expr) => {
-                match self.unwind_async_for_of_loops(&mut for_of_stack, $from, &func_env) {
-                    Err(exit) => {
+                match self.unwind_async_for_of_loops(
+                    &mut for_of_stack,
+                    $from,
+                    &func_env,
+                    Completion::Empty,
+                ) {
+                    Completion::Exit(code) => {
                         self.scheduler.remove_async_function_state(async_id);
-                        return exit;
+                        return Completion::Exit(code);
                     }
-                    Ok(Some(e)) => {
+                    Completion::Throw(e) => {
                         pending_exception = Some(e);
                         continue;
                     }
-                    Ok(None) => {}
+                    _ => {}
                 }
             };
         }
@@ -9085,10 +9090,12 @@ impl Interpreter {
         &mut self,
         loop_state: AsyncForOfLoopState,
         func_env: &EnvRef,
+        completion: Completion,
     ) -> Completion {
-        let mut completion = loop_state.iteration_env.map_or(Completion::Empty, |env| {
-            self.dispose_resources(&env, Completion::Empty)
-        });
+        let mut completion = match loop_state.iteration_env {
+            Some(env) => self.dispose_resources(&env, completion),
+            None => completion,
+        };
 
         // The borrow must end before `iterator_close_result` runs the user's
         // `return` method, which may write bindings in this same environment.
@@ -9107,23 +9114,22 @@ impl Interpreter {
     }
 
     /// Closes every active for-of loop from `from` to the innermost, inner to
-    /// outer. Returns the first (innermost) disposal or iterator-close error,
-    /// or `Err(Completion::Exit)` when a disposer called `__host_exit`.
+    /// outer, carrying each loop's resulting completion into the next outer
+    /// iteration disposal.
     fn unwind_async_for_of_loops(
         &mut self,
         for_of_stack: &mut Vec<AsyncForOfLoopState>,
         from: usize,
         func_env: &EnvRef,
-    ) -> Result<Option<JsValue>, Completion> {
-        let mut unwind_error = None;
+        mut completion: Completion,
+    ) -> Completion {
         for loop_state in for_of_stack.drain(from..).rev() {
-            match self.close_async_for_of_loop(loop_state, func_env) {
-                Completion::Throw(e) if unwind_error.is_none() => unwind_error = Some(e),
-                Completion::Exit(code) => return Err(Completion::Exit(code)),
-                _ => {}
+            completion = self.close_async_for_of_loop(loop_state, func_env, completion);
+            if matches!(completion, Completion::Exit(_)) {
+                break;
             }
         }
-        Ok(unwind_error)
+        completion
     }
 
     fn async_fn_complete(
