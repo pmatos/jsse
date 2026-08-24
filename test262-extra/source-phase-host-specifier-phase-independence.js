@@ -122,9 +122,9 @@ assert.sameValue(
 );
 
 // --- an unsatisfiable typed request fails identically in both phases ---
-// The host has no text or bytes for a Module Source module. Attributes are part
-// of the module request, so this is a distinct request the host may reject; what
-// it must not do is reject in one phase and resolve in the other.
+// The host has no JSON, text, or bytes for a Module Source module. Attributes
+// are part of the module request, so this is a distinct request the host may
+// reject; what it must not do is reject in one phase and resolve in the other.
 const dynamicForms = {
   'import()': (s, o) => import(s, o),
   'import.source()': (s, o) => import.source(s, o),
@@ -140,8 +140,8 @@ async function rejection(fn, specifier, options) {
   return null;
 }
 
-const messagesByType = { text: [], bytes: [] };
-for (const type of ['text', 'bytes']) {
+const messagesByType = { json: [], text: [], bytes: [] };
+for (const type of ['json', 'text', 'bytes']) {
   for (const name of Object.keys(dynamicForms)) {
     const err = await rejection(dynamicForms[name], '<module source>', { with: { type } });
     assert(

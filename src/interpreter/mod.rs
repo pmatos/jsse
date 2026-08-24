@@ -45,16 +45,15 @@ mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ImportModuleType {
+    Json,
     Text,
     Bytes,
 }
 
 impl ImportModuleType {
-    /// The `type` import-attribute values jsse serves synthetic modules for.
-    /// `None` covers both an unknown type and one jsse decides another way
-    /// (`"json"` is chosen by file extension — see #475).
     fn from_attr_value(value: &str) -> Option<Self> {
         match value {
+            "json" => Some(Self::Json),
             "text" => Some(Self::Text),
             "bytes" => Some(Self::Bytes),
             _ => None,
@@ -63,17 +62,115 @@ impl ImportModuleType {
 
     fn attr_value(self) -> &'static str {
         match self {
+            Self::Json => "json",
             Self::Text => "text",
             Self::Bytes => "bytes",
         }
     }
 }
 
-fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+enum ImportAttributeError {
+    UnsupportedKey(String),
+    UnsupportedType(String),
+}
+
+impl ImportAttributeError {
+    /// The message text, written once. The *constructor* still varies per
+    /// import form (see `dynamic_import_module_type` and
+    /// `static_import_module_type`), the wording does not.
+    fn message(&self) -> String {
+        match self {
+            Self::UnsupportedKey(key) => format!("Unsupported import attribute '{key}'"),
+            Self::UnsupportedType(value) => format!("Unsupported module type '{value}'"),
+        }
+    }
+}
+
+fn validated_import_module_type(
+    attrs: &[(String, String)],
+) -> Result<Option<ImportModuleType>, ImportAttributeError> {
+    // AllImportAttributesSupported checks the complete key list before the
+    // host sees any values. Keep this as a separate pass so an earlier invalid
+    // `type` value cannot hide a later unsupported key.
+    for (key, _) in attrs {
+        if key != "type" {
+            return Err(ImportAttributeError::UnsupportedKey(key.clone()));
+        }
+    }
+
     attrs
         .iter()
         .find(|(key, _)| key == "type")
-        .and_then(|(_, value)| ImportModuleType::from_attr_value(value))
+        .map(|(_, value)| {
+            ImportModuleType::from_attr_value(value)
+                .ok_or_else(|| ImportAttributeError::UnsupportedType(value.clone()))
+        })
+        .transpose()
+}
+
+/// The module type selected by *already-validated* attributes.
+///
+/// Every static path reaches this only after the enclosing program's
+/// `validate_and_resolve_static_module_request` pass, so the error case is
+/// unreachable.
+/// Called out of that order it would silently downgrade an unsupported key or
+/// unknown `type` to "ordinary source module" — which is exactly the bug
+/// jsse#475 was about — so the ordering is asserted rather than remembered.
+fn prevalidated_import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    let validated = validated_import_module_type(attrs);
+    debug_assert!(
+        validated.is_ok(),
+        "import attributes must be validated before selecting a module type"
+    );
+    validated.ok().flatten()
+}
+
+/// One module item's request for *another* module: everything the graph and
+/// pre-load passes need in order to act on it. `None` for items that name no
+/// module (a local declaration, `export { x }` with no `from`, a statement).
+///
+/// `is_source_phase` is reported as data rather than acted on here because the
+/// loading seam resolves those requests shallowly, while graph traversal still
+/// needs to recognize the request itself.
+struct ModuleItemRequest<'a> {
+    specifier: &'a str,
+    attributes: &'a [(String, String)],
+    is_deferred: bool,
+    is_source_phase: bool,
+}
+
+impl ModuleItemRequest<'_> {
+    fn import_type(&self) -> Option<ImportModuleType> {
+        prevalidated_import_module_type(self.attributes)
+    }
+}
+
+fn module_item_request(item: &ModuleItem) -> Option<ModuleItemRequest<'_>> {
+    match item {
+        ModuleItem::ImportDeclaration(import) => Some(ModuleItemRequest {
+            specifier: import.source.as_str(),
+            attributes: &import.attributes,
+            is_deferred: import
+                .specifiers
+                .iter()
+                .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_))),
+            is_source_phase: Interpreter::is_source_phase_import(import),
+        }),
+        ModuleItem::ExportDeclaration(ExportDeclaration::All {
+            source, attributes, ..
+        })
+        | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+            source: Some(source),
+            attributes,
+            ..
+        }) => Some(ModuleItemRequest {
+            specifier: source.as_str(),
+            attributes,
+            is_deferred: false,
+            is_source_phase: false,
+        }),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +253,8 @@ pub(crate) struct Interpreter {
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
-    synthetic_module_registry: HashMap<(ModuleKey, ImportModuleType), Rc<RefCell<LoadedModule>>>,
+    synthetic_module_registry:
+        HashMap<(usize, ModuleKey, ImportModuleType), Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<ModuleKey>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
@@ -382,12 +480,29 @@ pub(crate) struct LoadedModule {
     pub path: ModuleKey,
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
-    pub export_bindings: HashMap<String, String>, // export_name -> binding_name
+    /// export_name -> binding_name. Binding names use several encodings, which
+    /// differ in how a consumer turns one back into a value:
+    ///
+    /// - a plain local name, or `*default*` — resolved by env lookup.
+    /// - `*ns:{specifier}` and `*reexport:{specifier}:{name}` — *re-parsed* to
+    ///   recover the specifier and walk to the source module (see
+    ///   `eval/modules.rs` and `resolve_export_binding`).
+    /// - `*synthetic-ns:{name}*` — opaque: materialized eagerly for typed
+    ///   (json/text/bytes) namespace requests and resolved by plain env lookup,
+    ///   because re-resolving the specifier would reload the resource without
+    ///   the request's type.
+    /// - `*ambiguous*` — a sentinel for a name exported by two `export *`
+    ///   sources; not resolvable, and never overwritten once set.
+    pub export_bindings: HashMap<String, String>,
     pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
     pub cached_deferred_namespace: Option<JsValue>, // cached deferred namespace (separate from eager)
     pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
     pub error: Option<JsValue>,                     // if module evaluation threw, the error
     pub namespace_imports: HashMap<String, ModuleKey>, // local_name -> source module (for `import * as ns`)
+    /// Internal namespace binding -> typed target. Namespace values are
+    /// materialized locally, but ResolveExport must retain the synthetic
+    /// module's identity when comparing star-export resolutions.
+    synthetic_namespace_imports: HashMap<String, (ModuleKey, ImportModuleType)>,
     pub source_imports: HashMap<String, ModuleKey>, // local_name -> source-phase target (for `import source X`)
     pub module_source: Option<JsValue>, // [[ModuleSource]]: source-phase representation (empty for Source Text Modules)
     pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
@@ -1008,6 +1123,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: Some(source_val),
             star_export_sources: Vec::new(),
@@ -1064,14 +1180,82 @@ impl Interpreter {
         Ok((resolved, None))
     }
 
-    /// The host has no text or bytes to hand back for a Module Source module, in
-    /// any import phase. Built in one place so the source phase and the
+    /// The host has no JSON, text, or bytes to hand back for a Module Source
+    /// module, in any import phase. Built in one place so the source phase and the
     /// evaluation phase cannot report an unsatisfiable request differently.
     fn module_source_type_error(&mut self, itype: ImportModuleType) -> JsValue {
         self.create_type_error(&format!(
             "Module '{MODULE_SOURCE_SPECIFIER}' has no {} representation",
             itype.attr_value()
         ))
+    }
+
+    fn dynamic_import_module_type(
+        &mut self,
+        attrs: &[(String, String)],
+    ) -> Result<Option<ImportModuleType>, JsValue> {
+        validated_import_module_type(attrs)
+            .map_err(|error| self.create_type_error(&error.message()))
+    }
+
+    fn static_import_module_type(
+        &mut self,
+        attrs: &[(String, String)],
+    ) -> Result<Option<ImportModuleType>, JsValue> {
+        validated_import_module_type(attrs).map_err(|error| {
+            let message = error.message();
+            match error {
+                // InnerModuleLoading turns a failed
+                // AllImportAttributesSupported check into SyntaxError.
+                ImportAttributeError::UnsupportedKey(_) => {
+                    self.create_error("SyntaxError", &message)
+                }
+                // The `type` key is supported, so an unsupported value is a
+                // host-loading failure rather than the key-list check.
+                ImportAttributeError::UnsupportedType(_) => self.create_type_error(&message),
+            }
+        })
+    }
+
+    /// Apply AllImportAttributesSupported and host resolution to one static
+    /// ModuleRequest. Callers do this in source order before linking any loaded
+    /// dependency, because jsse's `load_module` also links/evaluates and could
+    /// otherwise expose an earlier dependency's link error before a later
+    /// sibling's host-resolution error.
+    fn validate_and_resolve_static_module_request(
+        &mut self,
+        req: ModuleItemRequest<'_>,
+        referrer: Option<&Path>,
+    ) -> Result<(), JsValue> {
+        self.static_import_module_type(req.attributes)?;
+        self.resolve_module_specifier(req.specifier, referrer)?;
+        Ok(())
+    }
+
+    /// Load one static ModuleRequest after the source-order validation and
+    /// resolution pass. Source-phase requests load shallowly; all other
+    /// requests load the representation selected by their attributes.
+    fn load_prevalidated_static_module_request(
+        &mut self,
+        req: ModuleItemRequest<'_>,
+        referrer: Option<&Path>,
+        defer_all_untyped: bool,
+    ) -> Result<(), JsValue> {
+        let import_type = prevalidated_import_module_type(req.attributes);
+
+        if req.is_source_phase {
+            self.resolve_source_phase_target(req.specifier, referrer, import_type)?;
+            return Ok(());
+        }
+
+        let resolved = self.resolve_module_specifier(req.specifier, referrer)?;
+        let mode = if defer_all_untyped || req.is_deferred {
+            ModuleLoadMode::Defer
+        } else {
+            ModuleLoadMode::Evaluate
+        };
+        self.load_module_for_type(&resolved, import_type, mode)?;
+        Ok(())
     }
 
     /// Load a resolved module request through the one host/type/mode dispatch
@@ -1091,8 +1275,7 @@ impl Interpreter {
         };
 
         match import_type {
-            Some(ImportModuleType::Text) => self.load_text_module(key, path),
-            Some(ImportModuleType::Bytes) => self.load_bytes_module(key, path),
+            Some(itype) => self.load_typed_module(key, path, itype),
             None => match mode {
                 ModuleLoadMode::Evaluate => self.load_module(key, path),
                 ModuleLoadMode::Defer => self.load_module_no_eval(key, path),
@@ -2094,6 +2277,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -2132,6 +2316,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -2155,67 +2340,81 @@ impl Interpreter {
             }
         }
 
-        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
+        // Validate and host-resolve every request in source order before
+        // `load_module` can expose a dependency's link-phase error.
+        for item in &program.module_items {
+            let Some(req) = module_item_request(item) else {
+                continue;
+            };
+            let module_path = self.current_module_path.clone();
+            if let Err(e) = self.validate_and_resolve_static_module_request(
+                req,
+                module_path.as_ref().and_then(ModuleKey::file_path),
+            ) {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
+            }
+        }
+
+        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6).
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
-            let (specifier, is_deferred, import_type) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, false, None)
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (
-                        Some(import.source.as_str()),
-                        is_defer,
-                        import_module_type(&import.attributes),
-                    )
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false, None)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), false, None),
-                _ => (None, false, None),
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(
-                    spec,
-                    module_path.as_ref().and_then(ModuleKey::file_path),
-                ) {
-                    let mode = if is_deferred {
-                        ModuleLoadMode::Defer
-                    } else {
-                        ModuleLoadMode::Evaluate
-                    };
-                    if let Err(e) = self.load_module_for_type(&resolved, import_type, mode) {
-                        if import_type.is_none() {
-                            Self::cache_module_error(&loaded_module, &e);
-                        }
-                        self.current_module_path = prev_module_path;
-                        return Completion::Throw(e);
-                    }
+            let module_path = self.current_module_path.clone();
+            let should_cache_error = req.import_type().is_none();
+            if let Err(e) = self.load_prevalidated_static_module_request(
+                req,
+                module_path.as_ref().and_then(ModuleKey::file_path),
+                false,
+            ) {
+                if should_cache_error {
+                    Self::cache_module_error(&loaded_module, &e);
                 }
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
             }
         }
 
         // Second pass: process re-exports (export * from) — before imports
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
+            }
+        }
+
+        // Named re-exports run before imports; see validate_named_reexports.
+        if let Some(ref canon_path) = module_path {
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    attributes,
+                    ..
+                }) = item
+                    && let Err(e) =
+                        self.validate_named_reexports(canon_path, source, attributes, specifiers)
+                {
+                    Self::cache_module_error(&loaded_module, &e);
+                    self.current_module_path = prev_module_path;
+                    return Completion::Throw(e);
+                }
             }
         }
 
@@ -2227,24 +2426,6 @@ impl Interpreter {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
-            }
-        }
-
-        // Validate named re-exports (export { x } from './mod')
-        if module_path.is_some() {
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    ..
-                }) = item
-                    && let Err(e) =
-                        self.validate_named_reexports(&canon_path_entry, source, specifiers)
-                {
-                    Self::cache_module_error(&loaded_module, &e);
-                    self.current_module_path = prev_module_path;
-                    return Completion::Throw(e);
-                }
             }
         }
 
@@ -2290,7 +2471,7 @@ impl Interpreter {
         // before the generic path, which binds a namespace and loads the target
         // graph; the source phase binds `[[ModuleSource]]` and stays shallow.
         if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
-            let itype = import_module_type(&import.attributes);
+            let itype = prevalidated_import_module_type(&import.attributes);
             return self.process_source_phase_import(local, &import.source, itype, env);
         }
 
@@ -2299,23 +2480,14 @@ impl Interpreter {
             module_path.as_ref().and_then(ModuleKey::file_path),
         )?;
 
-        let itype = import_module_type(&import.attributes);
+        let itype = prevalidated_import_module_type(&import.attributes);
 
-        // Text/bytes imports use synthetic module registry
-        if let Some(ref it) = itype {
-            let key = (resolved.clone(), *it);
-            let loaded = self
-                .synthetic_module_registry
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| {
-                    JsValue::string(JsString::from_str(&format!(
-                        "Synthetic module not found for '{}'",
-                        import.source
-                    )))
-                })?;
+        // Typed imports are served by the synthetic module registry, which
+        // `load_typed_module` owns and memoizes.
+        if itype.is_some() {
+            let loaded = self.load_module_for_type(&resolved, itype, ModuleLoadMode::Evaluate)?;
             for spec in &import.specifiers {
-                match spec {
+                let (local, value) = match spec {
                     ImportSpecifier::Default(local) => {
                         let val = loaded
                             .borrow()
@@ -2323,16 +2495,39 @@ impl Interpreter {
                             .get("default")
                             .cloned()
                             .unwrap_or(JsValue::UNDEFINED);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, val);
+                        (local, val)
                     }
                     ImportSpecifier::Namespace(local) => {
-                        let ns = self.create_module_namespace(&loaded);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, ns);
+                        (local, self.create_module_namespace(&loaded))
                     }
-                    _ => {}
-                }
+                    ImportSpecifier::Named { imported, local } => {
+                        let Some(val) = loaded.borrow().exports.get(imported).cloned() else {
+                            return Err(self.create_error(
+                                "SyntaxError",
+                                &format!(
+                                    "Module '{}' has no export named '{}'",
+                                    loaded.borrow().path.display(),
+                                    imported
+                                ),
+                            ));
+                        };
+                        (local, val)
+                    }
+                    ImportSpecifier::DeferredNamespace(local) => {
+                        (local, self.create_deferred_module_namespace(&loaded))
+                    }
+                    // A source-phase ImportDeclaration is handled above; reaching
+                    // here means the declaration mixes phases, which has no
+                    // synthetic-module meaning.
+                    ImportSpecifier::SourcePhase(_) => {
+                        return Err(self.create_error(
+                            "SyntaxError",
+                            "Source phase imports cannot request a module type",
+                        ));
+                    }
+                };
+                env.borrow_mut().declare(local, BindingKind::Const);
+                env.borrow_mut().initialize_binding(local, value);
             }
             return Ok(());
         }
@@ -2527,6 +2722,7 @@ impl Interpreter {
         &mut self,
         source: &str,
         exported_as: Option<&String>,
+        attributes: &[(String, String)],
         module: &Rc<RefCell<LoadedModule>>,
     ) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
@@ -2534,20 +2730,42 @@ impl Interpreter {
             source,
             module_path.as_ref().and_then(ModuleKey::file_path),
         )?;
-        let source_module = self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)?;
+        let import_type = prevalidated_import_module_type(attributes);
+        let source_module =
+            self.load_module_for_type(&resolved, import_type, ModuleLoadMode::Evaluate)?;
 
         if let Some(name) = exported_as {
             // export * as ns from './mod' - create namespace object
             let ns = self.create_module_namespace(&source_module);
             module.borrow_mut().exports.insert(name.clone(), ns.clone());
+            // A typed request cannot use the `*ns:{source}` binding: re-resolving
+            // it reloads the resource without this request's type. Bind the
+            // namespace under an internal name instead — `export * as x` creates
+            // no local `x`, so the export name itself may be taken by an
+            // unrelated local declaration in the same module.
+            let binding = match import_type {
+                Some(_) => format!("*synthetic-ns:{name}*"),
+                None => format!("*ns:{source}"),
+            };
             module
                 .borrow_mut()
                 .export_bindings
-                .insert(name.clone(), format!("*ns:{}", source));
+                .insert(name.clone(), binding.clone());
+            if let Some(itype) = import_type {
+                module
+                    .borrow_mut()
+                    .synthetic_namespace_imports
+                    .insert(binding.clone(), (resolved.clone(), itype));
+            }
             // Store in module env so indirect bindings can reference it
+            let env_name: &str = if import_type.is_some() {
+                &binding
+            } else {
+                name
+            };
             let mod_env = module.borrow().env.clone();
-            mod_env.borrow_mut().declare(name, BindingKind::Const);
-            mod_env.borrow_mut().initialize_binding(name, ns);
+            mod_env.borrow_mut().declare(env_name, BindingKind::Const);
+            mod_env.borrow_mut().initialize_binding(env_name, ns);
         } else {
             // export * from './mod' - re-export all non-default exports
             let source_exports = source_module.borrow().exports.clone();
@@ -2715,6 +2933,13 @@ impl Interpreter {
         key: &ModuleKey,
         path: &Path,
     ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        // This host also supports untyped `.json` requests. Route them through
+        // the same typed loader so extension- and attribute-selected requests
+        // observe one ParseJSONModule result.
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            return self.load_typed_module(key, path, ImportModuleType::Json);
+        }
+
         let canon_path = key.clone();
 
         // Check if module is already loaded
@@ -2731,79 +2956,8 @@ impl Interpreter {
             return Ok(existing);
         }
 
-        // Handle JSON modules: parse JSON and expose as default export
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let source = std::fs::read_to_string(path).map_err(|e| {
-                JsValue::string(JsString::from_str(&format!(
-                    "Cannot read module '{}': {}",
-                    path.display(),
-                    e
-                )))
-            })?;
-            let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _other => {
-                    return Err(JsValue::string(JsString::from_str(&format!(
-                        "JSON parse error in '{}'",
-                        path.display()
-                    ))));
-                }
-            };
-            let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
-            module_env.borrow_mut().strict = true;
-            let loaded_module = Rc::new(RefCell::new(LoadedModule {
-                path: canon_path.clone(),
-                env: module_env.clone(),
-                exports: {
-                    let mut m = HashMap::new();
-                    m.insert("default".to_string(), parsed.clone());
-                    m
-                },
-                export_bindings: {
-                    let mut m = HashMap::new();
-                    m.insert("default".to_string(), "*default*".to_string());
-                    m
-                },
-                cached_namespace: None,
-                cached_deferred_namespace: None,
-                cached_import_meta: None,
-                error: None,
-                namespace_imports: HashMap::new(),
-                source_imports: HashMap::new(),
-                module_source: None,
-                star_export_sources: Vec::new(),
-                evaluated: true,
-                is_evaluating: false,
-                deferred_only: false,
-                has_tla: false,
-                program_ast: None,
-                async_evaluation_order: None,
-                pending_async_dependencies: 0,
-                async_parent_modules: Vec::new(),
-                cycle_root: None,
-                top_level_capability: None,
-                dfs_index: None,
-                dfs_ancestor_index: None,
-            }));
-            module_env
-                .borrow_mut()
-                .declare("*default*", BindingKind::Const);
-            module_env
-                .borrow_mut()
-                .initialize_binding("*default*", parsed);
-            self.module_registry_insert(canon_path.clone(), loaded_module.clone());
-            return Ok(loaded_module);
-        }
-
         // Read and parse the module
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::string(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let source = Self::read_module_text(path)?;
 
         let mut parser = match parser::Parser::new(&source) {
             Ok(p) => p,
@@ -2842,6 +2996,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -2877,6 +3032,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -2911,26 +3067,13 @@ impl Interpreter {
             }
         }
 
-        // Host-resolve pre-pass (spec LoadRequestedModules): surface unresolvable
-        // specifier errors before any transitive Link-phase SyntaxError fires.
+        // Validate and host-resolve every request in source order before
+        // `load_module` can expose a dependency's link-phase error.
         for item in &program.module_items {
-            let specifier = match item {
-                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    Some(source.as_str())
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(s), ..
-                }) => Some(s.as_str()),
-                _ => None,
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            // `resolve_module_specifier` handles the host `<module source>`
-            // specifier itself; every other specifier — including source-phase
-            // targets like `<do not resolve>` — must surface unresolvable
-            // specifier errors here.
-            if let Some(spec) = specifier
-                && let Err(e) = self.resolve_module_specifier(spec, Some(path))
-            {
+            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(path)) {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 return Err(e);
@@ -2941,64 +3084,57 @@ impl Interpreter {
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
-            let (specifier, is_deferred, itype) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, false, None)
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (
-                        Some(import.source.as_str()),
-                        is_defer,
-                        import_module_type(&import.attributes),
-                    )
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false, None)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), false, None),
-                _ => (None, false, None),
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(
-                    spec,
-                    module_path.as_ref().and_then(ModuleKey::file_path),
-                ) {
-                    let mode = if is_deferred {
-                        ModuleLoadMode::Defer
-                    } else {
-                        ModuleLoadMode::Evaluate
-                    };
-                    if let Err(e) = self.load_module_for_type(&resolved, itype, mode) {
-                        if itype.is_none() && !is_deferred {
-                            Self::cache_module_error(&loaded_module, &e);
-                            self.current_module_path = prev_path;
-                        }
-                        return Err(e);
-                    }
+            let should_cache_error = req.import_type().is_none() && !req.is_deferred;
+            if let Err(e) = self.load_prevalidated_static_module_request(req, Some(path), false) {
+                if should_cache_error {
+                    Self::cache_module_error(&loaded_module, &e);
                 }
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
         // Second pass: process re-exports (export * from) — before imports
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 return Err(e);
+            }
+        }
+
+        // Named re-exports run before imports; see validate_named_reexports.
+        {
+            let canon = canon_path.clone();
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    attributes,
+                    ..
+                }) = item
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon, source, attributes, specifiers)
+                {
+                    self.current_module_path = prev_path;
+                    Self::cache_module_error(&loaded_module, &e);
+                    return Err(e);
+                }
             }
         }
 
@@ -3010,24 +3146,6 @@ impl Interpreter {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 return Err(e);
-            }
-        }
-
-        // Validate named re-exports (export { x } from './mod')
-        {
-            let canon = canon_path.clone();
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    ..
-                }) = item
-                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
-                {
-                    self.current_module_path = prev_path;
-                    Self::cache_module_error(&loaded_module, &e);
-                    return Err(e);
-                }
             }
         }
 
@@ -3066,13 +3184,7 @@ impl Interpreter {
             return self.load_module(key, path);
         }
 
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::string(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let source = Self::read_module_text(path)?;
 
         let mut parser = match parser::Parser::new(&source) {
             Ok(p) => p,
@@ -3111,6 +3223,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -3146,6 +3259,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -3176,54 +3290,72 @@ impl Interpreter {
         let prev_loading_deferred = self.loading_deferred;
         self.loading_deferred = true;
 
+        // Validate and host-resolve every request in source order before
+        // `load_module_no_eval` can expose a transitive failure.
+        for item in &program.module_items {
+            let Some(req) = module_item_request(item) else {
+                continue;
+            };
+            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(path)) {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
+            }
+        }
+
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
-            let (specifier, itype) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, None)
-                }
-                ModuleItem::ImportDeclaration(import) => (
-                    Some(import.source.as_str()),
-                    import_module_type(&import.attributes),
-                ),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), None)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), None),
-                _ => (None, None),
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(
-                    spec,
-                    module_path.as_ref().and_then(ModuleKey::file_path),
-                ) {
-                    let result = self.load_module_for_type(&resolved, itype, ModuleLoadMode::Defer);
-                    if let Err(e) = result {
-                        Self::cache_module_error(&loaded_module, &e);
-                        self.current_module_path = prev_path;
-                        self.loading_deferred = prev_loading_deferred;
-                        return Err(e);
-                    }
-                }
+            if let Err(e) = self.load_prevalidated_static_module_request(req, Some(path), true) {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
             }
         }
 
         // Process re-exports
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
+            }
+        }
+
+        // Named re-exports run before imports; see validate_named_reexports.
+        {
+            let canon = canon_path.clone();
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    attributes,
+                    ..
+                }) = item
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon, source, attributes, specifiers)
+                {
+                    self.loading_deferred = prev_loading_deferred;
+                    self.current_module_path = prev_path;
+                    Self::cache_module_error(&loaded_module, &e);
+                    return Err(e);
+                }
             }
         }
 
@@ -3236,25 +3368,6 @@ impl Interpreter {
                 self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
-            }
-        }
-
-        // Validate named re-exports
-        {
-            let canon = canon_path.clone();
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    ..
-                }) = item
-                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
-                {
-                    self.loading_deferred = prev_loading_deferred;
-                    self.current_module_path = prev_path;
-                    Self::cache_module_error(&loaded_module, &e);
-                    return Err(e);
-                }
             }
         }
 
@@ -3296,6 +3409,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -3314,50 +3428,59 @@ impl Interpreter {
         }))
     }
 
-    fn load_text_module(
+    /// Load a resource as the synthetic default-export module for `import_type`,
+    /// memoized per realm by canonical path and type. All three representations
+    /// share the read/cache/registry path; only the value construction differs.
+    fn load_typed_module(
         &mut self,
         key: &ModuleKey,
         path: &Path,
+        import_type: ImportModuleType,
     ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         let canon = key.clone();
-        let key = (canon.clone(), ImportModuleType::Text);
-        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+        let registry_key = (self.current_realm_id, canon.clone(), import_type);
+        if let Some(existing) = self.synthetic_module_registry.get(&registry_key) {
             return Ok(existing.clone());
         }
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::string(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
-        let value = JsValue::string(JsString::from_str(&source));
+        let value = match import_type {
+            ImportModuleType::Json => {
+                let source = Self::read_module_text(path)?;
+                match crate::interpreter::helpers::json_parse_value(self, &source) {
+                    Completion::Normal(value) => value,
+                    Completion::Throw(error) => return Err(error),
+                    _ => {
+                        return Err(self.create_error(
+                            "SyntaxError",
+                            &format!("JSON parse error in '{}'", path.display()),
+                        ));
+                    }
+                }
+            }
+            ImportModuleType::Text => {
+                let source = Self::read_module_text(path)?;
+                JsValue::string(JsString::from_str(&source))
+            }
+            ImportModuleType::Bytes => {
+                let bytes = std::fs::read(path).map_err(|e| Self::module_read_error(path, &e))?;
+                self.create_immutable_uint8array(&bytes)
+            }
+        };
         let module = self.create_synthetic_default_module(canon, value);
-        self.synthetic_module_registry.insert(key, module.clone());
+        self.synthetic_module_registry
+            .insert(registry_key, module.clone());
         Ok(module)
     }
 
-    fn load_bytes_module(
-        &mut self,
-        key: &ModuleKey,
-        path: &Path,
-    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon = key.clone();
-        let key = (canon.clone(), ImportModuleType::Bytes);
-        if let Some(existing) = self.synthetic_module_registry.get(&key) {
-            return Ok(existing.clone());
-        }
-        let bytes = std::fs::read(path).map_err(|e| {
-            JsValue::string(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
-        let value = self.create_immutable_uint8array(&bytes);
-        let module = self.create_synthetic_default_module(canon, value);
-        self.synthetic_module_registry.insert(key, module.clone());
-        Ok(module)
+    fn read_module_text(path: &Path) -> Result<String, JsValue> {
+        std::fs::read_to_string(path).map_err(|e| Self::module_read_error(path, &e))
+    }
+
+    fn module_read_error(path: &Path, err: &std::io::Error) -> JsValue {
+        JsValue::string(JsString::from_str(&format!(
+            "Cannot read module '{}': {}",
+            path.display(),
+            err
+        )))
     }
 
     fn create_immutable_uint8array(&mut self, bytes: &[u8]) -> JsValue {
@@ -3725,6 +3848,18 @@ impl Interpreter {
         Ok(idx)
     }
 
+    /// The specifier a module item contributes to the module *graph*, plus
+    /// whether the request is deferred. Typed (json/text/bytes) requests are
+    /// served by the synthetic registry and are never DFS dependencies.
+    ///
+    /// Unlike the pre-load passes, this deliberately does *not* skip
+    /// source-phase imports.
+    fn graph_dependency_request(item: &ModuleItem) -> Option<(&str, bool)> {
+        module_item_request(item)
+            .filter(|req| req.import_type().is_none())
+            .map(|req| (req.specifier, req.is_deferred))
+    }
+
     fn get_module_dep_paths(&self, canon_path: &ModuleKey) -> Vec<(ModuleKey, bool)> {
         let module = match self.module_registry_get(canon_path) {
             Some(m) => m,
@@ -3736,28 +3871,7 @@ impl Interpreter {
         };
         let mut deps = Vec::new();
         for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
-                ModuleItem::ImportDeclaration(import) => {
-                    // Skip synthetic (text/bytes) imports — they're not DFS dependencies
-                    if import_module_type(&import.attributes).is_some() {
-                        continue;
-                    }
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
-            };
-            if let Some(spec) = specifier
+            if let Some((spec, is_deferred)) = Self::graph_dependency_request(item)
                 && let Ok(resolved) =
                     self.resolve_module_specifier_pure(spec, canon_path.file_path())
             {
@@ -4088,23 +4202,7 @@ impl Interpreter {
             let items: Vec<_> = program.module_items.clone();
             drop(module_ref);
             for item in &items {
-                let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => {
-                        if import_module_type(&import.attributes).is_some() {
-                            continue;
-                        }
-                        Some(import.source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                        Some(source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                        source: Some(source),
-                        ..
-                    }) => Some(source.as_str()),
-                    _ => None,
-                };
-                if let Some(spec) = specifier
+                if let Some((spec, _)) = Self::graph_dependency_request(item)
                     && let Ok(resolved) =
                         self.resolve_module_specifier_pure(spec, canon.file_path())
                 {
@@ -4171,23 +4269,7 @@ impl Interpreter {
             let items: Vec<_> = program.module_items.clone();
             drop(module_ref);
             for item in &items {
-                let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => {
-                        if import_module_type(&import.attributes).is_some() {
-                            continue;
-                        }
-                        Some(import.source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                        Some(source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                        source: Some(source),
-                        ..
-                    }) => Some(source.as_str()),
-                    _ => None,
-                };
-                if let Some(spec) = specifier
+                if let Some((spec, _)) = Self::graph_dependency_request(item)
                     && let Ok(resolved) =
                         self.resolve_module_specifier_pure(spec, canon.file_path())
                     && !self.ready_for_sync_execution(&resolved, seen)
@@ -4200,13 +4282,74 @@ impl Interpreter {
         true
     }
 
+    /// Validate `export { x } from './mod'` re-exports, and — for typed
+    /// (json/text/bytes) requests — materialize them as bindings on the current
+    /// module.
+    ///
+    /// Callers run this *before* processing imports, so that a namespace built
+    /// while processing them (a self-import, or this module's own namespace)
+    /// already sees materialized re-export bindings. That ordering is
+    /// load-bearing: the typed branch below writes `exports`/`export_bindings`,
+    /// it does not merely check them.
     fn validate_named_reexports(
         &mut self,
         current_module: &ModuleKey,
         source: &str,
+        attributes: &[(String, String)],
         specifiers: &[ExportSpecifier],
     ) -> Result<(), JsValue> {
         let resolved = self.resolve_module_specifier(source, current_module.file_path())?;
+
+        if let Some(itype) = prevalidated_import_module_type(attributes) {
+            let loaded =
+                self.load_module_for_type(&resolved, Some(itype), ModuleLoadMode::Evaluate)?;
+            let canon_current = current_module.canonicalize();
+            for spec in specifiers {
+                let (value, source_binding, source_env, loaded_path) = {
+                    let loaded = loaded.borrow();
+                    (
+                        loaded.exports.get(&spec.local).cloned(),
+                        loaded.export_bindings.get(&spec.local).cloned(),
+                        loaded.env.clone(),
+                        loaded.path.clone(),
+                    )
+                };
+                let (Some(value), Some(source_binding)) = (value, source_binding) else {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Module '{}' has no export named '{}'",
+                            loaded_path.display(),
+                            spec.local
+                        ),
+                    ));
+                };
+
+                // Keep a collision-safe internal binding, but make it indirect:
+                // ResolveExport must identify the defining synthetic module and
+                // binding, not a copied binding in this intermediary module.
+                let Some(current) = self.module_registry_get(&canon_current) else {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Module '{}' is not registered; cannot re-export '{}'",
+                            canon_current.display(),
+                            spec.exported
+                        ),
+                    ));
+                };
+                let binding = format!("*synthetic-reexport:{}*", spec.exported);
+                let env = current.borrow().env.clone();
+                env.borrow_mut()
+                    .create_import_binding(&binding, source_env, source_binding);
+                let mut current = current.borrow_mut();
+                current.exports.insert(spec.exported.clone(), value);
+                current
+                    .export_bindings
+                    .insert(spec.exported.clone(), binding);
+            }
+            return Ok(());
+        }
 
         for spec in specifiers {
             let mut visited = HashSet::new();
@@ -4276,6 +4419,10 @@ impl Interpreter {
                     let binding_name = binding.clone();
                     let env = module_ref.env.clone();
                     let ns_path = module_ref.namespace_imports.get(&binding_name).cloned();
+                    let synthetic_ns = module_ref
+                        .synthetic_namespace_imports
+                        .get(&binding_name)
+                        .cloned();
                     let source_path = module_ref.source_imports.get(&binding_name).cloned();
                     drop(module_ref);
                     // Namespace import (import * as foo) resolves to the source module
@@ -4284,6 +4431,18 @@ impl Interpreter {
                             self.load_module_for_type(&ns_path, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
+                    }
+                    // Typed namespace re-export. Its value is materialized in
+                    // this module, but its ResolveExport identity belongs to
+                    // the cached synthetic target module.
+                    if let Some((target_path, import_type)) = synthetic_ns {
+                        let target = self.load_module_for_type(
+                            &target_path,
+                            Some(import_type),
+                            ModuleLoadMode::Evaluate,
+                        )?;
+                        let target_env = target.borrow().env.clone();
+                        return Ok((target_env, "*namespace*".to_string()));
                     }
                     // Source-phase import (import source foo) re-exported via
                     // `export { foo }` resolves to ResolvedBinding { [[Module]]:
@@ -4479,6 +4638,7 @@ impl Interpreter {
             ExportDeclaration::Named {
                 specifiers,
                 source,
+                attributes,
                 declaration,
             } => {
                 if let Some(src) = source {
@@ -4487,9 +4647,11 @@ impl Interpreter {
                     if let Ok(resolved) = self.resolve_module_specifier(
                         src,
                         module_path.as_ref().and_then(ModuleKey::file_path),
-                    ) && let Ok(source_mod) =
-                        self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)
-                    {
+                    ) && let Ok(source_mod) = self.load_module_for_type(
+                        &resolved,
+                        prevalidated_import_module_type(attributes),
+                        ModuleLoadMode::Evaluate,
+                    ) {
                         let source_exports = source_mod.borrow().exports.clone();
                         for spec in specifiers {
                             if let Some(val) = source_exports.get(&spec.local) {
@@ -4794,11 +4956,18 @@ impl Interpreter {
 
     fn create_namespace_for_env(&mut self, target_env: &EnvRef) -> JsValue {
         let realm_id = self.current_realm_id;
-        let found = self
+        let ordinary_modules = self
             .module_registry
             .iter()
             .filter(|((rid, _), _)| *rid == realm_id)
-            .map(|(_, module)| module)
+            .map(|(_, module)| module);
+        let synthetic_modules = self
+            .synthetic_module_registry
+            .iter()
+            .filter(|((rid, _, _), _)| *rid == realm_id)
+            .map(|(_, module)| module);
+        let found = ordinary_modules
+            .chain(synthetic_modules)
             .find(|m| Rc::ptr_eq(&m.borrow().env, target_env))
             .cloned();
         if let Some(module) = found {
@@ -4937,6 +5106,7 @@ impl Interpreter {
                 specifiers,
                 source,
                 declaration,
+                ..
             } => {
                 if let Some(src) = source {
                     // Re-export: export { x } from './mod'

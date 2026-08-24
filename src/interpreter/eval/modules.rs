@@ -414,7 +414,7 @@ impl Interpreter {
             }
         };
 
-        // Text/bytes synthetic modules: load and resolve immediately
+        // Typed synthetic modules load and resolve immediately.
         if import_type.is_some() {
             let module =
                 self.load_module_for_type(&resolved, import_type, super::ModuleLoadMode::Evaluate);
