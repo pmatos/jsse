@@ -175,22 +175,11 @@ impl Interpreter {
                 let Some(obj_id) = args.first().and_then(JsValue::as_object_id) else {
                     return Completion::Normal(JsValue::UNDEFINED);
                 };
-                let Some(obj) = interp.get_object_cell(obj_id) else {
-                    return Completion::Normal(JsValue::UNDEFINED);
-                };
-                let obj = obj.borrow();
-                let Some(proxy) = obj.proxy() else {
-                    return Completion::Normal(JsValue::UNDEFINED);
-                };
-                if proxy.revoked {
-                    return Completion::Normal(JsValue::NULL);
-                }
-                Completion::Normal(
-                    proxy
-                        .target_id
-                        .map(JsValue::object)
-                        .unwrap_or(JsValue::NULL),
-                )
+                Completion::Normal(match interp.get_proxy_info(obj_id) {
+                    None => JsValue::UNDEFINED,
+                    Some((false, Some(target_id), _)) => JsValue::object(target_id),
+                    Some(_) => JsValue::NULL,
+                })
             },
         ));
         self.install_host_global("__host_proxy_target", proxy_target_fn);

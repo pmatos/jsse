@@ -56,8 +56,20 @@ name and the instance's data-valued message still produce a readable
 `[Error: message]` fallback.
 
 Constructor and function names are read from data descriptors. Prototype
-metadata traversal unwraps a Proxy before inspecting it. Primitive Symbol
-formatting uses the captured intrinsic rather than a mutable prototype method.
+metadata traversal unwraps a Proxy at every hop before inspecting it. Primitive
+Symbol formatting uses the captured intrinsic rather than a mutable prototype
+method.
+
+`util.format`'s `%s` classification walk (`hasBuiltInToString`) decides whether
+a value carries a user-defined coercion hook or routes to `inspect`. It unwraps
+the value and then each prototype it visits, so a Proxy anywhere in the chain
+runs no `getPrototypeOf`/`getOwnPropertyDescriptor` trap. This is a deliberate
+divergence: Node *would* fire that trap, so a `--node` cross-check difference on
+a prototype-chain Proxy is expected rather than a regression. The initial
+`toString`/`@@toPrimitive` presence checks on that path are still ordinary
+property reads, so a proxied prototype can observe those two gets; closing that
+remainder requires changing the classification to descriptor lookups, which
+would alter which values Node-compatibly route to `inspect`, and is left out.
 
 ## Failure behavior and fallback
 
@@ -70,8 +82,12 @@ there remains best-effort and catches exotic failures where possible.
 
 The cross-engine node-shim self-test covers array-target Proxies, throwing
 `getPrototypeOf`/`ownKeys`/`getOwnPropertyDescriptor`/`get` traps, revoked and
-nested Proxies, Error accessors, and sparse arrays with inherited accessors.
-Trap/getter counters prove the JSSE shim invokes none of them; Node runs the
+nested Proxies, a Proxy in the prototype chain rather than as the inspected
+value, Error accessors, and sparse arrays with inherited accessors.
+Trap/getter counters prove the JSSE shim invokes none of them **for those
+cases**; the counters are evidence for the enumerated shapes, not a blanket
+proof, and the `%s` `toString`/`@@toPrimitive` presence reads noted above remain
+a known uncovered remainder. Node runs the
 same structural cases as the reference implementation. Rust host-floor tests
 verify the hook is gated, non-enumerable, unwraps without traps, and identifies
 revoked Proxies.

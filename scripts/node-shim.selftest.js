@@ -18,6 +18,12 @@
 var util =
   typeof globalThis.util !== "undefined" ? globalThis.util : require("util");
 
+// True only under jsse `--node`, where the host floor lets the shim read
+// [[ProxyTarget]]. Trap/getter-count assertions apply to that shim alone: on
+// Node the same probes legitimately fire, so they are gated rather than skipped
+// (the "ok N - name" line still prints on both, keeping output byte-identical).
+var hasProxyTargetHost = typeof __host_proxy_target !== "undefined";
+
 var testNo = 0;
 
 function ok(name) {
@@ -406,7 +412,7 @@ eq(
       "%s Error ignores throwing stack and patched toString"
     );
     truthy(
-      typeof __host_proxy_target === "undefined" || stackReads === 0,
+      !hasProxyTargetHost || stackReads === 0,
       "%s shim does not read an Error stack getter"
     );
   } finally {
@@ -668,7 +674,7 @@ eq(
     "%s handles a throwing Proxy prototype walk"
   );
   truthy(
-    typeof __host_proxy_target === "undefined" || formatted !== "PROXY STRING",
+    !hasProxyTargetHost || formatted !== "PROXY STRING",
     "%s does not invoke a Proxy get trap"
   );
 })();
@@ -954,7 +960,7 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   var revocable = Proxy.revocable({ a: 1 }, proxyHandler);
   revocable.revoke();
   truthy(
-    typeof __host_proxy_target === "undefined" ||
+    !hasProxyTargetHost ||
       util.inspect(revocable.proxy) === "<Revoked Proxy>",
     "inspect renders a revoked Proxy"
   );
@@ -994,7 +1000,7 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "inspect handles Error stack/name/message accessors"
   );
   truthy(
-    typeof __host_proxy_target === "undefined" || errorReads === 0,
+    !hasProxyTargetHost || errorReads === 0,
     "inspect invokes no Error stack/name/message getters"
   );
 
@@ -1018,6 +1024,34 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "inspect preserves sparse-array holes"
   );
   eq(inheritedReads, 0, "inspect does not read inherited array elements");
+
+  // A Proxy in the PROTOTYPE CHAIN, not as the inspected value itself. The
+  // `%s` classification walk used to reflect on each prototype directly, so a
+  // proxied prototype ran getPrototypeOf/getOwnPropertyDescriptor traps during
+  // a diagnostic print. Unwrapping at every hop is a deliberate divergence from
+  // Node (which does fire that trap), hence the host gate.
+  var protoTraps = 0;
+  var chainHandler = {
+    getPrototypeOf: function (t) {
+      protoTraps++;
+      return Object.getPrototypeOf(t);
+    },
+    getOwnPropertyDescriptor: function (t, k) {
+      protoTraps++;
+      return Object.getOwnPropertyDescriptor(t, k);
+    },
+    ownKeys: function (t) {
+      protoTraps++;
+      return Reflect.ownKeys(t);
+    },
+  };
+  var chained = Object.create(new Proxy({}, chainHandler));
+  chained.a = 1;
+  eq(util.format("%s", chained), "{ a: 1 }", "%s renders a proxied prototype");
+  truthy(
+    !hasProxyTargetHost || protoTraps === 0,
+    "%s invokes no prototype-chain Proxy reflection traps"
+  );
 
   // A normal named class still gets its "ClassName " prefix.
   function Widget() {

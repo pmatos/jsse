@@ -88,6 +88,7 @@
   var arrayIndexOf = functionCall.bind(arrayConstructor.prototype.indexOf);
   var arrayIsArray = arrayConstructor.isArray;
   var arrayJoin = functionCall.bind(arrayConstructor.prototype.join);
+  var arrayPush = functionCall.bind(arrayConstructor.prototype.push);
   var objectGetOwnPropertyDescriptor =
     objectConstructor.getOwnPropertyDescriptor;
   var objectGetPrototypeOf = objectConstructor.getPrototypeOf;
@@ -155,22 +156,16 @@
   }
 
   // `desc` is always FromPropertyDescriptor output — an ordinary object whose
-  // fields are own data properties — so an own-property check is enough to keep
-  // a polluted `Object.prototype.get`/`set`/`value` out of the result.
-  function descriptorField(desc, key) {
-    if (!desc) return undefined;
-    return objectHasOwnProperty(desc, key) ? desc[key] : undefined;
+  // fields are own data properties — so an own-property check keeps a polluted
+  // `Object.prototype.value` out of the result. That output is always either a
+  // data descriptor (own `value`) or an accessor one (own `get`/`set`), never
+  // both and never neither, so probing `value` alone discriminates the two.
+  function isDataDescriptor(desc) {
+    return !!desc && objectHasOwnProperty(desc, "value");
   }
 
   function dataDescriptorValue(desc) {
-    if (!desc) return undefined;
-    if (
-      descriptorField(desc, "get") !== undefined ||
-      descriptorField(desc, "set") !== undefined
-    ) {
-      return undefined;
-    }
-    return descriptorField(desc, "value");
+    return isDataDescriptor(desc) ? desc.value : undefined;
   }
 
   function findPropertyDescriptor(v, key) {
@@ -190,6 +185,17 @@
     return null;
   }
 
+  // A function's `name` read from its own data descriptor only, so neither an
+  // accessor `name` nor a Proxy get trap is observed. Returns "" when absent.
+  function functionName(fn) {
+    var name = dataDescriptorValue(objectGetOwnPropertyDescriptor(fn, "name"));
+    return typeof name === "string" ? name : "";
+  }
+
+  function emptyItems(count) {
+    return "<" + count + " empty item" + (count === 1 ? "" : "s") + ">";
+  }
+
   function primitiveString(value, fallback) {
     var type = typeof value;
     if (type === "object" || type === "function" || type === "undefined") {
@@ -207,15 +213,12 @@
   // object costs a single trap-free [[GetPrototypeOf]].
   function inheritsErrorPrototype(v) {
     try {
-      var current = objectGetPrototypeOf(v);
+      // `unwrapProxy` is already fully recursive and maps a revoked Proxy to
+      // null, which the loop condition treats as the end of the chain.
+      var current = unwrapProxy(objectGetPrototypeOf(v));
       while (current !== null && current !== objectPrototype) {
         if (current === errorPrototype) return true;
-        var target = unwrapProxy(current);
-        if (target !== current) {
-          current = target;
-          continue;
-        }
-        current = objectGetPrototypeOf(current);
+        current = unwrapProxy(objectGetPrototypeOf(current));
       }
     } catch (e) {
       // The no-host fallback cannot unwrap an exotic chain; leave it opaque.
@@ -250,14 +253,8 @@
       }
 
       if (t === "function") {
-        var name = dataDescriptorValue(
-          objectGetOwnPropertyDescriptor(v, "name")
-        );
-        return (
-          "[Function" +
-          (typeof name === "string" && name ? ": " + name : " (anonymous)") +
-          "]"
-        );
+        var name = functionName(v);
+        return "[Function" + (name ? ": " + name : " (anonymous)") + "]";
       }
 
       // Objects.
@@ -332,16 +329,16 @@
     }
 
     function renderDescriptor(desc, depth) {
-      var getter = descriptorField(desc, "get");
-      var setter = descriptorField(desc, "set");
-      if (getter !== undefined || setter !== undefined) {
-        return getter
-          ? setter
+      // Not a data descriptor => an accessor one, whose `get`/`set` are own
+      // data properties that are undefined-or-callable.
+      if (desc && !isDataDescriptor(desc)) {
+        return desc.get
+          ? desc.set
             ? "[Getter/Setter]"
             : "[Getter]"
           : "[Setter]";
       }
-      return render(descriptorField(desc, "value"), depth - 1);
+      return render(dataDescriptorValue(desc), depth - 1);
     }
 
     // Array length and elements are read from own descriptors on the unwrapped
@@ -353,48 +350,43 @@
       );
       if (typeof length !== "number" || length <= 0) return "[]";
 
-      var body = "";
-      var hasPart = false;
+      // Collect into a local array and join once. Accumulating with `+=`
+      // instead is superlinear here: JsString is a flat buffer with no rope
+      // representation, so each concat copies the whole prefix.
+      var parts = [];
       var holes = 0;
-
-      function append(part) {
-        if (hasPart) body += ", ";
-        body += part;
-        hasPart = true;
-      }
-
-      function flushHoles() {
-        if (!holes) return;
-        append("<" + holes + " empty item" + (holes === 1 ? "" : "s") + ">");
-        holes = 0;
-      }
 
       for (var i = 0; i < length; i++) {
         var desc = objectGetOwnPropertyDescriptor(v, i);
         if (!desc) {
           holes++;
-        } else {
-          flushHoles();
-          append(renderDescriptor(desc, depth));
+          continue;
         }
+        if (holes) {
+          arrayPush(parts, emptyItems(holes));
+          holes = 0;
+        }
+        arrayPush(parts, renderDescriptor(desc, depth));
       }
-      flushHoles();
-      return hasPart ? "[ " + body + " ]" : "[]";
+      if (holes) arrayPush(parts, emptyItems(holes));
+      // `length > 0` guarantees the loop ran, so every index became either an
+      // element or a hole, and `parts` cannot be empty.
+      return "[ " + arrayJoin(parts, ", ") + " ]";
+    }
+
+    function errorField(v, key, fallback) {
+      return primitiveString(
+        dataDescriptorValue(findPropertyDescriptor(v, key)),
+        fallback
+      );
     }
 
     function renderError(v) {
-      var stackDesc = findPropertyDescriptor(v, "stack");
-      var stack = primitiveString(dataDescriptorValue(stackDesc), "");
+      var stack = errorField(v, "stack", "");
       if (stack) return stack;
 
-      var name = primitiveString(
-        dataDescriptorValue(findPropertyDescriptor(v, "name")),
-        "Error"
-      );
-      var message = primitiveString(
-        dataDescriptorValue(findPropertyDescriptor(v, "message")),
-        ""
-      );
+      var name = errorField(v, "name", "Error");
+      var message = errorField(v, "message", "");
       var text = !name ? message : !message ? name : name + ": " + message;
       return "[" + text + "]";
     }
@@ -421,12 +413,8 @@
         // leading space).
         ctor = unwrapProxy(ctor);
         if (typeof ctor !== "function") return "";
-        var name = dataDescriptorValue(
-          objectGetOwnPropertyDescriptor(ctor, "name")
-        );
-        return typeof name === "string" && name && name !== "Object"
-          ? name + " "
-          : "";
+        var name = functionName(ctor);
+        return name && name !== "Object" ? name + " " : "";
       } catch (e) {
         return "";
       }
@@ -535,10 +523,15 @@
       return false;
     }
 
+    // Unwrap at every hop, not just at the top: a Proxy anywhere in the chain
+    // would otherwise run its getPrototypeOf/getOwnPropertyDescriptor traps
+    // during a diagnostic print. This is a deliberate divergence — Node *would*
+    // fire the trap here — so a `--node` cross-check difference on a
+    // prototype-chain Proxy is expected, not a regression.
     var pointer = value;
     try {
       do {
-        pointer = objectGetPrototypeOf(pointer);
+        pointer = unwrapProxy(objectGetPrototypeOf(pointer));
       } while (
         pointer !== null &&
         !hasOwnToString(pointer, "toString") &&
@@ -827,7 +820,7 @@
   function writeLine(stream, args) {
     var line = format.apply(null, args);
     if (groupIndent) {
-      line = groupIndent + line.replace(/\n/g, "\n" + groupIndent);
+      line = groupIndent + replaceAll(line, "\n", "\n" + groupIndent);
     }
     stream.write(line + "\n");
   }
