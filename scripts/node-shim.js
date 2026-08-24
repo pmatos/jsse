@@ -63,6 +63,10 @@
 
   function quoteString(s) {
     s = stringConstructor(s);
+    // The overwhelmingly common string needs no escaping at all, and one
+    // scan settles that; the replaceAll chain below scans three times
+    // unconditionally. Non-global pattern, so `lastIndex` is untouched.
+    if (regexpExec(escapableCharPattern, s) === null) return "'" + s + "'";
     return (
       "'" +
       replaceAll(
@@ -153,6 +157,7 @@
   );
   var stringSlice = functionCall.bind(stringConstructor.prototype.slice);
   var identifierKeyPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+  var escapableCharPattern = /[\\'\n]/;
   var circularMessagePattern = /circular/i;
   var numberValueOf = functionCall.bind(numberConstructor.prototype.valueOf);
   var stringValueOf = functionCall.bind(stringConstructor.prototype.valueOf);
@@ -222,9 +227,10 @@
   var REVOKED_PROXY = {};
 
   // The unwrapped [[Prototype]] of `v`. Read once per value and threaded into
-  // every builtinPrototypeKind() call below, so classifying eight built-in
-  // families costs one metadata read rather than eight — and, in the no-host
-  // fallback where `v` may still be a Proxy, one getPrototypeOf trap.
+  // every builtinPrototypeKind() call below plus constructorName(), so
+  // classifying eight built-in families and deriving the class-name prefix
+  // costs one metadata read rather than nine — and, in the no-host fallback
+  // where `v` may still be a Proxy, one getPrototypeOf trap.
   function prototypeOf(v) {
     try {
       return unwrapProxy(objectGetPrototypeOf(v));
@@ -295,6 +301,13 @@
     return isDataDescriptor(desc) ? desc.value : undefined;
   }
 
+  // The canonical safe read of this module: an own property's value, taken
+  // from its data descriptor, so neither an accessor nor a Proxy get trap is
+  // observed. `undefined` when the property is absent or accessor-valued.
+  function ownDataValue(obj, key) {
+    return dataDescriptorValue(objectGetOwnPropertyDescriptor(obj, key));
+  }
+
   function findPropertyDescriptor(v, key) {
     try {
       var current = v;
@@ -316,7 +329,7 @@
   // A function's `name` read from its own data descriptor only, so neither an
   // accessor `name` nor a Proxy get trap is observed. Returns "" when absent.
   function functionName(fn) {
-    var name = dataDescriptorValue(objectGetOwnPropertyDescriptor(fn, "name"));
+    var name = ownDataValue(fn, "name");
     return typeof name === "string" ? name : "";
   }
 
@@ -370,35 +383,33 @@
   // would invoke an accessor `constructor` or a Proxy get-trap — Node reads
   // constructor metadata via the prototype chain, not by calling a getter. Use
   // data descriptors only, and treat any exotic-trap throw as "no prefix".
-  function constructorName(v) {
+  // `prototype` is the caller's already-unwrapped [[Prototype]] of `v`, so no
+  // second metadata read (and, on the no-host fallback, no second
+  // getPrototypeOf trap) is needed here.
+  function constructorName(v, prototype) {
     try {
-      var ctor;
-      var own = objectGetOwnPropertyDescriptor(v, "constructor");
-      if (own) {
-        ctor = dataDescriptorValue(own);
-      } else {
-        var proto = unwrapProxy(objectGetPrototypeOf(v));
-        var pd = proto && proto !== REVOKED_PROXY
-          ? objectGetOwnPropertyDescriptor(proto, "constructor")
-          : null;
-        if (pd) ctor = dataDescriptorValue(pd);
+      // An own `constructor` wins even when it is accessor-valued: the first
+      // descriptor found is the one Node's walk would stop at, and
+      // dataDescriptorValue then declines to call the getter.
+      var desc = objectGetOwnPropertyDescriptor(v, "constructor");
+      if (
+        !desc &&
+        prototype &&
+        prototype !== REVOKED_PROXY &&
+        prototype !== UNKNOWN_PROTOTYPE
+      ) {
+        desc = objectGetOwnPropertyDescriptor(prototype, "constructor");
       }
       // Node's getConstructorName only accepts a callable `constructor` with
       // a non-empty name; anything else yields no prefix at all (never a bare
       // leading space).
-      ctor = unwrapProxy(ctor);
+      var ctor = unwrapProxy(dataDescriptorValue(desc));
       if (typeof ctor !== "function") return "";
       // Node accepts a `constructor` only when the value is an INSTANCE of
       // it, and a constructor's own `prototype` object never is. Rejecting
       // that self-reference gives every intrinsic prototype Node's plain
       // `{}` rendering without enumerating them one by one.
-      if (
-        dataDescriptorValue(
-          objectGetOwnPropertyDescriptor(ctor, "prototype")
-        ) === v
-      ) {
-        return "";
-      }
+      if (ownDataValue(ctor, "prototype") === v) return "";
       var name = functionName(ctor);
       return name && name !== "Object" ? name + " " : "";
     } catch (e) {
@@ -421,16 +432,16 @@
       if (t === "boolean") return stringConstructor(v);
       if (t === "symbol") return symbolToString(v);
 
-      // Node's native inspector can read [[ProxyTarget]] without dispatching
-      // through the handler. The --node host floor exposes that one piece of
-      // metadata so the JS shim can do the same before any instanceof,
-      // reflection, property access, or enumeration. Nested Proxies are
-      // unwrapped recursively; a revoked Proxy is an opaque terminal value.
-      if (t === "object" || t === "function") {
-        v = unwrapProxy(v);
-        if (v === REVOKED_PROXY) return "<Revoked Proxy>";
-        t = typeof v;
-      }
+      // Every primitive `typeof` has returned by now, so `v` is an object or
+      // a function. Node's native inspector can read [[ProxyTarget]] without
+      // dispatching through the handler. The --node host floor exposes that
+      // one piece of metadata so the JS shim can do the same before any
+      // instanceof, reflection, property access, or enumeration. Nested
+      // Proxies are unwrapped recursively; a revoked Proxy is an opaque
+      // terminal value.
+      v = unwrapProxy(v);
+      if (v === REVOKED_PROXY) return "<Revoked Proxy>";
+      t = typeof v;
 
       if (t === "function") {
         var name = functionName(v);
@@ -444,7 +455,17 @@
       // whole built-in classification below (seven throwing slot probes and
       // eight chain walks) is pure waste for the commonest object shape.
       var prototype = prototypeOf(v);
+      // `Array.isArray` reads an internal slot and pierces a Proxy without
+      // dispatching a trap, so this is free of user code. Hoisted above the
+      // classification block, which it prunes, and reused by both call sites
+      // below.
+      var isArr = arrayIsArray(v);
       if (prototype !== objectPrototype) {
+        // This first classification does double duty: "revoked" is a property
+        // of the CHAIN, not of the Error family, and every walk below would
+        // report it too — but only this one throws. It must therefore stay
+        // ahead of them all, and outside the `isArr` guard, so an array whose
+        // chain contains a revoked Proxy still throws.
         var errorKind = builtinPrototypeKind(prototype, errorPrototype, null);
         if (errorKind === "revoked") {
           throw new typeErrorConstructor(
@@ -455,6 +476,17 @@
         if (errorKind === "null" && errorIsError && errorIsError(v)) {
           return renderNullPrototypeError(v);
         }
+      }
+
+      // Internal-slot presentation. An Array exotic object is created by
+      // ArrayCreate, never by OrdinaryCreateFromConstructor, so it cannot
+      // carry [[RegExpMatcher]], [[DateValue]], [[NumberData]],
+      // [[StringData]], [[BooleanData]], [[BigIntData]] or [[SymbolData]].
+      // Every probe below would therefore throw and be caught — six
+      // thrown-and-unwound TypeErrors per array, at every nesting level.
+      // Skipping them for arrays is a zero-divergence prune; the Error
+      // chain walk above is deliberately NOT skipped.
+      if (!isArr && prototype !== objectPrototype) {
         var boxed;
         // `get RegExp.prototype.source` uniquely does NOT throw for
         // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
@@ -553,12 +585,12 @@
         }
       }
 
-      if (depth < 0) return arrayIsArray(v) ? "[Array]" : "[Object]";
+      if (depth < 0) return isArr ? "[Array]" : "[Object]";
 
       arrayPush(seen, v);
       var out;
       try {
-        if (arrayIsArray(v)) {
+        if (isArr) {
           out = renderArray(v, depth);
         } else {
           // Own properties are rendered from their descriptors WITHOUT
@@ -574,7 +606,7 @@
             var memberDesc = objectGetOwnPropertyDescriptor(v, k);
             arrayPush(parts, label + ": " + renderDescriptor(memberDesc, depth));
           }
-          var ctorName = constructorName(v);
+          var ctorName = constructorName(v, prototype);
           out = parts.length
             ? ctorName + "{ " + arrayJoin(parts, ", ") + " }"
             : ctorName + "{}";
@@ -593,9 +625,10 @@
       if (desc && !isDataDescriptor(desc)) {
         if (desc.get) return desc.set ? "[Getter/Setter]" : "[Getter]";
         if (desc.set) return "[Setter]";
-        return render(undefined, depth - 1);
+        // Both undefined: fall through to render the absent value, as Node
+        // does.
       }
-      return render(desc ? desc.value : undefined, depth - 1);
+      return render(dataDescriptorValue(desc), depth - 1);
     }
 
     // Array length and elements are read from own descriptors on the unwrapped
@@ -606,9 +639,7 @@
     // index keys assigned after array creation, so every element of a
     // push-built array would render as a hole).
     function renderArray(v, depth) {
-      var length = dataDescriptorValue(
-        objectGetOwnPropertyDescriptor(v, "length")
-      );
+      var length = ownDataValue(v, "length");
       if (typeof length !== "number" || length <= 0) return "[]";
 
       // Collect into a local array and join once. Accumulating with `+=`
@@ -634,7 +665,6 @@
       // element or a hole, and `parts` cannot be empty.
       return "[ " + arrayJoin(parts, ", ") + " ]";
     }
-
 
     return render(value, maxDepth);
   }

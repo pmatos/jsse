@@ -89,8 +89,16 @@ avoid, so the shorter prefix is accepted.
 Built-in presentation combines an internal-slot probe with a trap-free
 prototype-chain classifier. Reparenting a genuine Date, RegExp, or boxed
 primitive to an ordinary object selects the generic descriptor path; a direct
-null prototype receives Node's family-specific marker. Slot-bearing prototype
-objects retain cross-realm recognition where the built-in exposes such a slot.
+null prototype receives Node's family-specific marker. The slot probes are
+skipped for Array exotic objects: `ArrayCreate` and
+`OrdinaryCreateFromConstructor` are disjoint, so an array can carry none of
+`[[RegExpMatcher]]`, `[[DateValue]]`, `[[NumberData]]`, `[[StringData]]`,
+`[[BooleanData]]`, `[[BigIntData]]` or `[[SymbolData]]`, and every probe would
+only throw and be caught. The Error prototype-chain classification is *not*
+skipped, so `Reflect.construct(Array, [1, 2], Error)` still renders `[Error]`
+and an array whose chain contains a revoked Proxy still throws. Slot-bearing
+prototype objects retain cross-realm recognition where the built-in exposes
+such a slot.
 RegExps are formatted from the captured `source` and individual flag accessors;
 using the captured `RegExp.prototype.toString` would still perform ordinary
 `source` and `flags` gets and could invoke replacement accessors. Normal boxed

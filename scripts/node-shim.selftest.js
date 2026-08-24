@@ -1222,18 +1222,13 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
 
   var nestedProxy = new Proxy(objectProxy, proxyHandler);
   // Node 24 unwraps only the outer Proxy here and observes the inner throwing
-  // get trap; Node 26 recursively unwraps both. Exercise the shim invariant on
-  // JSSE and emit the same assertion line on either Node version.
-  if (hasNodeHost) {
-    truthy(
-      util.inspect(nestedProxy).indexOf("a: 1") !== -1,
-      "inspect safely unwraps nested Proxies (jsse only)"
-    );
-  } else {
-    // Name the line for what it is: on Node nothing is asserted here, and a
-    // reader of the output should not be told otherwise.
-    ok("inspect safely unwraps nested Proxies (jsse only)");
-  }
+  // get trap; Node 26 recursively unwraps both. Short-circuit so inspect is
+  // never called on Node, and the same assertion line is emitted there — the
+  // `(jsse only)` label names what the line does and does not assert.
+  truthy(
+    !hasNodeHost || util.inspect(nestedProxy).indexOf("a: 1") !== -1,
+    "inspect safely unwraps nested Proxies (jsse only)"
+  );
   eq(proxyCalls, 0, "inspect invokes no nested Proxy traps");
 
   // util.inspect output is never byte-compared against Node (see the header),
