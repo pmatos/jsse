@@ -709,6 +709,43 @@ impl Interpreter {
             .cloned()
             .unwrap_or_default();
 
+        macro_rules! route_exception {
+            ($error:expr) => {{
+                match self.route_generator_exception(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    &mut pending_exception,
+                    &mut current_id,
+                    $error,
+                ) {
+                    Completion::Empty => continue,
+                    Completion::Throw(error) => error,
+                    Completion::Exit(code) => {
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
+                        );
+                        return Completion::Exit(code);
+                    }
+                    _ => unreachable!("routing a throw returned a non-abrupt completion"),
+                }
+            }};
+        }
+
         loop {
             let terminator = state_machine.states[current_id].terminator.clone();
 
@@ -803,16 +840,7 @@ impl Interpreter {
                 // Route genuine throws through the generator body's
                 // catch/finally states (a `Completion::Exit` was handled
                 // above and never reaches here).
-                if let Some(try_info) = current_try_stack.pop() {
-                    if let Some(catch_state) = try_info.catch_state {
-                        pending_exception = Some(e);
-                        current_id = catch_state;
-                        continue;
-                    } else if let Some(finally_state) = try_info.finally_state {
-                        current_id = finally_state;
-                        continue;
-                    }
-                }
+                let e = route_exception!(e);
                 // §27.5.3.3: DisposeResources when generator throws
                 let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
@@ -872,16 +900,7 @@ impl Interpreter {
                                 // catch/finally handling (a `Completion::Exit`
                                 // takes the `other` arm below and never reaches
                                 // here — issue #242).
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
+                                let e = route_exception!(e);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
                                         IteratorState::StateMachineGenerator {
@@ -1278,13 +1297,9 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(try_info) = current_try_stack.pop()
-                        && let Some(catch_state) = try_info.catch_state
-                    {
-                        current_id = catch_state;
-                        continue;
-                    }
+                    let throw_val = route_exception!(throw_val);
 
+                    let disp = self.dispose_resources(&func_env, Completion::Throw(throw_val));
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
                             state_machine,
@@ -1300,7 +1315,7 @@ impl Interpreter {
                         },
                     );
                     self.generator_inline_iters.remove(&o.id);
-                    return Completion::Throw(throw_val);
+                    return disp;
                 }
 
                 // Async-function transforms are currently the only machines
@@ -1425,17 +1440,7 @@ impl Interpreter {
                     current_try_stack.pop();
                     if let Some(exc) = pending_exception.take() {
                         // Re-throw pending exception after finally completes
-                        if let Some(try_info) = current_try_stack.pop() {
-                            if let Some(catch_state) = try_info.catch_state {
-                                pending_exception = Some(exc);
-                                current_id = catch_state;
-                                continue;
-                            } else if let Some(finally_state) = try_info.finally_state {
-                                pending_exception = Some(exc);
-                                current_id = finally_state;
-                                continue;
-                            }
-                        }
+                        let exc = route_exception!(exc);
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineGenerator {
                                 state_machine,
@@ -1581,16 +1586,7 @@ impl Interpreter {
                     let iterable_val = match self.eval_expr(iterable, &iterable_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
+                            let e = route_exception!(e);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
@@ -1613,16 +1609,7 @@ impl Interpreter {
                     let iterator = match self.get_iterator(&iterable_val) {
                         Ok(iter) => iter,
                         Err(e) => {
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
+                            let e = route_exception!(e);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
@@ -1710,19 +1697,7 @@ impl Interpreter {
                         self.gc_unroot_value(&iterator);
                         for_of_stack.remove(loop_pos);
                         self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                        if let Some(try_info) = current_try_stack.pop() {
-                            if let Some(catch_state) = try_info.catch_state {
-                                pending_exception = Some(e);
-                                current_id = catch_state;
-                                continue;
-                            } else if let Some(finally_state) = try_info.finally_state {
-                                // TryExit re-throws whatever `pending_exception`
-                                // still holds once the finally body completes.
-                                pending_exception = Some(e);
-                                current_id = finally_state;
-                                continue;
-                            }
-                        }
+                        let e = route_exception!(e);
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineGenerator {
                                 state_machine,
@@ -1749,14 +1724,7 @@ impl Interpreter {
                                 loop_pos,
                                 &iterator,
                             );
-                            if Self::enter_generator_exception_handler(
-                                &mut current_try_stack,
-                                &mut pending_exception,
-                                &mut current_id,
-                                e.clone(),
-                            ) {
-                                continue;
-                            }
+                            let e = route_exception!(e);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
@@ -1807,14 +1775,7 @@ impl Interpreter {
                                         loop_pos,
                                         &iterator,
                                     );
-                                    if Self::enter_generator_exception_handler(
-                                        &mut current_try_stack,
-                                        &mut pending_exception,
-                                        &mut current_id,
-                                        e.clone(),
-                                    ) {
-                                        continue;
-                                    }
+                                    let e = route_exception!(e);
                                     obj_rc.borrow_mut().kind =
                                         crate::interpreter::types::ObjectKind::Iterator(
                                             IteratorState::StateMachineGenerator {
@@ -1866,14 +1827,7 @@ impl Interpreter {
                                                 loop_pos,
                                                 &iterator,
                                             );
-                                            if Self::enter_generator_exception_handler(
-                                                &mut current_try_stack,
-                                                &mut pending_exception,
-                                                &mut current_id,
-                                                e.clone(),
-                                            ) {
-                                                continue;
-                                            }
+                                            let e = route_exception!(e);
                                             obj_rc.borrow_mut().kind =
                                                 crate::interpreter::types::ObjectKind::Iterator(
                                                     IteratorState::StateMachineGenerator {
@@ -1904,14 +1858,7 @@ impl Interpreter {
                                             loop_pos,
                                             &iterator,
                                         );
-                                        if Self::enter_generator_exception_handler(
-                                            &mut current_try_stack,
-                                            &mut pending_exception,
-                                            &mut current_id,
-                                            e.clone(),
-                                        ) {
-                                            continue;
-                                        }
+                                        let e = route_exception!(e);
                                         obj_rc.borrow_mut().kind =
                                             crate::interpreter::types::ObjectKind::Iterator(
                                                 IteratorState::StateMachineGenerator {
@@ -1942,14 +1889,7 @@ impl Interpreter {
                                                 loop_pos,
                                                 &iterator,
                                             );
-                                            if Self::enter_generator_exception_handler(
-                                                &mut current_try_stack,
-                                                &mut pending_exception,
-                                                &mut current_id,
-                                                e.clone(),
-                                            ) {
-                                                continue;
-                                            }
+                                            let e = route_exception!(e);
                                             obj_rc.borrow_mut().kind =
                                                 crate::interpreter::types::ObjectKind::Iterator(
                                                     IteratorState::StateMachineGenerator {
@@ -2005,14 +1945,7 @@ impl Interpreter {
                                 loop_pos,
                                 &iterator,
                             );
-                            if Self::enter_generator_exception_handler(
-                                &mut current_try_stack,
-                                &mut pending_exception,
-                                &mut current_id,
-                                e.clone(),
-                            ) {
-                                continue;
-                            }
+                            let e = route_exception!(e);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
@@ -2460,13 +2393,13 @@ impl Interpreter {
             func_env,
             is_strict,
             execution_state,
-            try_stack,
+            mut try_stack,
             delegated_iterator,
             pending_return: stored_pending_return,
             ..
         }) = state
         {
-            match execution_state {
+            let suspended_state_id = match execution_state {
                 StateMachineExecutionState::Executing => {
                     return Completion::Throw(
                         self.create_type_error("Generator is already running"),
@@ -2490,8 +2423,8 @@ impl Interpreter {
                     );
                     return Completion::Throw(exception);
                 }
-                StateMachineExecutionState::SuspendedAtState { .. } => {}
-            }
+                StateMachineExecutionState::SuspendedAtState { state_id } => state_id,
+            };
 
             if let Some(ref deleg_info) = delegated_iterator {
                 let iterator = deleg_info.iterator.clone();
@@ -2684,68 +2617,81 @@ impl Interpreter {
                 }
             }
 
-            // Walk try_stack from innermost to outermost to find a handler
-            for i in (0..try_stack.len()).rev() {
-                let try_info = &try_stack[i];
-                if !try_info.entered_catch
-                    && !try_info.entered_finally
-                    && let Some(catch_state) = try_info.catch_state
-                {
+            let mut for_of_stack = self
+                .generator_for_of_stacks
+                .get(&o.id)
+                .cloned()
+                .unwrap_or_default();
+            let mut pending_exception = None;
+            let mut handler_state = suspended_state_id;
+            match self.route_generator_exception(
+                o.id,
+                &mut for_of_stack,
+                &mut try_stack,
+                &func_env,
+                &mut pending_exception,
+                &mut handler_state,
+                exception,
+            ) {
+                Completion::Empty => {
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
                             state_machine,
                             func_env,
                             is_strict,
                             execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: catch_state,
+                                state_id: handler_state,
                             },
                             _sent_value: JsValue::UNDEFINED,
-                            try_stack: try_stack[..i].to_vec(),
+                            try_stack,
                             pending_binding: None,
                             delegated_iterator: None,
-                            pending_exception: Some(exception.clone()),
+                            pending_exception,
                             pending_return: stored_pending_return,
                         },
                     );
                     return self.generator_next_state_machine(this, JsValue::UNDEFINED);
                 }
-                if !try_info.entered_finally
-                    && let Some(finally_state) = try_info.finally_state
-                {
+                Completion::Throw(error) => {
+                    self.generator_inline_iters.remove(&o.id);
+                    self.generator_for_of_stacks.remove(&o.id);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
                             state_machine,
                             func_env,
                             is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: finally_state,
-                            },
+                            execution_state: StateMachineExecutionState::Completed,
                             _sent_value: JsValue::UNDEFINED,
-                            try_stack: try_stack[..i].to_vec(),
+                            try_stack: vec![],
                             pending_binding: None,
                             delegated_iterator: None,
-                            pending_exception: Some(exception.clone()),
-                            pending_return: stored_pending_return,
+                            pending_exception: None,
+                            pending_return: None,
                         },
                     );
-                    return self.generator_next_state_machine(this, JsValue::UNDEFINED);
+                    return Completion::Throw(error);
                 }
+                Completion::Exit(code) => {
+                    self.generator_inline_iters.remove(&o.id);
+                    self.generator_for_of_stacks.remove(&o.id);
+                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            _sent_value: JsValue::UNDEFINED,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                            pending_return: None,
+                        },
+                    );
+                    return Completion::Exit(code);
+                }
+                _ => unreachable!("routing a throw returned a non-abrupt completion"),
             }
-
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::Completed,
-                    _sent_value: JsValue::UNDEFINED,
-                    try_stack: vec![],
-                    pending_binding: None,
-                    delegated_iterator: None,
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
         }
         Completion::Throw(exception)
     }
@@ -4427,32 +4373,49 @@ impl Interpreter {
             .get(&o.id)
             .cloned()
             .unwrap_or_default();
+
+        macro_rules! route_exception {
+            ($error:expr) => {{
+                match self.route_generator_exception(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    &mut pending_exception,
+                    &mut current_id,
+                    $error,
+                ) {
+                    Completion::Empty => continue,
+                    Completion::Throw(error) => error,
+                    Completion::Exit(code) => {
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
+                        );
+                        return Completion::Exit(code);
+                    }
+                    _ => unreachable!("routing a throw returned a non-abrupt completion"),
+                }
+            }};
+        }
         loop {
             if check_abrupt_on_resume {
                 check_abrupt_on_resume = false;
                 // Check pending_exception before executing state (handles .throw() with no try/catch)
                 if let Some(exc) = pending_exception.take() {
-                    let mut handled = false;
-                    for i in (0..current_try_stack.len()).rev() {
-                        if !current_try_stack[i].entered_catch
-                            && !current_try_stack[i].entered_finally
-                        {
-                            if let Some(catch_state) = current_try_stack[i].catch_state {
-                                pending_exception = Some(exc.clone());
-                                current_id = catch_state;
-                                handled = true;
-                                break;
-                            } else if let Some(finally_state) = current_try_stack[i].finally_state {
-                                pending_exception = Some(exc.clone());
-                                current_id = finally_state;
-                                handled = true;
-                                break;
-                            }
-                        }
-                    }
-                    if handled {
-                        continue;
-                    }
+                    let exc = route_exception!(exc);
                     let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
                     let exc = match disp {
                         Completion::Throw(e) => e,
@@ -4657,16 +4620,7 @@ impl Interpreter {
                 // Route genuine throws through the async generator body's
                 // catch/finally states (a `Completion::Exit` was handled above
                 // and never reaches here).
-                if let Some(try_info) = current_try_stack.pop() {
-                    if let Some(catch_state) = try_info.catch_state {
-                        pending_exception = Some(e);
-                        current_id = catch_state;
-                        continue;
-                    } else if let Some(finally_state) = try_info.finally_state {
-                        current_id = finally_state;
-                        continue;
-                    }
-                }
+                let e = route_exception!(e);
                 // §27.6.3.3: DisposeResources when async generator throws
                 let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                 let e = match disp {
@@ -4800,16 +4754,7 @@ impl Interpreter {
                                 // catch/finally handling (a `Completion::Exit`
                                 // takes the `other` arm below and never reaches
                                 // here — issue #242).
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
+                                let e = route_exception!(e);
                                 self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
@@ -5709,14 +5654,14 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(try_info) = current_try_stack.pop()
-                        && let Some(catch_state) = try_info.catch_state
-                    {
-                        pending_exception = Some(throw_val);
-                        current_id = catch_state;
-                        continue;
-                    }
+                    let throw_val = route_exception!(throw_val);
 
+                    let disp = self.dispose_resources(&func_env, Completion::Throw(throw_val));
+                    let throw_val = match disp {
+                        Completion::Throw(error) => error,
+                        Completion::Exit(code) => return Completion::Exit(code),
+                        _ => unreachable!("disposing a throw must stay abrupt"),
+                    };
                     self.generator_inline_iters.remove(&o.id);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineAsyncGenerator {
@@ -5844,17 +5789,7 @@ impl Interpreter {
                     current_try_stack.pop();
                     if let Some(exc) = pending_exception.take() {
                         // Re-throw pending exception after finally completes
-                        if let Some(try_info) = current_try_stack.pop() {
-                            if let Some(catch_state) = try_info.catch_state {
-                                pending_exception = Some(exc);
-                                current_id = catch_state;
-                                continue;
-                            } else if let Some(finally_state) = try_info.finally_state {
-                                pending_exception = Some(exc);
-                                current_id = finally_state;
-                                continue;
-                            }
-                        }
+                        let exc = route_exception!(exc);
                         self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineAsyncGenerator {
@@ -5999,16 +5934,7 @@ impl Interpreter {
                     let iterable_val = match self.eval_expr(iterable, &iterable_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
+                            let e = route_exception!(e);
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -6041,16 +5967,7 @@ impl Interpreter {
                         match self.get_async_iterator(&iterable_val) {
                             Ok(iter) => iter,
                             Err(e) => {
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
+                                let e = route_exception!(e);
                                 self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
@@ -6076,16 +5993,7 @@ impl Interpreter {
                         match self.get_iterator(&iterable_val) {
                             Ok(iter) => iter,
                             Err(e) => {
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
+                                let e = route_exception!(e);
                                 self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
@@ -6177,19 +6085,7 @@ impl Interpreter {
                         self.gc_unroot_value(&iterator);
                         for_of_stack.remove(loop_pos);
                         self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                        if let Some(try_info) = current_try_stack.pop() {
-                            if let Some(catch_state) = try_info.catch_state {
-                                pending_exception = Some(e);
-                                current_id = catch_state;
-                                continue;
-                            } else if let Some(finally_state) = try_info.finally_state {
-                                // TryExit re-throws whatever `pending_exception`
-                                // still holds once the finally body completes.
-                                pending_exception = Some(e);
-                                current_id = finally_state;
-                                continue;
-                            }
-                        }
+                        let e = route_exception!(e);
                         self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineAsyncGenerator {
@@ -6219,14 +6115,7 @@ impl Interpreter {
                                 loop_pos,
                                 &iterator,
                             );
-                            if Self::enter_generator_exception_handler(
-                                &mut current_try_stack,
-                                &mut pending_exception,
-                                &mut current_id,
-                                e.clone(),
-                            ) {
-                                continue;
-                            }
+                            let e = route_exception!(e);
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -6258,14 +6147,7 @@ impl Interpreter {
                                     loop_pos,
                                     &iterator,
                                 );
-                                if Self::enter_generator_exception_handler(
-                                    &mut current_try_stack,
-                                    &mut pending_exception,
-                                    &mut current_id,
-                                    e.clone(),
-                                ) {
-                                    continue;
-                                }
+                                let e = route_exception!(e);
                                 self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
@@ -6329,14 +6211,7 @@ impl Interpreter {
                                         loop_pos,
                                         &iterator,
                                     );
-                                    if Self::enter_generator_exception_handler(
-                                        &mut current_try_stack,
-                                        &mut pending_exception,
-                                        &mut current_id,
-                                        e.clone(),
-                                    ) {
-                                        continue;
-                                    }
+                                    let e = route_exception!(e);
                                     self.generator_inline_iters.remove(&o.id);
                                     obj_rc.borrow_mut().kind =
                                         crate::interpreter::types::ObjectKind::Iterator(
@@ -6392,14 +6267,7 @@ impl Interpreter {
                                                 loop_pos,
                                                 &iterator,
                                             );
-                                            if Self::enter_generator_exception_handler(
-                                                &mut current_try_stack,
-                                                &mut pending_exception,
-                                                &mut current_id,
-                                                e.clone(),
-                                            ) {
-                                                continue;
-                                            }
+                                            let e = route_exception!(e);
                                             self.generator_inline_iters.remove(&o.id);
                                             obj_rc.borrow_mut().kind =
                                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -6437,14 +6305,7 @@ impl Interpreter {
                                             loop_pos,
                                             &iterator,
                                         );
-                                        if Self::enter_generator_exception_handler(
-                                            &mut current_try_stack,
-                                            &mut pending_exception,
-                                            &mut current_id,
-                                            e.clone(),
-                                        ) {
-                                            continue;
-                                        }
+                                        let e = route_exception!(e);
                                         self.generator_inline_iters.remove(&o.id);
                                         obj_rc.borrow_mut().kind =
                                             crate::interpreter::types::ObjectKind::Iterator(
@@ -6482,14 +6343,7 @@ impl Interpreter {
                                                 loop_pos,
                                                 &iterator,
                                             );
-                                            if Self::enter_generator_exception_handler(
-                                                &mut current_try_stack,
-                                                &mut pending_exception,
-                                                &mut current_id,
-                                                e.clone(),
-                                            ) {
-                                                continue;
-                                            }
+                                            let e = route_exception!(e);
                                             self.generator_inline_iters.remove(&o.id);
                                             obj_rc.borrow_mut().kind =
                                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -6549,14 +6403,7 @@ impl Interpreter {
                                 loop_pos,
                                 &iterator,
                             );
-                            if Self::enter_generator_exception_handler(
-                                &mut current_try_stack,
-                                &mut pending_exception,
-                                &mut current_id,
-                                e.clone(),
-                            ) {
-                                continue;
-                            }
+                            let e = route_exception!(e);
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -7499,25 +7346,69 @@ impl Interpreter {
         self.sync_generator_for_of_stack(generator_id, for_of_stack);
     }
 
-    fn enter_generator_exception_handler(
+    /// Route a generator throw to the nearest active handler, first unwinding
+    /// every transformed for-of loop crossed on the way there. A handler
+    /// lexically inside a loop retains that loop; a handler outside it sees
+    /// the restored outer environment after IteratorClose.
+    fn route_generator_exception(
+        &mut self,
+        generator_id: u64,
+        for_of_stack: &mut Vec<ForOfLoopState>,
         try_stack: &mut Vec<TryContextInfo>,
+        func_env: &EnvRef,
         pending_exception: &mut Option<JsValue>,
         current_id: &mut usize,
         error: JsValue,
-    ) -> bool {
-        if let Some(try_info) = try_stack.pop() {
-            if let Some(catch_state) = try_info.catch_state {
-                *pending_exception = Some(error);
-                *current_id = catch_state;
-                return true;
+    ) -> Completion {
+        let handler = (0..try_stack.len()).rev().find_map(|depth| {
+            let try_info = &try_stack[depth];
+            if !try_info.entered_catch
+                && !try_info.entered_finally
+                && let Some(catch_state) = try_info.catch_state
+            {
+                return Some((depth, catch_state, true, try_info.finally_state.is_some()));
             }
-            if let Some(finally_state) = try_info.finally_state {
-                *pending_exception = Some(error);
-                *current_id = finally_state;
-                return true;
+            if !try_info.entered_finally
+                && let Some(finally_state) = try_info.finally_state
+            {
+                return Some((depth, finally_state, false, true));
             }
+            None
+        });
+
+        let keep_len = handler.map_or(0, |(handler_depth, _, _, _)| {
+            for_of_stack
+                .iter()
+                .position(|loop_state| loop_state.try_depth > handler_depth)
+                .unwrap_or(for_of_stack.len())
+        });
+        let completion = self.unwind_generator_for_of_loops(
+            generator_id,
+            for_of_stack,
+            try_stack,
+            func_env,
+            keep_len,
+            Completion::Throw(error),
+        );
+        let error = match completion {
+            Completion::Throw(error) => error,
+            Completion::Exit(code) => return Completion::Exit(code),
+            _ => unreachable!("unwinding a throw must preserve abrupt completion"),
+        };
+
+        if let Some((depth, handler_state, is_catch, has_finally)) = handler {
+            let retained_depth = if is_catch && !has_finally {
+                depth
+            } else {
+                depth + 1
+            };
+            try_stack.truncate(retained_depth);
+            *pending_exception = Some(error);
+            *current_id = handler_state;
+            Completion::Empty
+        } else {
+            Completion::Throw(error)
         }
-        false
     }
 
     /// Close transformed generator for-of loops from the inside out while
