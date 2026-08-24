@@ -2752,31 +2752,6 @@ impl Interpreter {
                             Completion::Throw(e) => return Err(e),
                             _ => return Ok(()),
                         };
-                        // Fast path: non-negative integer index on typed array
-                        if let Some(index) = v.as_number()
-                            && let Some(o) = (obj_val)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            && let Some(obj) = self.get_object(o.id)
-                            && obj.borrow().typed_array_info().is_some()
-                        {
-                            let obj_ref = obj.borrow();
-                            let ta = obj_ref.typed_array_info().unwrap();
-                            if is_valid_integer_index(ta, index) {
-                                let is_bigint = ta.kind.is_bigint();
-                                let ta_clone = ta.clone();
-                                drop(obj_ref);
-                                let num_val = if is_bigint {
-                                    self.to_bigint_value(&value)?
-                                } else {
-                                    JsValue::number(self.to_number_value(&value)?)
-                                };
-                                typed_array_set_index(&ta_clone, index as usize, &num_val);
-                                return Ok(());
-                            }
-                            // Invalid index (e.g. -0, NaN, fractional) — fall through
-                            // to to_property_key which may canonicalize the key
-                        }
                         self.to_property_key(&v)?
                     }
                     MemberProperty::Private(_) => unreachable!(),
@@ -2791,82 +2766,8 @@ impl Interpreter {
                         }
                     )));
                 }
-                if let Some(o) = (obj_val)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(obj) = self.get_object(o.id)
-                {
-                    // TypedArray [[Set]]
-                    let is_ta = obj.borrow().typed_array_info().is_some();
-                    if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
-                        let is_bigint = obj
-                            .borrow()
-                            .typed_array_info()
-                            .map(|ta| ta.kind.is_bigint())
-                            .unwrap_or(false);
-                        let num_val = if is_bigint {
-                            self.to_bigint_value(&value)?
-                        } else {
-                            JsValue::number(self.to_number_value(&value)?)
-                        };
-                        let obj_ref = obj.borrow();
-                        let ta = obj_ref.typed_array_info().unwrap();
-                        if is_valid_integer_index(ta, index) {
-                            let ta_clone = ta.clone();
-                            drop(obj_ref);
-                            typed_array_set_index(&ta_clone, index as usize, &num_val);
-                        }
-                        return Ok(());
-                    }
-                    // Check own setter
-                    let desc = obj.borrow().get_own_property_full(&key);
-                    if let Some(ref d) = desc
-                        && let Some(ref setter) = d.set
-                        && !(setter).is_undefined()
-                    {
-                        let setter = setter.clone();
-                        let this = obj_val.clone();
-                        return match self.call_function(
-                            &setter,
-                            &this,
-                            std::slice::from_ref(&value),
-                        ) {
-                            Completion::Throw(e) => Err(e),
-                            _ => Ok(()),
-                        };
-                    }
-                    // OrdinarySet: walk prototype chain for setters
-                    if !obj.borrow().has_own_property(&key) {
-                        let mut proto_opt = obj.borrow().prototype_id;
-                        while let Some(proto_id) = proto_opt {
-                            let inherited = self.get_property_descriptor_on_id(proto_id, &key);
-                            if let Some(ref inherited_desc) = inherited {
-                                if inherited_desc.is_accessor_descriptor() {
-                                    if let Some(ref setter) = inherited_desc.set
-                                        && !(setter).is_undefined()
-                                    {
-                                        let setter = setter.clone();
-                                        let this = obj_val.clone();
-                                        return match self.call_function(
-                                            &setter,
-                                            &this,
-                                            std::slice::from_ref(&value),
-                                        ) {
-                                            Completion::Throw(e) => Err(e),
-                                            _ => Ok(()),
-                                        };
-                                    }
-                                    return Ok(());
-                                }
-                                break;
-                            }
-                            proto_opt = self.get_object_cell_expect(proto_id).borrow().prototype_id;
-                        }
-                    }
-                    self.gc_write_barrier_value(&obj, &value);
-                    obj.borrow_mut_untracked().set_property_value(&key, value);
-                }
-                Ok(())
+                let strict = env.borrow().strict;
+                self.set_object_with_key(obj_val, &key, value, strict)
             }
             _ => Ok(()),
         }
@@ -3245,19 +3146,19 @@ impl Interpreter {
                             key
                         )));
                     }
+                    let final_val = if op == AssignOp::Assign {
+                        rval
+                    } else {
+                        match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    };
                     if let Some(o) = (obj_val)
                         .as_object_id()
                         .map(|id| crate::types::JsObject { id })
                         && let Some(obj) = self.get_object(o.id)
                     {
-                        let final_val = if op == AssignOp::Assign {
-                            rval
-                        } else {
-                            match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
-                        };
                         // Fast path for dense ordinary Array indexed writes: in-bounds
                         // overwrite or append-at-end directly into the backing Vec,
                         // bypassing the setter/prototype/Set machinery. Bails to the
@@ -3358,294 +3259,25 @@ impl Interpreter {
                                 // inherited index): fall through to the slow path.
                             }
                         }
-                        // Proxy set trap
-                        if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                            let receiver = obj_val.clone();
-                            match self.proxy_set(o.id, &key, final_val.clone(), &receiver) {
-                                Ok(success) => {
-                                    if !success && env.borrow().strict {
-                                        return Completion::Throw(self.create_type_error(
-                                            &format!("Cannot assign to read only property '{key}'"),
-                                        ));
-                                    }
-                                    return Completion::Normal(final_val);
-                                }
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        // Module namespace [[Set]] always returns false (§10.4.6.5)
-                        if obj.borrow().module_namespace().is_some() {
-                            if env.borrow().strict {
-                                return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}' of object '[object Module]'"
-                            )));
-                            }
-                            return Completion::Normal(final_val);
-                        }
-                        // Check for setter — only own properties (prototype chain walked below with proxy support)
-                        let desc = obj.borrow().get_own_property_full(&key);
-                        if let Some(ref d) = desc
-                            && let Some(ref setter) = d.set
-                            && !(setter).is_undefined()
-                        {
-                            let setter = setter.clone();
-                            let this = obj_val.clone();
-                            return match self.call_function(
-                                &setter,
-                                &this,
-                                std::slice::from_ref(&final_val),
-                            ) {
-                                Completion::Normal(_) => Completion::Normal(final_val),
-                                other => other,
-                            };
-                        }
-                        if desc
-                            .as_ref()
-                            .map(|d| d.is_accessor_descriptor())
-                            .unwrap_or(false)
-                        {
-                            if env.borrow().strict {
-                                return Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot set property '{key}' which has only a getter"
-                                )));
-                            }
-                            return Completion::Normal(final_val);
-                        }
-                        // TypedArray [[Set]]: ToNumber/ToBigInt before index check
-                        {
-                            let is_ta = obj.borrow().typed_array_info().is_some();
-                            if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
-                                let is_bigint = obj
-                                    .borrow()
-                                    .typed_array_info()
-                                    .map(|ta| ta.kind.is_bigint())
-                                    .unwrap_or(false);
-                                // Convert value first (may throw)
-                                let num_val = if is_bigint {
-                                    match self.to_bigint_value(&final_val) {
-                                        Ok(v) => v,
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                } else {
-                                    match self.to_number_value(&final_val) {
-                                        Ok(n) => JsValue::number(n),
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                };
-                                let obj_ref = obj.borrow();
-                                let ta = obj_ref.typed_array_info().unwrap();
-                                if is_valid_integer_index(ta, index) {
-                                    let ta_clone = ta.clone();
-                                    drop(obj_ref);
-                                    typed_array_set_index(&ta_clone, index as usize, &num_val);
-                                }
-                                return Completion::Normal(final_val);
-                            }
-                        }
-                        // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
-                        if !obj.borrow().has_own_property(&key) {
-                            let mut proto_opt = obj.borrow().prototype_id;
-                            while let Some(proto_rc) = proto_opt {
-                                let proto_id = proto_rc;
-                                // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
-                                {
-                                    let proto_borrow =
-                                        self.get_object_cell_expect(proto_rc).borrow();
-                                    if let Some(ta) = proto_borrow.typed_array_info()
-                                        && let Some(index) = canonical_numeric_index_string(&key)
-                                        && !is_valid_integer_index(ta, index)
-                                    {
-                                        return Completion::Normal(final_val);
-                                    }
-                                    // Valid index: fall through to data descriptor path below
-                                }
-                                if self.has_proxy_in_prototype_chain(proto_id) {
-                                    let receiver = obj_val.clone();
-                                    match self.proxy_set(
-                                        proto_id,
-                                        &key,
-                                        final_val.clone(),
-                                        &receiver,
-                                    ) {
-                                        Ok(success) => {
-                                            if !success && env.borrow().strict {
-                                                return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot assign to read only property '{key}'"
-                                                ),
-                                            ));
-                                            }
-                                            return Completion::Normal(final_val);
-                                        }
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                }
-                                let proto_id = proto_rc;
-                                let inherited = self.get_property_descriptor_on_id(proto_id, &key);
-                                if let Some(ref inherited_desc) = inherited {
-                                    if inherited_desc.is_data_descriptor() {
-                                        if inherited_desc.writable == Some(false) {
-                                            if env.borrow().strict {
-                                                return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot assign to read only property '{key}' of object '#<Object>'"
-                                                ),
-                                            ));
-                                            }
-                                            return Completion::Normal(final_val);
-                                        }
-                                        break;
-                                    }
-                                    if inherited_desc.is_accessor_descriptor() {
-                                        if let Some(ref setter) = inherited_desc.set
-                                            && !(setter).is_undefined()
-                                        {
-                                            let setter = setter.clone();
-                                            let this = obj_val.clone();
-                                            return match self.call_function(
-                                                &setter,
-                                                &this,
-                                                std::slice::from_ref(&final_val),
-                                            ) {
-                                                Completion::Normal(_) => {
-                                                    Completion::Normal(final_val)
-                                                }
-                                                other => other,
-                                            };
-                                        }
-                                        if env.borrow().strict {
-                                            return Completion::Throw(self.create_type_error(
-                                            &format!(
-                                                "Cannot set property '{key}' which has only a getter"
-                                            ),
-                                        ));
-                                        }
-                                        return Completion::Normal(final_val);
-                                    }
-                                    break;
-                                }
-                                proto_opt =
-                                    self.get_object_cell_expect(proto_rc).borrow().prototype_id;
-                            }
-                        }
-                        // ArraySetLength §10.4.2.4 via [[Set]]
-                        if key.eq_str("length") && obj.borrow().class_name == "Array" {
-                            let desc = PropertyDescriptor {
-                                value: Some(final_val.clone()),
-                                writable: None,
-                                enumerable: None,
-                                configurable: None,
-                                get: None,
-                                set: None,
-                            };
-                            match self.array_set_length(o.id as usize, desc) {
-                                Ok(success) => {
-                                    if !success && env.borrow().strict {
-                                        return Completion::Throw(self.create_type_error(
-                                            "Cannot assign to read only property 'length'",
-                                        ));
-                                    }
-                                    let obj_rc = self.get_object_cell(o.id).unwrap();
-                                    let len_val = obj_rc
-                                        .borrow()
-                                        .properties
-                                        .get("length")
-                                        .and_then(|d| d.value.clone())
-                                        .unwrap_or(JsValue::number(0.0));
-                                    return Completion::Normal(len_val);
-                                }
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        self.gc_write_barrier_value(&obj, &final_val);
-                        let success = obj
-                            .borrow_mut_untracked()
-                            .set_property_value(&key, final_val.clone());
-                        if !success && env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}'"
-                            )));
-                        }
-                        if success && let Some(key) = key.as_str() {
-                            self.sync_global_object_binding(o.id, key, &final_val);
-                        }
-                        return Completion::Normal(final_val);
                     }
-                    // Primitive base: ToObject(base).[[Set]](key, val, primitiveBase)
-                    // Per §6.2.5.6 PutValue + §10.1.9.2 OrdinarySet:
-                    // The receiver is the original primitive. If a setter exists in
-                    // the prototype chain, call it. Otherwise [[Set]] returns false
-                    // (can't create own property on primitive receiver), so strict
-                    // mode throws TypeError and sloppy silently returns.
-                    let final_val = if op == AssignOp::Assign {
-                        rval
-                    } else {
-                        match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        }
-                    };
                     let strict = env.borrow().strict;
-                    let wrapper = match self.to_object(&obj_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(final_val),
+                    let succeeded = match self.set_object_with_key_result(
+                        obj_val.clone(),
+                        &key,
+                        final_val.clone(),
+                        false,
+                    ) {
+                        Ok(succeeded) => succeeded,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    if let Some(o) = (wrapper)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        // Walk prototype chain looking for setter or proxy set trap
-                        let desc = self.get_property_descriptor_on_id(o.id, &key);
-                        if let Some(ref d) = desc
-                            && let Some(ref setter) = d.set
-                            && !(setter).is_undefined()
-                        {
-                            let setter = setter.clone();
-                            return match self.call_function(
-                                &setter,
-                                &obj_val,
-                                std::slice::from_ref(&final_val),
-                            ) {
-                                Completion::Normal(_) => Completion::Normal(final_val),
-                                other => other,
-                            };
-                        }
-                        // Check for proxy in prototype chain
-                        if let Some(obj) = self.get_object_cell(o.id) {
-                            let mut proto_opt = obj.borrow().prototype_id;
-                            while let Some(proto_rc) = proto_opt {
-                                let proto_id = proto_rc;
-                                if self.get_proxy_info(proto_id).is_some() {
-                                    match self.proxy_set(
-                                        proto_id,
-                                        &key,
-                                        final_val.clone(),
-                                        &obj_val,
-                                    ) {
-                                        Ok(success) => {
-                                            if !success && strict {
-                                                return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot create property '{key}' on {obj_val}"
-                                                ),
-                                            ));
-                                            }
-                                            return Completion::Normal(final_val);
-                                        }
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                }
-                                proto_opt =
-                                    self.get_object_cell_expect(proto_rc).borrow().prototype_id;
-                            }
-                        }
+                    if !succeeded && strict {
+                        return Completion::Throw(self.member_assignment_error(&obj_val, &key));
                     }
-                    // No setter found — [[Set]] returns false for primitive receiver
-                    if strict {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot create property '{key}' on {obj_val}"
-                        )));
+                    if succeeded
+                        && let Some(obj_id) = obj_val.as_object_id()
+                        && let Some(key) = key.as_str()
+                    {
+                        self.sync_global_object_binding(obj_id, key, &final_val);
                     }
                     Completion::Normal(final_val)
                 })();
@@ -3932,111 +3564,11 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Write back (boxed_obj is already the ToObject result)
-                if let Some(o) = (boxed_obj)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(obj) = self.get_object_cell(o.id)
+                let strict = env.borrow().strict;
+                if let Err(e) =
+                    self.set_object_with_key(obj_val.clone(), &key, rval.clone(), strict)
                 {
-                    if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                        let receiver = boxed_obj.clone();
-                        match self.proxy_set(o.id, &key, rval.clone(), &receiver) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Completion::Normal(rval);
-                            }
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    let desc = self.get_property_descriptor_on_id(o.id, &key);
-                    if let Some(ref d) = desc
-                        && let Some(ref setter) = d.set
-                        && !(setter).is_undefined()
-                    {
-                        let setter = setter.clone();
-                        let this = boxed_obj.clone();
-                        return match self.call_function(&setter, &this, std::slice::from_ref(&rval))
-                        {
-                            Completion::Normal(_) => Completion::Normal(rval),
-                            other => other,
-                        };
-                    }
-                    if desc
-                        .as_ref()
-                        .map(|d| d.is_accessor_descriptor())
-                        .unwrap_or(false)
-                    {
-                        if env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot set property '{key}' which has only a getter"
-                            )));
-                        }
-                        return Completion::Normal(rval);
-                    }
-                    if !obj.borrow().has_own_property(&key) {
-                        let proto = obj.borrow().prototype_id;
-                        if let Some(proto_rc) = proto {
-                            let proto_id = proto_rc;
-                            if self.has_proxy_in_prototype_chain(proto_id) {
-                                let receiver = boxed_obj.clone();
-                                match self.proxy_set(proto_id, &key, rval.clone(), &receiver) {
-                                    Ok(success) => {
-                                        if !success && env.borrow().strict {
-                                            return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot assign to read only property '{key}'"
-                                                ),
-                                            ));
-                                        }
-                                        return Completion::Normal(rval);
-                                    }
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
-                        }
-                    }
-                    // ArraySetLength §10.4.2.4 via [[Set]]
-                    if key.eq_str("length") && obj.borrow().class_name == "Array" {
-                        let desc = PropertyDescriptor {
-                            value: Some(rval.clone()),
-                            writable: None,
-                            enumerable: None,
-                            configurable: None,
-                            get: None,
-                            set: None,
-                        };
-                        match self.array_set_length(o.id as usize, desc) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(
-                                        "Cannot assign to read only property 'length'",
-                                    ));
-                                }
-                                let obj_rc = self.get_object_cell(o.id).unwrap();
-                                let len_val = obj_rc
-                                    .borrow()
-                                    .properties
-                                    .get("length")
-                                    .and_then(|d| d.value.clone())
-                                    .unwrap_or(JsValue::number(0.0));
-                                return Completion::Normal(len_val);
-                            }
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    self.gc_write_barrier_value(obj, &rval);
-                    let success = obj
-                        .borrow_mut_untracked()
-                        .set_property_value(&key, rval.clone());
-                    if !success && env.borrow().strict {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot assign to read only property '{key}'"
-                        )));
-                    }
+                    return Completion::Throw(e);
                 }
                 Completion::Normal(rval)
             }
@@ -4171,7 +3703,17 @@ impl Interpreter {
         val: JsValue,
         strict: bool,
     ) -> Result<(), JsValue> {
-        let key = key.to_js_property_key();
+        self.set_object_with_key_result(obj_val, key, val, strict)
+            .map(|_| ())
+    }
+
+    fn set_object_with_key_result<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_val: JsValue,
+        key: &K,
+        val: JsValue,
+        strict: bool,
+    ) -> Result<bool, JsValue> {
         // §6.2.5.6 PutValue: [[Set]] is invoked on ToObject(base), but the
         // receiver argument stays the original base value. For a primitive
         // base that means the receiver is never an object, so OrdinarySet's
@@ -4183,7 +3725,7 @@ impl Interpreter {
             match self.to_object(&obj_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => return Ok(()),
+                _ => return Ok(true),
             }
         } else {
             obj_val
@@ -4193,18 +3735,34 @@ impl Interpreter {
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
         else {
-            return Ok(());
+            return Ok(true);
         };
-        let obj_id = o.id;
+        self.put_value_to_property(o.id, key, val, &receiver, strict)
+    }
+
+    /// Property-Reference branch of §6.2.5.6 PutValue after ToObject and
+    /// ToPropertyKey have identified the [[Set]] holder and property key.
+    ///
+    /// `receiver` is GetThisValue(reference): the original base for an
+    /// ordinary member Reference and the actual `this` for a Super Reference.
+    fn put_value_to_property<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base_id: u64,
+        key: &K,
+        val: JsValue,
+        receiver: &JsValue,
+        strict: bool,
+    ) -> Result<bool, JsValue> {
+        let key = key.to_js_property_key();
         // Delegate to the canonical [[Set]] entry point: proxy `set` trap,
         // module-namespace reject, TypedArray integer-index set, accessor
         // setters, and the OrdinarySet prototype-chain walk all live in
         // `property.rs`.
-        let success = self.set_object_property(obj_id, &key, val, &receiver)?;
+        let success = self.set_object_property(base_id, &key, val, receiver)?;
         if !success && strict {
-            return Err(self.read_only_assignment_error(obj_id, &key));
+            return Err(self.read_only_assignment_error(base_id, &key));
         }
-        Ok(())
+        Ok(success)
     }
 
     /// Builds the strict-mode TypeError for a rejected [[Set]] on `obj_id`,
@@ -4235,6 +3793,38 @@ impl Interpreter {
             ));
         }
         self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
+    }
+
+    /// Preserve the host-compatible diagnostics historically produced by the
+    /// plain member-assignment dispatcher after canonical [[Set]] rejects.
+    /// The rejection itself and all observable descriptor/proxy work have
+    /// already happened inside `property.rs`; this only formats the TypeError.
+    fn member_assignment_error(&mut self, base: &JsValue, key: &JsPropertyKey) -> JsValue {
+        let Some(obj_id) = base.as_object_id() else {
+            return self.create_type_error(&format!("Cannot create property '{key}' on {base}"));
+        };
+        let Some(cell) = self.get_object_cell(obj_id) else {
+            return self.create_type_error(&format!("Cannot assign to read only property '{key}'"));
+        };
+        if cell.borrow().module_namespace().is_some() {
+            return self.create_type_error(&format!(
+                "Cannot assign to read only property '{key}' of object '[object Module]'"
+            ));
+        }
+        let is_proxy = cell.borrow().is_proxy() || cell.borrow().is_proxy_revoked();
+        let has_own = cell.borrow().has_own_property(key);
+        if !is_proxy
+            && !has_own
+            && !self.has_proxy_in_prototype_chain(obj_id)
+            && self
+                .get_property_descriptor_on_id(obj_id, key)
+                .is_some_and(|desc| desc.is_data_descriptor() && desc.writable == Some(false))
+        {
+            return self.create_type_error(&format!(
+                "Cannot assign to read only property '{key}' of object '#<Object>'"
+            ));
+        }
+        self.read_only_assignment_error(obj_id, key)
     }
 
     fn set_member_property(
@@ -8361,8 +7951,7 @@ impl Interpreter {
         None
     }
 
-    /// OrdinarySet (§10.1.9) starting at `base_id` with a separate `receiver`.
-    /// Used for super property assignment: `super[key] = val`.
+    /// PutValue for a Super Reference, whose [[Set]] holder and receiver differ.
     fn super_set_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         base_id: u64,
@@ -8371,126 +7960,9 @@ impl Interpreter {
         receiver: &JsValue,
         strict: bool,
     ) -> Completion {
-        let key = key.to_js_property_key();
-        // Find the property descriptor starting from base_id, walking prototype chain.
-        // If we encounter a Proxy, delegate to proxy_set.
-        let mut current_id = Some(base_id);
-        let mut desc: Option<PropertyDescriptor> = None;
-        while let Some(id) = current_id {
-            if self.get_proxy_info(id).is_some() {
-                match self.proxy_set(id, &key, val.clone(), receiver) {
-                    Ok(success) => {
-                        if !success && strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot set property '{key}' on proxy"
-                            )));
-                        }
-                        return Completion::Normal(val);
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            if let Some(obj) = self.get_object_cell(id) {
-                desc = obj.borrow().get_own_property_full(&key);
-                if desc.is_some() {
-                    break;
-                }
-                current_id = obj.borrow().prototype_id.as_ref().copied();
-            } else {
-                break;
-            }
-        }
-
-        match &desc {
-            Some(d) if d.is_accessor_descriptor() => {
-                if let Some(ref setter) = d.set
-                    && !(setter).is_undefined()
-                {
-                    let setter = setter.clone();
-                    let recv = receiver.clone();
-                    return match self.call_function(&setter, &recv, std::slice::from_ref(&val)) {
-                        Completion::Normal(_) => Completion::Normal(val),
-                        other => other,
-                    };
-                }
-                if strict {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot set property '{key}' which has only a getter"
-                    )));
-                }
-                Completion::Normal(val)
-            }
-            Some(d) if d.is_data_descriptor() && d.writable == Some(false) => {
-                if strict {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot assign to read only property '{key}'"
-                    )));
-                }
-                Completion::Normal(val)
-            }
-            _ => {
-                // §10.1.9.2 OrdinarySetWithOwnDescriptor: set on Receiver
-                if let Some(o) = (receiver)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(obj) = self.get_object_cell(o.id)
-                {
-                    // Module namespace exotic receiver (§10.4.6):
-                    // OrdinarySetWithOwnDescriptor calls Receiver.[[GetOwnProperty]] before
-                    // attempting [[DefineOwnProperty]]. For a module namespace, that
-                    // [[GetOwnProperty]] (a) triggers deferred-module evaluation for
-                    // non-symbol-like keys, and (b) throws ReferenceError if the export
-                    // binding is uninitialized (TDZ). After both checks pass, [[Set]]
-                    // returns false (TypeError in strict).
-                    let is_ns = obj.borrow().module_namespace().is_some();
-                    if is_ns {
-                        if let Err(e) = self.check_namespace_tdz(o.id, &key) {
-                            return Completion::Throw(e);
-                        }
-                        if strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}' of module namespace"
-                            )));
-                        }
-                        return Completion::Normal(val);
-                    }
-                    let existing = obj.borrow().get_own_property_full(&key);
-                    match &existing {
-                        Some(ed) if ed.is_accessor_descriptor() => {
-                            if strict {
-                                return Completion::Throw(
-                                    self.create_type_error(&format!("Cannot set property '{key}'")),
-                                );
-                            }
-                            return Completion::Normal(val);
-                        }
-                        Some(ed) if ed.writable == Some(false) => {
-                            if strict {
-                                return Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot assign to read only property '{key}'"
-                                )));
-                            }
-                            return Completion::Normal(val);
-                        }
-                        Some(_) => {
-                            let _ = obj.borrow_mut().set_property_value(&key, val.clone());
-                        }
-                        None => {
-                            // CreateDataProperty: checks extensibility
-                            if !obj.borrow().extensible {
-                                if strict {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot add property '{key}', object is not extensible"
-                                    )));
-                                }
-                                return Completion::Normal(val);
-                            }
-                            let _ = obj.borrow_mut().set_property_value(&key, val.clone());
-                        }
-                    }
-                }
-                Completion::Normal(val)
-            }
+        match self.put_value_to_property(base_id, key, val.clone(), receiver, strict) {
+            Ok(_) => Completion::Normal(val),
+            Err(e) => Completion::Throw(e),
         }
     }
 

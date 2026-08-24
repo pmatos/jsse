@@ -907,6 +907,16 @@ impl Interpreter {
             // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
             // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
             if let Some(recv_id) = receiver.as_object_id() {
+                // Module namespace exotic [[GetOwnProperty]] triggers deferred
+                // evaluation / TDZ checks before its [[DefineOwnProperty]]
+                // necessarily rejects the new data property.
+                let is_module_namespace_recv = self
+                    .get_object_cell(recv_id)
+                    .is_some_and(|o| o.borrow().module_namespace().is_some());
+                if is_module_namespace_recv {
+                    self.check_namespace_tdz(recv_id, key)?;
+                    return Ok(false);
+                }
                 let is_proxy_recv = self
                     .get_object_cell(recv_id)
                     .is_some_and(|o| o.borrow().is_proxy() || o.borrow().is_proxy_revoked());
