@@ -32,6 +32,34 @@ async function nestedDisposalErrors() {
   }
 }
 
+var throwingCloseIterator = {
+  done: false,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    if (this.done) {
+      return { value: undefined, done: true };
+    }
+    this.done = true;
+    return { value: 1, done: false };
+  },
+  return: function () {
+    throw 'close';
+  }
+};
+
+async function closeFailureEscapesExitedCatch() {
+  for (const value of throwingCloseIterator) {
+    try {
+      await null;
+      return value;
+    } catch (error) {
+      return 'incorrectly caught ' + error;
+    }
+  }
+}
+
 nestedDisposalErrors()
   .then(
     function () {
@@ -41,6 +69,17 @@ nestedDisposalErrors()
       assert(error instanceof SuppressedError, 'outer disposal creates a SuppressedError');
       assert.sameValue(error.error, 'outer', 'outer disposal error is the primary error');
       assert.sameValue(error.suppressed, 'inner', 'inner disposal error is suppressed');
+    }
+  )
+  .then(function () {
+    return closeFailureEscapesExitedCatch();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('iterator close failure resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'close', 'an exited catch cannot handle IteratorClose failure');
     }
   )
   .then($DONE, $DONE);

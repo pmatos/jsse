@@ -8341,9 +8341,16 @@ impl Interpreter {
         // abrupt completion from a disposer or an iterator `return` method.
         macro_rules! unwind_for_of {
             ($from:expr) => {
+                let unwind_from = $from;
+                // Handlers entered inside the outermost loop being left have
+                // already completed before IteratorClose runs. A close error
+                // must not route back into one of those exited handlers.
+                if let Some(loop_state) = for_of_stack.get(unwind_from) {
+                    try_stack.truncate(loop_state.try_depth);
+                }
                 match self.unwind_async_for_of_loops(
                     &mut for_of_stack,
-                    $from,
+                    unwind_from,
                     &func_env,
                     Completion::Empty,
                 ) {
