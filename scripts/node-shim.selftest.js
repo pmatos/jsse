@@ -1176,11 +1176,7 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "[ 1, z: [Getter] ]",
     "inspect renders array extra getters from descriptors"
   );
-  eq(
-    namedArrayGetterCalls,
-    0,
-    "inspect does not invoke array extra getters"
-  );
+  eq(namedArrayGetterCalls, 0, "inspect does not invoke array extra getters");
   var arrayWithNumericNames = [];
   arrayWithNumericNames["4294967295"] = "max";
   arrayWithNumericNames["-0"] = "minus";

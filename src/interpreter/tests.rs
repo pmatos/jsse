@@ -3561,37 +3561,47 @@ mod node_host_tests {
         assert_node_ok(
             r#"
             let getterCalls = 0;
-            const a = new Array(100000).fill(1);
-            a.z = 2;
-            Object.defineProperty(a, "getter", {
-              get() { getterCalls++; throw new Error("named getter ran"); },
-              enumerable: true,
-              configurable: true,
-            });
-            Object.defineProperty(a, "hidden", {
-              value: 3,
-              enumerable: false,
-              configurable: true,
-            });
-            Object.defineProperty(a, "2", {
-              get() { getterCalls++; throw new Error("index getter ran"); },
-              enumerable: true,
-              configurable: true,
-            });
-            a["4294967295"] = "max";
-            a["-0"] = "minus";
-            Object.defineProperty(a, "+1", {
-              value: "plus",
-              enumerable: true,
-              configurable: true,
-            });
-            a["01"] = "leading";
-            a["1e0"] = "exponential";
-            a[Symbol("marker")] = 4;
+            // The two Array storage shapes must agree. An Array literal mirrors
+            // every dense index into property_order, so it exercises the index
+            // filter; `new Array(n).fill(v)` keeps them out, so it exercises the
+            // empty-scan path. Only the literal has indices to filter.
+            const builders = {
+              literal: () => [1, 2, 3, 4, 5],
+              fill: () => new Array(5).fill(1),
+            };
+            for (const [shape, build] of Object.entries(builders)) {
+              const a = build();
+              a.z = 2;
+              Object.defineProperty(a, "getter", {
+                get() { getterCalls++; throw new Error("named getter ran"); },
+                enumerable: true,
+                configurable: true,
+              });
+              Object.defineProperty(a, "hidden", {
+                value: 3,
+                enumerable: false,
+                configurable: true,
+              });
+              Object.defineProperty(a, "2", {
+                get() { getterCalls++; throw new Error("index getter ran"); },
+                enumerable: true,
+                configurable: true,
+              });
+              a["4294967295"] = "max";
+              a["-0"] = "minus";
+              Object.defineProperty(a, "+1", {
+                value: "plus",
+                enumerable: true,
+                configurable: true,
+              });
+              a["01"] = "leading";
+              a["1e0"] = "exponential";
+              a[Symbol("marker")] = 4;
 
-            const keys = __host_array_extra_keys(a);
-            if (keys.join(",") !== "z,getter,4294967295,-0,+1,01,1e0") {
-              throw new Error("wrong keys: " + keys.join(","));
+              const keys = __host_array_extra_keys(a);
+              if (keys.join(",") !== "z,getter,4294967295,-0,+1,01,1e0") {
+                throw new Error(shape + " wrong keys: " + keys.join(","));
+              }
             }
             if (getterCalls !== 0) throw new Error("getter invoked");
             if (__host_array_extra_keys({ z: 1 }).length !== 0) {
@@ -3600,7 +3610,7 @@ mod node_host_tests {
             if (__host_array_extra_keys(1).length !== 0) {
               throw new Error("primitive accepted");
             }
-            "#,
+"#,
         );
     }
 

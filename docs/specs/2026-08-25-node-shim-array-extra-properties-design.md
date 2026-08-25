@@ -17,12 +17,12 @@ internal method is `[[DefineOwnProperty]]`. The resulting string keys place
 array indices first in numeric order and other strings in property-creation
 order.
 
-JSSE issue #516 records that `Object.keys` correctly enumerates indices and
-named properties on dynamically populated Arrays even though the currently
-unmerged `Object.getOwnPropertyNames`/bare `Reflect.ownKeys` fix is still in
-PR #520. It is functionally reliable, but enumerating it after the existing
-100-index probe would materialize every dense index key and undo the cap's
-runtime benefit.
+`Object.keys` correctly enumerates indices and named properties on dynamically
+populated Arrays; JSSE issue #516 recorded that `Object.getOwnPropertyNames` and
+bare `Reflect.ownKeys` did not, and PR #520 has since fixed them. Availability is
+therefore not the constraint — cost is. Enumerating any of the three after the
+existing 100-index probe would materialize every dense index key and undo the
+cap's runtime benefit.
 
 ## Approaches considered
 
@@ -32,13 +32,16 @@ runtime benefit.
    no values, so the rendered output stays bounded by the 100-index cap. The
    shim still reads values only from ordinary own descriptor objects.
 
-   The *scan* is not equally bounded, because the two Array population paths
-   store indices asymmetrically. `new Array(n).fill(v)` keeps dense indices out
-   of `property_order`, so the hook is O(named descriptors) there; but
-   `create_array` / `create_array_with_holes` (`src/interpreter/builtins/array.rs`)
-   `insert_value` every present index, so an Array *literal* carries all `n`
-   indices in `property_order` and the hook scans them to discard them. Measured
-   at 200,000 elements, 20 inspections: 56 ms with the hook versus 21 ms without
+   The *scan* is not equally bounded, because the Array population paths store
+   indices asymmetrically. `new Array(n).fill(v)` and plain index assignment keep
+   dense indices out of `property_order`, so the hook is O(named descriptors)
+   there; but `create_array` / `create_array_with_holes`
+   (`src/interpreter/builtins/array.rs`) `insert_value` every present index, so
+   the Array carries all `n` indices in `property_order` and the hook scans them
+   to discard them. That path is the common case, not a niche one: it backs
+   literals *and* `.map`, `.slice`, `.filter`, `.concat`, `Array.from`,
+   `String.prototype.split`, `Object.keys`, and `JSON.parse`. Measured at
+   200,000 elements, 20 inspections: 56 ms with the hook versus 21 ms without
    for a literal, against 21 ms versus 15 ms for the `fill` form — about 1.75 ms
    per inspection of a 200k literal. That is a linear key scan, a much smaller
    cost class than the superlinear rendering PR #518 capped, and bounding it
@@ -50,11 +53,12 @@ runtime benefit.
    unwrapping, but rejected on measured performance: inspecting 100,000 filled
    elements took 0.34--0.38 seconds versus about 0.01 seconds on the capped
    `origin/main` implementation (a no-inspect control took about 0.02 seconds).
-3. Depend on PR #520 and enumerate `Reflect.ownKeys` or
-   `Object.getOwnPropertyNames`. This offers a more general reflection seam but
-   couples this shim fix to an unmerged engine change. Both APIs also
+3. Enumerate `Reflect.ownKeys` or `Object.getOwnPropertyNames` (fixed by
+   PR #520). This offers a more general reflection seam, but both APIs
    materialize every index key before the shim can filter it, retaining the
-   dense-Array performance regression from approach 2.
+   dense-Array performance regression from approach 2. Now that #516 is closed
+   this is the approach most likely to be retried; the cost, not availability,
+   is what rules it out.
 
 ## Design
 

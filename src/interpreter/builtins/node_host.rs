@@ -196,43 +196,47 @@ impl Interpreter {
             "__host_array_extra_keys".to_string(),
             1,
             |interp, _this, args| {
-                let mut keys = Vec::new();
-                if let Some(obj_id) = args.first().and_then(JsValue::as_object_id)
-                    && let Some(obj) = interp.get_object_cell(obj_id)
-                {
-                    let obj = obj.borrow();
-                    if obj.array_elements().is_some() {
-                        for key in &obj.property_order {
-                            // Canonical array indices always begin with an
-                            // ASCII digit. Keep the guard explicit because the
-                            // engine-wide parser currently accepts a leading
-                            // `+`, while "+1" is a named property here.
-                            let is_array_index = key
-                                .as_bytes()
-                                .first()
-                                .is_some_and(|byte| byte.is_ascii_digit())
-                                && parse_array_index(key).is_some();
-                            if key.is_symbol() || is_array_index {
-                                continue;
-                            }
-                            // Same enumerability test as
-                            // `own_enumerable_keys_with_shadow` (which backs
-                            // Object.keys): an unset flag counts as
-                            // enumerable, so this hook and the shim's
-                            // Object.keys fallback cannot disagree.
-                            if obj
-                                .properties
-                                .get(key)
-                                .is_some_and(|desc| desc.enumerable != Some(false))
-                            {
-                                keys.push(JsValue::string(key.to_js_string()));
-                            }
-                        }
-                    }
-                }
+                let cell = args
+                    .first()
+                    .and_then(JsValue::as_object_id)
+                    .and_then(|obj_id| interp.get_object_cell(obj_id));
+                let keys = match cell {
+                    Some(cell) => array_extra_keys(&cell.borrow()),
+                    None => Vec::new(),
+                };
                 Completion::Normal(interp.create_array(keys))
             },
         ));
         self.install_host_global("__host_array_extra_keys", array_extra_keys_fn);
     }
+}
+
+/// An Array's own enumerable non-index string keys, in property-creation order.
+/// Non-Arrays have none. Reads descriptors only, so no getter runs.
+fn array_extra_keys(obj: &JsObjectData) -> Vec<JsValue> {
+    if obj.array_elements().is_none() {
+        return Vec::new();
+    }
+    let mut keys = Vec::new();
+    for key in &obj.property_order {
+        // Canonical array indices always begin with an ASCII digit. Keep the
+        // guard explicit because the engine-wide parser currently accepts a
+        // leading `+`, while "+1" is a named property here.
+        let is_array_index = key.as_bytes().first().is_some_and(u8::is_ascii_digit)
+            && parse_array_index(key).is_some();
+        if key.is_symbol() || is_array_index {
+            continue;
+        }
+        // Same enumerability test as `own_enumerable_keys_with_shadow` (which
+        // backs Object.keys): an unset flag counts as enumerable, so this hook
+        // and the shim's Object.keys fallback cannot disagree.
+        if obj
+            .properties
+            .get(key)
+            .is_some_and(|desc| desc.enumerable != Some(false))
+        {
+            keys.push(JsValue::string(key.to_js_string()));
+        }
+    }
+    keys
 }

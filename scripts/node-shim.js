@@ -654,12 +654,14 @@
     // the whole phase is guarded and degrades to no extra properties. Parts are
     // accumulated locally and returned only on success, so a throw mid-way
     // cannot leave the caller with a half-rendered tail.
-    function arrayExtraMembers(v, length, depth) {
-      if (hostArrayExtraKeys) return namedMembers(v, hostArrayExtraKeys(v), depth);
+    function arrayExtraMembers(v, truncated, depth) {
+      if (hostArrayExtraKeys) {
+        return namedMembers(v, hostArrayExtraKeys(v), depth);
+      }
       // Object.keys is a safe descriptor-only fallback for small Arrays, but it
-      // materializes every dense index key; skip it above the cap, where the
-      // index phase's truncation marker already stands in for the elements.
-      if (length > MAX_INSPECT_ARRAY_LENGTH) return [];
+      // materializes every dense index key; skip it when the element phase
+      // truncated, where its marker already stands in for the elements.
+      if (truncated) return [];
       try {
         return namedMembers(v, objectKeys(v), depth);
       } catch (e) {
@@ -683,10 +685,11 @@
     // through Array.prototype (which could invoke an inherited getter).
     // Keep descriptor probes bounded even for enormous sparse arrays. The
     // O(elements) own-index-key form needed for Node-exact sparse truncation is
-    // blocked on jsse#516 (Object.getOwnPropertyNames/Reflect.ownKeys omit
-    // index keys assigned after array creation). Object.keys is reliable here,
-    // but cannot replace the descriptor probes because it omits non-enumerable
-    // array elements; use it only for Node-visible extra named properties.
+    // rejected on cost, not availability: Object.getOwnPropertyNames and
+    // Reflect.ownKeys both materialize every present index key before the shim
+    // can filter, which would undo this cap. Object.keys is reliable here, but
+    // has that same cost and omits non-enumerable array elements besides; use
+    // it only for Node-visible extra named properties, below the cap.
     function renderArray(v, depth) {
       var length = ownDataValue(v, "length");
       if (typeof length !== "number" || length < 0) return "[]";
@@ -719,7 +722,7 @@
           "... " + remaining + " more item" + (remaining === 1 ? "" : "s")
         );
       }
-      var extras = arrayExtraMembers(v, length, depth);
+      var extras = arrayExtraMembers(v, renderLength < length, depth);
       for (var e = 0; e < extras.length; e++) arrayPush(parts, extras[e]);
       if (!parts.length) return "[]";
       return "[ " + arrayJoin(parts, ", ") + " ]";
