@@ -72,10 +72,12 @@ the Unicode form instead of performing another pass. `RegexInput` also retains
 the ASCII classification so byte/UTF-16 offset conversion does not rediscover
 it by scanning the complete subject on every exec.
 
-Compiled-pattern cache key redesign and non-ASCII byte-offset maps are excluded
-from this slice. Pattern keys are normally small and do not account for the
-full-subject O(n) passes. Offset mapping is a separate representation question
-that is unnecessary for the reported ASCII tokenizer workload.
+Compiled-pattern cache key redesign is excluded from this slice. Pattern keys
+are normally small and do not account for the full-subject O(n) passes. A lazy
+non-ASCII Unicode boundary map is included for correctness: it translates
+backend byte offsets through the retained UTF-16 subject without confusing a
+genuine U+F0000-U+F07FF scalar with the same scalar used as a lone-surrogate
+sentinel. ASCII subjects return offsets directly and never allocate the map.
 
 ## Correctness and failure behavior
 
@@ -88,7 +90,9 @@ before matching in their existing order.
 
 UTF-16 offsets, rather than backend byte offsets, are retained for Annex B
 contexts. This preserves lone surrogates and makes context materialization
-independent of which regex backend produced the match.
+independent of which regex backend produced the match. Unicode-mode offsets are
+looked up in boundaries derived from the original UTF-16 subject, not inferred
+from the ambiguous converted Unicode form.
 
 Each lazy form is built from the retained UTF-16 code units, never derived from
 another form. The PUA encoding of lone surrogates is not injective: U+F0000 is a
@@ -104,7 +108,8 @@ encoding itself causes are tracked separately and are unchanged by this slice.
 - Add unit coverage proving repeated use of the same `JsString` returns the
   identical cached `RegexInput`, while a distinct backing allocation misses.
 - Add semantic coverage for lazy Annex B input/contexts, including an input
-  setter after a match and lone-surrogate slicing.
+  setter after a match, lone-surrogate slicing, and genuine supplementary PUA
+  scalars on both sides of a match.
 - Re-run the release sticky-scan measurement and require a doubling ratio near
   linear, with a large absolute improvement over the recorded baseline.
 - Run custom tests, the official built-in RegExp and Annex B RegExp test262

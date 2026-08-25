@@ -71,25 +71,6 @@ fn byte_offset_to_utf16(s: &str, byte_offset: usize) -> usize {
     utf16_offset
 }
 
-/// Byte offset to UTF-16 offset, counting every char by its real UTF-16 length.
-/// Correct for a Unicode-mode view whose subject holds no lone surrogate, where
-/// a char in the PUA sentinel range is a genuine supplementary scalar.
-fn byte_offset_to_utf16_scalar(s: &str, byte_offset: usize) -> usize {
-    s[..byte_offset].chars().map(char::len_utf16).sum()
-}
-
-/// The inverse of `byte_offset_to_utf16_scalar`.
-fn utf16_to_byte_offset_scalar(s: &str, utf16_offset: usize) -> usize {
-    let mut utf16_count = 0;
-    for (byte_idx, c) in s.char_indices() {
-        if utf16_count >= utf16_offset {
-            return byte_idx;
-        }
-        utf16_count += c.len_utf16();
-    }
-    s.len()
-}
-
 /// Convert a UTF-16 code unit offset to a byte offset in a UTF-8 string
 fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
     if s.is_ascii() {
@@ -115,28 +96,6 @@ fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
 const SURROGATE_START: u32 = 0xD800;
 const SURROGATE_END: u32 = 0xDFFF;
 const SURROGATE_PUA_BASE: u32 = 0xF0000;
-
-/// True when `code_units` holds a surrogate that Unicode-mode conversion maps to
-/// a PUA sentinel rather than combining into a supplementary scalar. Mirrors the
-/// pairing rule in `js_string_to_regex_input_mode`.
-fn subject_has_lone_surrogate(code_units: &[u16]) -> bool {
-    let mut i = 0;
-    while i < code_units.len() {
-        let cu = code_units[i];
-        if (0xD800..=0xDBFF).contains(&cu) {
-            if i + 1 < code_units.len() && (0xDC00..=0xDFFF).contains(&code_units[i + 1]) {
-                i += 2;
-                continue;
-            }
-            return true;
-        }
-        if (0xDC00..=0xDFFF).contains(&cu) {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
 
 fn pua_aware_utf16_len(s: &str) -> usize {
     s.chars()
@@ -426,9 +385,15 @@ struct RegexInput {
     subject: JsString,
     unicode: Rc<str>,
     ascii: bool,
-    lone_surrogate: bool,
     non_unicode: std::cell::OnceCell<Rc<str>>,
+    unicode_boundaries: std::cell::OnceCell<Vec<RegexInputBoundary>>,
     wtf8: std::cell::OnceCell<Rc<[u8]>>,
+}
+
+#[derive(Clone, Copy)]
+struct RegexInputBoundary {
+    byte: usize,
+    utf16: usize,
 }
 
 impl RegexInput {
@@ -441,13 +406,12 @@ impl RegexInput {
                 .set(Rc::clone(&unicode))
                 .expect("new OnceCell must be empty");
         }
-        let lone_surrogate = !ascii && subject_has_lone_surrogate(&subject.code_units);
         Self {
             subject,
             unicode,
             ascii,
-            lone_surrogate,
             non_unicode,
+            unicode_boundaries: std::cell::OnceCell::new(),
             wtf8: std::cell::OnceCell::new(),
         }
     }
@@ -472,17 +436,65 @@ impl RegexInput {
             .as_ref()
     }
 
-    /// `unicode_view` says which representation `input` is, because the PUA
-    /// sentinel range is only ambiguous in the Unicode one. The non-Unicode view
-    /// maps every surrogate code unit to its own sentinel char, so PUA-aware
-    /// counting is always right there. In the Unicode view a valid surrogate
-    /// pair becomes one char, so a PUA-range char is a genuine two-code-unit
-    /// scalar unless the subject also holds a lone surrogate.
+    fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
+        self.unicode_boundaries.get_or_init(|| {
+            let code_units = &self.subject.code_units;
+            let mut boundaries = Vec::with_capacity(code_units.len() + 1);
+            let mut byte = 0;
+            let mut utf16 = 0;
+            boundaries.push(RegexInputBoundary { byte, utf16 });
+
+            while utf16 < code_units.len() {
+                let code_unit_count = if (0xD800..=0xDBFF).contains(&code_units[utf16])
+                    && utf16 + 1 < code_units.len()
+                    && (0xDC00..=0xDFFF).contains(&code_units[utf16 + 1])
+                {
+                    2
+                } else {
+                    1
+                };
+                let encoded = self.unicode[byte..]
+                    .chars()
+                    .next()
+                    .expect("each UTF-16 character must have a regex input character");
+                byte += encoded.len_utf8();
+                utf16 += code_unit_count;
+                boundaries.push(RegexInputBoundary { byte, utf16 });
+            }
+
+            debug_assert_eq!(byte, self.unicode.len());
+            boundaries
+        })
+    }
+
+    fn unicode_utf16_to_byte_offset(&self, offset: usize) -> usize {
+        let target = offset.min(self.subject.len());
+        let boundaries = self.unicode_boundaries();
+        match boundaries.binary_search_by_key(&target, |boundary| boundary.utf16) {
+            Ok(index) => boundaries[index].byte,
+            // A UTF-16 index within a surrogate pair refers to the character
+            // that starts at the preceding code-unit boundary.
+            Err(index) => boundaries[index.saturating_sub(1)].byte,
+        }
+    }
+
+    fn unicode_byte_offset_to_utf16(&self, offset: usize) -> usize {
+        let target = offset.min(self.unicode.len());
+        let boundaries = self.unicode_boundaries();
+        match boundaries.binary_search_by_key(&target, |boundary| boundary.byte) {
+            Ok(index) => boundaries[index].utf16,
+            Err(index) => boundaries[index.saturating_sub(1)].utf16,
+        }
+    }
+
+    /// `unicode_view` identifies the surrogate-ambiguous representation. Its
+    /// offsets use boundaries derived from the original UTF-16 subject, while
+    /// the direct non-Unicode form can use PUA-aware counting safely.
     fn utf16_to_byte_offset(&self, input: &str, unicode_view: bool, offset: usize) -> usize {
         if self.ascii {
             offset.min(input.len())
-        } else if unicode_view && !self.lone_surrogate {
-            utf16_to_byte_offset_scalar(input, offset)
+        } else if unicode_view {
+            self.unicode_utf16_to_byte_offset(offset)
         } else {
             utf16_to_byte_offset(input, offset)
         }
@@ -491,8 +503,8 @@ impl RegexInput {
     fn byte_offset_to_utf16(&self, input: &str, unicode_view: bool, offset: usize) -> usize {
         if self.ascii {
             offset
-        } else if unicode_view && !self.lone_surrogate {
-            byte_offset_to_utf16_scalar(input, offset)
+        } else if unicode_view {
+            self.unicode_byte_offset_to_utf16(offset)
         } else {
             byte_offset_to_utf16(input, offset)
         }
@@ -10742,7 +10754,7 @@ mod nullable_quantifier_rewrite_tests {
 
 #[cfg(test)]
 mod regex_input_cache_tests {
-    use super::{Interpreter, JsString, JsValue, Rc, to_regex_input_with_units};
+    use super::{Interpreter, JsString, JsValue, Rc, RegexInput, to_regex_input_with_units};
 
     #[test]
     fn reuses_conversion_for_the_same_js_string_identity() {
@@ -10756,5 +10768,29 @@ mod regex_input_cache_tests {
         let equal_but_distinct = JsValue::string(JsString::from_str(&"a".repeat(1024)));
         let third = to_regex_input_with_units(&mut interp, &equal_but_distinct).unwrap();
         assert!(!Rc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn maps_unicode_offsets_from_the_original_utf16_subject() {
+        let input = RegexInput::new(JsString::from_vec(vec![0xDB80, 0xDC00, b'x' as u16]));
+        let unicode = input.as_str(true);
+
+        assert_eq!(input.utf16_to_byte_offset(unicode, true, 0), 0);
+        assert_eq!(input.utf16_to_byte_offset(unicode, true, 1), 0);
+        assert_eq!(input.utf16_to_byte_offset(unicode, true, 2), 4);
+        assert_eq!(input.byte_offset_to_utf16(unicode, true, 4), 2);
+        assert_eq!(input.byte_offset_to_utf16(unicode, true, 5), 3);
+
+        let mixed = RegexInput::new(JsString::from_vec(vec![
+            0xD800,
+            0xDB80,
+            0xDC00,
+            b'x' as u16,
+        ]));
+        let unicode = mixed.as_str(true);
+        assert_eq!(mixed.utf16_to_byte_offset(unicode, true, 2), 4);
+        assert_eq!(mixed.utf16_to_byte_offset(unicode, true, 3), 8);
+        assert_eq!(mixed.byte_offset_to_utf16(unicode, true, 8), 3);
+        assert_eq!(mixed.byte_offset_to_utf16(unicode, true, 9), 4);
     }
 }

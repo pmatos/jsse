@@ -128,6 +128,12 @@ var lone = String.fromCharCode(0xD800);
 /x/.exec(lone + "x");
 assertSameUnits(RegExp.leftContext, lone, "lone surrogate leftContext");
 
+// The original UTF-16 boundaries also disambiguate a genuine PUA scalar when
+// the same subject contains a lone surrogate sentinel.
+var mixed = lone + pua + "x";
+/x/u.exec(mixed);
+assertSameUnits(RegExp.leftContext, lone + pua, "mixed PUA and lone surrogate context");
+
 var emoji = String.fromCharCode(0xD83D, 0xDE00);
 /x/u.exec(emoji + "x");
 assertSameUnits(RegExp.leftContext, emoji, "astral unicode leftContext");

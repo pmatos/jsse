@@ -100,6 +100,36 @@ if (
   throw new Test262Error("RegExp.rightContext did not preserve the trail surrogate");
 }
 
+// Unicode match offsets must be translated back through the original UTF-16
+// subject. A genuine scalar in JSSE's lone-surrogate PUA range must count as
+// its two original code units rather than as a one-unit surrogate sentinel.
+var supplementaryPua = String.fromCharCode(0xdb80, 0xdc00);
+var puaContextInput = supplementaryPua + "x" + supplementaryPua;
+
+function assertSupplementaryPuaContexts(re, label) {
+  var puaMatch = re.exec(puaContextInput);
+  if (puaMatch.index !== 2) {
+    throw new Test262Error(label + " match index should be 2, got " + puaMatch.index);
+  }
+  if (
+    RegExp.leftContext.length !== 2 ||
+    RegExp.leftContext.charCodeAt(0) !== 0xdb80 ||
+    RegExp.leftContext.charCodeAt(1) !== 0xdc00
+  ) {
+    throw new Test262Error(label + " leftContext split a supplementary PUA scalar");
+  }
+  if (
+    RegExp.rightContext.length !== 2 ||
+    RegExp.rightContext.charCodeAt(0) !== 0xdb80 ||
+    RegExp.rightContext.charCodeAt(1) !== 0xdc00
+  ) {
+    throw new Test262Error(label + " rightContext split a supplementary PUA scalar");
+  }
+}
+
+assertSupplementaryPuaContexts(/x/, "non-Unicode");
+assertSupplementaryPuaContexts(/x/u, "Unicode");
+
 // --- Subclass receiver throws TypeError ---
 class MyRegExp extends RegExp {}
 var threw = false;
