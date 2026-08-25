@@ -39,6 +39,7 @@
   var fallbackConsoleLog = console.log;
 
   var NS_PER_SEC = 1000000000;
+  var MAX_INSPECT_ARRAY_LENGTH = 100;
 
   // ---- util.inspect (best-effort) ------------------------------------------
   //
@@ -615,13 +616,15 @@
     // Array length and elements are read from own descriptors on the unwrapped
     // target. A missing descriptor is a hole, never an invitation to read
     // through Array.prototype (which could invoke an inherited getter).
-    // Probing every index is O(length); the O(elements) own-index-key form is
+    // Keep descriptor probes bounded even for enormous sparse arrays. The
+    // O(elements) own-index-key form needed for Node-exact sparse truncation is
     // blocked on jsse#516 (Object.getOwnPropertyNames/Reflect.ownKeys omit
-    // index keys assigned after array creation, so every element of a
-    // push-built array would render as a hole).
+    // index keys assigned after array creation).
     function renderArray(v, depth) {
       var length = ownDataValue(v, "length");
       if (typeof length !== "number" || length <= 0) return "[]";
+      var renderLength =
+        length < MAX_INSPECT_ARRAY_LENGTH ? length : MAX_INSPECT_ARRAY_LENGTH;
 
       // Collect into a local array and join once. Accumulating with `+=`
       // instead is superlinear here: JsString is a flat buffer with no rope
@@ -629,7 +632,7 @@
       var parts = [];
       var holes = 0;
 
-      for (var i = 0; i < length; i++) {
+      for (var i = 0; i < renderLength; i++) {
         var desc = objectGetOwnPropertyDescriptor(v, i);
         if (!desc) {
           holes++;
@@ -642,8 +645,15 @@
         arrayPush(parts, renderDescriptor(desc, depth));
       }
       if (holes) arrayPush(parts, emptyItems(holes));
-      // `length > 0` guarantees the loop ran, so every index became either an
-      // element or a hole, and `parts` cannot be empty.
+      if (renderLength < length) {
+        var remaining = length - renderLength;
+        arrayPush(
+          parts,
+          "... " + remaining + " more item" + (remaining === 1 ? "" : "s")
+        );
+      }
+      // `length > 0` guarantees either the loop ran or a truncation marker was
+      // added, so `parts` cannot be empty.
       return "[ " + arrayJoin(parts, ", ") + " ]";
     }
 
