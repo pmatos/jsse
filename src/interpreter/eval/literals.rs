@@ -65,6 +65,9 @@ impl Interpreter {
             .array_prototype
             .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
+            crate::interpreter::types::ArrayData::default(),
+        );
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_property(
                 i.to_string(),
@@ -75,7 +78,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::number(len as f64), false, false, false),
         );
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
+        *obj_data.array_elements_mut().unwrap() = values;
         obj_data.extensible = false;
         let id = self.alloc_object(obj_data);
         JsValue::object(id)

@@ -3557,17 +3557,17 @@ mod node_host_tests {
     }
 
     #[test]
-    fn host_array_extra_keys_filters_dense_indices_without_getting_values() {
+    fn host_array_extra_keys_uses_named_metadata_without_getting_values() {
         assert_node_ok(
             r#"
             let getterCalls = 0;
-            // The two Array storage shapes must agree. An Array literal mirrors
-            // every dense index into property_order, so it exercises the index
-            // filter; `new Array(n).fill(v)` keeps them out, so it exercises the
-            // empty-scan path. Only the literal has indices to filter.
+            // The Array storage shapes must agree even though their dense-index
+            // descriptor layouts differ. The host hook reads the dedicated
+            // non-index String-key order, never either dense representation.
             const builders = {
               literal: () => [1, 2, 3, 4, 5],
               fill: () => new Array(5).fill(1),
+              arrayFrom: () => Array.from({ length: 5 }, () => 1),
             };
             for (const [shape, build] of Object.entries(builders)) {
               const a = build();

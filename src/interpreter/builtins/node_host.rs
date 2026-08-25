@@ -187,11 +187,11 @@ impl Interpreter {
         // __host_array_extra_keys(value) -> Array<string>
         //
         // Trap- and value-read-free metadata for util.inspect's Array
-        // presentation. Dense elements live in the Array backing store; scan
-        // only descriptor-backed property order so rendering extra named
-        // properties does not undo maxArrayLength's O(100) element cap. The
-        // shim passes an already-unwrapped Proxy target and deletes this global
-        // immediately after capture.
+        // presentation. Array mutation bookkeeping maintains a separate order
+        // for non-index String properties, so this hook never scans dense
+        // elements or descriptor-backed element indices and cannot undo
+        // maxArrayLength's bounded work. The shim passes an already-unwrapped
+        // Proxy target and deletes this global immediately after capture.
         let array_extra_keys_fn = self.create_function(JsFunction::native(
             "__host_array_extra_keys".to_string(),
             1,
@@ -214,19 +214,11 @@ impl Interpreter {
 /// An Array's own enumerable non-index string keys, in property-creation order.
 /// Non-Arrays have none. Reads descriptors only, so no getter runs.
 fn array_extra_keys(obj: &JsObjectData) -> Vec<JsValue> {
-    if obj.array_elements().is_none() {
+    let Some(property_order) = obj.array_non_index_string_property_order() else {
         return Vec::new();
-    }
+    };
     let mut keys = Vec::new();
-    for key in &obj.property_order {
-        // Canonical array indices always begin with an ASCII digit. Keep the
-        // guard explicit because the engine-wide parser currently accepts a
-        // leading `+`, while "+1" is a named property here.
-        let is_array_index = key.as_bytes().first().is_some_and(u8::is_ascii_digit)
-            && parse_array_index(key).is_some();
-        if key.is_symbol() || is_array_index {
-            continue;
-        }
+    for key in property_order {
         // Same enumerability test as `own_enumerable_keys_with_shadow` (which
         // backs Object.keys): an unset flag counts as enumerable, so this hook
         // and the shim's Object.keys fallback cannot disagree.

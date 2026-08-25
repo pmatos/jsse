@@ -26,34 +26,26 @@ cap's runtime benefit.
 
 ## Approaches considered
 
-1. Add a narrow `--node` host-floor hook that returns only an Array's enumerable
-   non-index own string keys. This is selected: it walks the descriptor-backed
-   `property_order` without walking the dense element backing store, and reads
-   no values, so the rendered output stays bounded by the 100-index cap. The
-   shim still reads values only from ordinary own descriptor objects.
-
-   The *scan* is not equally bounded, because the Array population paths store
-   indices asymmetrically. `new Array(n).fill(v)` and plain index assignment keep
-   dense indices out of `property_order`, so the hook is O(named descriptors)
-   there; but `create_array` / `create_array_with_holes`
-   (`src/interpreter/builtins/array.rs`) `insert_value` every present index, so
-   the Array carries all `n` indices in `property_order` and the hook scans them
-   to discard them. That path is the common case, not a niche one: it backs
-   literals *and* `.map`, `.slice`, `.filter`, `.concat`, `Array.from`,
-   `String.prototype.split`, `Object.keys`, and `JSON.parse`. Measured at
-   200,000 elements, 20 inspections: 56 ms with the hook versus 21 ms without
-   for a literal, against 21 ms versus 15 ms for the `fill` form — about 1.75 ms
-   per inspection of a 200k literal. That is a linear key scan, a much smaller
-   cost class than the superlinear rendering PR #518 capped, and bounding it
-   soundly is not possible inside the hook: `properties.len()` cannot separate
-   "n indices plus one named key" from "n-1 indices plus two named keys". The
-   fix belongs in the storage asymmetry itself and is left to a follow-up.
-2. Retain the bounded index probe, then enumerate `Object.keys` and discard
+1. Add a narrow `--node` host-floor hook backed by Array-only non-index String
+   property metadata. This is selected. `ArrayData` maintains creation order for
+   just those keys alongside the ordinary `property_order`; numeric indices and
+   Symbols never enter the dedicated list, and deletion removes a key so a
+   later re-creation appends it in the correct chronological position. The hook
+   therefore reads no values and does work proportional to named String
+   descriptors, independent of the Array's element count.
+2. Walk the existing descriptor-backed `property_order` and discard indices.
+   This was the initial implementation, but it is unbounded for literals and
+   the many built-ins that route through `create_array`: those constructors put
+   every present index in `property_order`. A deterministic probe over a
+   20,000-entry `Array.from` result took 186--200 ms for 2,000 hook calls solely
+   to discard index keys. This approach is rejected because it restores linear
+   work per inspection.
+3. Retain the bounded index probe, then enumerate `Object.keys` and discard
    array indices. This is functionally correct and trap-free after Proxy
    unwrapping, but rejected on measured performance: inspecting 100,000 filled
    elements took 0.34--0.38 seconds versus about 0.01 seconds on the capped
    `origin/main` implementation (a no-inspect control took about 0.02 seconds).
-3. Enumerate `Reflect.ownKeys` or `Object.getOwnPropertyNames` (fixed by
+4. Enumerate `Reflect.ownKeys` or `Object.getOwnPropertyNames` (fixed by
    PR #520). This offers a more general reflection seam, but both APIs
    materialize every index key before the shim can filter it, retaining the
    dense-Array performance regression from approach 2. Now that #516 is closed
@@ -69,12 +61,19 @@ truncation marker.
 
 The Node host floor exposes
 `__host_array_extra_keys(value) -> Array<string>`. For an Array target it walks
-only `property_order`, returning keys whose descriptors are enumerable Strings
-and whose names are not canonical array indices. For non-Arrays and primitives
-it returns an empty Array. It does not read descriptor values or traverse a
-prototype. Like `__host_proxy_target`, it is installed only under `--node` as a
-non-enumerable configurable global; the shim captures and immediately deletes
-the binding before bundled library code runs.
+only `ArrayData::non_index_string_property_order`, returning keys whose
+descriptors are enumerable. For non-Arrays and primitives it returns an empty
+Array. It does not read descriptor values or traverse a prototype. Like
+`__host_proxy_target`, it is installed only under `--node` as a non-enumerable
+configurable global; the shim captures and immediately deletes the binding
+before bundled library code runs.
+
+All Array construction paths install `ObjectKind::Array` before creating their
+descriptors. The shared property-creation helper then records `length` and any
+later non-index String keys in the dedicated order while excluding canonical
+indices and Symbols. The shared removal helper deletes from both orders. This
+does not alter ECMAScript `[[OwnPropertyKeys]]`: the complete `property_order`
+and dense-element machinery remain authoritative for ordinary reflection.
 
 After the index window and marker, `renderArray` walks the captured hook's
 result. Every key is labelled with the same identifier-or-quoted-string policy
@@ -135,13 +134,11 @@ The node-shim self-test will assert exact Node-compatible output for:
 - a 101-element Array whose extra property follows the truncation marker.
 
 The 116-shape differential corpus from PR #497 will be run before and after the
-change on both `jsse --node` and the plain-jsse fallback. A 100,000-element
-dense benchmark will confirm that inspection remains close to the capped
-implementation rather than the rejected `Object.keys` pass. That benchmark must
-cover an Array *literal* as well as the `new Array(n).fill(v)` form: only the
-literal path populates `property_order` with dense indices, so a `fill`-only
-benchmark cannot observe the hook's scan cost at all. The node-shim
-self-test, all shim fixtures, the Object.keys test262 area, and the repository's
-full quality gate will cover regressions. The hook is disabled for ordinary
-execution and test262, so no conformance pass-count or README change is
-expected.
+change on both `jsse --node` and the plain-jsse fallback. A deterministic
+high-repeat hook probe over an `Array.from` result will catch work proportional
+to descriptor-backed indices, while literal, `Array.from`, and `fill` fixtures
+must return the same named keys. The node-shim self-test, all shim fixtures, the
+Object.keys test262 area, and the repository's full quality gate will cover
+regressions. The host hook is disabled for ordinary execution and test262; the
+Array metadata itself is exercised by the full conformance run, so no pass-count
+or README change is expected.

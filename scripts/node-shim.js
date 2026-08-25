@@ -644,9 +644,10 @@
     }
 
     // Node-visible extra named properties, rendered after the element phase.
-    // The host metadata hook walks only descriptor-backed property order, never
-    // the dense element store, so this pass cannot undo the 100-index cap, and
-    // it reads an unwrapped target so no handler trap runs.
+    // The host metadata hook walks the Array's dedicated non-index String-key
+    // order, never dense elements or descriptor-backed indices, so this pass
+    // cannot undo the 100-index cap. It reads an unwrapped target, so no handler
+    // trap runs.
     //
     // Without --node there is no unwrapping seam: `v` may still be a Proxy, so
     // both the enumeration and every per-key descriptor read are user code. A
