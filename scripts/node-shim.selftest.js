@@ -1142,6 +1142,24 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     arr.indexOf("1") !== -1 && arr.indexOf("2") !== -1 && arr.indexOf("3") !== -1,
     "inspect renders array elements"
   );
+  var denseOverLimit = [];
+  var denseExpectedParts = [];
+  for (var denseIndex = 0; denseIndex < 101; denseIndex++) {
+    denseOverLimit.push(denseIndex);
+    if (denseIndex < 100) denseExpectedParts.push(String(denseIndex));
+  }
+  eq(
+    util.inspect(denseOverLimit, { breakLength: Infinity, compact: true }),
+    "[ " + denseExpectedParts.join(", ") + ", ... 1 more item ]",
+    "inspect caps dense arrays at 100 entries"
+  );
+  eq(
+    util.inspect(new Array(1000000)),
+    hasNodeHost
+      ? "[ <100 empty items>, ... 999900 more items ]"
+      : "[ <1000000 empty items> ]",
+    "inspect bounds sparse-array descriptor probes"
+  );
   var cyc = {};
   cyc.self = cyc;
   var ci = util.inspect(cyc);
