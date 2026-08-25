@@ -4,6 +4,7 @@ use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, Expression, ForInit, Literal, LogicalOp, MemberProperty,
     Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
 };
+use crate::types::JsString;
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
@@ -471,8 +472,7 @@ impl Compiler {
                 Ok(())
             }
             Literal::String(units) => {
-                let s = String::from_utf16_lossy(units);
-                let idx = self.add_constant(Constant::String(s.into()))?;
+                let idx = self.add_constant(Constant::String(JsString::from_vec(units.clone())))?;
                 self.emit(Op::LoadConst);
                 self.emit_u16(idx);
                 self.push_n(1);

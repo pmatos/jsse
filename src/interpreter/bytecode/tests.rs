@@ -5,7 +5,7 @@ use super::vm::run_chunk;
 use crate::ast::{Expression, Literal, Statement};
 use crate::interpreter::Interpreter;
 use crate::interpreter::types::Completion;
-use crate::types::JsValue;
+use crate::types::{JsString, JsValue};
 
 fn run(chunk: Chunk) -> Completion {
     let mut interp = Interpreter::new();
@@ -741,7 +741,10 @@ fn add_string_and_number_falls_through_to_string_concat() {
             Op::Add as u8,
             Op::Return as u8,
         ],
-        constants: vec![Constant::String("x".into()), Constant::Number(1.0)],
+        constants: vec![
+            Constant::String(JsString::from_str("x")),
+            Constant::Number(1.0),
+        ],
         names: vec![],
         var_names: vec![],
         max_stack: 2,
@@ -1660,4 +1663,15 @@ fn member_calls_and_nested_tail_positions_remain_ineligible() {
         compile_body(&[Statement::Return(Some(nested_tail_call))]),
         Err(CompileError::Unsupported(_))
     ));
+}
+
+#[test]
+fn top_level_bytecode_string_literals_preserve_utf16_code_units() {
+    let source = r#"var __r = "\uD800" === "\uFFFD";"#;
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(
+        bytecode_count, 1,
+        "the eligible Script Body must execute through bytecode"
+    );
+    assert_eq!(value.as_boolean(), Some(false));
 }

@@ -4,14 +4,14 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub(crate) enum Constant {
     Number(f64),
-    String(Rc<str>),
+    String(JsString),
 }
 
 impl Constant {
     pub(crate) fn to_value(&self) -> JsValue {
         match self {
             Constant::Number(n) => JsValue::number(*n),
-            Constant::String(s) => JsValue::string(JsString::from_str(s)),
+            Constant::String(s) => JsValue::string(s.clone()),
         }
     }
 }
