@@ -1,17 +1,21 @@
-// Tests that RegExp replacement preserves subject code units that encode
-// supplementary code points in the Private Use Area plane 15 range
-// U+F0000-U+F07FF.
-// Spec: ECMAScript 2026, sec-regexp.prototype-%symbol.replace% steps 14-16
-//
-// jsse converts a UTF-16 subject into a Rust String for matching, encoding
-// lone surrogates as PUA scalars in U+F0000-U+F07FF. A *genuine* supplementary
-// code point in that same range must not be confused with that encoding: the
-// non-Unicode matching view has to be built from the original UTF-16 code
-// units, not derived from the Unicode view, or a real U+F0000 collapses into a
-// single lone surrogate and the unchanged portion of the subject is corrupted.
-//
-// Built with String.fromCharCode rather than a source literal so the test
-// exercises the RegExp conversion path only.
+/*---
+esid: sec-regexp.prototype-%symbol.replace%
+description: >
+  RegExp replacement preserves subject code units that encode supplementary
+  Private Use Area code points in the plane 15 range U+F0000-U+F07FF.
+info: |
+  RegExp.prototype [ %Symbol.replace% ] ( string, replaceValue ), steps 14-16
+
+  jsse converts a UTF-16 subject into a Rust String for matching, encoding
+  lone surrogates as PUA scalars in U+F0000-U+F07FF. A *genuine* supplementary
+  code point in that same range must not be confused with that encoding: the
+  non-Unicode matching view has to be built from the original UTF-16 code
+  units, not derived from the Unicode view, or a real U+F0000 collapses into a
+  single lone surrogate and the unchanged portion of the subject is corrupted.
+
+  Built with String.fromCharCode rather than a source literal so the test
+  exercises the RegExp conversion path only.
+---*/
 
 function codeUnits(s) {
   var units = [];

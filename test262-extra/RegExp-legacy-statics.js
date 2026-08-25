@@ -1,10 +1,17 @@
-// Tests the value behavior of legacy RegExp static properties after exec/test.
-// Spec: ECMAScript 2024, Annex B.1.2 — Legacy RegExp Features
-//
-// test262 only covers property descriptors and `this`-value validation for
-// the legacy accessors. This test fills the value-behavior gap: after a
-// successful match, the legacy statics must reflect the input, captures,
-// and context strings.
+/*---
+esid: sec-legacy-regexp-features
+description: >
+  Legacy RegExp static properties report the value of the last successful
+  match: input, lastMatch, lastParen, leftContext, rightContext and $1-$9.
+info: |
+  Annex B.1.2 Legacy RegExp Features
+
+  test262 only covers property descriptors and `this`-value validation for
+  the legacy accessors. This test fills the value-behavior gap: after a
+  successful match, the legacy statics must reflect the input, captures,
+  and context strings.
+features: [legacy-regexp]
+---*/
 
 // --- Setup: a match that exercises all legacy statics ---
 var re = /(\d+)-(\w+)/;
