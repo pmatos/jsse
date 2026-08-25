@@ -1905,46 +1905,10 @@ impl Interpreter {
             return Ok(bigint_ops::less_than(&a.value, &b.value));
         }
         if let (Some(b), Some(n)) = (lprim.as_bigint(), rprim.as_number()) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if n == f64::INFINITY {
-                return Ok(Some(true));
-            }
-            if n == f64::NEG_INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if *b.value < n_floor {
-                return Ok(Some(true));
-            }
-            if *b.value > n_floor {
-                return Ok(Some(false));
-            }
-            // n_floor == b.value, so result depends on fractional part
-            return Ok(Some(n_trunc < n));
+            return Ok(compare_bigint_number(&b.value, n, true));
         }
         if let (Some(n), Some(b)) = (lprim.as_number(), rprim.as_bigint()) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if n == f64::NEG_INFINITY {
-                return Ok(Some(true));
-            }
-            if n == f64::INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if n_floor < *b.value {
-                return Ok(Some(true));
-            }
-            if n_floor > *b.value {
-                return Ok(Some(false));
-            }
-            // n_floor == b.value, so result depends on fractional part
-            return Ok(Some(n < n_trunc));
+            return Ok(compare_bigint_number(&b.value, n, false));
         }
         // BigInt vs String: try parsing via StringToBigInt
         if lprim.is_bigint()
@@ -1984,44 +1948,10 @@ impl Interpreter {
             return Ok(bigint_ops::less_than(&a.value, &b.value));
         }
         if let (Some(b), Some(n)) = (lnum.as_bigint(), rnum.as_number()) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if n == f64::INFINITY {
-                return Ok(Some(true));
-            }
-            if n == f64::NEG_INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if *b.value < n_floor {
-                return Ok(Some(true));
-            }
-            if *b.value > n_floor {
-                return Ok(Some(false));
-            }
-            return Ok(Some(n_trunc < n));
+            return Ok(compare_bigint_number(&b.value, n, true));
         }
         if let (Some(n), Some(b)) = (lnum.as_number(), rnum.as_bigint()) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if n == f64::NEG_INFINITY {
-                return Ok(Some(true));
-            }
-            if n == f64::INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if n_floor < *b.value {
-                return Ok(Some(true));
-            }
-            if n_floor > *b.value {
-                return Ok(Some(false));
-            }
-            return Ok(Some(n < n_trunc));
+            return Ok(compare_bigint_number(&b.value, n, false));
         }
         if let (Some(ln), Some(rn)) = (lnum.as_number(), rnum.as_number()) {
             return Ok(number_ops::less_than(ln, rn));
@@ -9877,5 +9807,146 @@ impl Interpreter {
             Some(Err(e)) => Completion::Throw(e),
             None => Completion::Normal(JsValue::UNDEFINED),
         }
+    }
+}
+
+/// §7.2.13 IsLessThan — the numeric comparison of a BigInt against a Number.
+///
+/// Both the BigInt-vs-Number and Number-vs-BigInt arms of IsLessThan reduce to
+/// this single relation; `bigint_is_left` selects the direction: `true`
+/// computes `bigint < number`, `false` computes `number < bigint`.
+///
+/// Returns `None` when `number` is `NaN` (the comparison is mathematically
+/// undefined), matching IsLessThan's "if either operand is NaN, return
+/// undefined" rule. The comparison is exact: the Number is split into its
+/// integer part (compared against the BigInt) and its fractional part (used
+/// only to break ties when the integer parts are equal), so BigInts beyond
+/// f64's 2^53 exact-integer range still compare correctly.
+fn compare_bigint_number(
+    bigint: &num_bigint::BigInt,
+    number: f64,
+    bigint_is_left: bool,
+) -> Option<bool> {
+    if number.is_nan() {
+        return None;
+    }
+    if number.is_infinite() {
+        // A finite BigInt is below +∞ and above -∞.
+        let bigint_below_number = number == f64::INFINITY;
+        return Some(if bigint_is_left {
+            bigint_below_number
+        } else {
+            !bigint_below_number
+        });
+    }
+    let trunc = number.trunc();
+    let integer_part = crate::interpreter::builtins::bigint::f64_to_bigint(trunc);
+    match bigint.cmp(&integer_part) {
+        std::cmp::Ordering::Less => Some(bigint_is_left),
+        std::cmp::Ordering::Greater => Some(!bigint_is_left),
+        std::cmp::Ordering::Equal => {
+            // Integer parts are equal; the sign of the Number's fractional part
+            // decides. `trunc < number` ⇔ positive fraction ⇔ bigint < number.
+            Some(if bigint_is_left {
+                trunc < number
+            } else {
+                number < trunc
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod relational_bigint_tests {
+    use super::compare_bigint_number;
+    use num_bigint::BigInt;
+
+    fn big(n: i64) -> BigInt {
+        BigInt::from(n)
+    }
+
+    // Expected values below were cross-checked against Node's evaluation of the
+    // corresponding `<` expressions, an independent source of truth.
+
+    #[test]
+    fn bigint_left_finite_number() {
+        // 1n < 1.5 -> true
+        assert_eq!(compare_bigint_number(&big(1), 1.5, true), Some(true));
+        // 2n < 1.5 -> false
+        assert_eq!(compare_bigint_number(&big(2), 1.5, true), Some(false));
+    }
+
+    #[test]
+    fn bigint_left_nan_is_undefined() {
+        // 1n < NaN -> undefined
+        assert_eq!(compare_bigint_number(&big(1), f64::NAN, true), None);
+    }
+
+    #[test]
+    fn bigint_left_infinities() {
+        // 1n < Infinity -> true; 1n < -Infinity -> false
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::INFINITY, true),
+            Some(true)
+        );
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::NEG_INFINITY, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn bigint_left_negative_fraction_tiebreak() {
+        // -1n < -0.5 -> true; -1n < -1.5 -> false; 0n < -0.5 -> false
+        assert_eq!(compare_bigint_number(&big(-1), -0.5, true), Some(true));
+        assert_eq!(compare_bigint_number(&big(-1), -1.5, true), Some(false));
+        assert_eq!(compare_bigint_number(&big(0), -0.5, true), Some(false));
+    }
+
+    #[test]
+    fn number_left_finite_number() {
+        // 1.5 < 2n -> true; 1.5 < 1n -> false
+        assert_eq!(compare_bigint_number(&big(2), 1.5, false), Some(true));
+        assert_eq!(compare_bigint_number(&big(1), 1.5, false), Some(false));
+    }
+
+    #[test]
+    fn number_left_equal_integer_parts() {
+        // 2.0 < 2n -> false; 1.9 < 2n -> true; -0.5 < 0n -> true
+        assert_eq!(compare_bigint_number(&big(2), 2.0, false), Some(false));
+        assert_eq!(compare_bigint_number(&big(2), 1.9, false), Some(true));
+        assert_eq!(compare_bigint_number(&big(0), -0.5, false), Some(true));
+    }
+
+    #[test]
+    fn number_left_nan_and_infinities() {
+        // NaN < 1n -> undefined; Infinity < 1n -> false; -Infinity < 1n -> true
+        assert_eq!(compare_bigint_number(&big(1), f64::NAN, false), None);
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::INFINITY, false),
+            Some(false)
+        );
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::NEG_INFINITY, false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn precision_beyond_f64_integer_range() {
+        // 2^53 = 9007199254740992 is exactly representable; 2^53 + 1 is not and
+        // rounds to 2^53 as an f64 literal, but the BigInt stays exact.
+        let two_53 = 9_007_199_254_740_992.0_f64;
+        let two_53_plus_1 = big(9_007_199_254_740_993);
+        // 9007199254740993n < 9007199254740992 -> false
+        assert_eq!(
+            compare_bigint_number(&two_53_plus_1, two_53, true),
+            Some(false)
+        );
+        // 9007199254740993 (rounds to 2^53) < 9007199254740993n -> true
+        assert_eq!(
+            compare_bigint_number(&two_53_plus_1, two_53, false),
+            Some(true)
+        );
     }
 }
