@@ -100,3 +100,38 @@ if (m.index !== 3) {
   throw new Test262Error("match index should be 3, got " + m.index);
 }
 assertSameUnits(padded.match(/./)[0], "a", "non-unicode single unit match");
+
+// Offsets derived from the Unicode matching view must count such a scalar as its
+// real two code units, not as the one-code-unit surrogate sentinel. This governs
+// `.index`, the Unicode-mode replacement slice, and the Annex B lazy
+// `leftContext`/`rightContext`, which retain UTF-16 offsets into the subject.
+assertSameUnits(padded.replace(/b/u, "Z"), "a" + pua + "Z", "trailing unicode replace");
+assertSameUnits(padded.replace(/b/gu, "Z"), "a" + pua + "Z", "trailing global unicode replace");
+
+var mu = padded.match(/b/u);
+if (mu.index !== 3) {
+  throw new Test262Error("unicode match index should be 3, got " + mu.index);
+}
+
+/x/u.exec(pua + "x");
+assertSameUnits(RegExp.leftContext, pua, "unicode leftContext");
+/x/u.exec("x" + pua);
+assertSameUnits(RegExp.rightContext, pua, "unicode rightContext");
+/x/.exec(pua + "x");
+assertSameUnits(RegExp.leftContext, pua, "non-unicode leftContext");
+/x/.exec("x" + pua);
+assertSameUnits(RegExp.rightContext, pua, "non-unicode rightContext");
+
+// The sentinel range must keep working for what it actually encodes: a lone
+// surrogate stays one code unit, and an ordinary astral character stays two.
+var lone = String.fromCharCode(0xD800);
+/x/.exec(lone + "x");
+assertSameUnits(RegExp.leftContext, lone, "lone surrogate leftContext");
+
+var emoji = String.fromCharCode(0xD83D, 0xDE00);
+/x/u.exec(emoji + "x");
+assertSameUnits(RegExp.leftContext, emoji, "astral unicode leftContext");
+/x/.exec(emoji + "x");
+assertSameUnits(RegExp.leftContext, emoji, "astral non-unicode leftContext");
+assertSameUnits(emoji.replace(/x/g, "y"), emoji, "astral replace unchanged");
+assertSameUnits(lone.replace(/x/g, "y"), lone, "lone surrogate replace unchanged");
