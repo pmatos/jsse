@@ -28,9 +28,23 @@ runtime benefit.
 
 1. Add a narrow `--node` host-floor hook that returns only an Array's enumerable
    non-index own string keys. This is selected: it walks the descriptor-backed
-   `property_order` without walking the dense element backing store, so the
-   formatter remains O(100 + named/special descriptors). The shim still reads
-   values only from ordinary own descriptor objects.
+   `property_order` without walking the dense element backing store, and reads
+   no values, so the rendered output stays bounded by the 100-index cap. The
+   shim still reads values only from ordinary own descriptor objects.
+
+   The *scan* is not equally bounded, because the two Array population paths
+   store indices asymmetrically. `new Array(n).fill(v)` keeps dense indices out
+   of `property_order`, so the hook is O(named descriptors) there; but
+   `create_array` / `create_array_with_holes` (`src/interpreter/builtins/array.rs`)
+   `insert_value` every present index, so an Array *literal* carries all `n`
+   indices in `property_order` and the hook scans them to discard them. Measured
+   at 200,000 elements, 20 inspections: 56 ms with the hook versus 21 ms without
+   for a literal, against 21 ms versus 15 ms for the `fill` form — about 1.75 ms
+   per inspection of a 200k literal. That is a linear key scan, a much smaller
+   cost class than the superlinear rendering PR #518 capped, and bounding it
+   soundly is not possible inside the hook: `properties.len()` cannot separate
+   "n indices plus one named key" from "n-1 indices plus two named keys". The
+   fix belongs in the storage asymmetry itself and is left to a follow-up.
 2. Retain the bounded index probe, then enumerate `Object.keys` and discard
    array indices. This is functionally correct and trap-free after Proxy
    unwrapping, but rejected on measured performance: inspecting 100,000 filled
@@ -119,7 +133,10 @@ The node-shim self-test will assert exact Node-compatible output for:
 The 116-shape differential corpus from PR #497 will be run before and after the
 change on both `jsse --node` and the plain-jsse fallback. A 100,000-element
 dense benchmark will confirm that inspection remains close to the capped
-implementation rather than the rejected `Object.keys` pass. The node-shim
+implementation rather than the rejected `Object.keys` pass. That benchmark must
+cover an Array *literal* as well as the `new Array(n).fill(v)` form: only the
+literal path populates `property_order` with dense indices, so a `fill`-only
+benchmark cannot observe the hook's scan cost at all. The node-shim
 self-test, all shim fixtures, the Object.keys test262 area, and the repository's
 full quality gate will cover regressions. The hook is disabled for ordinary
 execution and test262, so no conformance pass-count or README change is
