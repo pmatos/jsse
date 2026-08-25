@@ -45,7 +45,7 @@ pub(crate) enum ValueKind {
 
 // UTF-16 code unit string per spec §6.1.4
 // Uses Arc<Vec<u16>> so cloning (e.g. env.get) is O(1).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct JsString {
     pub code_units: Arc<Vec<u16>>,
 }

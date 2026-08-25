@@ -55,43 +55,12 @@ fn encode_for_regexp_escape(c: char) -> String {
     }
 }
 
-/// Convert a UTF-16 code unit offset to a byte offset in a UTF-8 string
-fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
-    if s.is_ascii() {
-        return utf16_offset.min(s.len());
-    }
-    let mut utf16_count = 0;
-    for (byte_idx, c) in s.char_indices() {
-        if utf16_count >= utf16_offset {
-            return byte_idx;
-        }
-        if pua_to_surrogate(c).is_some() {
-            utf16_count += 1;
-        } else {
-            utf16_count += c.len_utf16();
-        }
-    }
-    s.len()
-}
-
 // Surrogate code points (U+D800-U+DFFF) can't be represented as Rust chars.
 // We remap them to Supplementary PUA-A (U+F0000+) so regex matching works
 // on strings containing lone surrogates.
 const SURROGATE_START: u32 = 0xD800;
 const SURROGATE_END: u32 = 0xDFFF;
 const SURROGATE_PUA_BASE: u32 = 0xF0000;
-
-fn pua_aware_utf16_len(s: &str) -> usize {
-    s.chars()
-        .map(|c| {
-            if pua_to_surrogate(c).is_some() {
-                1
-            } else {
-                c.len_utf16()
-            }
-        })
-        .sum()
-}
 
 fn is_surrogate(cp: u32) -> bool {
     (SURROGATE_START..=SURROGATE_END).contains(&cp)
@@ -121,10 +90,17 @@ fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, false)
 }
 
+/// Both regex views encode an all-ASCII subject identically to its code units,
+/// which is what lets `RegexInput` map offsets without a boundary table. The
+/// conversion fast path and that offset shortcut must agree on "ASCII", so both
+/// ask here rather than each spelling the test their own way.
+fn code_units_are_ascii(code_units: &[u16]) -> bool {
+    code_units.iter().all(|&cu| cu < 0x80)
+}
+
 fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
-    if code_units.iter().all(|&cu| cu < 0x80) {
-        let bytes: Vec<u8> = code_units.iter().map(|&cu| cu as u8).collect();
-        return String::from_utf8(bytes).expect("ASCII code units are valid UTF-8");
+    if code_units_are_ascii(code_units) {
+        return code_units.iter().map(|&cu| cu as u8 as char).collect();
     }
 
     let mut result = String::with_capacity(code_units.len());
@@ -367,12 +343,37 @@ fn is_co_property(content: &str) -> bool {
 
 struct RegexInput {
     subject: JsString,
-    unicode: Rc<str>,
     ascii: bool,
-    non_unicode: std::cell::OnceCell<Rc<str>>,
+    unicode: std::cell::OnceCell<Box<str>>,
+    non_unicode: std::cell::OnceCell<Box<str>>,
     unicode_boundaries: std::cell::OnceCell<Vec<RegexInputBoundary>>,
     non_unicode_offsets: std::cell::OnceCell<Vec<usize>>,
     wtf8: std::cell::OnceCell<Vec<u8>>,
+}
+
+/// Which representation of the subject a set of byte offsets belongs to. The
+/// three are not interchangeable, so offset conversion takes this rather than a
+/// bare bool: callers that pick a view and callers that convert an offset now
+/// name the same thing, and a `@@replace` holding both text views at once
+/// cannot silently cross their offsets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegexView {
+    /// `u`/`v` mode: a surrogate pair became one scalar.
+    Unicode,
+    /// Default mode: exactly one character per UTF-16 code unit.
+    NonUnicode,
+    /// `\p{Cs}`/`\p{Co}` patterns, which match over raw WTF-8 bytes.
+    Wtf8,
+}
+
+impl RegexView {
+    fn select(bytes_mode: bool, unicode: bool) -> Self {
+        match (bytes_mode, unicode) {
+            (true, _) => Self::Wtf8,
+            (false, true) => Self::Unicode,
+            (false, false) => Self::NonUnicode,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -383,36 +384,30 @@ struct RegexInputBoundary {
 
 impl RegexInput {
     fn new(subject: JsString) -> Self {
-        let unicode: Rc<str> = Rc::from(js_string_to_regex_input(&subject.code_units));
-        let ascii = unicode.is_ascii();
-        let non_unicode = std::cell::OnceCell::new();
-        if ascii {
-            non_unicode
-                .set(Rc::clone(&unicode))
-                .expect("new OnceCell must be empty");
-        }
         Self {
+            ascii: code_units_are_ascii(&subject.code_units),
             subject,
-            unicode,
-            ascii,
-            non_unicode,
+            unicode: std::cell::OnceCell::new(),
+            non_unicode: std::cell::OnceCell::new(),
             unicode_boundaries: std::cell::OnceCell::new(),
             non_unicode_offsets: std::cell::OnceCell::new(),
             wtf8: std::cell::OnceCell::new(),
         }
     }
 
+    /// Every view is built from the retained UTF-16 code units, never derived
+    /// from another view: the PUA encoding of lone surrogates is not injective,
+    /// so a genuine U+F0000-U+F07FF scalar is indistinguishable from an encoded
+    /// surrogate once converted. An all-ASCII subject is the one case where the
+    /// two text views coincide, so they share a cell and convert only once.
     fn as_str(&self, unicode: bool) -> &str {
-        if unicode {
-            &self.unicode
+        if unicode || self.ascii {
+            self.unicode
+                .get_or_init(|| js_string_to_regex_input(&self.subject.code_units).into())
         } else {
-            self.non_unicode
-                .get_or_init(|| {
-                    Rc::from(js_string_to_regex_input_non_unicode(
-                        &self.subject.code_units,
-                    ))
-                })
-                .as_ref()
+            self.non_unicode.get_or_init(|| {
+                js_string_to_regex_input_non_unicode(&self.subject.code_units).into()
+            })
         }
     }
 
@@ -423,6 +418,7 @@ impl RegexInput {
 
     fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
         self.unicode_boundaries.get_or_init(|| {
+            let view = self.as_str(true);
             let code_units = &self.subject.code_units;
             let mut boundaries = Vec::with_capacity(code_units.len() + 1);
             let mut byte = 0;
@@ -438,7 +434,7 @@ impl RegexInput {
                 } else {
                     1
                 };
-                let encoded = self.unicode[byte..]
+                let encoded = view[byte..]
                     .chars()
                     .next()
                     .expect("each UTF-16 character must have a regex input character");
@@ -447,7 +443,11 @@ impl RegexInput {
                 boundaries.push(RegexInputBoundary { byte, utf16 });
             }
 
-            debug_assert_eq!(byte, self.unicode.len());
+            debug_assert_eq!(byte, view.len());
+            // One entry per character, not per code unit, so a surrogate-heavy
+            // subject leaves up to half the reservation unused for the life of
+            // the cache.
+            boundaries.shrink_to_fit();
             boundaries
         })
     }
@@ -464,7 +464,7 @@ impl RegexInput {
     }
 
     fn unicode_byte_offset_to_utf16(&self, offset: usize) -> usize {
-        let target = offset.min(self.unicode.len());
+        let target = offset.min(self.as_str(true).len());
         let boundaries = self.unicode_boundaries();
         match boundaries.binary_search_by_key(&target, |boundary| boundary.byte) {
             Ok(index) => boundaries[index].utf16,
@@ -487,35 +487,62 @@ impl RegexInput {
         })
     }
 
-    /// `unicode_view` identifies the surrogate-ambiguous representation. Its
-    /// offsets use boundaries derived from the original UTF-16 subject, while
-    /// the direct non-Unicode form indexes its own one-char-per-code-unit table.
-    fn utf16_to_byte_offset(&self, unicode_view: bool, offset: usize) -> usize {
-        if self.ascii {
-            offset.min(self.unicode.len())
-        } else if unicode_view {
-            self.unicode_utf16_to_byte_offset(offset)
-        } else {
-            let offsets = self.non_unicode_offsets();
-            offsets[offset.min(offsets.len() - 1)]
+    /// Map a UTF-16 code-unit offset to a byte offset within `view`.
+    ///
+    /// The Unicode view is surrogate-ambiguous once converted, so its offsets
+    /// come from boundaries derived from the original UTF-16 subject. The
+    /// non-Unicode view encodes one character per code unit and indexes its own
+    /// table directly. An all-ASCII subject needs no table in either case.
+    fn utf16_to_byte_offset(&self, view: RegexView, offset: usize) -> usize {
+        // The start of the subject is offset 0 in every view. Worth its own
+        // arm: a non-global match reads lastIndex 0 and then never converts
+        // again, so without this a single lookup builds a whole index table.
+        if offset == 0 {
+            return 0;
         }
-    }
-
-    fn byte_offset_to_utf16(&self, unicode_view: bool, offset: usize) -> usize {
-        if self.ascii {
-            offset
-        } else if unicode_view {
-            self.unicode_byte_offset_to_utf16(offset)
-        } else {
-            let offsets = self.non_unicode_offsets();
-            match offsets.binary_search(&offset) {
-                Ok(index) => index,
-                // A byte offset inside a character refers to the code unit that
-                // character starts at.
-                Err(index) => index.saturating_sub(1),
+        match view {
+            RegexView::Wtf8 => utf16_to_wtf8_byte_offset(self.wtf8(), offset),
+            _ if self.ascii => offset.min(self.subject.len()),
+            RegexView::Unicode => self.unicode_utf16_to_byte_offset(offset),
+            RegexView::NonUnicode => {
+                let offsets = self.non_unicode_offsets();
+                offsets[offset.min(offsets.len() - 1)]
             }
         }
     }
+
+    /// Inverse of [`RegexInput::utf16_to_byte_offset`].
+    fn byte_offset_to_utf16(&self, view: RegexView, offset: usize) -> usize {
+        if offset == 0 {
+            return 0;
+        }
+        match view {
+            RegexView::Wtf8 => wtf8_byte_offset_to_utf16(self.wtf8(), offset),
+            _ if self.ascii => offset,
+            RegexView::Unicode => self.unicode_byte_offset_to_utf16(offset),
+            RegexView::NonUnicode => {
+                let offsets = self.non_unicode_offsets();
+                match offsets.binary_search(&offset) {
+                    Ok(index) => index,
+                    // A byte offset inside a character refers to the code unit
+                    // that character starts at.
+                    Err(index) => index.saturating_sub(1),
+                }
+            }
+        }
+    }
+}
+
+fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
+    if let Some(cached) = interp.regexp_legacy.input_cache.as_ref()
+        && Arc::ptr_eq(&cached.subject.code_units, &subject.code_units)
+    {
+        return Rc::clone(cached);
+    }
+
+    let input = Rc::new(RegexInput::new(subject));
+    interp.regexp_legacy.input_cache = Some(Rc::clone(&input));
+    input
 }
 
 fn regex_input_for_value(
@@ -523,15 +550,7 @@ fn regex_input_for_value(
     val: &JsValue,
 ) -> Result<Rc<RegexInput>, JsValue> {
     let subject = interp.to_js_string(val)?;
-    if let Some(cached) = interp.regexp_legacy.input_cache.as_ref()
-        && Arc::ptr_eq(&cached.subject.code_units, &subject.code_units)
-    {
-        return Ok(Rc::clone(cached));
-    }
-
-    let input = Rc::new(RegexInput::new(subject));
-    interp.regexp_legacy.input_cache = Some(Rc::clone(&input));
-    Ok(input)
+    Ok(regex_input_for_subject(interp, subject))
 }
 
 fn escape_regexp_pattern_code_units(code_units: &[u16]) -> JsString {
@@ -5008,11 +5027,23 @@ enum CompiledRegex {
         remaining_source: Option<String>,
     },
 }
-/// RegExp-owned interpreter state: Annex B.1.2 legacy statics plus the
-/// compiled-pattern and most-recent-subject caches.
+/// RegExp-owned interpreter state: the Annex B.1.2 legacy statics
+/// (`RegExp.input`, `RegExp.$1`-`$9`, `RegExp.lastMatch`, `RegExp.lastParen`,
+/// `RegExp.leftContext`, `RegExp.rightContext`) plus the compiled-pattern and
+/// most-recent-subject caches.
 ///
-/// The left and right contexts retain UTF-16 offsets into `context_input` and
-/// materialize only when their JavaScript accessors run.
+/// All eight legacy fields were previously flat fields on the `Interpreter`
+/// god object, touched only by this file. Colocating them into a single struct
+/// deepens the Interpreter: 8 fields collapse to 1, and the regexp concern
+/// gains a clean seam. See `JobScheduler` for the same pattern (embedded
+/// struct accessed via `self.scheduler`).
+///
+/// `input` and `context_input` are assigned the same subject after a match but
+/// are NOT redundant: the `RegExp.input` setter replaces `input` alone, and
+/// `leftContext`/`rightContext` must keep slicing the subject the last match
+/// actually ran against. Collapsing them into one field silently breaks that.
+/// They retain UTF-16 offsets and materialize only when their accessors run.
+#[derive(Default)]
 pub(crate) struct RegexpLegacyState {
     pub(crate) input: JsString,
     pub(crate) last_match: String,
@@ -5024,24 +5055,6 @@ pub(crate) struct RegexpLegacyState {
     pub(crate) constructor_id: Option<u64>,
     pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
     input_cache: Option<Rc<RegexInput>>,
-}
-
-impl Default for RegexpLegacyState {
-    fn default() -> Self {
-        let empty = JsString::from_vec(Vec::new());
-        Self {
-            input: empty.clone(),
-            last_match: String::new(),
-            last_paren: String::new(),
-            context_input: empty,
-            left_context_end: 0,
-            right_context_start: 0,
-            parens: std::array::from_fn(|_| String::new()),
-            constructor_id: None,
-            regex_cache: HashMap::new(),
-            input_cache: None,
-        }
-    }
 }
 
 pub(crate) struct CachedRegex {
@@ -7714,23 +7727,23 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
 
 /// Inner implementation of RegExp @@replace result collection and processing.
 /// Extracted so the caller can bracket it with gc_temp_roots save/restore.
-/// AdvanceStringIndex per spec. `index` is in UTF-16 code units.
-fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
+/// AdvanceStringIndex per spec (22.2.7.3). `index` is in UTF-16 code units.
+///
+/// The spec defines this over the original String S, so it reads the retained
+/// UTF-16 code units directly. That is both exact — no PUA sentinel can be
+/// confused with a real scalar — and O(1), where scanning a converted view cost
+/// two full passes over the subject on every call.
+fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usize {
     if !unicode {
         return index + 1;
     }
-    let utf16_len = pua_aware_utf16_len(s);
-    if index + 1 >= utf16_len {
+    let code_units = &input.subject.code_units;
+    if index + 1 >= code_units.len() {
         return index + 1;
     }
-    let byte_offset = utf16_to_byte_offset(s, index);
-    if byte_offset >= s.len() {
-        return index + 1;
-    }
-    let c = s[byte_offset..].chars().next().unwrap_or('\0');
-    if pua_to_surrogate(c).is_some() {
-        index + 1
-    } else if c.len_utf16() == 2 {
+    if (0xD800..=0xDBFF).contains(&code_units[index])
+        && (0xDC00..=0xDFFF).contains(&code_units[index + 1])
+    {
         index + 2
     } else {
         index + 1
@@ -7958,8 +7971,6 @@ fn regexp_exec_raw(
     let has_indices = flags.contains('d');
     let unicode = flags.contains('u') || flags.contains('v');
 
-    let input = regex_input.as_str(unicode);
-
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
     let input_utf16_len = regex_input.subject.len();
     let last_index_utf16 = if global || sticky {
@@ -7980,20 +7991,12 @@ fn regexp_exec_raw(
     };
 
     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-    let wtf8_bytes = if is_bytes_mode {
-        regex_input.wtf8()
-    } else {
-        &[]
-    };
-    let last_index_byte = if is_bytes_mode {
-        utf16_to_wtf8_byte_offset(wtf8_bytes, last_index_utf16)
-    } else {
-        regex_input.utf16_to_byte_offset(unicode, last_index_utf16)
-    };
+    let view = RegexView::select(is_bytes_mode, unicode);
+    let last_index_byte = regex_input.utf16_to_byte_offset(view, last_index_utf16);
 
     let mut caps = if is_bytes_mode {
         if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-            match bytes_regex_captures_at(bytes_re, wtf8_bytes, last_index_byte) {
+            match bytes_regex_captures_at(bytes_re, regex_input.wtf8(), last_index_byte) {
                 Some(c) => c,
                 None => {
                     if (global || sticky)
@@ -8008,7 +8011,11 @@ fn regexp_exec_raw(
             unreachable!()
         }
     } else {
-        match regex_captures_at(&cached.compiled, input, last_index_byte) {
+        match regex_captures_at(
+            &cached.compiled,
+            regex_input.as_str(unicode),
+            last_index_byte,
+        ) {
             Some(c) => c,
             None => {
                 if (global || sticky)
@@ -8030,16 +8037,8 @@ fn regexp_exec_raw(
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets
-    let match_start_utf16 = if is_bytes_mode {
-        wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.start)
-    } else {
-        regex_input.byte_offset_to_utf16(unicode, full_match.start)
-    };
-    let match_end_utf16 = if is_bytes_mode {
-        wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.end)
-    } else {
-        regex_input.byte_offset_to_utf16(unicode, full_match.end)
-    };
+    let match_start_utf16 = regex_input.byte_offset_to_utf16(view, full_match.start);
+    let match_end_utf16 = regex_input.byte_offset_to_utf16(view, full_match.end);
 
     if sticky && full_match.start != last_index_byte {
         if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
@@ -8128,13 +8127,8 @@ fn regexp_exec_raw(
             .insert_value("groups".to_string(), groups_val.clone());
 
         if has_indices {
-            let cap_byte_to_utf16 = |offset: usize| -> usize {
-                if is_bytes_mode {
-                    wtf8_byte_offset_to_utf16(wtf8_bytes, offset)
-                } else {
-                    regex_input.byte_offset_to_utf16(unicode, offset)
-                }
-            };
+            let cap_byte_to_utf16 =
+                |offset: usize| -> usize { regex_input.byte_offset_to_utf16(view, offset) };
             let mut index_pairs: Vec<JsValue> = Vec::new();
             for i in 0..caps.len() {
                 match caps.get(i) {
@@ -8488,7 +8482,6 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = regex_input.as_str(true);
 
                 // 4. Let flags be ? ToString(? Get(rx, "flags")).
                 // Per spec, must invoke the flags accessor chain so user overrides of
@@ -8544,16 +8537,7 @@ impl Interpreter {
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = flags_owned.contains('y');
                     let unicode = flags_owned.contains('u') || flags_owned.contains('v');
-                    let input = if is_bytes_mode {
-                        s
-                    } else {
-                        regex_input.as_str(unicode)
-                    };
-                    let wtf8_bytes = if is_bytes_mode {
-                        regex_input.wtf8()
-                    } else {
-                        &[]
-                    };
+                    let view = RegexView::select(is_bytes_mode, unicode);
                     let input_utf16_len = regex_input.subject.len();
                     let mut results: Vec<JsValue> = Vec::new();
                     let mut last_index_utf16: usize = 0;
@@ -8561,19 +8545,24 @@ impl Interpreter {
                         if last_index_utf16 > input_utf16_len {
                             break;
                         }
-                        let last_index_byte = if is_bytes_mode {
-                            utf16_to_wtf8_byte_offset(wtf8_bytes, last_index_utf16)
-                        } else {
-                            regex_input.utf16_to_byte_offset(unicode, last_index_utf16)
-                        };
+                        let last_index_byte =
+                            regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                bytes_regex_captures_at(bytes_re, wtf8_bytes, last_index_byte)
+                                bytes_regex_captures_at(
+                                    bytes_re,
+                                    regex_input.wtf8(),
+                                    last_index_byte,
+                                )
                             } else {
                                 unreachable!()
                             }
                         } else {
-                            regex_captures_at(&cached.compiled, input, last_index_byte)
+                            regex_captures_at(
+                                &cached.compiled,
+                                regex_input.as_str(unicode),
+                                last_index_byte,
+                            )
                         };
                         let Some(caps) = caps else { break };
                         let full_match = caps.get(0).unwrap();
@@ -8583,25 +8572,19 @@ impl Interpreter {
                             break;
                         }
                         let match_text = &full_match.text;
-                        let match_end_utf16 = if is_bytes_mode {
-                            wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.end)
-                        } else {
-                            regex_input.byte_offset_to_utf16(unicode, full_match.end)
-                        };
+                        let match_end_utf16 =
+                            regex_input.byte_offset_to_utf16(view, full_match.end);
 
                         results.push(JsValue::string(regex_output_to_js_string(match_text)));
 
                         if match_text.is_empty() {
-                            let match_start_utf16 = if is_bytes_mode {
-                                wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.start)
-                            } else {
-                                regex_input.byte_offset_to_utf16(unicode, full_match.start)
-                            };
+                            let match_start_utf16 =
+                                regex_input.byte_offset_to_utf16(view, full_match.start);
                             // AdvanceStringIndex per spec operates on the original S, not the
                             // possibly-preprocessed `input` — full_unicode must be able to detect
                             // real surrogate pairs in S even when the matcher runs on a split form.
                             last_index_utf16 =
-                                advance_string_index(s, match_start_utf16, full_unicode);
+                                advance_string_index(&regex_input, match_start_utf16, full_unicode);
                         } else {
                             last_index_utf16 = match_end_utf16;
                         }
@@ -8660,7 +8643,8 @@ impl Interpreter {
                                 } else {
                                     li_num.min(9007199254740991.0).floor() as usize
                                 };
-                                let next_index = advance_string_index(s, this_index, full_unicode);
+                                let next_index =
+                                    advance_string_index(&regex_input, this_index, full_unicode);
                                 if let Err(e) =
                                     set_last_index_strict(interp, rx_id, next_index as f64)
                                 {
@@ -8787,7 +8771,6 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = regex_input.as_str(true);
                 // Non-unicode version for string slicing (surrogates kept as
                 // individual PUA chars so UTF-16 indexing works correctly)
                 let s_slice = regex_input.as_str(false);
@@ -8870,16 +8853,7 @@ impl Interpreter {
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = flags_owned.contains('y');
                     let unicode = flags_owned.contains('u') || flags_owned.contains('v');
-                    let input = if is_bytes_mode {
-                        s
-                    } else {
-                        regex_input.as_str(unicode)
-                    };
-                    let wtf8_bytes = if is_bytes_mode {
-                        regex_input.wtf8()
-                    } else {
-                        &[]
-                    };
+                    let view = RegexView::select(is_bytes_mode, unicode);
                     let input_utf16_len = regex_input.subject.len();
                     let template = replace_str.as_ref().unwrap();
                     let mut accumulated_result = String::new();
@@ -8890,15 +8864,15 @@ impl Interpreter {
                         if last_index_utf16 > input_utf16_len {
                             break;
                         }
-                        let last_index_byte = if is_bytes_mode {
-                            utf16_to_wtf8_byte_offset(wtf8_bytes, last_index_utf16)
-                        } else {
-                            regex_input.utf16_to_byte_offset(unicode, last_index_utf16)
-                        };
+                        let last_index_byte =
+                            regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let mut caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                match bytes_regex_captures_at(bytes_re, wtf8_bytes, last_index_byte)
-                                {
+                                match bytes_regex_captures_at(
+                                    bytes_re,
+                                    regex_input.wtf8(),
+                                    last_index_byte,
+                                ) {
                                     Some(c) => c,
                                     None => break,
                                 }
@@ -8906,7 +8880,11 @@ impl Interpreter {
                                 unreachable!()
                             }
                         } else {
-                            match regex_captures_at(&cached.compiled, input, last_index_byte) {
+                            match regex_captures_at(
+                                &cached.compiled,
+                                regex_input.as_str(unicode),
+                                last_index_byte,
+                            ) {
                                 Some(c) => c,
                                 None => break,
                             }
@@ -8922,21 +8900,15 @@ impl Interpreter {
 
                         let full_match = caps.get(0).unwrap();
                         let matched = &full_match.text;
-                        let match_start_utf16 = if is_bytes_mode {
-                            wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.start)
-                        } else {
-                            regex_input.byte_offset_to_utf16(unicode, full_match.start)
-                        };
-                        let match_end_utf16 = if is_bytes_mode {
-                            wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.end)
-                        } else {
-                            regex_input.byte_offset_to_utf16(unicode, full_match.end)
-                        };
+                        let match_start_utf16 =
+                            regex_input.byte_offset_to_utf16(view, full_match.start);
+                        let match_end_utf16 =
+                            regex_input.byte_offset_to_utf16(view, full_match.end);
                         let match_length_utf16 =
                             regex_output_to_js_string(matched).code_units.len();
                         let position_utf16 = match_start_utf16;
                         let position = regex_input
-                            .utf16_to_byte_offset(false, position_utf16)
+                            .utf16_to_byte_offset(RegexView::NonUnicode, position_utf16)
                             .min(length_s);
 
                         // Build captures as JsValues for get_substitution
@@ -9018,7 +8990,7 @@ impl Interpreter {
                             JsValue::UNDEFINED
                         };
                         let tail_pos = regex_input.utf16_to_byte_offset(
-                            false,
+                            RegexView::NonUnicode,
                             (position_utf16 + match_length_utf16).min(s_utf16_len),
                         );
                         let replacement = match get_substitution(
@@ -9045,7 +9017,7 @@ impl Interpreter {
                         // original S, not the possibly-preprocessed `input`.
                         if matched.is_empty() {
                             last_index_utf16 =
-                                advance_string_index(s, match_start_utf16, full_unicode);
+                                advance_string_index(&regex_input, match_start_utf16, full_unicode);
                         } else {
                             last_index_utf16 = match_end_utf16;
                         }
@@ -9128,7 +9100,8 @@ impl Interpreter {
                                     };
                                     n as usize
                                 };
-                                let next_index = advance_string_index(s, this_index, full_unicode);
+                                let next_index =
+                                    advance_string_index(&regex_input, this_index, full_unicode);
                                 match set_last_index_strict(interp, rx_id, next_index as f64) {
                                     Ok(()) => {}
                                     Err(e) => {
@@ -9227,7 +9200,7 @@ impl Interpreter {
                         (
                             utf16_pos,
                             regex_input
-                                .utf16_to_byte_offset(false, utf16_pos)
+                                .utf16_to_byte_offset(RegexView::NonUnicode, utf16_pos)
                                 .min(length_s),
                         )
                     };
@@ -9317,7 +9290,7 @@ impl Interpreter {
                             JsValue::UNDEFINED
                         };
                         let tail_pos = regex_input.utf16_to_byte_offset(
-                            false,
+                            RegexView::NonUnicode,
                             (position_utf16 + match_length_utf16).min(s_utf16_len),
                         );
                         match get_substitution(
@@ -9340,7 +9313,7 @@ impl Interpreter {
 
                     // p. If position >= nextSourcePosition, then
                     let tail_pos_final = regex_input.utf16_to_byte_offset(
-                        false,
+                        RegexView::NonUnicode,
                         (position_utf16 + match_length_utf16).min(s_utf16_len),
                     );
                     if position >= next_source_position {
@@ -9387,6 +9360,8 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
+                // @@split slices S itself, so it works in the Unicode view
+                // regardless of the splitter's own flags.
                 let s = regex_input.as_str(true);
 
                 // 3. Let C be ? SpeciesConstructor(rx, %RegExp%).
@@ -9505,7 +9480,7 @@ impl Interpreter {
 
                     // c. If z is null, set q to AdvanceStringIndex(S, q, unicodeMatching).
                     if z_val.is_null() {
-                        q = advance_string_index(s, q, unicode_matching);
+                        q = advance_string_index(&regex_input, q, unicode_matching);
                         continue;
                     }
 
@@ -9532,14 +9507,14 @@ impl Interpreter {
 
                     //   ii. If e = p, set q to AdvanceStringIndex(S, q, unicodeMatching).
                     if e_length == p {
-                        q = advance_string_index(s, q, unicode_matching);
+                        q = advance_string_index(&regex_input, q, unicode_matching);
                         continue;
                     }
 
                     //   iii. Else,
                     // Push substring from p to q (convert UTF-16 positions to byte offsets)
-                    let p_byte = regex_input.utf16_to_byte_offset(true, p);
-                    let q_byte = regex_input.utf16_to_byte_offset(true, q);
+                    let p_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, p);
+                    let q_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, q);
                     let t = &s[p_byte..q_byte];
                     a.push(JsValue::string(regex_output_to_js_string(t)));
                     length_a += 1;
@@ -9554,7 +9529,7 @@ impl Interpreter {
                     let z_id = match z_val.as_object_id() {
                         Some(id) => id,
                         None => {
-                            q = advance_string_index(s, q, unicode_matching);
+                            q = advance_string_index(&regex_input, q, unicode_matching);
                             continue;
                         }
                     };
@@ -9594,7 +9569,7 @@ impl Interpreter {
                 }
 
                 // 16. Push remaining substring
-                let p_byte = regex_input.utf16_to_byte_offset(true, p);
+                let p_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, p);
                 let t = &s[p_byte..];
                 a.push(JsValue::string(regex_output_to_js_string(t)));
                 Completion::Normal(interp.create_array(a))
@@ -9828,11 +9803,7 @@ impl Interpreter {
                     );
                 }
 
-                let input_value = JsValue::string(string.clone());
-                let regex_input = match regex_input_for_value(interp, &input_value) {
-                    Ok(input) => input,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let regex_input = regex_input_for_subject(interp, string.clone());
                 let regex_string = regex_input.as_str(true);
 
                 // If we have a matcher object, use RegExpExec
@@ -9911,7 +9882,7 @@ impl Interpreter {
                             li_num.min(9007199254740991.0).floor() as usize
                         };
                         let next_index =
-                            advance_string_index(regex_string, this_index, full_unicode);
+                            advance_string_index(&regex_input, this_index, full_unicode);
                         if let Err(e) = spec_set(
                             interp, mid, "lastIndex",
                             JsValue::number(next_index as f64), true,
@@ -10759,7 +10730,7 @@ mod nullable_quantifier_rewrite_tests {
 
 #[cfg(test)]
 mod regex_input_cache_tests {
-    use super::{Interpreter, JsString, JsValue, Rc, RegexInput, regex_input_for_value};
+    use super::{Interpreter, JsString, JsValue, Rc, RegexInput, RegexView, regex_input_for_value};
 
     #[test]
     fn reuses_conversion_for_the_same_js_string_identity() {
@@ -10778,13 +10749,12 @@ mod regex_input_cache_tests {
     #[test]
     fn maps_unicode_offsets_from_the_original_utf16_subject() {
         let input = RegexInput::new(JsString::from_vec(vec![0xDB80, 0xDC00, b'x' as u16]));
-        let unicode = input.as_str(true);
 
-        assert_eq!(input.utf16_to_byte_offset(true, 0), 0);
-        assert_eq!(input.utf16_to_byte_offset(true, 1), 0);
-        assert_eq!(input.utf16_to_byte_offset(true, 2), 4);
-        assert_eq!(input.byte_offset_to_utf16(true, 4), 2);
-        assert_eq!(input.byte_offset_to_utf16(true, 5), 3);
+        assert_eq!(input.utf16_to_byte_offset(RegexView::Unicode, 0), 0);
+        assert_eq!(input.utf16_to_byte_offset(RegexView::Unicode, 1), 0);
+        assert_eq!(input.utf16_to_byte_offset(RegexView::Unicode, 2), 4);
+        assert_eq!(input.byte_offset_to_utf16(RegexView::Unicode, 4), 2);
+        assert_eq!(input.byte_offset_to_utf16(RegexView::Unicode, 5), 3);
 
         let mixed = RegexInput::new(JsString::from_vec(vec![
             0xD800,
@@ -10792,10 +10762,9 @@ mod regex_input_cache_tests {
             0xDC00,
             b'x' as u16,
         ]));
-        let unicode = mixed.as_str(true);
-        assert_eq!(mixed.utf16_to_byte_offset(true, 2), 4);
-        assert_eq!(mixed.utf16_to_byte_offset(true, 3), 8);
-        assert_eq!(mixed.byte_offset_to_utf16(true, 8), 3);
-        assert_eq!(mixed.byte_offset_to_utf16(true, 9), 4);
+        assert_eq!(mixed.utf16_to_byte_offset(RegexView::Unicode, 2), 4);
+        assert_eq!(mixed.utf16_to_byte_offset(RegexView::Unicode, 3), 8);
+        assert_eq!(mixed.byte_offset_to_utf16(RegexView::Unicode, 8), 3);
+        assert_eq!(mixed.byte_offset_to_utf16(RegexView::Unicode, 9), 4);
     }
 }
