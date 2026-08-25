@@ -1145,6 +1145,36 @@ fn top_level_bytecode_var_is_a_global_property() {
 }
 
 #[test]
+fn top_level_bytecode_var_redeclaration_preserves_existing_global_property() {
+    use crate::parser::Parser;
+
+    for bytecode in [false, true] {
+        let mut interp = Interpreter::new();
+        interp.bytecode_enabled = bytecode;
+
+        let mut setup = Parser::new(
+            "Object.defineProperty(globalThis, 'existingBytecodeGlobal', { \
+                value: 17, writable: true, configurable: true \
+            });",
+        )
+        .expect("setup parser init");
+        let setup_program = setup.parse_program().expect("parse setup");
+        assert!(matches!(interp.run(&setup_program), Completion::Normal(_)));
+
+        let mut redeclaration = Parser::new("var existingBytecodeGlobal; existingBytecodeGlobal;")
+            .expect("redeclaration parser init");
+        let redeclaration_program = redeclaration.parse_program().expect("parse redeclaration");
+        let completion = interp.run(&redeclaration_program);
+
+        let Completion::Normal(value) = completion else {
+            panic!("expected normal Script completion, got {completion:?}");
+        };
+        assert_eq!(value.as_number(), Some(17.0));
+        assert_eq!(interp.bytecode_chunks_executed, usize::from(bytecode));
+    }
+}
+
+#[test]
 fn top_level_bytecode_checks_global_declarations_before_execution() {
     use crate::parser::Parser;
 

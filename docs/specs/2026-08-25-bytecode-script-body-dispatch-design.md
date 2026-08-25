@@ -71,9 +71,12 @@ root on normal or abrupt exit.
 
 The top-level dispatcher installs the Script Body's IC handle around VM
 execution and keeps the global environment in `call_stack_envs`, matching the
-tree-walker Body lifetime. Script Bodies are normally evaluated once, so this
-slice does not add a second bytecode cache keyed by AST identity; function
-object caching remains unchanged.
+tree-walker Body lifetime. Its Script-specific VM entry skips the function
+chunk's `var_names` binding prologue because GlobalDeclarationInstantiation has
+already established the Script's bindings; rerunning that prologue would
+incorrectly shadow pre-existing global-object properties. Script Bodies are
+normally evaluated once, so this slice does not add a second bytecode cache
+keyed by AST identity; function object caching remains unchanged.
 
 ## Eligibility and scope
 

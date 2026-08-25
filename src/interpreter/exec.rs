@@ -32,7 +32,7 @@ impl Interpreter {
                     err
                 } else {
                     self.call_stack_envs.push(env.clone());
-                    let result = crate::interpreter::bytecode::vm::run_chunk(
+                    let result = crate::interpreter::bytecode::vm::run_script_chunk(
                         self,
                         &chunk,
                         env,
