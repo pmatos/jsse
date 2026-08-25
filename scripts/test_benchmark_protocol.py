@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import os
 import stat
 import subprocess
@@ -34,6 +35,32 @@ def load_runner_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def assert_scores_are_self_consistent(case, scores):
+    """Assert overall_score is the geometric mean of the sub-scores beside it.
+
+    JetStream defines the overall score that way, so any aggregation across
+    repeats has to preserve it or the published score contradicts the
+    sub-scores reported next to it.
+    """
+    components = [scores["first_score"], scores["average_score"]]
+    if scores["worst_score"] is not None:
+        components.append(scores["worst_score"])
+    expected = math.exp(sum(math.log(c) for c in components) / len(components))
+    case.assertAlmostEqual(scores["overall_score"], expected, places=9)
+
+    for time_key, score_key in (
+        ("first_time", "first_score"),
+        ("average_time", "average_score"),
+        ("worst_time", "worst_score"),
+    ):
+        if scores[time_key] is None:
+            case.assertIsNone(scores[score_key])
+            continue
+        case.assertAlmostEqual(
+            scores[score_key], 5000.0 / max(scores[time_key], 1.0), places=9
+        )
 
 
 class LoadGateTests(unittest.TestCase):
@@ -153,6 +180,58 @@ class RepeatSummaryTests(unittest.TestCase):
         for values in ([], [0.0, 1.0], [float("inf"), 1.0]):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 summarize_repeats(values)
+
+
+class ScoreAggregationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def measurement(self, results, worst_case_count=0):
+        return {"scores": self.runner.compute_scores(results, worst_case_count)}
+
+    def test_single_measurement_scores_are_self_consistent(self):
+        scores = self.runner.compute_scores([100.0, 200.0, 400.0], 1)
+
+        assert_scores_are_self_consistent(self, scores)
+        self.assertIsNotNone(scores["worst_score"])
+
+    def test_aggregate_of_divergent_measurements_stays_self_consistent(self):
+        # Chosen so a per-field median of the *scores* would contradict the
+        # geometric mean beside it: the first/average orderings disagree.
+        measurements = [
+            self.measurement([100.0, 100.0]),
+            self.measurement([200.0, 400.0]),
+            self.measurement([300.0, 200.0]),
+        ]
+
+        scores = self.runner.median_scores(measurements)
+
+        assert_scores_are_self_consistent(self, scores)
+        self.assertEqual(scores["first_time"], 200.0)
+        self.assertEqual(scores["average_time"], 200.0)
+
+    def test_aggregate_medians_the_times(self):
+        measurements = [
+            self.measurement([10.0, 30.0, 50.0], 1),
+            self.measurement([20.0, 60.0, 100.0], 1),
+            self.measurement([90.0, 270.0, 450.0], 1),
+        ]
+
+        scores = self.runner.median_scores(measurements)
+
+        self.assertEqual(scores["first_time"], 20.0)
+        self.assertEqual(scores["worst_time"], 100.0)
+        assert_scores_are_self_consistent(self, scores)
+
+    def test_absent_worst_case_stays_absent_after_aggregation(self):
+        measurements = [self.measurement([10.0, 20.0]) for _ in range(3)]
+
+        scores = self.runner.median_scores(measurements)
+
+        self.assertIsNone(scores["worst_time"])
+        self.assertIsNone(scores["worst_score"])
+        assert_scores_are_self_consistent(self, scores)
 
 
 class RunnerMeasurementTests(unittest.TestCase):
@@ -299,16 +378,32 @@ class RunnerCliTests(unittest.TestCase):
         output = json.loads(output_path.read_text(encoding="utf-8"))
         benchmark = output["results"][0]
         self.assertEqual(benchmark["repeat_summary"]["n"], 3)
-        self.assertEqual(
-            benchmark["scores"]["overall_score"],
-            benchmark["repeat_summary"]["median"],
-        )
+        assert_scores_are_self_consistent(self, benchmark["scores"])
         self.assertEqual(len(benchmark["measurements"]), 3)
         self.assertEqual(output["measurement_protocol"]["repeats"], 3)
         self.assertIn("cpu_model", output["host"])
         self.assertIn("nproc", output["host"])
         self.assertIn("loadavg_start", output["host"])
         self.assertEqual(self.counter.read_text(encoding="utf-8"), "3")
+
+    def test_busy_host_exits_distinctly_and_keeps_existing_baseline(self):
+        if read_load_averages()[0] == 0.0:
+            self.skipTest("host reports zero load, so no threshold can trip")
+
+        baseline = self.root / "jetstream-results.json"
+        baseline.write_text('{"overall_score": 1234.5}', encoding="utf-8")
+
+        # Any nonzero load exceeds a zero threshold, so the gate always trips.
+        result = self.run_runner("--idle-threshold", "0")
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertNotEqual(result.returncode, 2)
+        self.assertIn("BUSY", result.stdout)
+        self.assertIn("existing baseline preserved", result.stdout)
+        self.assertEqual(
+            json.loads(baseline.read_text(encoding="utf-8")),
+            {"overall_score": 1234.5},
+        )
 
     def test_repeats_below_three_are_rejected(self):
         result = self.run_runner("--repeats", "2", "--no-idle-gate")

@@ -22,6 +22,12 @@ Options:
     --list              List available benchmarks and exit
     -j N                Number of parallel workers (default: 1, benchmarks run sequentially)
     -v, --verbose       Verbose output
+
+Exit codes:
+    0  every selected benchmark produced a result
+    1  engine or JetStream checkout missing
+    2  invalid command-line arguments (argparse)
+    3  a busy host aborted the run before the suite finished
 """
 
 import argparse
@@ -47,6 +53,10 @@ from benchmark_protocol import (
     require_idle,
     summarize_repeats,
 )
+
+# Distinct from argparse's usage-error exit code 2, so a CI wrapper can tell
+# "host was too busy" apart from "the flags were wrong".
+EXIT_BUSY_HOST = 3
 
 # JS-only benchmarks extracted from JetStreamDriver.js BENCHMARKS array.
 # Each entry: (name, type, files, preload_dict_or_None, default_iterations, deterministic_random, worst_case_count)
@@ -580,30 +590,22 @@ def to_score(time_ms):
     return 5000.0 / max(time_ms, 1.0)
 
 
-def compute_scores(results, worst_case_count):
-    if not results:
-        return None
-    first_time = results[0]
+def scores_from_times(first_time, avg_time, worst_time):
+    """Derive every score field from the three measured times.
+
+    Sole definition of the score relationships, so single-measurement and
+    across-measurement aggregation cannot drift apart.
+    """
     first_score = to_score(first_time)
-
-    rest = sorted(results[1:], reverse=True)
-
-    worst_time = None
-    worst_score = None
-    if worst_case_count and len(rest) >= worst_case_count:
-        worst_times = rest[:worst_case_count]
-        worst_time = sum(worst_times) / len(worst_times)
-        worst_score = to_score(worst_time)
-
-    avg_time = sum(rest) / len(rest) if rest else first_time
     avg_score = to_score(avg_time)
+    worst_score = to_score(worst_time) if worst_time is not None else None
 
-    scores = [first_score, avg_score]
+    components = [first_score, avg_score]
     if worst_score is not None:
-        scores.append(worst_score)
+        components.append(worst_score)
 
     # Overall score is geometric mean of sub-scores
-    overall = math.exp(sum(math.log(s) for s in scores) / len(scores))
+    overall = math.exp(sum(math.log(s) for s in components) / len(components))
 
     return {
         "first_time": first_time,
@@ -614,6 +616,21 @@ def compute_scores(results, worst_case_count):
         "average_score": avg_score,
         "overall_score": overall,
     }
+
+
+def compute_scores(results, worst_case_count):
+    if not results:
+        return None
+    first_time = results[0]
+    rest = sorted(results[1:], reverse=True)
+
+    worst_time = None
+    if worst_case_count and len(rest) >= worst_case_count:
+        worst_times = rest[:worst_case_count]
+        worst_time = sum(worst_times) / len(worst_times)
+
+    avg_time = sum(rest) / len(rest) if rest else first_time
+    return scores_from_times(first_time, avg_time, worst_time)
 
 
 def run_benchmark_once(
@@ -749,16 +766,28 @@ def run_benchmark_once(
 
 
 def median_scores(measurements):
-    """Take the median of every numeric JetStream score component."""
-    combined = {}
-    for key in measurements[0]["scores"]:
+    """Aggregate measurements by medianing the times, then re-deriving scores.
+
+    Medianing each score field independently would leave overall_score
+    inconsistent with the sub-scores beside it, because the median of a
+    geometric mean is not the geometric mean of the medians. Medianing the
+    measured times instead keeps the emitted scores object satisfying the
+    same relationships compute_scores guarantees for a single measurement.
+    """
+
+    def median_time(key):
         values = [
             measurement["scores"][key]
             for measurement in measurements
             if measurement["scores"][key] is not None
         ]
-        combined[key] = median(values) if values else None
-    return combined
+        return median(values) if values else None
+
+    return scores_from_times(
+        median_time("first_time"),
+        median_time("average_time"),
+        median_time("worst_time"),
+    )
 
 
 def run_benchmark(
@@ -1013,7 +1042,7 @@ def main():
             if repeat_summary["unstable"]:
                 stability = f"  [UNSTABLE {repeat_summary['relative_range']:.1%} range]"
             print(
-                f"  PASS  {name:40s}  score median: {overall:8.1f}  "
+                f"  PASS  {name:40s}  score: {overall:8.1f}  "
                 f"N={repeat_summary['n']}  "
                 f"range: {repeat_summary['min']:.1f}-{repeat_summary['max']:.1f}  "
                 f"avg: {avg_ms:8.1f}ms{stability}{compare_str}"
@@ -1138,12 +1167,19 @@ def main():
             json.dump(output, f, indent=2)
         print(f"\nResults written to {args.json}")
 
-    # Always write to a default location too
-    default_path = "jetstream-results.json"
-    with open(default_path, "w") as f:
-        json.dump(output, f, indent=2)
+    # Always write to a default location too, except when a busy host aborted
+    # the run: a truncated suite must not overwrite a complete baseline.
+    if busy:
+        print(
+            "\nSkipped default jetstream-results.json write "
+            "(run aborted by busy host; existing baseline preserved)"
+        )
+    else:
+        default_path = "jetstream-results.json"
+        with open(default_path, "w") as f:
+            json.dump(output, f, indent=2)
 
-    return 2 if busy else 0
+    return EXIT_BUSY_HOST if busy else 0
 
 
 if __name__ == "__main__":

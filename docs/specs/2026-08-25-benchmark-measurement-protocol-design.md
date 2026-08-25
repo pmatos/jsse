@@ -59,11 +59,24 @@ and cannot satisfy the protocol. The disabled gate is printed prominently and
 recorded in JSON so diagnostic runs cannot be mistaken for controlled results.
 
 For passing benchmarks, the existing `scores` object remains the comparison
-interface, with each numeric field set to the median across successful outer
-measurements. The result also stores each measurement, plus a `repeat_summary`
-for overall score. Console output shows median score, N, min-max score, and an
-`UNSTABLE` marker above the 5% limit. A busy check returns a distinct result,
-stops further sequential benchmarks, writes partial JSON, and exits nonzero.
+interface. Aggregation medians the measured *times* across successful outer
+measurements and re-derives every score from them through the single
+`scores_from_times` definition that `compute_scores` also uses. Medianing each
+score field independently was rejected: the median of a geometric mean is not
+the geometric mean of the medians, so it would publish an `overall_score` that
+contradicts the sub-scores printed beside it. `raw_times` and `iterations` come
+from the measurement nearest the median, so they describe one real run rather
+than a synthetic blend; `scores` is derived from median times across N and is
+therefore not re-derivable from that single `raw_times` array. Every individual
+measurement is retained under `measurements` for auditing, plus a
+`repeat_summary` of the observed overall scores. Console output shows the score,
+N, the min-max range of the repeats, and an `UNSTABLE` marker above the 5%
+limit. A busy check returns a distinct result, stops further sequential
+benchmarks, and exits 3 — chosen so a CI wrapper can distinguish a busy host
+from argparse's usage-error exit 2. A refused run writes partial JSON only to an
+explicitly requested `--json` path; it deliberately does not touch the default
+`jetstream-results.json`, because overwriting a complete baseline with a
+truncated suite is the comparability hazard this work exists to remove.
 
 The top-level JSON adds a `measurement_protocol` object and a `host` object.
 The host object includes CPU model, logical CPU count, start load averages,
@@ -89,10 +102,17 @@ reported as unpinned with a reason rather than guessed.
 - Unit-test heterogeneous, uniform, incomplete, and affinity-restricted CPU
   topology detection using temporary sysfs trees.
 - Unit-test repeat medians, ranges, and the 5% instability boundary.
+- Unit-test that aggregation keeps `overall_score` equal to the geometric mean
+  of the sub-scores beside it, including when the per-measurement first-time and
+  average-time orderings disagree, and when no worst-case window exists.
 - Use a temporary fake JetStream checkout and engine to verify CLI repeat
-  aggregation, affinity command construction, JSON host metadata, and busy
-  refusal without running the full benchmark suite.
-- Run the documented synthetic burner check and the repository quality gate.
+  aggregation, affinity command construction, JSON host metadata, busy refusal
+  with exit 3, and that a refusal leaves an existing `jetstream-results.json`
+  intact — all without running the full benchmark suite.
+- Run the synthetic burner check documented in `README.md` under "Running
+  JetStream 3", and the repository quality gate. The issue's suggested single
+  `yes > /dev/null` asymptotes the one-minute average to only ~1.0, below the
+  1.5 default, so the documented recipe uses three burners.
 
 This is benchmark infrastructure only. There is no relevant ECMAScript section
 or targeted test262 directory, and the test262 pass count must remain unchanged.
