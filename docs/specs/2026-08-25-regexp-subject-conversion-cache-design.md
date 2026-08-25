@@ -90,6 +90,15 @@ UTF-16 offsets, rather than backend byte offsets, are retained for Annex B
 contexts. This preserves lone surrogates and makes context materialization
 independent of which regex backend produced the match.
 
+Each lazy form is built from the retained UTF-16 code units, never derived from
+another form. The PUA encoding of lone surrogates is not injective: U+F0000 is a
+real assignable code point, so a genuine plane-15 scalar in U+F0000-U+F07FF is
+indistinguishable in the Unicode form from an encoded lone surrogate, and
+deriving the non-Unicode form from it silently loses one code unit of the
+subject. Aliasing is therefore confined to pure-ASCII subjects, where no
+surrogate encoding is in play. The residual divergences that the ambiguous
+encoding itself causes are tracked separately and are unchanged by this slice.
+
 ## Validation
 
 - Add unit coverage proving repeated use of the same `JsString` returns the

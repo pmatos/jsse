@@ -413,7 +413,11 @@ impl RegexInput {
             &self.unicode
         } else {
             self.non_unicode
-                .get_or_init(|| Rc::from(split_surrogates_for_non_unicode(&self.unicode)))
+                .get_or_init(|| {
+                    Rc::from(js_string_to_regex_input_non_unicode(
+                        &self.subject.code_units,
+                    ))
+                })
                 .as_ref()
         }
     }
@@ -7792,22 +7796,6 @@ fn get_substitution(
         }
     }
     Ok(result)
-}
-
-fn split_surrogates_for_non_unicode(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    for c in input.chars() {
-        if c as u32 >= 0x10000 && pua_to_surrogate(c).is_none() {
-            let cp = c as u32;
-            let hi = ((cp - 0x10000) >> 10) + 0xD800;
-            let lo = ((cp - 0x10000) & 0x3FF) + 0xDC00;
-            result.push(surrogate_to_pua(hi));
-            result.push(surrogate_to_pua(lo));
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 fn resolve_named_group_matches<'a>(
