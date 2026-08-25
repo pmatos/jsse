@@ -71,6 +71,34 @@ if (RegExp.input !== "overridden") {
 if (RegExp["$_"] !== "overridden") {
   throw new Test262Error('RegExp.$_ after set should be "overridden", got: ' + RegExp["$_"]);
 }
+// Setting [[RegExpInput]] must not alter contexts retained from the last match.
+if (RegExp.leftContext !== "abc " || RegExp.rightContext !== " def") {
+  throw new Test262Error("setting RegExp.input changed the last match contexts");
+}
+
+// Retained input and lazily materialized contexts preserve raw UTF-16 code
+// units, including unpaired surrogates.
+var surrogateInput = "\ud800A\udc00";
+/A/.exec(surrogateInput);
+if (
+  RegExp.input.length !== 3 ||
+  RegExp.input.charCodeAt(0) !== 0xd800 ||
+  RegExp.input.charCodeAt(2) !== 0xdc00
+) {
+  throw new Test262Error("RegExp.input did not preserve lone surrogates");
+}
+if (
+  RegExp.leftContext.length !== 1 ||
+  RegExp.leftContext.charCodeAt(0) !== 0xd800
+) {
+  throw new Test262Error("RegExp.leftContext did not preserve the lead surrogate");
+}
+if (
+  RegExp.rightContext.length !== 1 ||
+  RegExp.rightContext.charCodeAt(0) !== 0xdc00
+) {
+  throw new Test262Error("RegExp.rightContext did not preserve the trail surrogate");
+}
 
 // --- Subclass receiver throws TypeError ---
 class MyRegExp extends RegExp {}

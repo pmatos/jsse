@@ -68,7 +68,9 @@ content rather than necessarily duplicating the full subject.
 
 The UTF-16-to-regex conversion will reserve capacity. Pure ASCII subjects take
 an exact-capacity byte conversion fast path, and the non-Unicode form aliases
-the Unicode form instead of performing another pass.
+the Unicode form instead of performing another pass. `RegexInput` also retains
+the ASCII classification so byte/UTF-16 offset conversion does not rediscover
+it by scanning the complete subject on every exec.
 
 Compiled-pattern cache key redesign and non-ASCII byte-offset maps are excluded
 from this slice. Pattern keys are normally small and do not account for the
