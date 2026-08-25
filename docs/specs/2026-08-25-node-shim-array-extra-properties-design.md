@@ -92,12 +92,15 @@ used by the hardened inspector. A missing descriptor degrades to the existing
 `undefined` rendering rather than a property access.
 
 The plain-jsse fallback has no unwrapping seam, so `v` there may still be a
-Proxy and `Object.keys` dispatches its `ownKeys` trap — user code that the
-pre-existing index-descriptor probes already reach through the
-`getOwnPropertyDescriptor` trap. Key-mode `EnumerableOwnProperties` can invoke
+Proxy: `Object.keys` dispatches its `ownKeys` trap, and each named key it
+yields is then read back through the `getOwnPropertyDescriptor` trap — both
+user code, and both newly reachable, since the pre-existing probes only ever
+touched `length` and index keys. Key-mode `EnumerableOwnProperties` can invoke
 neither indexed nor named getters, but a hostile or merely throwing trap must
-not turn a diagnostic print into a throw, so the fallback enumeration is
-guarded and degrades to no extra properties.
+not turn a diagnostic print into a throw, so the enumeration *and* the
+per-key descriptor reads are guarded together and degrade to no extra
+properties. Parts are accumulated locally and returned only on success, so a
+throw part-way through cannot leave a half-rendered tail.
 
 ## Validation
 

@@ -1189,6 +1189,17 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "[ '4294967295': 'max', '-0': 'minus' ]",
     "inspect preserves numeric-looking array property names"
   );
+  var arrayWithHiddenProp = [1];
+  Object.defineProperty(arrayWithHiddenProp, "hidden", {
+    value: 9,
+    enumerable: false,
+    configurable: true,
+  });
+  eq(
+    util.inspect(arrayWithHiddenProp),
+    "[ 1 ]",
+    "inspect omits a non-enumerable array property"
+  );
   var arrayWithProtoName = [1];
   Object.defineProperty(arrayWithProtoName, "__proto__", {
     value: 7,

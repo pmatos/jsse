@@ -110,8 +110,9 @@ command -v node >/dev/null 2>&1 && check_exit node node
 # The library harness always passes --node, but node-shim.js documents a
 # degraded pure-JS fallback for plain jsse runs. Cover that path directly so the
 # fallback stream never recurses through the shimmed console methods, and so the
-# Object.keys-based array extra-property fallback (which, without the host floor,
-# cannot unwrap a Proxy first) stays non-throwing.
+# array extra-property fallback (which, without the host floor, cannot unwrap a
+# Proxy first) stays non-throwing for both the ownKeys enumeration and the
+# per-key descriptor reads that follow it.
 echo ""
 echo "== jsse fallback without --node =="
 FALLBACK_PROBE="$TMP/fallback-probe.cjs"
@@ -130,6 +131,23 @@ var fallbackProxy = new Proxy([1, 2], {
   },
 });
 console.log(util.inspect(fallbackProxy));
+var fallbackGopdCalls = 0;
+var fallbackTarget = [1, 2];
+Object.defineProperty(fallbackTarget, "w", {
+  value: 5,
+  enumerable: true,
+  configurable: true,
+});
+var fallbackDescProxy = new Proxy(fallbackTarget, {
+  getOwnPropertyDescriptor: function (t, k) {
+    if (k === "w") {
+      fallbackGopdCalls++;
+      if (fallbackGopdCalls > 1) throw new Error("descriptor trap called");
+    }
+    return Reflect.getOwnPropertyDescriptor(t, k);
+  },
+});
+console.log(util.inspect(fallbackDescProxy));
 process.stdout.write("partial");
 process.exit(0);
 PROBE
@@ -147,6 +165,7 @@ fallback stderr
 fallback console
 fallback error
 [ 1, z: 2 ]
+[ 1, 2 ]
 [ 1, 2 ]
 partial
 EXPECTED

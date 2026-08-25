@@ -643,6 +643,41 @@
       return label + ": " + renderDescriptor(desc, depth);
     }
 
+    // Node-visible extra named properties, rendered after the element phase.
+    // The host metadata hook walks only descriptor-backed property order, never
+    // the dense element store, so this pass cannot undo the 100-index cap, and
+    // it reads an unwrapped target so no handler trap runs.
+    //
+    // Without --node there is no unwrapping seam: `v` may still be a Proxy, so
+    // both the enumeration and every per-key descriptor read are user code. A
+    // diagnostic print must not start throwing where it previously rendered, so
+    // the whole phase is guarded and degrades to no extra properties. Parts are
+    // accumulated locally and returned only on success, so a throw mid-way
+    // cannot leave the caller with a half-rendered tail.
+    function arrayExtraMembers(v, length, depth) {
+      if (hostArrayExtraKeys) return namedMembers(v, hostArrayExtraKeys(v), depth);
+      // Object.keys is a safe descriptor-only fallback for small Arrays, but it
+      // materializes every dense index key; skip it above the cap, where the
+      // index phase's truncation marker already stands in for the elements.
+      if (length > MAX_INSPECT_ARRAY_LENGTH) return [];
+      try {
+        return namedMembers(v, objectKeys(v), depth);
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // Render only the non-index keys: the index phase (or its truncation
+    // marker) already represents canonical array indices.
+    function namedMembers(v, keys, depth) {
+      var parts = [];
+      for (var i = 0; i < keys.length; i++) {
+        if (isArrayIndexKey(keys[i])) continue;
+        arrayPush(parts, renderMember(v, keys[i], depth));
+      }
+      return parts;
+    }
+
     // Array length and elements are read from own descriptors on the unwrapped
     // target. A missing descriptor is a hole, never an invitation to read
     // through Array.prototype (which could invoke an inherited getter).
@@ -684,31 +719,8 @@
           "... " + remaining + " more item" + (remaining === 1 ? "" : "s")
         );
       }
-      // The host metadata hook walks only descriptor-backed property order,
-      // never the dense element store, so this pass cannot undo the 100-index
-      // cap. Without --node, Object.keys is a safe descriptor-only fallback for
-      // small Arrays; skip it above the cap rather than materializing every
-      // dense index key. The index phase (or its truncation marker) already
-      // represents canonical array indices, so append only named strings.
-      var keys = [];
-      if (hostArrayExtraKeys) {
-        keys = hostArrayExtraKeys(v);
-      } else if (length <= MAX_INSPECT_ARRAY_LENGTH) {
-        // Without the host floor `v` is never unwrapped, so it may still be a
-        // Proxy whose ownKeys trap is user code. A diagnostic print must not
-        // start throwing where it previously rendered, so a failed enumeration
-        // degrades to no extra properties.
-        try {
-          keys = objectKeys(v);
-        } catch (e) {
-          keys = [];
-        }
-      }
-      for (var j = 0; j < keys.length; j++) {
-        var k = keys[j];
-        if (isArrayIndexKey(k)) continue;
-        arrayPush(parts, renderMember(v, k, depth));
-      }
+      var extras = arrayExtraMembers(v, length, depth);
+      for (var e = 0; e < extras.length; e++) arrayPush(parts, extras[e]);
       if (!parts.length) return "[]";
       return "[ " + arrayJoin(parts, ", ") + " ]";
     }
