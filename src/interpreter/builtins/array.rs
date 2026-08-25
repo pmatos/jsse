@@ -926,7 +926,9 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "Array".to_string();
         self.get_object_cell_expect(proto_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Array(Vec::new());
+            crate::interpreter::types::ObjectKind::Array(
+                crate::interpreter::types::ArrayData::default(),
+            );
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
@@ -3634,6 +3636,9 @@ impl Interpreter {
             .array_prototype
             .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
+            crate::interpreter::types::ArrayData::default(),
+        );
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_value(i.to_string(), v.clone());
         }
@@ -3641,7 +3646,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::number(values.len() as f64), true, false, false),
         );
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
+        *obj_data.array_elements_mut().unwrap() = values;
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
     }
@@ -3654,6 +3659,9 @@ impl Interpreter {
             .array_prototype
             .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
+            crate::interpreter::types::ArrayData::default(),
+        );
         let mut array_elements = Vec::with_capacity(len);
         for (i, item) in items.into_iter().enumerate() {
             match item {
@@ -3671,7 +3679,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::number(len as f64), true, false, false),
         );
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(array_elements);
+        *obj_data.array_elements_mut().unwrap() = array_elements;
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
     }
@@ -3683,12 +3691,14 @@ impl Interpreter {
             .array_prototype
             .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
+            crate::interpreter::types::ArrayData::default(),
+        );
         obj_data.insert_property(
             "length".to_string(),
             PropertyDescriptor::data(JsValue::number(len as f64), true, false, false),
         );
         // Use a small Vec for sparse arrays — don't pre-allocate huge arrays
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Vec::new());
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
     }

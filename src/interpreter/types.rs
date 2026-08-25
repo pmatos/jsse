@@ -1780,6 +1780,28 @@ pub(crate) enum ConstructorKind {
     DefaultDerivedClass,
 }
 
+/// Array-exotic internal data.
+///
+/// `extra_string_property_order` mirrors only the subset of
+/// `JsObjectData::property_order` needed by the Node-compatible inspector.
+/// Maintaining that subset as properties change lets inspection find named
+/// Array properties without scanning descriptor-backed element indices.
+#[derive(Clone, Default)]
+pub(crate) struct ArrayData {
+    elements: Vec<JsValue>,
+    extra_string_property_order: Vec<JsPropertyKey>,
+}
+
+impl ArrayData {
+    #[cfg(test)]
+    pub(crate) fn new(elements: Vec<JsValue>) -> Self {
+        Self {
+            elements,
+            extra_string_property_order: Vec::new(),
+        }
+    }
+}
+
 /// Discriminator for the kind-specific data attached to a JsObjectData.
 ///
 /// Each variant either is the kind in isolation (Ordinary), or carries the
@@ -1823,8 +1845,8 @@ pub(crate) enum ObjectKind {
     Iterator(IteratorState),
     /// `parameter_map` for an Arguments exotic object.
     Arguments(HashMap<String, (EnvRef, String)>),
-    /// `array_elements` for the Array exotic object.
-    Array(Vec<JsValue>),
+    /// Element storage and bounded named-property metadata for an Array exotic object.
+    Array(ArrayData),
     /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
     PrimitiveWrapper(JsValue),
     ModuleNamespace(ModuleNamespaceData),
@@ -1990,7 +2012,7 @@ impl JsObjectData {
     kind_accessor!(iterator_state, iterator_state_mut, Iterator, IteratorState);
     kind_accessor!(promise_data, promise_data_mut, Promise, PromiseData);
     kind_accessor!(parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
-    kind_accessor!(array_elements, array_elements_mut, Array, Vec<JsValue>);
+    kind_accessor!(array_data, array_data_mut, Array, ArrayData);
     kind_accessor!(map_data, map_data_mut, Map, Vec<Option<(JsValue, JsValue)>>);
     kind_accessor!(set_data, set_data_mut, Set, Vec<Option<JsValue>>);
     kind_accessor!(temporal_data, Temporal, TemporalData);
@@ -2010,6 +2032,32 @@ impl JsObjectData {
         DisposableStack,
         DisposableStackData
     );
+
+    pub(crate) fn array_elements(&self) -> Option<&Vec<JsValue>> {
+        self.array_data().map(|data| &data.elements)
+    }
+
+    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
+        self.array_data_mut().map(|data| &mut data.elements)
+    }
+
+    pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
+        self.array_data()
+            .map(|data| data.extra_string_property_order.as_slice())
+    }
+
+    fn record_property_creation(&mut self, key: &JsPropertyKey) {
+        self.property_order.push(key.clone());
+        // `length` is permanently non-enumerable on Arrays and can never be
+        // returned by the host hook. Excluding it keeps this Vec allocation-free
+        // for Arrays that never receive an actual extra String property.
+        if key.is_symbol() || key.eq_str("length") || is_array_index_property_key(key) {
+            return;
+        }
+        if let Some(data) = self.array_data_mut() {
+            data.extra_string_property_order.push(key.clone());
+        }
+    }
 
     /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
     pub(crate) fn is_proxy(&self) -> bool {
@@ -2663,7 +2711,7 @@ impl JsObjectData {
             // and get fresh storage each time, so pointer equality would miss existing entries.
             let ikey = key.clone();
             if !self.property_order.iter().any(|k| k == &ikey) {
-                self.property_order.push(ikey.clone());
+                self.record_property_creation(&ikey);
             }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
             // handled by array_set_length() in mod.rs, which calls this function.
@@ -2715,7 +2763,7 @@ impl JsObjectData {
             // New property: intern once and share the backing bytes between
             // property_order and the property map (one allocation, not two).
             let ikey = key;
-            self.property_order.push(ikey.clone());
+            self.record_property_creation(&ikey);
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
@@ -2941,7 +2989,7 @@ impl JsObjectData {
                 return false;
             }
             let ikey = intern_js_key(key.to_js_property_key());
-            self.property_order.push(ikey.clone());
+            self.record_property_creation(&ikey);
             self.properties
                 .insert(ikey, PropertyDescriptor::data_default(value));
             // Issue #71 (Step 5): new own property added — structural mutation.
@@ -2955,7 +3003,7 @@ impl JsObjectData {
     pub(crate) fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(key.clone());
+            self.record_property_creation(&key);
         }
         self.properties
             .insert(key, PropertyDescriptor::data_default(value));
@@ -2964,7 +3012,7 @@ impl JsObjectData {
     pub(crate) fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(key.clone());
+            self.record_property_creation(&key);
         }
         self.properties
             .insert(key, PropertyDescriptor::data(value, true, false, true));
@@ -2977,7 +3025,7 @@ impl JsObjectData {
     ) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(key.clone());
+            self.record_property_creation(&key);
         }
         self.properties.insert(key, desc);
     }
@@ -2995,6 +3043,10 @@ impl JsObjectData {
         if removed.is_some() {
             self.property_order
                 .retain(|k| k.as_bytes() != key.as_property_key_bytes());
+            if let Some(data) = self.array_data_mut() {
+                data.extra_string_property_order
+                    .retain(|k| k.as_bytes() != key.as_property_key_bytes());
+            }
         }
         removed
     }
@@ -3256,6 +3308,20 @@ pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: 
         return None;
     }
     Some(n)
+}
+
+/// Exact Array-index predicate for internal property-key bookkeeping.
+///
+/// `parse_array_index` currently accepts Rust's leading-`+` integer spelling;
+/// ECMAScript does not. Canonical Array indices always begin with an ASCII
+/// digit, so keep that guard at the narrow call sites that require exactness.
+pub(crate) fn is_array_index_property_key<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+) -> bool {
+    key.as_property_key_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_digit)
+        && parse_array_index(key).is_some()
 }
 
 pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + ?Sized>(
@@ -3930,7 +3996,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn array_elements_some_for_array_kind() {
-        let obj = obj_with_kind(ObjectKind::Array(vec![JsValue::UNDEFINED]));
+        let obj = obj_with_kind(ObjectKind::Array(ArrayData::new(vec![JsValue::UNDEFINED])));
         assert!(obj.array_elements().is_some());
         assert_eq!(obj.array_elements().unwrap().len(), 1);
     }
@@ -3943,9 +4009,53 @@ mod kind_accessor_tests {
 
     #[test]
     fn array_elements_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Array(Vec::new()));
+        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
         obj.array_elements_mut().unwrap().push(JsValue::TRUE);
         assert_eq!(obj.array_elements().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn array_named_property_order_excludes_indices_and_symbols() {
+        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        obj.insert_property(
+            "length",
+            PropertyDescriptor::data(JsValue::number(1024.0), true, false, false),
+        );
+        for index in 0..1024 {
+            obj.insert_value(index.to_string(), JsValue::number(index as f64));
+        }
+        assert_eq!(
+            obj.array_data()
+                .unwrap()
+                .extra_string_property_order
+                .capacity(),
+            0
+        );
+        obj.insert_value("+1", JsValue::number(1.0));
+        obj.insert_value("z", JsValue::number(2.0));
+        obj.insert_value(
+            JsPropertyKey::well_known_symbol("iterator"),
+            JsValue::number(3.0),
+        );
+
+        let keys = obj
+            .array_extra_string_property_order()
+            .unwrap()
+            .iter()
+            .map(JsPropertyKey::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["+1", "z"]);
+        assert_eq!(obj.property_order.len(), 1028);
+
+        obj.remove_property("+1");
+        obj.insert_value("+1", JsValue::number(4.0));
+        let keys = obj
+            .array_extra_string_property_order()
+            .unwrap()
+            .iter()
+            .map(JsPropertyKey::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["z", "+1"]);
     }
 
     // --- set_data / set_data_mut ---
@@ -3959,7 +4069,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_none_for_non_set_kind() {
-        let obj = obj_with_kind(ObjectKind::Array(Vec::new()));
+        let obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
         assert!(obj.set_data().is_none());
     }
 

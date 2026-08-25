@@ -1,12 +1,12 @@
 //! Node host-compat "syscall floor" (issue #229).
 //!
 //! The genuinely-cannot-be-pure-JS primitives — byte I/O, OS entropy, a
-//! monotonic high-resolution clock, the process-exit path, and trap-free Proxy
-//! metadata — exposed to the Node prelude only and gated behind the `--node`
-//! CLI flag. When the gate is off (the default, and always the case under
-//! test262) none of these globals are installed and every host-floor check
-//! elsewhere in the interpreter is inert, so the default global environment is
-//! byte-identical to a build without this feature.
+//! monotonic high-resolution clock, the process-exit path, and trap-free
+//! inspection metadata — exposed to the Node prelude only and gated behind the
+//! `--node` CLI flag. When the gate is off (the default, and always the case
+//! under test262) none of these globals are installed and every host-floor
+//! check elsewhere in the interpreter is inert, so the default global
+//! environment is byte-identical to a build without this feature.
 //!
 //! The primitives are installed as **non-enumerable** properties named
 //! `__host_*` on the global object. They are internal plumbing: the higher-level
@@ -183,5 +183,52 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_proxy_target", proxy_target_fn);
+
+        // __host_array_extra_keys(value) -> Array<string>
+        //
+        // Trap- and value-read-free metadata for util.inspect's Array
+        // presentation. Array mutation bookkeeping maintains a separate order
+        // for non-index String properties, so this hook never scans dense
+        // elements or descriptor-backed element indices and cannot undo
+        // maxArrayLength's bounded work. The shim passes an already-unwrapped
+        // Proxy target and deletes this global immediately after capture.
+        let array_extra_keys_fn = self.create_function(JsFunction::native(
+            "__host_array_extra_keys".to_string(),
+            1,
+            |interp, _this, args| {
+                let cell = args
+                    .first()
+                    .and_then(JsValue::as_object_id)
+                    .and_then(|obj_id| interp.get_object_cell(obj_id));
+                let keys = match cell {
+                    Some(cell) => array_extra_keys(&cell.borrow()),
+                    None => Vec::new(),
+                };
+                Completion::Normal(interp.create_array(keys))
+            },
+        ));
+        self.install_host_global("__host_array_extra_keys", array_extra_keys_fn);
     }
+}
+
+/// An Array's own enumerable non-index string keys, in property-creation order.
+/// Non-Arrays have none. Reads descriptors only, so no getter runs.
+fn array_extra_keys(obj: &JsObjectData) -> Vec<JsValue> {
+    let Some(property_order) = obj.array_extra_string_property_order() else {
+        return Vec::new();
+    };
+    let mut keys = Vec::new();
+    for key in property_order {
+        // Same enumerability test as `own_enumerable_keys_with_shadow` (which
+        // backs Object.keys): an unset flag counts as enumerable, so this hook
+        // and the shim's Object.keys fallback cannot disagree.
+        if obj
+            .properties
+            .get(key)
+            .is_some_and(|desc| desc.enumerable != Some(false))
+        {
+            keys.push(JsValue::string(key.to_js_string()));
+        }
+    }
+    keys
 }

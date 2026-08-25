@@ -1134,7 +1134,7 @@ mod tests {
     #[test]
     fn trace_object_fields_roots_array_elements_and_native_roots() {
         let mut data = JsObjectData::new();
-        data.kind = ObjectKind::Array(vec![obj(20), JsValue::number(0.0), obj(21)]);
+        data.kind = ObjectKind::Array(ArrayData::new(vec![obj(20), JsValue::number(0.0), obj(21)]));
         data.gc_native_roots = Some(vec![obj(22)]);
 
         let mut worklist = Vec::new();

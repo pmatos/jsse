@@ -9,9 +9,10 @@
 // util.format / util.inspect core they share) is built on top of the flag-gated
 // Rust host floor (issue #229): __host_write (byte-accurate fd I/O),
 // __host_hrtime (monotonic clock), __host_exit (real process exit), and
-// __host_proxy_target (trap-free Proxy metadata). The harness runs jsse with
-// `--node` so those primitives exist; when they are absent (jsse without
-// --node) each surface degrades to a pure-JS fallback.
+// __host_proxy_target / __host_array_extra_keys (trap-free inspection
+// metadata). The harness runs jsse with `--node` so those primitives exist;
+// when they are absent (jsse without --node) each surface degrades to a pure-JS
+// fallback.
 //
 // Everything below is skipped on real Node, where `process`, the full
 // `console`, and `require('util')` already exist. That inertness is what lets
@@ -33,13 +34,20 @@
   var hostExit = typeof __host_exit !== "undefined" ? __host_exit : null;
   var hostProxyTarget =
     typeof __host_proxy_target !== "undefined" ? __host_proxy_target : null;
-  // This metadata escape hatch exists only for the shim. Keep the captured
-  // closure private so bundled library code cannot bypass Proxy handlers.
+  var hostArrayExtraKeys =
+    typeof __host_array_extra_keys !== "undefined"
+      ? __host_array_extra_keys
+      : null;
+  // These metadata escape hatches exist only for the shim. Keep the captured
+  // closures private so bundled library code cannot bypass Proxy handlers or
+  // observe Array metadata outside ordinary ECMAScript reflection.
   if (hostProxyTarget) delete globalThis.__host_proxy_target;
+  if (hostArrayExtraKeys) delete globalThis.__host_array_extra_keys;
   var fallbackConsoleLog = console.log;
 
   var NS_PER_SEC = 1000000000;
   var MAX_INSPECT_ARRAY_LENGTH = 100;
+  var MAX_ARRAY_INDEX_EXCLUSIVE = 4294967295;
 
   // ---- util.inspect (best-effort) ------------------------------------------
   //
@@ -81,6 +89,16 @@
 
   function isIdentifierKey(k) {
     return regexpExec(identifierKeyPattern, k) !== null;
+  }
+
+  function isArrayIndexKey(k) {
+    var index = numberConstructor(k);
+    return (
+      index >= 0 &&
+      index < MAX_ARRAY_INDEX_EXCLUSIVE &&
+      index % 1 === 0 &&
+      stringConstructor(index) === k
+    );
   }
 
   // Capture uncurried intrinsics before bundled library code runs. Node's
@@ -583,10 +601,7 @@
           var keys = objectKeys(v);
           var parts = [];
           for (var j = 0; j < keys.length; j++) {
-            var k = keys[j];
-            var label = isIdentifierKey(k) ? k : quoteString(k);
-            var memberDesc = objectGetOwnPropertyDescriptor(v, k);
-            arrayPush(parts, label + ": " + renderDescriptor(memberDesc, depth));
+            arrayPush(parts, renderMember(v, keys[j], depth));
           }
           var ctorName = constructorName(v, prototype);
           out = parts.length
@@ -613,16 +628,72 @@
       return render(dataDescriptorValue(desc), depth - 1);
     }
 
+    // One own property as `label: value`, shared by the Array and generic
+    // object paths so both label keys identically. Node brackets `__proto__`
+    // so the line cannot be misread as a prototype; any other non-identifier
+    // key is quoted.
+    function renderMember(v, k, depth) {
+      var label =
+        k === "__proto__"
+          ? "['__proto__']"
+          : isIdentifierKey(k)
+            ? k
+            : quoteString(k);
+      var desc = objectGetOwnPropertyDescriptor(v, k);
+      return label + ": " + renderDescriptor(desc, depth);
+    }
+
+    // Node-visible extra named properties, rendered after the element phase.
+    // The host metadata hook walks the Array's dedicated non-index String-key
+    // order, never dense elements or descriptor-backed indices, so this pass
+    // cannot undo the 100-index cap. It reads an unwrapped target, so no handler
+    // trap runs.
+    //
+    // Without --node there is no unwrapping seam: `v` may still be a Proxy, so
+    // both the enumeration and every per-key descriptor read are user code. A
+    // diagnostic print must not start throwing where it previously rendered, so
+    // the whole phase is guarded and degrades to no extra properties. Parts are
+    // accumulated locally and returned only on success, so a throw mid-way
+    // cannot leave the caller with a half-rendered tail.
+    function arrayExtraMembers(v, truncated, depth) {
+      if (hostArrayExtraKeys) {
+        return namedMembers(v, hostArrayExtraKeys(v), depth);
+      }
+      // Object.keys is a safe descriptor-only fallback for small Arrays, but it
+      // materializes every dense index key; skip it when the element phase
+      // truncated, where its marker already stands in for the elements.
+      if (truncated) return [];
+      try {
+        return namedMembers(v, objectKeys(v), depth);
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // Render only the non-index keys: the index phase (or its truncation
+    // marker) already represents canonical array indices.
+    function namedMembers(v, keys, depth) {
+      var parts = [];
+      for (var i = 0; i < keys.length; i++) {
+        if (isArrayIndexKey(keys[i])) continue;
+        arrayPush(parts, renderMember(v, keys[i], depth));
+      }
+      return parts;
+    }
+
     // Array length and elements are read from own descriptors on the unwrapped
     // target. A missing descriptor is a hole, never an invitation to read
     // through Array.prototype (which could invoke an inherited getter).
     // Keep descriptor probes bounded even for enormous sparse arrays. The
     // O(elements) own-index-key form needed for Node-exact sparse truncation is
-    // blocked on jsse#516 (Object.getOwnPropertyNames/Reflect.ownKeys omit
-    // index keys assigned after array creation).
+    // rejected on cost, not availability: Object.getOwnPropertyNames and
+    // Reflect.ownKeys both materialize every present index key before the shim
+    // can filter, which would undo this cap. Object.keys is reliable here, but
+    // has that same cost and omits non-enumerable array elements besides; use
+    // it only for Node-visible extra named properties, below the cap.
     function renderArray(v, depth) {
       var length = ownDataValue(v, "length");
-      if (typeof length !== "number" || length <= 0) return "[]";
+      if (typeof length !== "number" || length < 0) return "[]";
       var renderLength =
         length < MAX_INSPECT_ARRAY_LENGTH ? length : MAX_INSPECT_ARRAY_LENGTH;
 
@@ -652,8 +723,9 @@
           "... " + remaining + " more item" + (remaining === 1 ? "" : "s")
         );
       }
-      // `length > 0` guarantees either the loop ran or a truncation marker was
-      // added, so `parts` cannot be empty.
+      var extras = arrayExtraMembers(v, renderLength < length, depth);
+      for (var e = 0; e < extras.length; e++) arrayPush(parts, extras[e]);
+      if (!parts.length) return "[]";
       return "[ " + arrayJoin(parts, ", ") + " ]";
     }
 
