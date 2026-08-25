@@ -134,6 +134,12 @@ uv run python scripts/run-jetstream.py --test OfflineAssembler --iterations 1 --
 ```
 
 The runner covers pure-JS JetStream 3 workloads and skips Wasm/Worker-dependent tests.
+Each workload is measured three times by default and reported as a median with
+its min-max range. Controlled runs refuse a one-minute load average above 1.5
+and use the maximum-frequency CPU cluster when Linux cpufreq data and `taskset`
+are available. Use `--repeats` and `--idle-threshold` to tune the protocol;
+`--no-idle-gate` is intended only for diagnostic or parallel runs. JSON output
+includes the repeat samples and a host/load/topology fingerprint.
 
 ## Running the Node-compat library tests
 

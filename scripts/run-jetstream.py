@@ -12,8 +12,11 @@ Options:
     --engine PATH       Path to JS engine binary (default: target/release/jsse)
     --jetstream PATH    Path to JetStream checkout (default: /tmp/JetStream)
     --iterations N      Override iteration count (default: use benchmark default)
+    --repeats N         Outer measurements per benchmark (default: 3, minimum: 3)
+    --idle-threshold N  Maximum accepted one-minute load average (default: 1.5)
+    --no-idle-gate      Disable load checks for diagnostic runs
     --test NAME         Run a specific test (comma-separated for multiple)
-    --timeout SECS      Per-benchmark timeout in seconds (default: 300)
+    --timeout SECS      Per-measurement timeout in seconds (default: 300)
     --json FILE         Write JSON results to file
     --compare FILE      Compare results against a previous JSON run
     --list              List available benchmarks and exit
@@ -31,6 +34,19 @@ import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from statistics import median
+
+from benchmark_protocol import (
+    DEFAULT_INSTABILITY_THRESHOLD,
+    BusyHostError,
+    LoadAverageUnavailable,
+    choose_cpu_pinning,
+    collect_host_fingerprint,
+    detect_cpu_topology,
+    read_load_averages,
+    require_idle,
+    summarize_repeats,
+)
 
 # JS-only benchmarks extracted from JetStreamDriver.js BENCHMARKS array.
 # Each entry: (name, type, files, preload_dict_or_None, default_iterations, deterministic_random, worst_case_count)
@@ -600,7 +616,7 @@ def compute_scores(results, worst_case_count):
     }
 
 
-def run_benchmark(
+def run_benchmark_once(
     name,
     btype,
     files,
@@ -608,7 +624,7 @@ def run_benchmark(
     iterations,
     det_random,
     worst_case,
-    engine,
+    engine_command,
     jetstream_dir,
     timeout,
     verbose,
@@ -663,7 +679,7 @@ def run_benchmark(
     try:
         start = time.time()
         result = subprocess.run(
-            [engine, tmp_path],
+            [*engine_command, tmp_path],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -732,6 +748,100 @@ def run_benchmark(
         os.unlink(tmp_path)
 
 
+def median_scores(measurements):
+    """Take the median of every numeric JetStream score component."""
+    combined = {}
+    for key in measurements[0]["scores"]:
+        values = [
+            measurement["scores"][key]
+            for measurement in measurements
+            if measurement["scores"][key] is not None
+        ]
+        combined[key] = median(values) if values else None
+    return combined
+
+
+def run_benchmark(
+    name,
+    btype,
+    files,
+    preloads,
+    iterations,
+    det_random,
+    worst_case,
+    engine_command,
+    jetstream_dir,
+    timeout,
+    verbose,
+    iteration_override,
+    repeats,
+    idle_threshold,
+):
+    """Run controlled outer measurements and aggregate their median score."""
+    measurements = []
+    for repeat in range(1, repeats + 1):
+        load_before = None
+        if idle_threshold is not None:
+            try:
+                load_before = require_idle(idle_threshold)
+            except (BusyHostError, LoadAverageUnavailable) as exc:
+                result = {
+                    "name": name,
+                    "status": "busy",
+                    "reason": str(exc),
+                    "completed_repeats": len(measurements),
+                    "measurements": measurements,
+                }
+                if isinstance(exc, BusyHostError):
+                    result["loadavg1"] = exc.loadavg1
+                    result["idle_threshold"] = exc.threshold
+                return result
+
+        result = run_benchmark_once(
+            name,
+            btype,
+            files,
+            preloads,
+            iterations,
+            det_random,
+            worst_case,
+            engine_command,
+            jetstream_dir,
+            timeout,
+            verbose,
+            iteration_override,
+        )
+        result["repeat"] = repeat
+        result["loadavg_before"] = load_before
+        measurements.append(result)
+        if result["status"] != "pass":
+            return result | {
+                "completed_repeats": repeat - 1,
+                "measurements": measurements,
+            }
+
+    scores = median_scores(measurements)
+    summary = summarize_repeats(
+        [measurement["scores"]["overall_score"] for measurement in measurements]
+    )
+    representative = min(
+        measurements,
+        key=lambda measurement: abs(
+            measurement["scores"]["overall_score"] - summary["median"]
+        ),
+    )
+    return {
+        "name": name,
+        "status": "pass",
+        "elapsed": median([measurement["elapsed"] for measurement in measurements]),
+        "iterations": representative["iterations"],
+        "scores": scores,
+        "raw_times": representative["raw_times"],
+        "repeat_summary": summary,
+        "measurements": measurements,
+    }
+
+
 def geometric_mean(values):
     if not values:
         return 0
@@ -752,10 +862,27 @@ def main():
         "--iterations", type=int, default=None, help="Override iteration count"
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=3,
+        help="Outer measurements per benchmark (default: 3, minimum: 3)",
+    )
+    parser.add_argument(
+        "--idle-threshold",
+        type=float,
+        default=1.5,
+        help="Maximum one-minute load average (default: 1.5)",
+    )
+    parser.add_argument(
+        "--no-idle-gate",
+        action="store_true",
+        help="Disable load checks for diagnostic runs",
+    )
+    parser.add_argument(
         "--test", default=None, help="Run specific test(s), comma-separated"
     )
     parser.add_argument(
-        "--timeout", type=int, default=300, help="Per-benchmark timeout (seconds)"
+        "--timeout", type=int, default=300, help="Per-measurement timeout (seconds)"
     )
     parser.add_argument("--json", default=None, help="Write JSON results to file")
     parser.add_argument(
@@ -773,7 +900,16 @@ def main():
         print(f"\nSkipped benchmarks ({len(SKIPPED_BENCHMARKS)}):")
         for name in SKIPPED_BENCHMARKS:
             print(f"  {name}")
-        return
+        return 0
+
+    if args.repeats < 3:
+        parser.error("--repeats must be at least 3")
+    if args.idle_threshold < 0 or not math.isfinite(args.idle_threshold):
+        parser.error("--idle-threshold must be finite and non-negative")
+    if args.j < 1:
+        parser.error("-j must be at least 1")
+    if args.j > 1 and not args.no_idle_gate:
+        parser.error("-j greater than 1 requires --no-idle-gate")
 
     # Validate paths
     engine = os.path.abspath(args.engine)
@@ -790,6 +926,18 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
+
+    topology = detect_cpu_topology()
+    pinning = choose_cpu_pinning(topology)
+    engine_command = [*pinning["command_prefix"], engine]
+
+    start_load = None
+    load_error = None
+    try:
+        start_load = read_load_averages()
+    except LoadAverageUnavailable as exc:
+        load_error = str(exc)
+    host = collect_host_fingerprint(topology, pinning, start_load, load_error)
 
     # Filter benchmarks
     benchmarks = BENCHMARKS
@@ -811,7 +959,23 @@ def main():
 
     print(f"JetStream 3 — {len(benchmarks)} JS benchmarks")
     print(f"Engine: {engine}")
-    print(f"Timeout: {args.timeout}s per benchmark")
+    print(f"Timeout: {args.timeout}s per measurement")
+    print(f"Measurements: N={args.repeats} per benchmark")
+    if args.no_idle_gate:
+        print("WARNING: idle-window gate disabled; results are diagnostic only")
+    else:
+        print(f"Idle gate: loadavg1 <= {args.idle_threshold:.2f}")
+    if start_load is None:
+        print(f"WARNING: starting load unavailable ({load_error})")
+    else:
+        print(
+            "Starting load: "
+            f"{start_load[0]:.2f} {start_load[1]:.2f} {start_load[2]:.2f}"
+        )
+    if pinning["applied"]:
+        print(f"CPU pinning: {pinning['reason']}")
+    else:
+        print(f"WARNING: CPU pinning disabled ({pinning['reason']})")
     if args.iterations:
         print(f"Iterations: {args.iterations} (override)")
     print()
@@ -821,6 +985,8 @@ def main():
     errors = []
     skipped = []
     timeouts = []
+    busy = []
+    unstable = []
 
     def process_result(result):
         all_results.append(result)
@@ -832,6 +998,9 @@ def main():
             overall = scores["overall_score"]
             passed_scores.append(overall)
             avg_ms = scores["average_time"]
+            repeat_summary = result["repeat_summary"]
+            if repeat_summary["unstable"]:
+                unstable.append(name)
 
             compare_str = ""
             if name in compare_data:
@@ -840,8 +1009,14 @@ def main():
                 arrow = "^" if ratio > 1.01 else ("v" if ratio < 0.99 else "=")
                 compare_str = f"  [{arrow} {ratio:.2f}x vs baseline]"
 
+            stability = ""
+            if repeat_summary["unstable"]:
+                stability = f"  [UNSTABLE {repeat_summary['relative_range']:.1%} range]"
             print(
-                f"  PASS  {name:40s}  score: {overall:8.1f}  avg: {avg_ms:8.1f}ms{compare_str}"
+                f"  PASS  {name:40s}  score median: {overall:8.1f}  "
+                f"N={repeat_summary['n']}  "
+                f"range: {repeat_summary['min']:.1f}-{repeat_summary['max']:.1f}  "
+                f"avg: {avg_ms:8.1f}ms{stability}{compare_str}"
             )
         elif status == "timeout":
             timeouts.append(name)
@@ -849,6 +1024,9 @@ def main():
         elif status == "skipped":
             skipped.append(name)
             print(f"  SKIP  {name:40s}  ({result.get('reason', '')})")
+        elif status == "busy":
+            busy.append(name)
+            print(f"  BUSY  {name:40s}  ({result.get('reason', '')})")
         else:
             errors.append(name)
             print(f"  FAIL  {name:40s}  ({result.get('reason', '')})")
@@ -866,11 +1044,13 @@ def main():
                     iters,
                     det_rand,
                     worst,
-                    engine,
+                    engine_command,
                     jetstream_dir,
                     args.timeout,
                     args.verbose,
                     args.iterations,
+                    args.repeats,
+                    None,
                 )
                 futures[future] = name
             for future in as_completed(futures):
@@ -885,13 +1065,17 @@ def main():
                 iters,
                 det_rand,
                 worst,
-                engine,
+                engine_command,
                 jetstream_dir,
                 args.timeout,
                 args.verbose,
                 args.iterations,
+                args.repeats,
+                None if args.no_idle_gate else args.idle_threshold,
             )
             process_result(result)
+            if result["status"] == "busy":
+                break
 
     # Summary
     print()
@@ -900,7 +1084,8 @@ def main():
     print(f"Overall score (geometric mean): {geo_mean:.1f}")
     print(
         f"Passed: {len(passed_scores)}/{len(benchmarks)}  "
-        f"Errors: {len(errors)}  Timeouts: {len(timeouts)}  Skipped: {len(skipped)}"
+        f"Errors: {len(errors)}  Timeouts: {len(timeouts)}  "
+        f"Skipped: {len(skipped)}  Busy: {len(busy)}  Unstable: {len(unstable)}"
     )
 
     if compare_data and passed_scores:
@@ -924,12 +1109,24 @@ def main():
         print(f"\nFailed: {', '.join(errors)}")
     if timeouts:
         print(f"Timed out: {', '.join(timeouts)}")
+    if busy:
+        print(f"Busy-window refusal: {', '.join(busy)}")
+    if unstable:
+        print(f"Unstable (>5% repeat range): {', '.join(unstable)}")
 
     # Write JSON
     output = {
         "engine": engine,
         "jetstream_version": "3.0",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "measurement_protocol": {
+            "repeats": args.repeats,
+            "idle_gate_enabled": not args.no_idle_gate,
+            "idle_threshold": args.idle_threshold,
+            "instability_threshold": DEFAULT_INSTABILITY_THRESHOLD,
+            "interrupted_by_busy_host": bool(busy),
+        },
+        "host": host,
         "overall_score": geo_mean,
         "passed": len(passed_scores),
         "total": len(benchmarks),
@@ -946,6 +1143,8 @@ def main():
     with open(default_path, "w") as f:
         json.dump(output, f, indent=2)
 
+    return 2 if busy else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
