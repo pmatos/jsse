@@ -15,7 +15,14 @@ pub(crate) enum CompileError {
     Unsupported(&'static str),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompileGoal {
+    Function,
+    Script,
+}
+
 struct Compiler {
+    goal: CompileGoal,
     code: Vec<u8>,
     constants: Vec<Constant>,
     names: Vec<std::rc::Rc<str>>,
@@ -34,8 +41,9 @@ struct Compiler {
 }
 
 impl Compiler {
-    fn new() -> Self {
+    fn new(goal: CompileGoal) -> Self {
         Self {
+            goal,
             code: Vec::new(),
             constants: Vec::new(),
             names: Vec::new(),
@@ -154,6 +162,15 @@ impl Compiler {
         self.emit(Op::StoreResolvedName);
         self.emit_u16(name_idx);
         self.pop_ref();
+    }
+
+    fn reset_script_completion(&mut self) {
+        if self.goal == CompileGoal::Script {
+            self.emit(Op::LoadUndefined);
+            self.push_n(1);
+            self.emit(Op::SetCompletion);
+            self.pop_n(1);
+        }
     }
 
     fn add_var_name(&mut self, name: &str) -> Result<u16, CompileError> {
@@ -485,7 +502,11 @@ impl Compiler {
             Statement::Empty => Ok(()),
             Statement::Expression(expr) => {
                 self.compile_expr(expr)?;
-                self.emit(Op::Pop);
+                self.emit(if self.goal == CompileGoal::Script {
+                    Op::SetCompletion
+                } else {
+                    Op::Pop
+                });
                 self.pop_n(1);
                 Ok(())
             }
@@ -500,6 +521,10 @@ impl Compiler {
             }
             Statement::Variable(decl) => self.compile_var_declaration(decl),
             Statement::If(if_stmt) => {
+                // IfStatement always produces a value: an empty selected arm
+                // is updated to undefined, and a missing else on the false
+                // path returns undefined. A value-producing arm replaces it.
+                self.reset_script_completion();
                 // Lowering (mirrors `Conditional`'s JumpIfFalse discipline):
                 //   <test>
                 //   JumpIfFalse else_target   ; JumpIfFalse POPS the test value
@@ -525,6 +550,9 @@ impl Compiler {
                 Ok(())
             }
             Statement::While(while_stmt) => {
+                // WhileLoopEvaluation starts its local V at undefined and
+                // updates it only when the body produces a non-empty value.
+                self.reset_script_completion();
                 let loop_start = self.code.len();
                 self.compile_expr(&while_stmt.test)?;
                 self.pop_n(1);
@@ -537,6 +565,10 @@ impl Compiler {
                 Ok(())
             }
             Statement::For(for_stmt) => {
+                // ForBodyEvaluation has the same V accumulator semantics as
+                // while. Reset once before the initializer, not at the loop
+                // backedge, so later empty iterations retain the prior V.
+                self.reset_script_completion();
                 if let Some(init) = &for_stmt.init {
                     match init {
                         ForInit::Variable(decl) => self.compile_var_declaration(decl)?,
@@ -569,6 +601,9 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Statement::Return(_) if self.goal == CompileGoal::Script => {
+                Err(CompileError::Unsupported("return in script"))
+            }
             Statement::Return(None) => {
                 self.emit(Op::ReturnUndefined);
                 Ok(())
@@ -593,13 +628,20 @@ impl Compiler {
     }
 
     fn finish(mut self) -> Chunk {
-        // Emit a trailing `ReturnUndefined` unless the chunk already ends in a
-        // return AND no branch falls through to the end. A forward jump whose
-        // target is the end of the chunk (e.g. the false arm of a one-armed
-        // `if` whose consequent ends in `return`) would otherwise run `pc` past
-        // the last byte of `code` and panic in the VM dispatch loop.
-        if !ends_with_return(&self.code) || self.max_jump_target >= self.code.len() {
-            self.emit(Op::ReturnUndefined);
+        if self.goal == CompileGoal::Script {
+            // ScriptEvaluation exposes the StatementList's last non-empty
+            // completion. Expression statements and the supported structured
+            // statements maintain that accumulator via SetCompletion.
+            self.emit(Op::ReturnCompletion);
+        } else {
+            // Emit a trailing `ReturnUndefined` unless the chunk already ends in a
+            // return AND no branch falls through to the end. A forward jump whose
+            // target is the end of the chunk (e.g. the false arm of a one-armed
+            // `if` whose consequent ends in `return`) would otherwise run `pc` past
+            // the last byte of `code` and panic in the VM dispatch loop.
+            if !ends_with_return(&self.code) || self.max_jump_target >= self.code.len() {
+                self.emit(Op::ReturnUndefined);
+            }
         }
         Chunk {
             code: self.code,
@@ -634,7 +676,15 @@ fn ends_with_return(code: &[u8]) -> bool {
 }
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
-    let mut c = Compiler::new();
+    let mut c = Compiler::new(CompileGoal::Function);
+    for stmt in body {
+        c.compile_statement(stmt)?;
+    }
+    Ok(c.finish())
+}
+
+pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileError> {
+    let mut c = Compiler::new(CompileGoal::Script);
     for stmt in body {
         c.compile_statement(stmt)?;
     }

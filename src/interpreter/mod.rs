@@ -2198,7 +2198,7 @@ impl Interpreter {
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                self.exec_body(&program.body, &global)
+                self.exec_script_body(&program.body, &global)
             }
             SourceType::Module => self.run_module(program, None),
         };
@@ -2222,7 +2222,7 @@ impl Interpreter {
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                let r = self.exec_body(&program.body, &global);
+                let r = self.exec_script_body(&program.body, &global);
                 // A top-level `__host_exit` (issue #242) latches its code (read
                 // by `main`) so draining is skipped.
                 if let Completion::Exit(code) = &r {

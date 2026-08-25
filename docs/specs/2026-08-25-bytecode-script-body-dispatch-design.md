@@ -54,14 +54,15 @@ statement lowering. In script mode only, an expression statement emits a
 `ReturnCompletion` instead of `ReturnUndefined`.
 
 The VM keeps an optional current StatementList completion for script chunks.
-`SetCompletion` replaces it with the expression's value; empty statements,
-declarations, untaken branches, loop tests, loop updates, and variable
-initializers leave it unchanged. A single dynamic accumulator is sufficient
-for the compiler's supported structured statements: it records the last
-value-producing expression statement actually evaluated, which is the result
-of the specification's nested `UpdateEmpty` operations. `ReturnCompletion`
-returns `Completion::Normal(value)` when populated and `Completion::Empty`
-otherwise.
+`SetCompletion` replaces it with the expression's value. Empty statements and
+declarations leave it unchanged. `if`, `while`, and `for` reset it to
+`undefined` on entry because those statements return a normal completion even
+when no branch or loop body produces a value; value-producing nested statements
+then replace it. Loop tests, updates, and variable initializers do not update
+it. A single dynamic accumulator is sufficient for the compiler's supported
+structured statements: it records the result of the specification's nested
+`UpdateEmpty` operations. `ReturnCompletion` returns
+`Completion::Normal(value)` when populated and `Completion::Empty` otherwise.
 
 Object-valued completion values are mirrored into `gc_bytecode_roots`, just
 like operand-stack entries. Replacing the accumulator unroots the old value and

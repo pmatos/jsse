@@ -191,6 +191,7 @@ fn run_chunk_inner(
     }
     let mut stack: Vec<JsValue> = Vec::with_capacity(chunk.max_stack as usize);
     let mut refs: Vec<IdentifierRef> = Vec::with_capacity(chunk.max_refs as usize);
+    let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
     loop {
         let op_byte = chunk.code[pc];
@@ -369,6 +370,15 @@ fn run_chunk_inner(
             Op::ReturnUndefined => {
                 return Completion::Return(JsValue::UNDEFINED);
             }
+            Op::ReturnCompletion => {
+                return match completion_value.take() {
+                    Some(value) => {
+                        unroot_stack_value(interp, &value);
+                        Completion::Normal(value)
+                    }
+                    None => Completion::Empty,
+                };
+            }
             Op::Call | Op::ReturnCall => {
                 let argc = decode_u16(chunk, pc) as usize;
                 pc += 2;
@@ -534,6 +544,13 @@ fn run_chunk_inner(
             }
             Op::Pop => {
                 pop_value(interp, &mut stack, "stack underflow on Pop");
+            }
+            Op::SetCompletion => {
+                let value = pop_value(interp, &mut stack, "stack underflow on SetCompletion");
+                if let Some(previous) = completion_value.replace(value.clone()) {
+                    unroot_stack_value(interp, &previous);
+                }
+                root_stack_value(interp, &value);
             }
             Op::Jump => {
                 let offset = decode_i16(chunk, pc) as i32;

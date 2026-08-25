@@ -51,6 +51,8 @@ pub(crate) enum Op {
     LoadCalleeName = 47,
     Call = 48,
     ReturnCall = 49,
+    SetCompletion = 50,
+    ReturnCompletion = 51,
 }
 
 impl Op {
@@ -106,6 +108,8 @@ impl Op {
             47 => Some(Op::LoadCalleeName),
             48 => Some(Op::Call),
             49 => Some(Op::ReturnCall),
+            50 => Some(Op::SetCompletion),
+            51 => Some(Op::ReturnCompletion),
             _ => None,
         }
     }
