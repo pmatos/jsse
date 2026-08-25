@@ -6,8 +6,13 @@
 //
 // Deterministic surfaces (util.format specifiers, byte-accurate stdout, the
 // count/group/assert output shapes) are asserted exactly. util.inspect is
-// best-effort (issue #230), so it is only smoke-tested structurally — never
-// byte-compared against Node.
+// best-effort (issue #230), so its assertions are mixed on purpose: the
+// hardening cases assert a MECHANISM (trap/getter counters staying at 0, the
+// descriptor path being taken) and are engine-independent, while the rendering
+// cases assert exact strings and are therefore Node-version-sensitive. Where a
+// rendering is known to differ across Node releases the assertion is gated on
+// `hasNodeHost` and labelled "(jsse only)", so stdout stays byte-identical
+// without claiming Node verified something it never ran.
 //
 // This file is not esbuild-bundled: scripts/run-node-shim-selftest.sh simply
 // concatenates the shim in front of it. On jsse the shim installs globalThis.util;
@@ -17,6 +22,14 @@
 
 var util =
   typeof globalThis.util !== "undefined" ? globalThis.util : require("util");
+
+// True only under jsse `--node`. The shim captures the Proxy-target hook and
+// removes its global binding before this bundle code runs, so use another host
+// primitive as the engine marker. Trap/getter-count assertions apply to the
+// shim alone: on Node the same probes may legitimately fire, so they are gated
+// rather than skipped (the "ok N - name" line still prints on both, keeping
+// output byte-identical).
+var hasNodeHost = typeof __host_write !== "undefined";
 
 var testNo = 0;
 
@@ -67,6 +80,11 @@ function capture(fn) {
 }
 
 console.log("# node-shim self-test");
+eq(
+  typeof globalThis.__host_proxy_target,
+  "undefined",
+  "shim hides the Proxy-target host hook"
+);
 
 // ---- util.format: %s ------------------------------------------------------
 eq(util.format("%s", "hi"), "hi", "%s string");
@@ -219,21 +237,26 @@ eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
     var original = Object.getOwnPropertyDescriptor(RegExp.prototype, name);
     var sentinel = new Error("patched RegExp " + name);
     var caught;
+    var formatted;
+    var calls = 0;
     try {
       Object.defineProperty(RegExp.prototype, name, {
         configurable: true,
         get: function () {
+          calls++;
           throw sentinel;
         },
       });
       try {
-        util.format("%s", /re/g);
+        formatted = util.format("%s", /re/g);
       } catch (e) {
         caught = e;
       }
       truthy(
-        caught === sentinel,
-        "%s RegExp rethrows patched " + name + " accessor error"
+        hasNodeHost
+          ? caught === undefined && formatted === "/re/g" && calls === 0
+          : caught === sentinel,
+        "%s RegExp handles patched " + name + " accessor"
       );
     } finally {
       Object.defineProperty(RegExp.prototype, name, original);
@@ -242,12 +265,74 @@ eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
 
   checkThrowingAccessor("source");
   checkThrowingAccessor("flags");
+  checkThrowingAccessor("global");
 })();
 eq(
   util.format("%s", Object.create(RegExp.prototype)),
   "RegExp {}",
   "%s RegExp prototype spoof falls back to ordinary inspect"
 );
+(function () {
+  var reparented = /x/gi;
+  Object.setPrototypeOf(reparented, {});
+  eq(
+    util.inspect(reparented),
+    "{}",
+    "inspect renders an ordinary-reparented RegExp generically"
+  );
+
+  var nullPrototype = /x/gi;
+  Object.setPrototypeOf(nullPrototype, null);
+  eq(
+    util.inspect(nullPrototype),
+    "[RegExp: null prototype] /x/gi",
+    "inspect renders a null-prototype RegExp from internal slots"
+  );
+
+  var accessorCalls = 0;
+  var accessorPrototype = {};
+  Object.defineProperty(accessorPrototype, "source", {
+    configurable: true,
+    get: function () {
+      accessorCalls++;
+      throw new Error("reparented RegExp source getter called");
+    },
+  });
+  Object.defineProperty(accessorPrototype, "flags", {
+    configurable: true,
+    get: function () {
+      accessorCalls++;
+      throw new Error("reparented RegExp flags getter called");
+    },
+  });
+  var accessorReparented = /x/gi;
+  Object.setPrototypeOf(accessorReparented, accessorPrototype);
+  eq(
+    util.inspect(accessorReparented),
+    "{}",
+    "inspect does not format an ordinary-reparented RegExp through getters"
+  );
+  eq(
+    accessorCalls,
+    0,
+    "inspect invokes no reparented RegExp source or flags getters"
+  );
+
+  var regexpParent = /parent/m;
+  var regexpChild = /child/dgimsuy;
+  Object.setPrototypeOf(regexpParent, {});
+  Object.setPrototypeOf(regexpChild, regexpParent);
+  eq(
+    util.inspect(regexpChild),
+    "{}",
+    "inspect does not treat a same-family RegExp instance as the intrinsic prototype"
+  );
+  eq(
+    util.inspect(new RegExp("unicode-sets", "v")),
+    "/unicode-sets/v",
+    "inspect composes the unicode-sets RegExp flag from its internal slot"
+  );
+})();
 eq(
   util.format("%s", { toString: null, a: 1 }),
   "{ toString: null, a: 1 }",
@@ -262,6 +347,192 @@ eq(
   "[Symbol: Symbol(wrapped)]",
   "%s Symbol wrapper"
 );
+eq(
+  util.inspect(Number.prototype),
+  "{}",
+  "inspect renders Number.prototype as an ordinary object"
+);
+eq(
+  util.inspect(String.prototype),
+  "{}",
+  "inspect renders String.prototype as an ordinary object"
+);
+eq(
+  util.inspect(Boolean.prototype),
+  "{}",
+  "inspect renders Boolean.prototype as an ordinary object"
+);
+(function () {
+  var cases = [
+    [
+      "Error",
+      function () {
+        return new Error("m");
+      },
+      "{}",
+      "[Error: null prototype]: m",
+    ],
+    [
+      "Date",
+      function () {
+        return new Date(0);
+      },
+      "{}",
+      "[Date: null prototype] 1970-01-01T00:00:00.000Z",
+    ],
+    [
+      "Number",
+      function () {
+        return new Number(3);
+      },
+      "{}",
+      "[Number (null prototype): 3]",
+    ],
+    [
+      "String",
+      function () {
+        return new String("x");
+      },
+      "{ '0': 'x' }",
+      "[String (null prototype): 'x']",
+    ],
+    [
+      "Boolean",
+      function () {
+        return new Boolean(true);
+      },
+      "{}",
+      "[Boolean (null prototype): true]",
+    ],
+    [
+      "BigInt",
+      function () {
+        return Object(3n);
+      },
+      "{}",
+      "[BigInt (null prototype): 3n]",
+    ],
+    [
+      "Symbol",
+      function () {
+        return Object(Symbol("x"));
+      },
+      "{}",
+      "[Symbol (null prototype): Symbol(x)]",
+    ],
+  ];
+
+  for (var i = 0; i < cases.length; i++) {
+    var item = cases[i];
+    var ordinary = item[1]();
+    Object.setPrototypeOf(ordinary, {});
+    eq(
+      util.inspect(ordinary),
+      item[2],
+      "inspect renders an ordinary-reparented " + item[0] + " generically"
+    );
+
+    var slotBearingParent = item[1]();
+    Object.setPrototypeOf(slotBearingParent, {});
+    var slotBearingChild = item[1]();
+    Object.setPrototypeOf(slotBearingChild, slotBearingParent);
+    eq(
+      util.inspect(slotBearingChild),
+      item[2],
+      "inspect does not treat a same-family " +
+        item[0] +
+        " instance as the intrinsic prototype"
+    );
+
+    var nullPrototype = item[1]();
+    Object.setPrototypeOf(nullPrototype, null);
+    var nullOutput = util.inspect(nullPrototype);
+    truthy(
+      item[0] === "Error" && !hasNodeHost
+        ? nullOutput.indexOf("[Error: null prototype]") === 0
+        : nullOutput === item[3],
+      "inspect renders a null-prototype " + item[0] + " explicitly"
+    );
+  }
+
+  var revokedCases = [
+    [
+      "RegExp",
+      function () {
+        return /x/gi;
+      },
+    ],
+  ].concat(cases);
+  var revokedPrototypeTrapCalls = 0;
+  var revokedPrototypeHandler = {
+    get: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype get trap called");
+    },
+    getOwnPropertyDescriptor: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype descriptor trap called");
+    },
+    getPrototypeOf: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype getPrototypeOf trap called");
+    },
+    ownKeys: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype ownKeys trap called");
+    },
+  };
+  for (var r = 0; r < revokedCases.length; r++) {
+    var revokedItem = revokedCases[r];
+    var revokedPrototype = Proxy.revocable({}, revokedPrototypeHandler);
+    var revokedValue = revokedItem[1]();
+    Object.setPrototypeOf(revokedValue, revokedPrototype.proxy);
+    revokedPrototype.revoke();
+    var revokedError;
+    try {
+      util.inspect(revokedValue);
+    } catch (e) {
+      revokedError = e;
+    }
+    truthy(
+      revokedError instanceof TypeError,
+      "inspect rejects a revoked-Proxy prototype on " + revokedItem[0]
+    );
+  }
+  eq(
+    revokedPrototypeTrapCalls,
+    0,
+    "inspect invokes no traps on revoked built-in prototypes"
+  );
+
+  var prototypeTrapCalls = 0;
+  var proxyPrototype = new Proxy(
+    {},
+    {
+      getPrototypeOf: function () {
+        prototypeTrapCalls++;
+        throw new Error("reparented wrapper prototype trap called");
+      },
+    }
+  );
+  var proxiedPrototypeNumber = new Number(3);
+  Object.setPrototypeOf(proxiedPrototypeNumber, proxyPrototype);
+  var proxiedPrototypeOutput;
+  var proxiedPrototypeError;
+  try {
+    proxiedPrototypeOutput = util.inspect(proxiedPrototypeNumber);
+  } catch (e) {
+    proxiedPrototypeError = e;
+  }
+  truthy(
+    hasNodeHost
+      ? proxiedPrototypeError === undefined &&
+          proxiedPrototypeOutput === "{}" &&
+          prototypeTrapCalls === 0
+      : proxiedPrototypeError instanceof Error,
+    "inspect classifies a reparented wrapper without prototype traps"
+  );
+})();
 (function () {
   var cases = [
     [
@@ -405,7 +676,10 @@ eq(
       "[Error: throwing stack sentinel]",
       "%s Error ignores throwing stack and patched toString"
     );
-    eq(stackReads, 1, "%s Error reads a stack getter once");
+    truthy(
+      !hasNodeHost || stackReads === 0,
+      "%s shim does not read an Error stack getter"
+    );
   } finally {
     Error.prototype.toString = originalToString;
   }
@@ -415,6 +689,26 @@ eq(
   "Number {}",
   "%s Number prototype spoof falls back to ordinary inspect"
 );
+// The %s classification tail reads `constructor.value.name` as an ORDINARY
+// get, unlike the descriptor-only reads elsewhere in the shim. Tightening it
+// would reroute this value to String(v) and print "[object Object]"; Node
+// invokes the accessor and routes to inspect, so the shim must too.
+(function () {
+  var original = Object.getOwnPropertyDescriptor(Object, "name");
+  Object.defineProperty(Object, "name", {
+    configurable: true,
+    get: function () {
+      return "Object";
+    },
+  });
+  var formatted;
+  try {
+    formatted = util.format("%s", { a: 1 });
+  } finally {
+    Object.defineProperty(Object, "name", original);
+  }
+  eq(formatted, "{ a: 1 }", "%s routes via an accessor constructor name");
+})();
 eq(
   util.format("%s", Object.create(String.prototype)),
   "String {}",
@@ -654,9 +948,19 @@ eq(
     }
   );
   var formatted = util.format("%s", proxy);
+  // Node reads [[ProxyTarget]] before any property access, so the trap-provided
+  // toString never runs and the target is inspected instead ("Proxy({})" with
+  // Node's marker, "{}" from the shim, which adds no marker). "PROXY STRING" is
+  // the degraded no-host fallback, where a Proxy stays opaque.
   truthy(
-    formatted === "PROXY STRING" || formatted === "Proxy({})",
+    formatted === "PROXY STRING" ||
+      formatted === "Proxy({})" ||
+      formatted === "{}",
     "%s handles a throwing Proxy prototype walk"
+  );
+  truthy(
+    !hasNodeHost || formatted !== "PROXY STRING",
+    "%s does not invoke a Proxy get trap"
   );
 })();
 (function () {
@@ -888,6 +1192,217 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     inspectedProxy === "{ a: 1 }" || inspectedProxy === "Proxy({ a: 1 })",
     "inspect does not trip a Proxy constructor trap"
   );
+
+  // The --node shim can unwrap Proxy targets through host metadata, just as
+  // Node's native inspector does. No handler trap may run, including the array
+  // length get and the reflection traps used by ordinary object rendering.
+  var proxyCalls = 0;
+  var proxyHandler = {
+    get: function () {
+      proxyCalls++;
+      throw new Error("Proxy get trap called");
+    },
+    getPrototypeOf: function () {
+      proxyCalls++;
+      throw new Error("Proxy getPrototypeOf trap called");
+    },
+    ownKeys: function () {
+      proxyCalls++;
+      throw new Error("Proxy ownKeys trap called");
+    },
+    getOwnPropertyDescriptor: function () {
+      proxyCalls++;
+      throw new Error("Proxy getOwnPropertyDescriptor trap called");
+    },
+  };
+  var arrayProxy = new Proxy([1, , 3], proxyHandler);
+  var inspectedArrayProxy = util.inspect(arrayProxy);
+  truthy(
+    inspectedArrayProxy.indexOf("1") !== -1 &&
+      inspectedArrayProxy.indexOf("3") !== -1 &&
+      inspectedArrayProxy.indexOf("empty item") !== -1,
+    "inspect renders an array-target Proxy without traps"
+  );
+  eq(proxyCalls, 0, "inspect invokes no array-target Proxy traps");
+
+  var objectProxy = new Proxy({ a: 1 }, proxyHandler);
+  var inspectedObjectProxy = util.inspect(objectProxy);
+  truthy(
+    inspectedObjectProxy.indexOf("a: 1") !== -1,
+    "inspect renders an object-target Proxy without traps"
+  );
+  eq(proxyCalls, 0, "inspect invokes no object-target Proxy traps");
+
+  var nestedProxy = new Proxy(objectProxy, proxyHandler);
+  // Node 24 unwraps only the outer Proxy here and observes the inner throwing
+  // get trap; Node 26 recursively unwraps both. Short-circuit so inspect is
+  // never called on Node, and the same assertion line is emitted there — the
+  // `(jsse only)` label names what the line does and does not assert.
+  truthy(
+    !hasNodeHost || util.inspect(nestedProxy).indexOf("a: 1") !== -1,
+    "inspect safely unwraps nested Proxies (jsse only)"
+  );
+  eq(proxyCalls, 0, "inspect invokes no nested Proxy traps");
+
+  // util.inspect output is never byte-compared against Node (see the header),
+  // so the exact revoked-Proxy marker is asserted only for the shim under test.
+  var revocable = Proxy.revocable({ a: 1 }, proxyHandler);
+  revocable.revoke();
+  truthy(
+    !hasNodeHost ||
+      util.inspect(revocable.proxy) === "<Revoked Proxy>",
+    "inspect renders a revoked Proxy"
+  );
+  eq(proxyCalls, 0, "inspect invokes no revoked Proxy traps");
+
+  // Error metadata must be read from descriptors. Throwing accessors shadow
+  // inherited defaults but are never called by the JSSE shim. Node's native
+  // output differs across releases, so only the structural string is shared;
+  // the host marker narrows the no-read assertion to the shim under test.
+  var errorReads = 0;
+  var accessorError = new Error("accessor sentinel");
+  Object.defineProperty(accessorError, "stack", {
+    configurable: true,
+    get: function () {
+      errorReads++;
+      throw new Error("stack getter called");
+    },
+  });
+  Object.defineProperty(accessorError, "name", {
+    configurable: true,
+    enumerable: true,
+    get: function () {
+      errorReads++;
+      throw new Error("name getter called");
+    },
+  });
+  Object.defineProperty(accessorError, "message", {
+    configurable: true,
+    enumerable: true,
+    get: function () {
+      errorReads++;
+      throw new Error("message getter called");
+    },
+  });
+  truthy(
+    typeof util.inspect(accessorError) === "string",
+    "inspect handles Error stack/name/message accessors"
+  );
+  truthy(
+    !hasNodeHost || errorReads === 0,
+    "inspect invokes no Error stack/name/message getters"
+  );
+
+  // `null` is safe to stringify despite `typeof null === "object"`. Suppress
+  // Node's native data-valued stack so these fallback renderings agree across
+  // engines and can be byte-compared.
+  function stripStack(err) {
+    Object.defineProperty(err, "stack", {
+      configurable: true,
+      get: undefined,
+      set: undefined,
+    });
+    return err;
+  }
+
+  var nullMessageError = stripStack(new Error("m"));
+  nullMessageError.message = null;
+  eq(
+    util.inspect(nullMessageError),
+    "[Error: null]",
+    "inspect stringifies a null Error message"
+  );
+
+  var nullNameError = stripStack(new Error("m"));
+  nullNameError.name = null;
+  eq(
+    util.inspect(nullNameError),
+    "[null: m]",
+    "inspect stringifies a null Error name"
+  );
+
+  // Stack truthiness is decided before primitive stringification. Otherwise a
+  // falsy value such as 0 becomes the truthy string "0" and replaces the Error
+  // fallback entirely.
+  var falsyStacks = [0, -0, 0n, false, NaN, null, ""];
+  for (var falsyIndex = 0; falsyIndex < falsyStacks.length; falsyIndex++) {
+    var falsyStackError = new Error("m");
+    Object.defineProperty(falsyStackError, "stack", {
+      configurable: true,
+      value: falsyStacks[falsyIndex],
+      writable: true,
+    });
+    eq(
+      util.inspect(falsyStackError),
+      "[Error: m]",
+      "inspect ignores falsy Error stack " + falsyIndex
+    );
+  }
+
+  // A hole has no own descriptor. Inspection must preserve it rather than
+  // falling through to an inherited indexed getter.
+  var inheritedReads = 0;
+  var sparsePrototype = Object.create(Array.prototype);
+  Object.defineProperty(sparsePrototype, "1", {
+    configurable: true,
+    get: function () {
+      inheritedReads++;
+      throw new Error("inherited array getter called");
+    },
+  });
+  var sparse = new Array(3);
+  sparse[2] = 3;
+  Object.setPrototypeOf(sparse, sparsePrototype);
+  eq(
+    util.inspect(sparse),
+    "[ <2 empty items>, 3 ]",
+    "inspect preserves sparse-array holes"
+  );
+  eq(inheritedReads, 0, "inspect does not read inherited array elements");
+
+  // An accessor descriptor may carry BOTH `get` and `set` as undefined. Node
+  // renders the absent value rather than a [Getter]/[Setter] marker, so this
+  // agrees across engines and is byte-compared.
+  var bothUndefined = {};
+  Object.defineProperty(bothUndefined, "x", {
+    get: undefined,
+    set: undefined,
+    enumerable: true,
+  });
+  eq(
+    util.inspect(bothUndefined),
+    "{ x: undefined }",
+    "inspect renders an all-undefined accessor as its absent value"
+  );
+
+  // A Proxy in the PROTOTYPE CHAIN, not as the inspected value itself. The
+  // `%s` classification walk used to reflect on each prototype directly, so a
+  // proxied prototype ran getPrototypeOf/getOwnPropertyDescriptor traps during
+  // a diagnostic print. Unwrapping at every hop is a deliberate divergence from
+  // Node (which does fire that trap), hence the host gate.
+  var protoTraps = 0;
+  var chainHandler = {
+    getPrototypeOf: function (t) {
+      protoTraps++;
+      return Object.getPrototypeOf(t);
+    },
+    getOwnPropertyDescriptor: function (t, k) {
+      protoTraps++;
+      return Object.getOwnPropertyDescriptor(t, k);
+    },
+    ownKeys: function (t) {
+      protoTraps++;
+      return Reflect.ownKeys(t);
+    },
+  };
+  var chained = Object.create(new Proxy({}, chainHandler));
+  chained.a = 1;
+  eq(util.format("%s", chained), "{ a: 1 }", "%s renders a proxied prototype");
+  truthy(
+    !hasNodeHost || protoTraps === 0,
+    "%s invokes no prototype-chain Proxy reflection traps"
+  );
+
   // A normal named class still gets its "ClassName " prefix.
   function Widget() {
     this.a = 1;

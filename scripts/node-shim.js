@@ -7,10 +7,11 @@
 //
 // The readable-output layer (process, the full console method set, and the
 // util.format / util.inspect core they share) is built on top of the flag-gated
-// Rust "syscall floor" (issue #229): __host_write (byte-accurate fd I/O),
-// __host_hrtime (monotonic clock), and __host_exit (real process exit). The
-// harness runs jsse with `--node` so those primitives exist; when they are
-// absent (jsse without --node) each surface degrades to a pure-JS fallback.
+// Rust host floor (issue #229): __host_write (byte-accurate fd I/O),
+// __host_hrtime (monotonic clock), __host_exit (real process exit), and
+// __host_proxy_target (trap-free Proxy metadata). The harness runs jsse with
+// `--node` so those primitives exist; when they are absent (jsse without
+// --node) each surface degrades to a pure-JS fallback.
 //
 // Everything below is skipped on real Node, where `process`, the full
 // `console`, and `require('util')` already exist. That inertness is what lets
@@ -30,6 +31,11 @@
   var hostWrite = typeof __host_write !== "undefined" ? __host_write : null;
   var hostHrtime = typeof __host_hrtime !== "undefined" ? __host_hrtime : null;
   var hostExit = typeof __host_exit !== "undefined" ? __host_exit : null;
+  var hostProxyTarget =
+    typeof __host_proxy_target !== "undefined" ? __host_proxy_target : null;
+  // This metadata escape hatch exists only for the shim. Keep the captured
+  // closure private so bundled library code cannot bypass Proxy handlers.
+  if (hostProxyTarget) delete globalThis.__host_proxy_target;
   var fallbackConsoleLog = console.log;
 
   var NS_PER_SEC = 1000000000;
@@ -42,13 +48,30 @@
   // heuristics, `<ref *N>` back-references, hidden keys, getters, Map/Set
   // internals — a bottomless pit); it only needs to be correct on depth,
   // cycles, and the common types.
+  // `String.prototype.replace` with a RegExp dispatches through
+  // `RegExp.prototype[@@replace]`, which reads `rx.exec` — a bundled library
+  // that monkey-patches `RegExp.prototype.exec` would therefore run during a
+  // diagnostic print. Split/join on a plain string separator is equivalent and
+  // touches no user-replaceable hook.
+  function replaceAll(s, needle, replacement) {
+    // The needle is absent from most strings; skip the array allocation then.
+    // `indexOf` with a string argument dispatches no user hook (only
+    // `String.prototype.search` consults %Symbol.search%).
+    if (stringIndexOf(s, needle) === -1) return s;
+    return arrayJoin(stringSplit(s, needle), replacement);
+  }
+
   function quoteString(s) {
     s = stringConstructor(s);
+    // The overwhelmingly common string needs no escaping at all, and one
+    // scan settles that; the replaceAll chain below scans three times
+    // unconditionally. Non-global pattern, so `lastIndex` is untouched.
+    if (regexpExec(escapableCharPattern, s) === null) return "'" + s + "'";
     return (
       "'" +
-      stringReplace(
-        stringReplace(stringReplace(s, /\\/g, "\\\\"), /'/g, "\\'"),
-        /\n/g,
+      replaceAll(
+        replaceAll(replaceAll(s, "\\", "\\\\"), "'", "\\'"),
+        "\n",
         "\\n"
       ) +
       "'"
@@ -56,7 +79,7 @@
   }
 
   function isIdentifierKey(k) {
-    return regexpTest(/^[A-Za-z_$][A-Za-z0-9_$]*$/, k);
+    return regexpExec(identifierKeyPattern, k) !== null;
   }
 
   // Capture uncurried intrinsics before bundled library code runs. Node's
@@ -73,31 +96,69 @@
   var regexpConstructor = RegExp;
   var stringConstructor = String;
   var symbolConstructor = Symbol;
-  var functionHasInstance = functionCall.bind(
-    Function.prototype[symbolConstructor.hasInstance]
-  );
+  var typeErrorConstructor = TypeError;
   var arrayIndexOf = functionCall.bind(arrayConstructor.prototype.indexOf);
   var arrayIsArray = arrayConstructor.isArray;
   var arrayJoin = functionCall.bind(arrayConstructor.prototype.join);
+  var arrayPush = functionCall.bind(arrayConstructor.prototype.push);
   var objectGetOwnPropertyDescriptor =
     objectConstructor.getOwnPropertyDescriptor;
   var objectGetPrototypeOf = objectConstructor.getPrototypeOf;
+  var objectHasOwnProperty = functionCall.bind(
+    objectConstructor.prototype.hasOwnProperty
+  );
   var objectIs = objectConstructor.is;
   var objectKeys = objectConstructor.keys;
-  var objectToString = functionCall.bind(objectConstructor.prototype.toString);
+  var objectPrototype = objectConstructor.prototype;
+  var bigintPrototype = bigintConstructor.prototype;
+  var booleanPrototype = booleanConstructor.prototype;
+  var datePrototype = dateConstructor.prototype;
+  var numberPrototype = numberConstructor.prototype;
+  var stringPrototype = stringConstructor.prototype;
+  var symbolPrototype = symbolConstructor.prototype;
   var numberIsNaN = numberConstructor.isNaN;
   var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
   var dateToISOString = functionCall.bind(
     dateConstructor.prototype.toISOString
   );
-  var errorToString = functionCall.bind(errorConstructor.prototype.toString);
-  var regexpGetSource = functionCall.bind(
-    objectGetOwnPropertyDescriptor(regexpConstructor.prototype, "source").get
+  var errorIsError = errorConstructor.isError;
+  var errorPrototype = errorConstructor.prototype;
+  var regexpPrototype = regexpConstructor.prototype;
+
+  // Captured defensively rather than as `descriptor.get`: on a host missing any
+  // one of these accessors that read throws from inside this IIFE, before
+  // `process` and `console` are installed, so a single absent flag would cost
+  // every library test its diagnostic output instead of one rendered letter.
+  function intrinsicGetter(target, key) {
+    var desc = objectGetOwnPropertyDescriptor(target, key);
+    if (!desc || isDataDescriptor(desc)) return null;
+    return typeof desc.get === "function" ? functionCall.bind(desc.get) : null;
+  }
+
+  // Null when the host lacks the accessor: `tryApplyIntrinsic` then rejects the
+  // slot probe and the value falls to the ordinary descriptor path.
+  var regexpGetSource = intrinsicGetter(regexpPrototype, "source");
+
+  // Node's flag order. A getter this host lacks contributes no letter.
+  var REGEXP_FLAGS = [
+    { letter: "d", get: intrinsicGetter(regexpPrototype, "hasIndices") },
+    { letter: "g", get: intrinsicGetter(regexpPrototype, "global") },
+    { letter: "i", get: intrinsicGetter(regexpPrototype, "ignoreCase") },
+    { letter: "m", get: intrinsicGetter(regexpPrototype, "multiline") },
+    { letter: "s", get: intrinsicGetter(regexpPrototype, "dotAll") },
+    { letter: "u", get: intrinsicGetter(regexpPrototype, "unicode") },
+    { letter: "v", get: intrinsicGetter(regexpPrototype, "unicodeSets") },
+    { letter: "y", get: intrinsicGetter(regexpPrototype, "sticky") },
+  ];
+  var regexpExec = functionCall.bind(regexpConstructor.prototype.exec);
+  var arrayPop = functionCall.bind(arrayConstructor.prototype.pop);
+  var stringCharCodeAt = functionCall.bind(
+    stringConstructor.prototype.charCodeAt
   );
-  var regexpToString = functionCall.bind(
-    regexpConstructor.prototype.toString
-  );
-  var regexpTest = functionCall.bind(regexpConstructor.prototype.test);
+  var stringSlice = functionCall.bind(stringConstructor.prototype.slice);
+  var identifierKeyPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+  var escapableCharPattern = /[\\'\n]/;
+  var circularMessagePattern = /circular/i;
   var numberValueOf = functionCall.bind(numberConstructor.prototype.valueOf);
   var stringValueOf = functionCall.bind(stringConstructor.prototype.valueOf);
   var booleanValueOf = functionCall.bind(
@@ -107,14 +168,26 @@
   var symbolToString = functionCall.bind(
     symbolConstructor.prototype.toString
   );
-  var stringReplace = functionCall.bind(stringConstructor.prototype.replace);
+  var stringSplit = functionCall.bind(stringConstructor.prototype.split);
+  var stringIndexOf = functionCall.bind(stringConstructor.prototype.indexOf);
+
+  // The wrapper families whose rendering is uniform: probe the internal slot,
+  // classify the prototype chain, emit "[Label: text]". BigInt and Symbol stay
+  // out on purpose — both gate their builtin rendering on a live @@hasInstance
+  // check, and Symbol's probe already yields a string, so folding them in would
+  // cost more variation flags than the table saves.
+  var BOXED_WRAPPERS = [
+    { label: "Number", probe: numberValueOf, prototype: numberPrototype },
+    { label: "String", probe: stringValueOf, prototype: stringPrototype },
+    { label: "Boolean", probe: booleanValueOf, prototype: booleanPrototype },
+  ];
 
   function tryApplyIntrinsic(intrinsic, value) {
     try {
       return { value: intrinsic(value) };
     } catch (e) {
-      // `instanceof` also accepts objects that merely inherit a built-in
-      // prototype. Only a genuine instance has the corresponding internal slot.
+      // An object can inherit a built-in prototype without carrying the
+      // corresponding internal slot. The intrinsic slot probe rejects it.
       return null;
     }
   }
@@ -124,6 +197,215 @@
       return value instanceof constructor;
     } catch (e) {
       return false;
+    }
+  }
+
+  function formatRegExp(value, source) {
+    var flags = "";
+    for (var i = 0; i < REGEXP_FLAGS.length; i++) {
+      var entry = REGEXP_FLAGS[i];
+      if (entry.get && entry.get(value)) flags += entry.letter;
+    }
+    return "/" + source + "/" + flags;
+  }
+
+  // Prototype chains are acyclic in practice, but a Proxy defeats
+  // OrdinarySetPrototypeOf's cycle check, so every walk below is bounded.
+  // Exhausting the bound always degrades to the walk's not-found result
+  // ("ordinary" / null / false), never to a verdict read off whichever chain
+  // node the last hop happened to land on. A chain deeper than this therefore
+  // classifies as if it ended there, which diverges from Node; no finite bound
+  // avoids that, and only a pathological chain reaches it.
+  var MAX_PROTOTYPE_HOPS = 1000;
+
+  // Sentinel for a [[Prototype]] read that threw — an exotic object in the
+  // no-host fallback. Distinct from every value a real chain can hold.
+  var UNKNOWN_PROTOTYPE = {};
+  // The host hook reports a revoked Proxy with null, which must stay distinct
+  // from a genuine null [[Prototype]]. The sentinel is private to this closure
+  // and therefore cannot collide with any object in a rendered value's chain.
+  var REVOKED_PROXY = {};
+
+  // The unwrapped [[Prototype]] of `v`. Read once per value and threaded into
+  // every builtinPrototypeKind() call below plus constructorName(), so
+  // classifying eight built-in families and deriving the class-name prefix
+  // costs one metadata read rather than nine — and, in the no-host fallback
+  // where `v` may still be a Proxy, one getPrototypeOf trap.
+  function prototypeOf(v) {
+    try {
+      return unwrapProxy(objectGetPrototypeOf(v));
+    } catch (e) {
+      return UNKNOWN_PROTOTYPE;
+    }
+  }
+
+  // Classify a built-in's presentation from trap-free prototype metadata. A
+  // genuine built-in can be reparented while retaining its internal slot, but
+  // Node renders it generically unless its prototype chain still identifies
+  // that built-in family. Only the captured intrinsic prototype is decisive:
+  // an arbitrary same-family instance carries the same slot, so probing chain
+  // nodes would let it impersonate the intrinsic prototype.
+  function builtinPrototypeKind(startPrototype, intrinsicPrototype) {
+    var current = startPrototype;
+    if (current === UNKNOWN_PROTOTYPE) return "ordinary";
+    if (current === REVOKED_PROXY) return "revoked";
+    if (current === null) return "null";
+    try {
+      var hops = MAX_PROTOTYPE_HOPS;
+      while (current !== null && current !== objectPrototype && hops-- > 0) {
+        if (current === REVOKED_PROXY) return "revoked";
+        if (current === intrinsicPrototype) return "builtin";
+        current = unwrapProxy(objectGetPrototypeOf(current));
+      }
+    } catch (e) {
+      // Exotic fallback: keep the value on the ordinary descriptor path.
+    }
+    return "ordinary";
+  }
+
+  // Walk a Proxy chain down to its non-Proxy target without dispatching to any
+  // handler. Returns the value unchanged when it is not a Proxy (or when the
+  // host floor is absent) and REVOKED_PROXY for a revoked Proxy.
+  function unwrapProxy(v) {
+    if (!hostProxyTarget) return v;
+    // Unbounded on purpose, unlike every prototype walk below: a Proxy's
+    // [[ProxyTarget]] is fixed at construction and can never be made to point
+    // back at the Proxy, so a target chain is acyclic by construction and
+    // finite in the number of live Proxies.
+    while (true) {
+      var target = hostProxyTarget(v);
+      if (target === undefined) return v;
+      if (target === null) return REVOKED_PROXY;
+      v = target;
+    }
+  }
+
+  // `desc` is always FromPropertyDescriptor output — an ordinary object whose
+  // fields are own data properties — so an own-property check keeps a polluted
+  // `Object.prototype.value` out of the result. That output is always either a
+  // data descriptor (own `value`) or an accessor one (own `get`/`set`), never
+  // both and never neither, so probing `value` alone discriminates the two.
+  function isDataDescriptor(desc) {
+    return !!desc && objectHasOwnProperty(desc, "value");
+  }
+
+  function dataDescriptorValue(desc) {
+    return isDataDescriptor(desc) ? desc.value : undefined;
+  }
+
+  // The canonical safe read of this module: an own property's value, taken
+  // from its data descriptor, so neither an accessor nor a Proxy get trap is
+  // observed. `undefined` when the property is absent or accessor-valued.
+  function ownDataValue(obj, key) {
+    return dataDescriptorValue(objectGetOwnPropertyDescriptor(obj, key));
+  }
+
+  function findPropertyDescriptor(v, key) {
+    try {
+      var current = v;
+      var hops = MAX_PROTOTYPE_HOPS;
+      while (current !== null && hops-- > 0) {
+        current = unwrapProxy(current);
+        if (current === null || current === REVOKED_PROXY) return null;
+        var desc = objectGetOwnPropertyDescriptor(current, key);
+        if (desc) return desc;
+        current = objectGetPrototypeOf(current);
+      }
+    } catch (e) {
+      // The pure-JS no-host fallback cannot unwrap exotic objects. A failed
+      // metadata walk degrades to the caller's default instead of escaping.
+    }
+    return null;
+  }
+
+  // A function's `name` read from its own data descriptor only, so neither an
+  // accessor `name` nor a Proxy get trap is observed. Returns "" when absent.
+  function functionName(fn) {
+    var name = ownDataValue(fn, "name");
+    return typeof name === "string" ? name : "";
+  }
+
+  function emptyItems(count) {
+    return "<" + count + " empty item" + (count === 1 ? "" : "s") + ">";
+  }
+
+  function primitiveString(value, fallback) {
+    var type = typeof value;
+    if (
+      value !== null &&
+      (type === "object" || type === "function" || type === "undefined")
+    ) {
+      return fallback;
+    }
+    return type === "symbol" ? symbolToString(value) : stringConstructor(value);
+  }
+
+  function errorField(v, key, fallback) {
+    return primitiveString(
+      dataDescriptorValue(findPropertyDescriptor(v, key)),
+      fallback
+    );
+  }
+
+  function renderError(v) {
+    // Test the raw descriptor value first. Stringifying a falsy primitive
+    // such as 0 or false would otherwise turn it into a truthy string and
+    // suppress the normal `[Error: message]` fallback.
+    var stackValue = dataDescriptorValue(findPropertyDescriptor(v, "stack"));
+    if (stackValue) {
+      var stack = primitiveString(stackValue, "");
+      if (stack) return stack;
+    }
+
+    var name = errorField(v, "name", "Error");
+    var message = errorField(v, "message", "");
+    var text = !name ? message : !message ? name : name + ": " + message;
+    return "[" + text + "]";
+  }
+
+  function renderNullPrototypeError(v) {
+    var name = errorField(v, "name", "Error") || "Error";
+    var message = errorField(v, "message", "");
+    return (
+      "[" + name + ": null prototype]" + (message ? ": " + message : "")
+    );
+  }
+
+  // Derive the "ClassName " prefix without a plain `v.constructor` get, which
+  // would invoke an accessor `constructor` or a Proxy get-trap — Node reads
+  // constructor metadata via the prototype chain, not by calling a getter. Use
+  // data descriptors only, and treat any exotic-trap throw as "no prefix".
+  // `prototype` is the caller's already-unwrapped [[Prototype]] of `v`, so no
+  // second metadata read (and, on the no-host fallback, no second
+  // getPrototypeOf trap) is needed here.
+  function constructorName(v, prototype) {
+    try {
+      // An own `constructor` wins even when it is accessor-valued: the first
+      // descriptor found is the one Node's walk would stop at, and
+      // dataDescriptorValue then declines to call the getter.
+      var desc = objectGetOwnPropertyDescriptor(v, "constructor");
+      if (
+        !desc &&
+        prototype &&
+        prototype !== REVOKED_PROXY &&
+        prototype !== UNKNOWN_PROTOTYPE
+      ) {
+        desc = objectGetOwnPropertyDescriptor(prototype, "constructor");
+      }
+      // Node's getConstructorName only accepts a callable `constructor` with
+      // a non-empty name; anything else yields no prefix at all (never a bare
+      // leading space).
+      var ctor = unwrapProxy(dataDescriptorValue(desc));
+      if (typeof ctor !== "function") return "";
+      // Node accepts a `constructor` only when the value is an INSTANCE of
+      // it, and a constructor's own `prototype` object never is. Rejecting
+      // that self-reference gives every intrinsic prototype Node's plain
+      // `{}` rendering without enumerating them one by one.
+      if (ownDataValue(ctor, "prototype") === v) return "";
+      var name = functionName(ctor);
+      return name && name !== "Object" ? name + " " : "";
+    } catch (e) {
+      return "";
     }
   }
 
@@ -140,134 +422,229 @@
       if (t === "number") return objectIs(v, -0) ? "-0" : stringConstructor(v);
       if (t === "bigint") return stringConstructor(v) + "n";
       if (t === "boolean") return stringConstructor(v);
-      if (t === "symbol") return v.toString();
+      if (t === "symbol") return symbolToString(v);
+
+      // Every primitive `typeof` has returned by now, so `v` is an object or
+      // a function. Node's native inspector can read [[ProxyTarget]] without
+      // dispatching through the handler. The --node host floor exposes that
+      // one piece of metadata so the JS shim can do the same before any
+      // instanceof, reflection, property access, or enumeration. Nested
+      // Proxies are unwrapped recursively; a revoked Proxy is an opaque
+      // terminal value.
+      v = unwrapProxy(v);
+      if (v === REVOKED_PROXY) return "<Revoked Proxy>";
+      t = typeof v;
+
       if (t === "function") {
-        return "[Function" + (v.name ? ": " + v.name : " (anonymous)") + "]";
+        var name = functionName(v);
+        return "[Function" + (name ? ": " + name : " (anonymous)") + "]";
       }
 
       // Objects.
       if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
-      if (functionHasInstance(errorConstructor, v)) {
-        var stack;
-        try {
-          stack = v.stack;
-        } catch (e) {
-          // Node ignores a throwing stack getter and renders the intrinsic
-          // Error string as a stackless error.
+      // Every builtinPrototypeKind() answer for a direct child of
+      // %Object.prototype% is "ordinary" — its walk body never runs — so the
+      // whole built-in classification below (seven throwing slot probes and
+      // eight chain walks) is pure waste for the commonest object shape.
+      var prototype = prototypeOf(v);
+      // `Array.isArray` reads an internal slot and pierces a Proxy without
+      // dispatching a trap, so this is free of user code. Hoisted above the
+      // classification block, which it prunes, and reused by both call sites
+      // below.
+      var isArr = arrayIsArray(v);
+      if (prototype !== objectPrototype) {
+        // This first classification does double duty: "revoked" is a property
+        // of the CHAIN, not of the Error family, and every walk below would
+        // report it too — but only this one throws. It must therefore stay
+        // ahead of them all, and outside the `isArr` guard, so an array whose
+        // chain contains a revoked Proxy still throws.
+        var errorKind = builtinPrototypeKind(prototype, errorPrototype);
+        if (errorKind === "revoked") {
+          throw new typeErrorConstructor(
+            "Cannot perform 'get' on a proxy that has been revoked"
+          );
         }
-        if (stack) return stringConstructor(stack);
-        try {
-          return "[" + errorToString(v) + "]";
-        } catch (e) {
-          return objectToString(v);
+        if (errorKind === "builtin") return renderError(v);
+        if (errorKind === "null" && errorIsError && errorIsError(v)) {
+          return renderNullPrototypeError(v);
         }
       }
-      var boxed;
-      if (functionHasInstance(regexpConstructor, v)) {
-        boxed = tryApplyIntrinsic(regexpGetSource, v);
-        if (boxed) return regexpToString(v);
-      }
-      if (functionHasInstance(dateConstructor, v)) {
+
+      // Internal-slot presentation. An Array exotic object is created by
+      // ArrayCreate, never by OrdinaryCreateFromConstructor, so it cannot
+      // carry [[RegExpMatcher]], [[DateValue]], [[NumberData]],
+      // [[StringData]], [[BooleanData]], [[BigIntData]] or [[SymbolData]].
+      // Every probe below would therefore throw and be caught — six
+      // thrown-and-unwound TypeErrors per array, at every nesting level.
+      // Skipping them for arrays is a zero-divergence prune; the Error
+      // chain walk above is deliberately NOT skipped.
+      if (!isArr && prototype !== objectPrototype) {
+        var boxed;
+        // `get RegExp.prototype.source` uniquely does NOT throw for
+        // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
+        // misreport the prototype itself as a RegExp. Only reachable when
+        // library code reparents %RegExp.prototype% — an unreparented one is a
+        // direct child of %Object.prototype% and never enters this block at
+        // all. After detecting a genuine
+        // RegExp, classify its prototype chain before presentation: a reparented
+        // RegExp must not dispatch ordinary `source`/`flags` gets through a user
+        // object. Compose the standard rendering from captured slot getters.
+        boxed =
+          v === regexpPrototype
+            ? null
+            : tryApplyIntrinsic(regexpGetSource, v);
+        if (boxed) {
+          var regexpKind = builtinPrototypeKind(prototype, regexpPrototype);
+          if (regexpKind === "builtin") return formatRegExp(v, boxed.value);
+          if (regexpKind === "null") {
+            return "[RegExp: null prototype] " + formatRegExp(v, boxed.value);
+          }
+        }
         boxed = tryApplyIntrinsic(dateGetTime, v);
         if (boxed) {
-          return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
+          var dateText = numberIsNaN(boxed.value)
+            ? "Invalid Date"
+            : dateToISOString(v);
+          var dateKind = builtinPrototypeKind(prototype, datePrototype);
+          if (dateKind === "builtin") return dateText;
+          if (dateKind === "null") {
+            return "[Date: null prototype] " + dateText;
+          }
         }
-      }
-      if (functionHasInstance(numberConstructor, v)) {
-        boxed = tryApplyIntrinsic(numberValueOf, v);
-        if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
-      }
-      if (functionHasInstance(stringConstructor, v)) {
-        boxed = tryApplyIntrinsic(stringValueOf, v);
-        if (boxed) return "[String: " + render(boxed.value, depth) + "]";
-      }
-      if (functionHasInstance(booleanConstructor, v)) {
-        boxed = tryApplyIntrinsic(booleanValueOf, v);
-        if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
-      }
-      if (functionHasInstance(bigintConstructor, v)) {
+        for (var w = 0; w < BOXED_WRAPPERS.length; w++) {
+          var wrapper = BOXED_WRAPPERS[w];
+          boxed = tryApplyIntrinsic(wrapper.probe, v);
+          if (!boxed) continue;
+          var wrapperText = render(boxed.value, depth);
+          var wrapperKind = builtinPrototypeKind(
+            prototype,
+            wrapper.prototype
+          );
+          if (wrapperKind === "builtin") {
+            return "[" + wrapper.label + ": " + wrapperText + "]";
+          }
+          if (wrapperKind === "null") {
+            return (
+              "[" + wrapper.label + " (null prototype): " + wrapperText + "]"
+            );
+          }
+        }
         boxed = tryApplyIntrinsic(bigintValueOf, v);
         if (boxed) {
-          // Unlike the older wrappers above, Node's boxed BigInt/Symbol
-          // rendering intentionally observes a constructor's current
-          // @@hasInstance result. A false or throwing hook selects its generic
-          // object shape, but must not intercept the internal-slot probe.
-          return tryInstanceOf(v, bigintConstructor)
-            ? "[BigInt: " + render(boxed.value, depth) + "]"
-            : "Object [BigInt] {}";
+          var bigintText = render(boxed.value, depth);
+          var bigintKind = builtinPrototypeKind(
+            prototype,
+            bigintPrototype
+          );
+          if (bigintKind === "null") {
+            return "[BigInt (null prototype): " + bigintText + "]";
+          }
+          if (bigintKind === "builtin") {
+            // Unlike the wrappers above, Node's boxed BigInt/Symbol rendering
+            // intentionally observes a constructor's current @@hasInstance
+            // result. A false or throwing hook selects its generic object
+            // shape, but must not intercept the internal-slot probe.
+            return tryInstanceOf(v, bigintConstructor)
+              ? "[BigInt: " + bigintText + "]"
+              : "Object [BigInt] {}";
+          }
         }
-      }
-      if (functionHasInstance(symbolConstructor, v)) {
         boxed = tryApplyIntrinsic(symbolToString, v);
         if (boxed) {
-          return tryInstanceOf(v, symbolConstructor)
-            ? "[Symbol: " + boxed.value + "]"
-            : "Object [Symbol] {}";
+          var symbolKind = builtinPrototypeKind(
+            prototype,
+            symbolPrototype
+          );
+          if (symbolKind === "null") {
+            return "[Symbol (null prototype): " + boxed.value + "]";
+          }
+          if (symbolKind === "builtin") {
+            return tryInstanceOf(v, symbolConstructor)
+              ? "[Symbol: " + boxed.value + "]"
+              : "Object [Symbol] {}";
+          }
         }
       }
 
-      if (depth < 0) return arrayIsArray(v) ? "[Array]" : "[Object]";
+      if (depth < 0) return isArr ? "[Array]" : "[Object]";
 
-      seen.push(v);
+      arrayPush(seen, v);
       var out;
       try {
-        if (arrayIsArray(v)) {
-          var items = [];
-          for (var i = 0; i < v.length; i++) items.push(renderMember(v, i, depth));
-          out = items.length ? "[ " + arrayJoin(items, ", ") + " ]" : "[]";
+        if (isArr) {
+          out = renderArray(v, depth);
         } else {
+          // Own properties are rendered from their descriptors WITHOUT
+          // invoking accessors — Node's util.inspect shows [Getter]/[Setter]
+          // rather than calling the getter, so a throwing or side-effecting
+          // accessor cannot make a diagnostic print throw/mutate under jsse
+          // where it would not under Node.
           var keys = objectKeys(v);
           var parts = [];
           for (var j = 0; j < keys.length; j++) {
             var k = keys[j];
             var label = isIdentifierKey(k) ? k : quoteString(k);
-            parts.push(label + ": " + renderMember(v, k, depth));
+            var memberDesc = objectGetOwnPropertyDescriptor(v, k);
+            arrayPush(parts, label + ": " + renderDescriptor(memberDesc, depth));
           }
-          var ctorName = constructorName(v);
+          var ctorName = constructorName(v, prototype);
           out = parts.length
             ? ctorName + "{ " + arrayJoin(parts, ", ") + " }"
             : ctorName + "{}";
         }
       } finally {
-        seen.pop();
+        arrayPop(seen);
       }
       return out;
     }
 
-    // Render one own property/element WITHOUT invoking accessors — Node's
-    // util.inspect shows [Getter]/[Setter] rather than calling the getter, so a
-    // throwing or side-effecting accessor (object property or array element)
-    // cannot make a diagnostic print throw/mutate under jsse where it would not
-    // under Node.
-    function renderMember(container, key, depth) {
-      var desc = objectGetOwnPropertyDescriptor(container, key);
-      if (desc && (desc.get || desc.set)) {
-        return desc.get ? (desc.set ? "[Getter/Setter]" : "[Getter]") : "[Setter]";
+    function renderDescriptor(desc, depth) {
+      // Not a data descriptor => an accessor one, whose `get`/`set` are own
+      // data properties that are undefined-or-callable. Both may be undefined
+      // (`defineProperty(o, k, { get: undefined, set: undefined })`); Node
+      // renders that as the absent value, so it must fall through.
+      if (desc && !isDataDescriptor(desc)) {
+        if (desc.get) return desc.set ? "[Getter/Setter]" : "[Getter]";
+        if (desc.set) return "[Setter]";
+        // Both undefined: fall through to render the absent value, as Node
+        // does.
       }
-      return render(desc ? desc.value : container[key], depth - 1);
+      return render(dataDescriptorValue(desc), depth - 1);
     }
 
-    // Derive the "ClassName " prefix without a plain `v.constructor` get, which
-    // would invoke an accessor `constructor` or a Proxy get-trap — Node reads
-    // constructor metadata via the prototype chain, not by calling a getter. Use
-    // data descriptors only, and treat any exotic-trap throw as "no prefix".
-    function constructorName(v) {
-      try {
-        var ctor;
-        var own = objectGetOwnPropertyDescriptor(v, "constructor");
-        if (own) {
-          if (!own.get && !own.set) ctor = own.value;
-        } else {
-          var proto = objectGetPrototypeOf(v);
-          var pd = proto
-            ? objectGetOwnPropertyDescriptor(proto, "constructor")
-            : null;
-          if (pd && !pd.get && !pd.set) ctor = pd.value;
+    // Array length and elements are read from own descriptors on the unwrapped
+    // target. A missing descriptor is a hole, never an invitation to read
+    // through Array.prototype (which could invoke an inherited getter).
+    // Probing every index is O(length); the O(elements) own-index-key form is
+    // blocked on jsse#516 (Object.getOwnPropertyNames/Reflect.ownKeys omit
+    // index keys assigned after array creation, so every element of a
+    // push-built array would render as a hole).
+    function renderArray(v, depth) {
+      var length = ownDataValue(v, "length");
+      if (typeof length !== "number" || length <= 0) return "[]";
+
+      // Collect into a local array and join once. Accumulating with `+=`
+      // instead is superlinear here: JsString is a flat buffer with no rope
+      // representation, so each concat copies the whole prefix.
+      var parts = [];
+      var holes = 0;
+
+      for (var i = 0; i < length; i++) {
+        var desc = objectGetOwnPropertyDescriptor(v, i);
+        if (!desc) {
+          holes++;
+          continue;
         }
-        return ctor && ctor.name && ctor.name !== "Object" ? ctor.name + " " : "";
-      } catch (e) {
-        return "";
+        if (holes) {
+          arrayPush(parts, emptyItems(holes));
+          holes = 0;
+        }
+        arrayPush(parts, renderDescriptor(desc, depth));
       }
+      if (holes) arrayPush(parts, emptyItems(holes));
+      // `length > 0` guarantees the loop ran, so every index became either an
+      // element or a hole, and `parts` cannot be empty.
+      return "[ " + arrayJoin(parts, ", ") + " ]";
     }
 
     return render(value, maxDepth);
@@ -338,14 +715,7 @@
     }
     return names;
   })();
-  var objectHasOwnProperty = functionCall.bind(
-    objectConstructor.prototype.hasOwnProperty
-  );
   var symbolToPrimitive = symbolConstructor.toPrimitive;
-
-  function hasOwnProperty(value, key) {
-    return objectHasOwnProperty(value, key);
-  }
 
   function returnFalse() {
     return false;
@@ -355,41 +725,64 @@
   // prototype method is user-defined even when inherited, while coercion hooks
   // owned by a built-in prototype route through inspect.
   function hasBuiltInToString(value) {
-    var hasOwnToString = hasOwnProperty;
-    var hasOwnToPrimitive = hasOwnProperty;
+    var hasOwnToString = objectHasOwnProperty;
+    var hasOwnToPrimitive = objectHasOwnProperty;
+
+    // Node reads [[ProxyTarget]] here before touching a single property, so
+    // classification never dispatches a Proxy get trap. Do the same via the
+    // host floor; a revoked Proxy has no coercion hook at all, so it routes to
+    // inspect. (When classification answers "user-defined", `convS` still
+    // coerces the ORIGINAL value, so the trap runs there — on Node too.)
+    value = unwrapProxy(value);
+    if (value === REVOKED_PROXY) return true;
 
     if (typeof value.toString !== "function") {
       if (typeof value[symbolToPrimitive] !== "function") return true;
-      if (hasOwnProperty(value, symbolToPrimitive)) return false;
+      if (objectHasOwnProperty(value, symbolToPrimitive)) return false;
       hasOwnToString = returnFalse;
-    } else if (hasOwnProperty(value, "toString")) {
+    } else if (objectHasOwnProperty(value, "toString")) {
       return false;
     } else if (typeof value[symbolToPrimitive] !== "function") {
       hasOwnToPrimitive = returnFalse;
-    } else if (hasOwnProperty(value, symbolToPrimitive)) {
+    } else if (objectHasOwnProperty(value, symbolToPrimitive)) {
       return false;
     }
 
+    // Unwrap at every hop, not just at the top: a Proxy anywhere in the chain
+    // would otherwise run its getPrototypeOf/getOwnPropertyDescriptor traps
+    // during a diagnostic print. This is a deliberate divergence — Node *would*
+    // fire the trap here — so a `--node` cross-check difference on a
+    // prototype-chain Proxy is expected, not a regression.
     var pointer = value;
+    var hops = MAX_PROTOTYPE_HOPS;
     try {
       do {
-        pointer = objectGetPrototypeOf(pointer);
+        // Exhausting the bound means the owner was not found, exactly as
+        // reaching a null [[Prototype]] does; falling out of the loop with a
+        // non-null pointer would instead classify off an arbitrary chain node.
+        if (hops-- <= 0) return false;
+        pointer = unwrapProxy(objectGetPrototypeOf(pointer));
+        if (pointer === REVOKED_PROXY) return false;
       } while (
         pointer !== null &&
         !hasOwnToString(pointer, "toString") &&
         !hasOwnToPrimitive(pointer, symbolToPrimitive)
       );
     } catch (e) {
-      // Node can unwrap proxies without invoking their prototype traps. The
-      // pure-JS shim cannot, so a failed owner walk uses ordinary coercion.
+      // Without the host floor the shim cannot unwrap an exotic object, so a
+      // failed owner walk falls back to ordinary coercion.
       return false;
     }
 
-    // A callable hook visible through a Proxy get trap may not have an owner in
-    // the reported prototype chain. Node can unwrap proxies internally; the
-    // pure-JS shim cannot, so treat that hook as user-defined.
+    // A callable hook with no owner in the reported prototype chain (only
+    // reachable on the no-host fallback, where a Proxy stays opaque) is treated
+    // as user-defined.
     if (pointer === null) return false;
 
+    // Deliberately an ordinary `.value`/`.name` read, NOT the descriptor
+    // helpers used elsewhere: routing here decides whether `%s` reaches
+    // inspect at all, and tightening it to data-descriptor lookups would
+    // change which values Node-compatibly route there. See the design doc.
     var descriptor = objectGetOwnPropertyDescriptor(pointer, "constructor");
     return (
       descriptor !== undefined &&
@@ -406,7 +799,7 @@
     if (v === null) return "null";
     if (t === "undefined") return "undefined";
     if (t === "boolean") return String(v);
-    if (t === "symbol") return v.toString();
+    if (t === "symbol") return symbolToString(v);
     if (t === "function") return inspect(v, { depth: 0 });
     return hasBuiltInToString(v) ? inspect(v, { depth: 0 }) : String(v);
   }
@@ -441,7 +834,8 @@
       // "Converting circular structure to JSON"; its BigInt/toJSON errors do not
       // mention "circular", so matching the message is safe here (the shim is
       // inert on Node, so this only ever sees jsse's error text).
-      if (e && /circular/i.test(String(e.message))) return "[Circular]";
+      if (e && regexpExec(circularMessagePattern, stringConstructor(e.message)))
+        return "[Circular]";
       throw e;
     }
   }
@@ -453,9 +847,12 @@
       // No format string: inspect every argument, join with a space.
       var pieces = [];
       for (var i = 0; i < args.length; i++) {
-        pieces.push(typeof args[i] === "string" ? args[i] : inspect(args[i]));
+        arrayPush(
+          pieces,
+          typeof args[i] === "string" ? args[i] : inspect(args[i])
+        );
       }
-      return pieces.join(" ");
+      return arrayJoin(pieces, " ");
     }
     // A lone string argument is returned verbatim — Node performs no specifier
     // substitution unless there is at least one argument to format, so e.g.
@@ -469,10 +866,10 @@
     var f = first;
     var n = f.length;
     for (var p = 0; p < n - 1; p++) {
-      if (f.charCodeAt(p) !== 37 /* % */) continue;
-      var next = f.charCodeAt(p + 1);
+      if (stringCharCodeAt(f, p) !== 37 /* % */) continue;
+      var next = stringCharCodeAt(f, p + 1);
       if (next === 37 /* %% */) {
-        out += f.slice(lastPos, p) + "%";
+        out += stringSlice(f, lastPos, p) + "%";
         lastPos = p + 2;
         p++;
         continue;
@@ -492,12 +889,12 @@
         }
       }
       if (repl !== null) {
-        out += f.slice(lastPos, p) + repl;
+        out += stringSlice(f, lastPos, p) + repl;
         lastPos = p + 2;
         p++;
       }
     }
-    out += f.slice(lastPos);
+    out += stringSlice(f, lastPos);
 
     // Trailing arguments beyond the specifiers are appended, space-separated.
     for (; argIndex < args.length; argIndex++) {
@@ -662,7 +1059,7 @@
   function writeLine(stream, args) {
     var line = format.apply(null, args);
     if (groupIndent) {
-      line = groupIndent + line.replace(/\n/g, "\n" + groupIndent);
+      line = groupIndent + replaceAll(line, "\n", "\n" + groupIndent);
     }
     stream.write(line + "\n");
   }
