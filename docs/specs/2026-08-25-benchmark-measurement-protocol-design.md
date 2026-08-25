@@ -74,9 +74,11 @@ N, the min-max range of the repeats, and an `UNSTABLE` marker above the 5%
 limit. A busy check returns a distinct result, stops further sequential
 benchmarks, and exits 3 — chosen so a CI wrapper can distinguish a busy host
 from argparse's usage-error exit 2. A refused run writes partial JSON only to an
-explicitly requested `--json` path; it deliberately does not touch the default
-`jetstream-results.json`, because overwriting a complete baseline with a
-truncated suite is the comparability hazard this work exists to remove.
+explicitly requested `--json` path that resolves to a file other than the
+default `jetstream-results.json`. Relative, absolute, and symlinked aliases of
+the default are protected as the same baseline, because overwriting a complete
+baseline with a truncated suite is the comparability hazard this work exists to
+remove.
 
 The top-level JSON adds a `measurement_protocol` object and a `host` object.
 The host object includes CPU model, logical CPU count, start load averages,
@@ -108,7 +110,8 @@ reported as unpinned with a reason rather than guessed.
 - Use a temporary fake JetStream checkout and engine to verify CLI repeat
   aggregation, affinity command construction, JSON host metadata, busy refusal
   with exit 3, and that a refusal leaves an existing `jetstream-results.json`
-  intact — all without running the full benchmark suite.
+  intact when `--json` is omitted or names the baseline through a relative,
+  absolute, or symlinked path — all without running the full benchmark suite.
 - Run the synthetic burner check documented in `README.md` under "Running
   JetStream 3", and the repository quality gate. The issue's suggested single
   `yes > /dev/null` asymptotes the one-minute average to only ~1.0, below the

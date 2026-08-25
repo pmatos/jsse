@@ -405,6 +405,51 @@ class RunnerCliTests(unittest.TestCase):
             {"overall_score": 1234.5},
         )
 
+    def test_busy_host_keeps_baseline_when_json_aliases_default(self):
+        if read_load_averages()[0] == 0.0:
+            self.skipTest("host reports zero load, so no threshold can trip")
+
+        baseline = self.root / "jetstream-results.json"
+        alias = self.root / "results-alias.json"
+        alias.symlink_to(baseline.name)
+        json_targets = [
+            "jetstream-results.json",
+            str(baseline.resolve()),
+            str(alias),
+        ]
+
+        for json_target in json_targets:
+            with self.subTest(json_target=json_target):
+                baseline.write_text('{"overall_score": 1234.5}', encoding="utf-8")
+
+                result = self.run_runner("--idle-threshold", "0", "--json", json_target)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("existing baseline preserved", result.stdout)
+                self.assertEqual(
+                    json.loads(baseline.read_text(encoding="utf-8")),
+                    {"overall_score": 1234.5},
+                )
+
+    def test_busy_host_writes_distinct_explicit_json(self):
+        if read_load_averages()[0] == 0.0:
+            self.skipTest("host reports zero load, so no threshold can trip")
+
+        baseline = self.root / "jetstream-results.json"
+        baseline.write_text('{"overall_score": 1234.5}', encoding="utf-8")
+        partial = self.root / "busy-partial.json"
+
+        result = self.run_runner("--idle-threshold", "0", "--json", str(partial))
+
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(
+            json.loads(baseline.read_text(encoding="utf-8")),
+            {"overall_score": 1234.5},
+        )
+        output = json.loads(partial.read_text(encoding="utf-8"))
+        self.assertTrue(output["measurement_protocol"]["interrupted_by_busy_host"])
+        self.assertEqual(output["passed"], 0)
+
     def test_repeats_below_three_are_rejected(self):
         result = self.run_runner("--repeats", "2", "--no-idle-gate")
 

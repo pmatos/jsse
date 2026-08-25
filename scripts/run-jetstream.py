@@ -1162,8 +1162,15 @@ def main():
         "results": all_results,
     }
 
-    if args.json:
-        with open(args.json, "w") as f:
+    default_path = Path("jetstream-results.json")
+    requested_path = Path(args.json) if args.json else None
+    requested_is_default = (
+        requested_path is not None
+        and requested_path.resolve() == default_path.resolve()
+    )
+
+    if requested_path is not None and not (busy and requested_is_default):
+        with requested_path.open("w") as f:
             json.dump(output, f, indent=2)
         print(f"\nResults written to {args.json}")
 
@@ -1175,8 +1182,7 @@ def main():
             "(run aborted by busy host; existing baseline preserved)"
         )
     else:
-        default_path = "jetstream-results.json"
-        with open(default_path, "w") as f:
+        with default_path.open("w") as f:
             json.dump(output, f, indent=2)
 
     return EXIT_BUSY_HOST if busy else 0

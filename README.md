@@ -145,10 +145,13 @@ host/load/topology fingerprint.
 
 A refused run exits **3** (distinct from argparse's 2) and leaves any existing
 `jetstream-results.json` untouched, so a truncated suite cannot overwrite a
-complete baseline. Because a single-threaded benchmark contributes roughly 1.0
-to the one-minute average itself, the default 1.5 threshold leaves only about
-0.5 of headroom for foreign load; raise `--idle-threshold` on a host with
-unavoidable background activity rather than disabling the gate.
+complete baseline. This protection also applies when `--json` names that file
+through an equivalent absolute or symlinked path; choose a distinct output path
+to retain partial refusal evidence. Because a single-threaded benchmark
+contributes roughly 1.0 to the one-minute average itself, the default 1.5
+threshold leaves only about 0.5 of headroom for foreign load; raise
+`--idle-threshold` on a host with unavoidable background activity rather than
+disabling the gate.
 
 To confirm the gate actually fires, run the suite against a synthetic load.
 One `yes` asymptotes the one-minute average to only ~1.0, which is *below* the
