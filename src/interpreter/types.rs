@@ -1782,14 +1782,14 @@ pub(crate) enum ConstructorKind {
 
 /// Array-exotic internal data.
 ///
-/// `non_index_string_property_order` mirrors only the subset of
+/// `extra_string_property_order` mirrors only the subset of
 /// `JsObjectData::property_order` needed by the Node-compatible inspector.
 /// Maintaining that subset as properties change lets inspection find named
 /// Array properties without scanning descriptor-backed element indices.
 #[derive(Clone, Default)]
 pub(crate) struct ArrayData {
     elements: Vec<JsValue>,
-    non_index_string_property_order: Vec<JsPropertyKey>,
+    extra_string_property_order: Vec<JsPropertyKey>,
 }
 
 impl ArrayData {
@@ -1797,7 +1797,7 @@ impl ArrayData {
     pub(crate) fn new(elements: Vec<JsValue>) -> Self {
         Self {
             elements,
-            non_index_string_property_order: Vec::new(),
+            extra_string_property_order: Vec::new(),
         }
     }
 }
@@ -2041,18 +2041,21 @@ impl JsObjectData {
         self.array_data_mut().map(|data| &mut data.elements)
     }
 
-    pub(crate) fn array_non_index_string_property_order(&self) -> Option<&[JsPropertyKey]> {
+    pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
         self.array_data()
-            .map(|data| data.non_index_string_property_order.as_slice())
+            .map(|data| data.extra_string_property_order.as_slice())
     }
 
     fn record_property_creation(&mut self, key: &JsPropertyKey) {
         self.property_order.push(key.clone());
-        if key.is_symbol() || is_array_index_property_key(key) {
+        // `length` is permanently non-enumerable on Arrays and can never be
+        // returned by the host hook. Excluding it keeps this Vec allocation-free
+        // for Arrays that never receive an actual extra String property.
+        if key.is_symbol() || key.eq_str("length") || is_array_index_property_key(key) {
             return;
         }
         if let Some(data) = self.array_data_mut() {
-            data.non_index_string_property_order.push(key.clone());
+            data.extra_string_property_order.push(key.clone());
         }
     }
 
@@ -3041,7 +3044,7 @@ impl JsObjectData {
             self.property_order
                 .retain(|k| k.as_bytes() != key.as_property_key_bytes());
             if let Some(data) = self.array_data_mut() {
-                data.non_index_string_property_order
+                data.extra_string_property_order
                     .retain(|k| k.as_bytes() != key.as_property_key_bytes());
             }
         }
@@ -4021,6 +4024,13 @@ mod kind_accessor_tests {
         for index in 0..1024 {
             obj.insert_value(index.to_string(), JsValue::number(index as f64));
         }
+        assert_eq!(
+            obj.array_data()
+                .unwrap()
+                .extra_string_property_order
+                .capacity(),
+            0
+        );
         obj.insert_value("+1", JsValue::number(1.0));
         obj.insert_value("z", JsValue::number(2.0));
         obj.insert_value(
@@ -4029,23 +4039,23 @@ mod kind_accessor_tests {
         );
 
         let keys = obj
-            .array_non_index_string_property_order()
+            .array_extra_string_property_order()
             .unwrap()
             .iter()
             .map(JsPropertyKey::to_string)
             .collect::<Vec<_>>();
-        assert_eq!(keys, vec!["length", "+1", "z"]);
+        assert_eq!(keys, vec!["+1", "z"]);
         assert_eq!(obj.property_order.len(), 1028);
 
         obj.remove_property("+1");
         obj.insert_value("+1", JsValue::number(4.0));
         let keys = obj
-            .array_non_index_string_property_order()
+            .array_extra_string_property_order()
             .unwrap()
             .iter()
             .map(JsPropertyKey::to_string)
             .collect::<Vec<_>>();
-        assert_eq!(keys, vec!["length", "z", "+1"]);
+        assert_eq!(keys, vec!["z", "+1"]);
     }
 
     // --- set_data / set_data_mut ---

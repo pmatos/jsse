@@ -214,7 +214,7 @@ impl Interpreter {
 /// An Array's own enumerable non-index string keys, in property-creation order.
 /// Non-Arrays have none. Reads descriptors only, so no getter runs.
 fn array_extra_keys(obj: &JsObjectData) -> Vec<JsValue> {
-    let Some(property_order) = obj.array_non_index_string_property_order() else {
+    let Some(property_order) = obj.array_extra_string_property_order() else {
         return Vec::new();
     };
     let mut keys = Vec::new();

@@ -61,7 +61,7 @@ truncation marker.
 
 The Node host floor exposes
 `__host_array_extra_keys(value) -> Array<string>`. For an Array target it walks
-only `ArrayData::non_index_string_property_order`, returning keys whose
+only `ArrayData::extra_string_property_order`, returning keys whose
 descriptors are enumerable. For non-Arrays and primitives it returns an empty
 Array. It does not read descriptor values or traverse a prototype. Like
 `__host_proxy_target`, it is installed only under `--node` as a non-enumerable
@@ -69,11 +69,14 @@ configurable global; the shim captures and immediately deletes the binding
 before bundled library code runs.
 
 All Array construction paths install `ObjectKind::Array` before creating their
-descriptors. The shared property-creation helper then records `length` and any
-later non-index String keys in the dedicated order while excluding canonical
-indices and Symbols. The shared removal helper deletes from both orders. This
-does not alter ECMAScript `[[OwnPropertyKeys]]`: the complete `property_order`
-and dense-element machinery remain authoritative for ordinary reflection.
+descriptors. The shared property-creation helper records non-index String keys
+in the dedicated order while excluding canonical indices, Symbols, and the
+mandatory `length` property. Since `length` is permanently non-enumerable, it
+can never be returned by the hook; excluding it also keeps the metadata Vec
+allocation-free for Arrays without extra properties. The shared removal helper
+deletes from both orders. This does not alter ECMAScript `[[OwnPropertyKeys]]`:
+the complete `property_order` and dense-element machinery remain authoritative
+for ordinary reflection.
 
 After the index window and marker, `renderArray` walks the captured hook's
 result. Every key is labelled with the same identifier-or-quoted-string policy
