@@ -5239,38 +5239,97 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            let keys_and_descs: Vec<(JsPropertyKey, PropertyDescriptor)> = {
-                                let b = obj.borrow();
-                                b.properties
-                                    .iter()
-                                    .map(|(k, d)| (k.clone(), d.clone()))
-                                    .collect()
-                            };
-                            for (key, desc) in keys_and_descs {
-                                let new_desc = if desc.is_accessor_descriptor() {
-                                    PropertyDescriptor {
-                                        configurable: Some(false),
-                                        value: None,
-                                        writable: None,
-                                        get: None,
-                                        set: None,
-                                        enumerable: None,
-                                    }
-                                } else {
-                                    PropertyDescriptor {
-                                        configurable: Some(false),
-                                        writable: Some(false),
-                                        value: None,
-                                        get: None,
-                                        set: None,
-                                        enumerable: None,
-                                    }
+                            let is_array = obj.borrow().array_elements().is_some();
+                            if is_array {
+                                let keys = match interp.proxy_own_keys(obj_id) {
+                                    Ok(keys) => keys,
+                                    Err(e) => return Completion::Throw(e),
                                 };
-                                // §7.3.8 DefinePropertyOrThrow: throw if [[DefineOwnProperty]] returns false
-                                if !obj.borrow_mut().define_own_property(key.clone(), new_desc) {
-                                    return Completion::Throw(interp.create_type_error(&format!(
-                                        "Cannot freeze property '{key}'"
-                                    )));
+                                for key_val in keys {
+                                    let key = to_property_key_string(&key_val);
+                                    let desc_val = match interp
+                                        .proxy_get_own_property_descriptor(obj_id, &key)
+                                    {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                    if desc_val.is_undefined() {
+                                        continue;
+                                    }
+                                    let desc = match interp.to_property_descriptor(&desc_val) {
+                                        Ok(desc) => desc,
+                                        Err(Some(e)) => return Completion::Throw(e),
+                                        Err(None) => continue,
+                                    };
+                                    let new_desc = if desc.is_accessor_descriptor() {
+                                        PropertyDescriptor {
+                                            configurable: Some(false),
+                                            value: None,
+                                            writable: None,
+                                            get: None,
+                                            set: None,
+                                            enumerable: None,
+                                        }
+                                    } else {
+                                        PropertyDescriptor {
+                                            configurable: Some(false),
+                                            writable: Some(false),
+                                            value: None,
+                                            get: None,
+                                            set: None,
+                                            enumerable: None,
+                                        }
+                                    };
+                                    let new_desc_val = interp.from_property_descriptor(&new_desc);
+                                    // §7.3.8 DefinePropertyOrThrow: throw if [[DefineOwnProperty]] returns false
+                                    match interp.proxy_define_own_property(
+                                        obj_id,
+                                        key.clone(),
+                                        &new_desc_val,
+                                    ) {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            return Completion::Throw(interp.create_type_error(
+                                                &format!("Cannot freeze property '{key}'"),
+                                            ));
+                                        }
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                }
+                            } else {
+                                let keys_and_descs: Vec<(JsPropertyKey, PropertyDescriptor)> = {
+                                    let b = obj.borrow();
+                                    b.properties
+                                        .iter()
+                                        .map(|(k, d)| (k.clone(), d.clone()))
+                                        .collect()
+                                };
+                                for (key, desc) in keys_and_descs {
+                                    let new_desc = if desc.is_accessor_descriptor() {
+                                        PropertyDescriptor {
+                                            configurable: Some(false),
+                                            value: None,
+                                            writable: None,
+                                            get: None,
+                                            set: None,
+                                            enumerable: None,
+                                        }
+                                    } else {
+                                        PropertyDescriptor {
+                                            configurable: Some(false),
+                                            writable: Some(false),
+                                            value: None,
+                                            get: None,
+                                            set: None,
+                                            enumerable: None,
+                                        }
+                                    };
+                                    if !obj.borrow_mut().define_own_property(key.clone(), new_desc)
+                                    {
+                                        return Completion::Throw(interp.create_type_error(
+                                            &format!("Cannot freeze property '{key}'"),
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -5726,124 +5785,12 @@ impl Interpreter {
                     let Some(obj_id) = target.as_object_id() else {
                         return Completion::Normal(interp.create_array(Vec::new()));
                     };
-                    if let Some(obj) = interp.get_object_cell(obj_id) {
-                        // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
-                        {
-                            let is_deferred_ns = obj
-                                .borrow()
-                                .module_namespace()
-                                .as_ref()
-                                .is_some_and(|ns| ns.deferred);
-                            if is_deferred_ns
-                                && let Err(e) = interp.ensure_deferred_namespace_evaluation(obj_id)
-                            {
-                                return Completion::Throw(e);
-                            }
-                        }
-                        let obj = interp.get_object_cell(obj_id).unwrap();
-                        // Proxy ownKeys trap (getOwnPropertyNames returns all string keys)
-                        let res = {
-                            let _b = obj.borrow();
-                            _b.is_proxy() || _b.is_proxy_revoked()
-                        };
-                        if res {
-                            match interp.proxy_own_keys(obj_id) {
-                                Ok(keys) => {
-                                    let str_keys: Vec<JsValue> =
-                                        keys.into_iter().filter(|k| (k).is_string()).collect();
-                                    let arr = interp.create_array(str_keys);
-                                    return Completion::Normal(arr);
-                                }
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        // TypedArray [[OwnPropertyKeys]]: virtual index keys
-                        {
-                            let b = obj.borrow();
-                            if let Some(ta) = b.typed_array_info() {
-                                let len = crate::interpreter::types::typed_array_length(ta);
-                                let property_order = b.property_order.clone();
-                                drop(b);
-                                let mut names: Vec<JsValue> = Vec::new();
-                                for i in 0..len {
-                                    names.push(JsValue::string(JsString::from_str(&i.to_string())));
-                                }
-                                for k in &property_order {
-                                    if k.is_symbol() {
-                                        continue;
-                                    }
-                                    if let Ok(n) = k.parse::<u64>()
-                                        && n < 0xFFFFFFFF
-                                        && k.eq_str(&n.to_string())
-                                    {
-                                        continue; // skip numeric indices
-                                    }
-                                    names.push(JsValue::string(k.to_js_string()));
-                                }
-                                let arr = interp.create_array(names);
-                                return Completion::Normal(arr);
-                            }
-                        }
-                        // String exotic: include "length" and character index keys
-                        let b = obj.borrow();
-                        let is_string_wrapper =
-                            b.primitive_value.as_ref().is_some_and(JsValue::is_string);
-                        let mut names: Vec<JsValue> = Vec::new();
-                        if is_string_wrapper
-                            && let Some(s) = b.primitive_value.as_ref().and_then(JsValue::as_string)
-                        {
-                            for i in 0..s.len() {
-                                names.push(JsValue::string(JsString::from_str(&i.to_string())));
-                            }
-                        }
-                        // Collect and sort non-symbol keys from property_order
-                        let prop_keys: Vec<JsPropertyKey> = b
-                            .property_order
-                            .iter()
-                            .filter(|k| !k.is_symbol())
-                            .cloned()
-                            .collect();
-                        drop(b);
-                        // Sort: integer indices first (already added char indices), then string keys
-                        let mut int_keys: Vec<(u64, JsPropertyKey)> = Vec::new();
-                        let mut str_keys2: Vec<JsPropertyKey> = Vec::new();
-                        for k in prop_keys {
-                            let already_added = names.iter().any(|v| {
-                                v.as_string()
-                                    .is_some_and(|s| JsPropertyKey::from_js_string(&s) == k)
-                            });
-                            if already_added {
-                                continue;
-                            }
-                            // For string wrappers, "length" is added at the end
-                            if is_string_wrapper && k.eq_str("length") {
-                                continue;
-                            }
-                            if let Ok(n) = k.parse::<u64>() {
-                                if k.eq_str(&n.to_string()) {
-                                    int_keys.push((n, k));
-                                } else {
-                                    str_keys2.push(k);
-                                }
-                            } else {
-                                str_keys2.push(k);
-                            }
-                        }
-                        int_keys.sort_by_key(|(n, _)| *n);
-                        for (_, k) in int_keys {
-                            names.push(JsValue::string(k.to_js_string()));
-                        }
-                        for k in str_keys2 {
-                            names.push(JsValue::string(k.to_js_string()));
-                        }
-                        // String exotic: "length" is always an own property
-                        if is_string_wrapper {
-                            names.push(JsValue::string(JsString::from_str("length")));
-                        }
-                        let arr = interp.create_array(names);
-                        return Completion::Normal(arr);
-                    }
-                    Completion::Normal(interp.create_array(Vec::new()))
+                    let keys = match interp.proxy_own_keys(obj_id) {
+                        Ok(keys) => keys,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let names = keys.into_iter().filter(JsValue::is_string).collect();
+                    Completion::Normal(interp.create_array(names))
                 },
             ));
             obj_func
@@ -6192,22 +6139,52 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            let keys: Vec<JsPropertyKey> = obj
-                                .borrow()
-                                .properties
-                                .keys()
-                                .cloned()
-                                .collect();
-                            for key in keys {
-                                let new_desc = PropertyDescriptor {
-                                    configurable: Some(false),
-                                    value: None,
-                                    writable: None,
-                                    get: None,
-                                    set: None,
-                                    enumerable: None,
+                            let is_array = obj.borrow().array_elements().is_some();
+                            if is_array {
+                                let keys = match interp.proxy_own_keys(obj_id) {
+                                    Ok(keys) => keys,
+                                    Err(e) => return Completion::Throw(e),
                                 };
-                                obj.borrow_mut().define_own_property(key, new_desc);
+                                for key_val in keys {
+                                    let key = to_property_key_string(&key_val);
+                                    let new_desc = PropertyDescriptor {
+                                        configurable: Some(false),
+                                        value: None,
+                                        writable: None,
+                                        get: None,
+                                        set: None,
+                                        enumerable: None,
+                                    };
+                                    let new_desc_val = interp.from_property_descriptor(&new_desc);
+                                    // §7.3.8 DefinePropertyOrThrow: throw if [[DefineOwnProperty]] returns false
+                                    match interp.proxy_define_own_property(
+                                        obj_id,
+                                        key.clone(),
+                                        &new_desc_val,
+                                    ) {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            return Completion::Throw(interp.create_type_error(
+                                                &format!("Cannot seal property '{key}'"),
+                                            ));
+                                        }
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                }
+                            } else {
+                                let keys: Vec<JsPropertyKey> =
+                                    obj.borrow().properties.keys().cloned().collect();
+                                for key in keys {
+                                    let new_desc = PropertyDescriptor {
+                                        configurable: Some(false),
+                                        value: None,
+                                        writable: None,
+                                        get: None,
+                                        set: None,
+                                        enumerable: None,
+                                    };
+                                    obj.borrow_mut().define_own_property(key, new_desc);
+                                }
                             }
                         }
                     }
@@ -7044,133 +7021,12 @@ impl Interpreter {
                         interp.create_type_error("Reflect.ownKeys requires an object"),
                     );
                 }
-                if let Some(target_id) = target.as_object_id()
-                    && let Some(obj) = interp.get_object_cell(target_id)
-                {
-                    // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
-                    {
-                        let is_deferred_ns = obj
-                            .borrow()
-                            .module_namespace()
-                            .as_ref()
-                            .is_some_and(|ns| ns.deferred);
-                        if is_deferred_ns
-                            && let Err(e) = interp.ensure_deferred_namespace_evaluation(target_id)
-                        {
-                            return Completion::Throw(e);
-                        }
-                    }
-                    let obj = interp.get_object_cell(target_id).unwrap();
-                    let res = {
-                        let _b = obj.borrow();
-                        _b.is_proxy() || _b.is_proxy_revoked()
-                    };
-                    if res {
-                        match interp.proxy_own_keys(target_id) {
-                            Ok(keys) => {
-                                let arr = interp.create_array(keys);
-                                return Completion::Normal(arr);
-                            }
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    // TypedArray [[OwnPropertyKeys]]: §10.4.5.6
-                    {
-                        let b = obj.borrow();
-                        if let Some(ta) = b.typed_array_info() {
-                            let len = crate::interpreter::types::typed_array_length(ta);
-                            let property_order = b.property_order.clone();
-                            drop(b);
-                            let mut keys: Vec<JsValue> = Vec::new();
-                            for i in 0..len {
-                                keys.push(JsValue::string(JsString::from_str(&i.to_string())));
-                            }
-                            let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
-                            let mut symbols: Vec<(JsPropertyKey, usize)> = Vec::new();
-                            for (pos, k) in property_order.iter().enumerate() {
-                                if k.is_symbol() {
-                                    symbols.push((k.clone(), pos));
-                                } else if let Ok(n) = k.parse::<u64>()
-                                    && n < 0xFFFFFFFF
-                                    && k.eq_str(&n.to_string())
-                                {
-                                    // Skip numeric indices, already handled above
-                                } else {
-                                    strings.push((k.clone(), pos));
-                                }
-                            }
-                            for (s, _) in &strings {
-                                keys.push(JsValue::string(s.to_js_string()));
-                            }
-                            for (sym_key, _) in &symbols {
-                                keys.push(interp.symbol_key_to_jsvalue(sym_key));
-                            }
-                            let arr = interp.create_array(keys);
-                            return Completion::Normal(arr);
-                        }
-                    }
-                    // Collect virtual own keys for String exotic objects
-                    let mut virtual_indices: Vec<u32> = Vec::new();
-                    let mut has_virtual_length = false;
-                    {
-                        let b = obj.borrow();
-                        if b.class_name == "String"
-                            && let Some(s) = b.primitive_value.as_ref().and_then(JsValue::as_string)
-                        {
-                            let slen = s.code_units.len();
-                            for i in 0..slen {
-                                virtual_indices.push(i as u32);
-                            }
-                            has_virtual_length = true;
-                        }
-                    }
-                    let property_order = obj.borrow().property_order.clone();
-                    // Collect keys already in property_order into virtual_indices set for dedup
-                    let existing_keys: HashSet<JsPropertyKey> =
-                        property_order.iter().cloned().collect();
-                    // OrdinaryOwnPropertyKeys: indices ascending, then strings, then symbols
-                    let mut indices: Vec<(u32, usize)> = Vec::new();
-                    let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
-                    let mut symbols: Vec<(JsPropertyKey, usize)> = Vec::new();
-                    // Add virtual string indices first (they have implicit position before all others)
-                    for idx in &virtual_indices {
-                        let k = idx.to_string();
-                        if !existing_keys.contains(k.as_bytes()) {
-                            indices.push((*idx, 0));
-                        }
-                    }
-                    for (pos, k) in property_order.iter().enumerate() {
-                        if k.is_symbol() {
-                            symbols.push((k.clone(), pos));
-                        } else if let Ok(n) = k.parse::<u64>()
-                            && n < 0xFFFFFFFF
-                            && k.eq_str(&n.to_string())
-                        {
-                            indices.push((n as u32, pos));
-                        } else {
-                            strings.push((k.clone(), pos));
-                        }
-                    }
-                    indices.sort_by_key(|&(n, _)| n);
-                    let mut keys: Vec<JsValue> =
-                        Vec::with_capacity(property_order.len() + virtual_indices.len() + 1);
-                    for (n, _) in &indices {
-                        keys.push(JsValue::string(JsString::from_str(&n.to_string())));
-                    }
-                    // Add "length" for String exotic objects (before other strings)
-                    if has_virtual_length && !existing_keys.contains("length".as_bytes()) {
-                        keys.push(JsValue::string(JsString::from_str("length")));
-                    }
-                    for (s, _) in &strings {
-                        keys.push(JsValue::string(s.to_js_string()));
-                    }
-                    for (sym_key, _) in &symbols {
-                        keys.push(interp.symbol_key_to_jsvalue(sym_key));
-                    }
-                    let arr = interp.create_array(keys);
-                    return Completion::Normal(arr);
-                }
-                Completion::Normal(interp.create_array(Vec::new()))
+                let target_id = target.as_object_id().unwrap();
+                let keys = match interp.proxy_own_keys(target_id) {
+                    Ok(keys) => keys,
+                    Err(e) => return Completion::Throw(e),
+                };
+                Completion::Normal(interp.create_array(keys))
             },
         ));
         self.get_object_cell_expect(reflect_obj_id)
