@@ -55,22 +55,6 @@ fn encode_for_regexp_escape(c: char) -> String {
     }
 }
 
-/// Convert a byte offset in a UTF-8 string to a UTF-16 code unit offset
-fn byte_offset_to_utf16(s: &str, byte_offset: usize) -> usize {
-    if s.is_ascii() {
-        return byte_offset;
-    }
-    let mut utf16_offset = 0;
-    for c in s[..byte_offset].chars() {
-        if pua_to_surrogate(c).is_some() {
-            utf16_offset += 1;
-        } else {
-            utf16_offset += c.len_utf16();
-        }
-    }
-    utf16_offset
-}
-
 /// Convert a UTF-16 code unit offset to a byte offset in a UTF-8 string
 fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
     if s.is_ascii() {
@@ -387,7 +371,8 @@ struct RegexInput {
     ascii: bool,
     non_unicode: std::cell::OnceCell<Rc<str>>,
     unicode_boundaries: std::cell::OnceCell<Vec<RegexInputBoundary>>,
-    wtf8: std::cell::OnceCell<Rc<[u8]>>,
+    non_unicode_offsets: std::cell::OnceCell<Vec<usize>>,
+    wtf8: std::cell::OnceCell<Vec<u8>>,
 }
 
 #[derive(Clone, Copy)]
@@ -412,6 +397,7 @@ impl RegexInput {
             ascii,
             non_unicode,
             unicode_boundaries: std::cell::OnceCell::new(),
+            non_unicode_offsets: std::cell::OnceCell::new(),
             wtf8: std::cell::OnceCell::new(),
         }
     }
@@ -432,8 +418,7 @@ impl RegexInput {
 
     fn wtf8(&self) -> &[u8] {
         self.wtf8
-            .get_or_init(|| Rc::from(js_code_units_to_wtf8(&self.subject.code_units)))
-            .as_ref()
+            .get_or_init(|| js_code_units_to_wtf8(&self.subject.code_units))
     }
 
     fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
@@ -487,31 +472,53 @@ impl RegexInput {
         }
     }
 
+    /// Byte offset of every UTF-16 code unit in the non-Unicode view, plus a
+    /// trailing total length. That view encodes each code unit as exactly one
+    /// character (a supplementary scalar arrives as a surrogate pair and
+    /// becomes two PUA characters), so a code-unit offset indexes this table
+    /// directly instead of rescanning the subject on every exec.
+    fn non_unicode_offsets(&self) -> &[usize] {
+        self.non_unicode_offsets.get_or_init(|| {
+            let view = self.as_str(false);
+            let mut offsets = Vec::with_capacity(self.subject.len() + 1);
+            offsets.extend(view.char_indices().map(|(byte, _)| byte));
+            offsets.push(view.len());
+            offsets
+        })
+    }
+
     /// `unicode_view` identifies the surrogate-ambiguous representation. Its
     /// offsets use boundaries derived from the original UTF-16 subject, while
-    /// the direct non-Unicode form can use PUA-aware counting safely.
-    fn utf16_to_byte_offset(&self, input: &str, unicode_view: bool, offset: usize) -> usize {
+    /// the direct non-Unicode form indexes its own one-char-per-code-unit table.
+    fn utf16_to_byte_offset(&self, unicode_view: bool, offset: usize) -> usize {
         if self.ascii {
-            offset.min(input.len())
+            offset.min(self.unicode.len())
         } else if unicode_view {
             self.unicode_utf16_to_byte_offset(offset)
         } else {
-            utf16_to_byte_offset(input, offset)
+            let offsets = self.non_unicode_offsets();
+            offsets[offset.min(offsets.len() - 1)]
         }
     }
 
-    fn byte_offset_to_utf16(&self, input: &str, unicode_view: bool, offset: usize) -> usize {
+    fn byte_offset_to_utf16(&self, unicode_view: bool, offset: usize) -> usize {
         if self.ascii {
             offset
         } else if unicode_view {
             self.unicode_byte_offset_to_utf16(offset)
         } else {
-            byte_offset_to_utf16(input, offset)
+            let offsets = self.non_unicode_offsets();
+            match offsets.binary_search(&offset) {
+                Ok(index) => index,
+                // A byte offset inside a character refers to the code unit that
+                // character starts at.
+                Err(index) => index.saturating_sub(1),
+            }
         }
     }
 }
 
-fn to_regex_input_with_units(
+fn regex_input_for_value(
     interp: &mut Interpreter,
     val: &JsValue,
 ) -> Result<Rc<RegexInput>, JsValue> {
@@ -7981,7 +7988,7 @@ fn regexp_exec_raw(
     let last_index_byte = if is_bytes_mode {
         utf16_to_wtf8_byte_offset(wtf8_bytes, last_index_utf16)
     } else {
-        regex_input.utf16_to_byte_offset(input, unicode, last_index_utf16)
+        regex_input.utf16_to_byte_offset(unicode, last_index_utf16)
     };
 
     let mut caps = if is_bytes_mode {
@@ -8026,12 +8033,12 @@ fn regexp_exec_raw(
     let match_start_utf16 = if is_bytes_mode {
         wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.start)
     } else {
-        regex_input.byte_offset_to_utf16(input, unicode, full_match.start)
+        regex_input.byte_offset_to_utf16(unicode, full_match.start)
     };
     let match_end_utf16 = if is_bytes_mode {
         wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.end)
     } else {
-        regex_input.byte_offset_to_utf16(input, unicode, full_match.end)
+        regex_input.byte_offset_to_utf16(unicode, full_match.end)
     };
 
     if sticky && full_match.start != last_index_byte {
@@ -8125,7 +8132,7 @@ fn regexp_exec_raw(
                 if is_bytes_mode {
                     wtf8_byte_offset_to_utf16(wtf8_bytes, offset)
                 } else {
-                    regex_input.byte_offset_to_utf16(input, unicode, offset)
+                    regex_input.byte_offset_to_utf16(unicode, offset)
                 }
             };
             let mut index_pairs: Vec<JsValue> = Vec::new();
@@ -8218,7 +8225,7 @@ impl Interpreter {
                     ));
                 }
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let input = match to_regex_input_with_units(interp, &arg) {
+                let input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8249,7 +8256,7 @@ impl Interpreter {
                     }
                 };
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let input = match to_regex_input_with_units(interp, &arg) {
+                let input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8477,7 +8484,7 @@ impl Interpreter {
                     }
                 };
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let regex_input = match to_regex_input_with_units(interp, &arg) {
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8557,7 +8564,7 @@ impl Interpreter {
                         let last_index_byte = if is_bytes_mode {
                             utf16_to_wtf8_byte_offset(wtf8_bytes, last_index_utf16)
                         } else {
-                            regex_input.utf16_to_byte_offset(input, unicode, last_index_utf16)
+                            regex_input.utf16_to_byte_offset(unicode, last_index_utf16)
                         };
                         let caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
@@ -8579,7 +8586,7 @@ impl Interpreter {
                         let match_end_utf16 = if is_bytes_mode {
                             wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.end)
                         } else {
-                            regex_input.byte_offset_to_utf16(input, unicode, full_match.end)
+                            regex_input.byte_offset_to_utf16(unicode, full_match.end)
                         };
 
                         results.push(JsValue::string(regex_output_to_js_string(match_text)));
@@ -8588,7 +8595,7 @@ impl Interpreter {
                             let match_start_utf16 = if is_bytes_mode {
                                 wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.start)
                             } else {
-                                regex_input.byte_offset_to_utf16(input, unicode, full_match.start)
+                                regex_input.byte_offset_to_utf16(unicode, full_match.start)
                             };
                             // AdvanceStringIndex per spec operates on the original S, not the
                             // possibly-preprocessed `input` — full_unicode must be able to detect
@@ -8692,7 +8699,7 @@ impl Interpreter {
                     }
                 };
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let regex_input = match to_regex_input_with_units(interp, &arg) {
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8776,7 +8783,7 @@ impl Interpreter {
 
                 // 3. Let S be ? ToString(string).
                 let string_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let regex_input = match to_regex_input_with_units(interp, &string_arg) {
+                let regex_input = match regex_input_for_value(interp, &string_arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8886,7 +8893,7 @@ impl Interpreter {
                         let last_index_byte = if is_bytes_mode {
                             utf16_to_wtf8_byte_offset(wtf8_bytes, last_index_utf16)
                         } else {
-                            regex_input.utf16_to_byte_offset(input, unicode, last_index_utf16)
+                            regex_input.utf16_to_byte_offset(unicode, last_index_utf16)
                         };
                         let mut caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
@@ -8918,18 +8925,18 @@ impl Interpreter {
                         let match_start_utf16 = if is_bytes_mode {
                             wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.start)
                         } else {
-                            regex_input.byte_offset_to_utf16(input, unicode, full_match.start)
+                            regex_input.byte_offset_to_utf16(unicode, full_match.start)
                         };
                         let match_end_utf16 = if is_bytes_mode {
                             wtf8_byte_offset_to_utf16(wtf8_bytes, full_match.end)
                         } else {
-                            regex_input.byte_offset_to_utf16(input, unicode, full_match.end)
+                            regex_input.byte_offset_to_utf16(unicode, full_match.end)
                         };
                         let match_length_utf16 =
                             regex_output_to_js_string(matched).code_units.len();
                         let position_utf16 = match_start_utf16;
                         let position = regex_input
-                            .utf16_to_byte_offset(s_slice, false, position_utf16)
+                            .utf16_to_byte_offset(false, position_utf16)
                             .min(length_s);
 
                         // Build captures as JsValues for get_substitution
@@ -9011,7 +9018,6 @@ impl Interpreter {
                             JsValue::UNDEFINED
                         };
                         let tail_pos = regex_input.utf16_to_byte_offset(
-                            s_slice,
                             false,
                             (position_utf16 + match_length_utf16).min(s_utf16_len),
                         );
@@ -9221,7 +9227,7 @@ impl Interpreter {
                         (
                             utf16_pos,
                             regex_input
-                                .utf16_to_byte_offset(s_slice, false, utf16_pos)
+                                .utf16_to_byte_offset(false, utf16_pos)
                                 .min(length_s),
                         )
                     };
@@ -9269,9 +9275,10 @@ impl Interpreter {
                         for cap in &captures {
                             replacer_args.push(cap.clone());
                         }
-                        // Pass UTF-16 position and the primitive string S (non-PUA)
+                        // Pass UTF-16 position and the primitive string S itself,
+                        // rather than re-decoding the PUA view once per match.
                         replacer_args.push(JsValue::number(position_utf16 as f64));
-                        replacer_args.push(JsValue::string(regex_output_to_js_string(s_slice)));
+                        replacer_args.push(JsValue::string(regex_input.subject.clone()));
                         if !named_captures.is_undefined() {
                             replacer_args.push(named_captures.clone());
                         }
@@ -9310,7 +9317,6 @@ impl Interpreter {
                             JsValue::UNDEFINED
                         };
                         let tail_pos = regex_input.utf16_to_byte_offset(
-                            s_slice,
                             false,
                             (position_utf16 + match_length_utf16).min(s_utf16_len),
                         );
@@ -9334,7 +9340,6 @@ impl Interpreter {
 
                     // p. If position >= nextSourcePosition, then
                     let tail_pos_final = regex_input.utf16_to_byte_offset(
-                        s_slice,
                         false,
                         (position_utf16 + match_length_utf16).min(s_utf16_len),
                     );
@@ -9378,7 +9383,7 @@ impl Interpreter {
                 };
                 // 2. Let S be ? ToString(string).
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let regex_input = match to_regex_input_with_units(interp, &arg) {
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -9533,8 +9538,8 @@ impl Interpreter {
 
                     //   iii. Else,
                     // Push substring from p to q (convert UTF-16 positions to byte offsets)
-                    let p_byte = regex_input.utf16_to_byte_offset(s, true, p);
-                    let q_byte = regex_input.utf16_to_byte_offset(s, true, q);
+                    let p_byte = regex_input.utf16_to_byte_offset(true, p);
+                    let q_byte = regex_input.utf16_to_byte_offset(true, q);
                     let t = &s[p_byte..q_byte];
                     a.push(JsValue::string(regex_output_to_js_string(t)));
                     length_a += 1;
@@ -9589,7 +9594,7 @@ impl Interpreter {
                 }
 
                 // 16. Push remaining substring
-                let p_byte = regex_input.utf16_to_byte_offset(s, true, p);
+                let p_byte = regex_input.utf16_to_byte_offset(true, p);
                 let t = &s[p_byte..];
                 a.push(JsValue::string(regex_output_to_js_string(t)));
                 Completion::Normal(interp.create_array(a))
@@ -9617,7 +9622,7 @@ impl Interpreter {
                 };
                 // 2. Let S be ? ToString(string).
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let regex_input = match to_regex_input_with_units(interp, &arg) {
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -9824,7 +9829,7 @@ impl Interpreter {
                 }
 
                 let input_value = JsValue::string(string.clone());
-                let regex_input = match to_regex_input_with_units(interp, &input_value) {
+                let regex_input = match regex_input_for_value(interp, &input_value) {
                     Ok(input) => input,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -10754,19 +10759,19 @@ mod nullable_quantifier_rewrite_tests {
 
 #[cfg(test)]
 mod regex_input_cache_tests {
-    use super::{Interpreter, JsString, JsValue, Rc, RegexInput, to_regex_input_with_units};
+    use super::{Interpreter, JsString, JsValue, Rc, RegexInput, regex_input_for_value};
 
     #[test]
     fn reuses_conversion_for_the_same_js_string_identity() {
         let mut interp = Interpreter::new();
         let subject = JsValue::string(JsString::from_str(&"a".repeat(1024)));
 
-        let first = to_regex_input_with_units(&mut interp, &subject).unwrap();
-        let second = to_regex_input_with_units(&mut interp, &subject.clone()).unwrap();
+        let first = regex_input_for_value(&mut interp, &subject).unwrap();
+        let second = regex_input_for_value(&mut interp, &subject.clone()).unwrap();
         assert!(Rc::ptr_eq(&first, &second));
 
         let equal_but_distinct = JsValue::string(JsString::from_str(&"a".repeat(1024)));
-        let third = to_regex_input_with_units(&mut interp, &equal_but_distinct).unwrap();
+        let third = regex_input_for_value(&mut interp, &equal_but_distinct).unwrap();
         assert!(!Rc::ptr_eq(&first, &third));
     }
 
@@ -10775,11 +10780,11 @@ mod regex_input_cache_tests {
         let input = RegexInput::new(JsString::from_vec(vec![0xDB80, 0xDC00, b'x' as u16]));
         let unicode = input.as_str(true);
 
-        assert_eq!(input.utf16_to_byte_offset(unicode, true, 0), 0);
-        assert_eq!(input.utf16_to_byte_offset(unicode, true, 1), 0);
-        assert_eq!(input.utf16_to_byte_offset(unicode, true, 2), 4);
-        assert_eq!(input.byte_offset_to_utf16(unicode, true, 4), 2);
-        assert_eq!(input.byte_offset_to_utf16(unicode, true, 5), 3);
+        assert_eq!(input.utf16_to_byte_offset(true, 0), 0);
+        assert_eq!(input.utf16_to_byte_offset(true, 1), 0);
+        assert_eq!(input.utf16_to_byte_offset(true, 2), 4);
+        assert_eq!(input.byte_offset_to_utf16(true, 4), 2);
+        assert_eq!(input.byte_offset_to_utf16(true, 5), 3);
 
         let mixed = RegexInput::new(JsString::from_vec(vec![
             0xD800,
@@ -10788,9 +10793,9 @@ mod regex_input_cache_tests {
             b'x' as u16,
         ]));
         let unicode = mixed.as_str(true);
-        assert_eq!(mixed.utf16_to_byte_offset(unicode, true, 2), 4);
-        assert_eq!(mixed.utf16_to_byte_offset(unicode, true, 3), 8);
-        assert_eq!(mixed.byte_offset_to_utf16(unicode, true, 8), 3);
-        assert_eq!(mixed.byte_offset_to_utf16(unicode, true, 9), 4);
+        assert_eq!(mixed.utf16_to_byte_offset(true, 2), 4);
+        assert_eq!(mixed.utf16_to_byte_offset(true, 3), 8);
+        assert_eq!(mixed.byte_offset_to_utf16(true, 8), 3);
+        assert_eq!(mixed.byte_offset_to_utf16(true, 9), 4);
     }
 }
