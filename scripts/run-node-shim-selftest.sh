@@ -109,7 +109,9 @@ command -v node >/dev/null 2>&1 && check_exit node node
 # ---- no-host fallback probe -----------------------------------------------
 # The library harness always passes --node, but node-shim.js documents a
 # degraded pure-JS fallback for plain jsse runs. Cover that path directly so the
-# fallback stream never recurses through the shimmed console methods.
+# fallback stream never recurses through the shimmed console methods, and so the
+# Object.keys-based array extra-property fallback (which, without the host floor,
+# cannot unwrap a Proxy first) stays non-throwing.
 echo ""
 echo "== jsse fallback without --node =="
 FALLBACK_PROBE="$TMP/fallback-probe.cjs"
@@ -119,6 +121,15 @@ process.stdout.write("fallback stdout\n");
 process.stderr.write("fallback stderr\n");
 console.log("fallback console");
 console.error("fallback error");
+var fallbackArray = [1];
+fallbackArray.z = 2;
+console.log(util.inspect(fallbackArray));
+var fallbackProxy = new Proxy([1, 2], {
+  ownKeys: function () {
+    throw new Error("ownKeys trap called");
+  },
+});
+console.log(util.inspect(fallbackProxy));
 process.stdout.write("partial");
 process.exit(0);
 PROBE
@@ -135,6 +146,8 @@ fallback stdout
 fallback stderr
 fallback console
 fallback error
+[ 1, z: 2 ]
+[ 1, 2 ]
 partial
 EXPECTED
     echo "FAIL: jsse fallback without --node output differed:" >&2

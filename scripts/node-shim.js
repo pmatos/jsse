@@ -601,10 +601,7 @@
           var keys = objectKeys(v);
           var parts = [];
           for (var j = 0; j < keys.length; j++) {
-            var k = keys[j];
-            var label = isIdentifierKey(k) ? k : quoteString(k);
-            var memberDesc = objectGetOwnPropertyDescriptor(v, k);
-            arrayPush(parts, label + ": " + renderDescriptor(memberDesc, depth));
+            arrayPush(parts, renderMember(v, keys[j], depth));
           }
           var ctorName = constructorName(v, prototype);
           out = parts.length
@@ -629,6 +626,21 @@
         // does.
       }
       return render(dataDescriptorValue(desc), depth - 1);
+    }
+
+    // One own property as `label: value`, shared by the Array and generic
+    // object paths so both label keys identically. Node brackets `__proto__`
+    // so the line cannot be misread as a prototype; any other non-identifier
+    // key is quoted.
+    function renderMember(v, k, depth) {
+      var label =
+        k === "__proto__"
+          ? "['__proto__']"
+          : isIdentifierKey(k)
+            ? k
+            : quoteString(k);
+      var desc = objectGetOwnPropertyDescriptor(v, k);
+      return label + ": " + renderDescriptor(desc, depth);
     }
 
     // Array length and elements are read from own descriptors on the unwrapped
@@ -678,17 +690,24 @@
       // small Arrays; skip it above the cap rather than materializing every
       // dense index key. The index phase (or its truncation marker) already
       // represents canonical array indices, so append only named strings.
-      var keys = hostArrayExtraKeys
-        ? hostArrayExtraKeys(v)
-        : length <= MAX_INSPECT_ARRAY_LENGTH
-          ? objectKeys(v)
-          : [];
+      var keys = [];
+      if (hostArrayExtraKeys) {
+        keys = hostArrayExtraKeys(v);
+      } else if (length <= MAX_INSPECT_ARRAY_LENGTH) {
+        // Without the host floor `v` is never unwrapped, so it may still be a
+        // Proxy whose ownKeys trap is user code. A diagnostic print must not
+        // start throwing where it previously rendered, so a failed enumeration
+        // degrades to no extra properties.
+        try {
+          keys = objectKeys(v);
+        } catch (e) {
+          keys = [];
+        }
+      }
       for (var j = 0; j < keys.length; j++) {
         var k = keys[j];
         if (isArrayIndexKey(k)) continue;
-        var label = isIdentifierKey(k) ? k : quoteString(k);
-        var memberDesc = objectGetOwnPropertyDescriptor(v, k);
-        arrayPush(parts, label + ": " + renderDescriptor(memberDesc, depth));
+        arrayPush(parts, renderMember(v, k, depth));
       }
       if (!parts.length) return "[]";
       return "[ " + arrayJoin(parts, ", ") + " ]";

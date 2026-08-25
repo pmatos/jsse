@@ -84,14 +84,20 @@ string properties.
 
 ## Safety and failure behavior
 
-The formatter unwraps active Proxies before `renderArray`, so the hook and
-descriptor reads operate on the target without invoking handler traps. The hook
-borrows only the Array's internal key order and descriptor enumerability flags;
-values are observed only through descriptor objects already used by the
-hardened inspector. In the small-Array fallback, key-mode
-`EnumerableOwnProperties` can invoke neither indexed nor named getters. A
-missing descriptor degrades to the existing `undefined` rendering rather than
-a property access.
+Under `--node` the formatter unwraps active Proxies before `renderArray`, so the
+hook and descriptor reads operate on the target without invoking handler traps.
+The hook borrows only the Array's internal key order and descriptor
+enumerability flags; values are observed only through descriptor objects already
+used by the hardened inspector. A missing descriptor degrades to the existing
+`undefined` rendering rather than a property access.
+
+The plain-jsse fallback has no unwrapping seam, so `v` there may still be a
+Proxy and `Object.keys` dispatches its `ownKeys` trap — user code that the
+pre-existing index-descriptor probes already reach through the
+`getOwnPropertyDescriptor` trap. Key-mode `EnumerableOwnProperties` can invoke
+neither indexed nor named getters, but a hostile or merely throwing trap must
+not turn a diagnostic print into a throw, so the fallback enumeration is
+guarded and degrades to no extra properties.
 
 ## Validation
 

@@ -215,10 +215,15 @@ impl Interpreter {
                             if key.is_symbol() || is_array_index {
                                 continue;
                             }
+                            // Same enumerability test as
+                            // `own_enumerable_keys_with_shadow` (which backs
+                            // Object.keys): an unset flag counts as
+                            // enumerable, so this hook and the shim's
+                            // Object.keys fallback cannot disagree.
                             if obj
                                 .properties
                                 .get(key)
-                                .is_some_and(|desc| desc.enumerable == Some(true))
+                                .is_some_and(|desc| desc.enumerable != Some(false))
                             {
                                 keys.push(JsValue::string(key.to_js_string()));
                             }

@@ -1189,12 +1189,39 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "[ '4294967295': 'max', '-0': 'minus' ]",
     "inspect preserves numeric-looking array property names"
   );
+  var arrayWithProtoName = [1];
+  Object.defineProperty(arrayWithProtoName, "__proto__", {
+    value: 7,
+    enumerable: true,
+    configurable: true,
+  });
+  eq(
+    util.inspect(arrayWithProtoName),
+    "[ 1, ['__proto__']: 7 ]",
+    "inspect brackets an own __proto__ array property"
+  );
+  var objectWithProtoName = {};
+  Object.defineProperty(objectWithProtoName, "__proto__", {
+    value: 7,
+    enumerable: true,
+    configurable: true,
+  });
+  eq(
+    util.inspect(objectWithProtoName),
+    "{ ['__proto__']: 7 }",
+    "inspect brackets an own __proto__ object property"
+  );
   var denseOverLimit = [];
   var denseExpectedParts = [];
   for (var denseIndex = 0; denseIndex < 101; denseIndex++) {
     denseOverLimit.push(denseIndex);
     if (denseIndex < 100) denseExpectedParts.push(String(denseIndex));
   }
+  eq(
+    util.inspect(denseOverLimit, { breakLength: Infinity, compact: true }),
+    "[ " + denseExpectedParts.join(", ") + ", ... 1 more item ]",
+    "inspect caps dense arrays at 100 entries"
+  );
   denseOverLimit.z = "tail";
   eq(
     util.inspect(denseOverLimit, { breakLength: Infinity, compact: true }),
