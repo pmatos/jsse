@@ -1747,13 +1747,10 @@ impl Interpreter {
             for k in &b.property_order {
                 if k.is_symbol() {
                     sym_keys.push(k.clone());
-                } else if let Ok(n) = k.parse::<u64>() {
-                    if k.eq_str(&n.to_string()) {
-                        // This is an integer index - add/overwrite (string char indices take precedence, but we let btreemap handle uniqueness)
-                        int_keys_set.insert(n, k.to_string());
-                    } else {
-                        str_keys.push(k.clone());
-                    }
+                } else if let Some(n) = parse_array_index(k) {
+                    // String char indices take precedence, but the BTreeMap
+                    // handles uniqueness and ascending numeric order.
+                    int_keys_set.insert(n as u64, k.to_string());
                 } else {
                     // Skip "length" for string wrappers - it's virtual, added separately
                     if is_string_wrapper && k.eq_str("length") {
@@ -1767,12 +1764,13 @@ impl Interpreter {
             for (_, k) in int_keys_set {
                 result.push(JsValue::from_str(&k));
             }
-            for k in str_keys {
-                result.push(JsValue::string(k.to_js_string()));
-            }
-            // String exotic: "length" is a virtual non-enumerable string key (after other str keys, before symbols)
+            // A String exotic's virtual "length" property exists before any
+            // subsequently created ordinary string properties.
             if is_string_wrapper {
                 result.push(JsValue::from_str("length"));
+            }
+            for k in str_keys {
+                result.push(JsValue::string(k.to_js_string()));
             }
             for k in sym_keys {
                 result.push(self.symbol_key_to_jsvalue(&k));
