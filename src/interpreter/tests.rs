@@ -3594,6 +3594,119 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_from_generator_loop_disposer_stops_iteration() {
+        // A resumed generator disposes the previous `for (using ...)`
+        // iteration before requesting the next value. An exit from that
+        // disposer must complete the generator without calling next() or
+        // IteratorClose afterward.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.nextCalls = 0;
+            globalThis.cleanup = "no";
+            globalThis.after = "no";
+            globalThis.iter = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                globalThis.nextCalls++;
+                if (this.done) return { done: true };
+                this.done = true;
+                return {
+                  value: { [Symbol.dispose]() { __host_exit(3); } },
+                  done: false,
+                };
+              },
+              return() { globalThis.cleanup = "ran"; return { done: true }; },
+            };
+            function* g() {
+              for (using resource of iter) {
+                yield resource;
+              }
+            }
+            globalThis.gen = g();
+            gen.next();
+            gen.next();
+            globalThis.after = "yes";
+            "#,
+        );
+        assert!(matches!(c, Completion::Exit(3)));
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_number(&interp, "nextCalls"), 1.0);
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let generator_id = global_object_id(&interp, "gen");
+        let iterator_id = global_object_id(&interp, "iter");
+        let generator = interp.get_object(generator_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert!(!interp.generator_for_of_stacks.contains_key(&generator_id));
+        assert!(!interp.generator_inline_iters.contains_key(&generator_id));
+        assert!(!interp.gc_temp_roots.contains(&iterator_id));
+    }
+
+    #[test]
+    fn host_exit_from_async_generator_loop_disposer_stops_iteration() {
+        // The async-generator queue is a completion-less boundary. It must
+        // latch an Exit returned by the resumed state machine, leave the
+        // request promise unsettled, and stop the current reaction immediately.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.nextCalls = 0;
+            globalThis.cleanup = "no";
+            globalThis.after = "no";
+            globalThis.iter = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                globalThis.nextCalls++;
+                if (this.done) return { done: true };
+                this.done = true;
+                return {
+                  value: { [Symbol.dispose]() { __host_exit(4); } },
+                  done: false,
+                };
+              },
+              return() { globalThis.cleanup = "ran"; return { done: true }; },
+            };
+            async function* g() {
+              for (using resource of iter) {
+                yield resource;
+              }
+            }
+            globalThis.gen = g();
+            gen.next().then(function () {
+              gen.next();
+              globalThis.after = "yes";
+            });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_number(&interp, "nextCalls"), 1.0);
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let generator_id = global_object_id(&interp, "gen");
+        let iterator_id = global_object_id(&interp, "iter");
+        let generator = interp.get_object(generator_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert!(!interp.generator_for_of_stacks.contains_key(&generator_id));
+        assert!(!interp.generator_inline_iters.contains_key(&generator_id));
+        assert!(!interp.gc_temp_roots.contains(&iterator_id));
+    }
+
+    #[test]
     fn host_exit_from_inner_async_iterator_close_skips_outer_cleanup() {
         // An exit requested by an inner iterator's return() must stop the
         // transformed unwind before it invokes an outer iterator's return().

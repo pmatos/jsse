@@ -1686,33 +1686,62 @@ impl Interpreter {
                         .map(|b| b.value.clone())
                         .unwrap_or(JsValue::UNDEFINED);
 
-                    // §14.7.5.6 step 7.h: a throwing disposer ends the loop
-                    // with a throw completion, so the iterator still closes
-                    // and the generator's own handlers still see the error.
-                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
-                        && let Completion::Throw(e) =
-                            self.dispose_resources(&iteration_env, Completion::Empty)
-                    {
-                        self.iterator_close(&iterator, e.clone());
-                        self.gc_unroot_value(&iterator);
-                        for_of_stack.remove(loop_pos);
-                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                        let e = route_exception!(e);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return Completion::Throw(e);
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take() {
+                        match self.dispose_resources(&iteration_env, Completion::Empty) {
+                            // §14.7.5.6 step 7.h: a throwing disposer ends the
+                            // loop with a throw completion, so the iterator
+                            // still closes and the generator's handlers see it.
+                            Completion::Throw(e) => {
+                                self.iterator_close(&iterator, e.clone());
+                                self.gc_unroot_value(&iterator);
+                                for_of_stack.remove(loop_pos);
+                                self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                let e = route_exception!(e);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return Completion::Throw(e);
+                            }
+                            // `__host_exit` is terminal and uncatchable. Drop
+                            // all saved loop state without invoking any further
+                            // disposer or iterator `return()` user code.
+                            Completion::Exit(code) => {
+                                self.discard_generator_for_of_loops_on_exit(
+                                    o.id,
+                                    &mut for_of_stack,
+                                    &func_env,
+                                );
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return Completion::Exit(code);
+                            }
+                            _ => {}
+                        }
                     }
 
                     let step_result = match self.iterator_next(&iterator) {
@@ -2769,6 +2798,9 @@ impl Interpreter {
         if !is_executing && queue_len == 1 {
             let this_clone = this.clone();
             self.async_gen_process_queue(&this_clone);
+            if let Some(code) = self.pending_exit {
+                return Completion::Exit(code);
+            }
         }
 
         Completion::Normal(promise)
@@ -2818,6 +2850,15 @@ impl Interpreter {
                     request.reject_fn.clone(),
                 ),
         };
+
+        // The queue driver has no Completion return channel of its own. Latch
+        // a terminal host exit here so the current JS call/microtask stops and
+        // the outer event-loop boundary can propagate the exit. The request
+        // promise deliberately remains unsettled.
+        if let Completion::Exit(code) = result {
+            self.pending_exit = Some(code);
+            return;
+        }
 
         // If the yield suspended asynchronously (pending promise), don't pop — the
         // fulfill/reject handler will pop and schedule the next request
@@ -6074,36 +6115,65 @@ impl Interpreter {
                         .map(|b| b.value.clone())
                         .unwrap_or(JsValue::UNDEFINED);
 
-                    // §14.7.5.6 step 7.h: a throwing disposer ends the loop
-                    // with a throw completion, so the iterator still closes
-                    // and the generator's own handlers still see the error.
-                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
-                        && let Completion::Throw(e) =
-                            self.dispose_resources(&iteration_env, Completion::Empty)
-                    {
-                        self.iterator_close(&iterator, e.clone());
-                        self.gc_unroot_value(&iterator);
-                        for_of_stack.remove(loop_pos);
-                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                        let e = route_exception!(e);
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take() {
+                        match self.dispose_resources(&iteration_env, Completion::Empty) {
+                            // §14.7.5.6 step 7.h: a throwing disposer ends the
+                            // loop with a throw completion, so the iterator
+                            // still closes and the generator's handlers see it.
+                            Completion::Throw(e) => {
+                                self.iterator_close(&iterator, e.clone());
+                                self.gc_unroot_value(&iterator);
+                                for_of_stack.remove(loop_pos);
+                                self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                let e = route_exception!(e);
+                                self.generator_inline_iters.remove(&o.id);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            // Leave the result promise unsettled: a terminal
+                            // host exit propagates through the queue boundary,
+                            // never through normal promise settlement.
+                            Completion::Exit(code) => {
+                                self.discard_generator_for_of_loops_on_exit(
+                                    o.id,
+                                    &mut for_of_stack,
+                                    &func_env,
+                                );
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                return Completion::Exit(code);
+                            }
+                            _ => {}
+                        }
                     }
 
                     let step_result = match self.iterator_next(&iterator) {
@@ -7343,6 +7413,25 @@ impl Interpreter {
         for_of_stack.remove(loop_pos);
         self.unroot_for_of_iterator(iterator);
         self.remove_generator_inline_iterator(generator_id, iterator);
+        self.sync_generator_for_of_stack(generator_id, for_of_stack);
+    }
+
+    /// Release the internal representation of every active generator for-of
+    /// loop after a terminal host exit. This is bookkeeping only: `Exit` must
+    /// not invoke another disposer or iterator `return()` callback.
+    fn discard_generator_for_of_loops_on_exit(
+        &mut self,
+        generator_id: u64,
+        for_of_stack: &mut Vec<ForOfLoopState>,
+        func_env: &EnvRef,
+    ) {
+        for loop_state in for_of_stack.drain(..).rev() {
+            let iterator = func_env.borrow().get(&loop_state.iter_var);
+            if let Some(iterator) = iterator {
+                self.unroot_for_of_iterator(&iterator);
+            }
+        }
+        self.generator_inline_iters.remove(&generator_id);
         self.sync_generator_for_of_stack(generator_id, for_of_stack);
     }
 
