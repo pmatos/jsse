@@ -79,6 +79,19 @@ backend byte offsets through the retained UTF-16 subject without confusing a
 genuine U+F0000-U+F07FF scalar with the same scalar used as a lone-surrogate
 sentinel. ASCII subjects return offsets directly and never allocate the map.
 
+Both offset maps are *sampled* rather than dense: they retain one boundary every
+`BOUNDARY_SAMPLE_INTERVAL` (32) characters, and a lookup binary-searches the
+samples before walking at most one interval. A dense map is the one part of a
+cached subject whose size tracks the subject's length rather than the work asked
+of it, so a prefix-only match such as `/^é/u.test(s)` would otherwise retain a
+table several times the size of the subject that produced it — 16 bytes per
+character for the Unicode map and 8 per code unit for the non-Unicode one. The
+bounded walk keeps lookups O(1), so sampling costs no measurable time (a
+400k-character tokenizer scan is unchanged within noise) while cutting the
+retained tables by more than an order of magnitude: on a five-million-character
+non-ASCII subject, exercising both maps grows peak RSS by 15 MB rather than
+126 MB.
+
 ## Correctness and failure behavior
 
 The cache holds only immutable `JsString` storage, so there is no invalidation

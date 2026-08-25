@@ -376,6 +376,31 @@ impl RegexView {
     }
 }
 
+/// How many characters lie between two sampled offset boundaries.
+///
+/// The offset tables are the one part of a cached subject that is proportional
+/// to its length rather than to the work asked of it, so they are sampled: a
+/// lookup binary-searches the samples and then walks at most one interval. 32
+/// keeps that walk far cheaper than the binary search it replaces while cutting
+/// the retained table to a thirty-second of a full one — enough that the tables
+/// no longer dominate the cached subject's footprint.
+const BOUNDARY_SAMPLE_INTERVAL: usize = 32;
+
+/// UTF-16 width, in code units, of the character starting at `index`.
+///
+/// A high surrogate immediately followed by a low surrogate is one two-unit
+/// character; anything else, including an unpaired surrogate, is one unit.
+fn utf16_char_width(code_units: &[u16], index: usize) -> usize {
+    if (0xD800..=0xDBFF).contains(&code_units[index])
+        && index + 1 < code_units.len()
+        && (0xDC00..=0xDFFF).contains(&code_units[index + 1])
+    {
+        2
+    } else {
+        1
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RegexInputBoundary {
     byte: usize,
@@ -416,37 +441,42 @@ impl RegexInput {
             .get_or_init(|| js_code_units_to_wtf8(&self.subject.code_units))
     }
 
+    /// Sampled boundaries: one entry per [`BOUNDARY_SAMPLE_INTERVAL`]
+    /// characters, always including the first and last. A lookup binary-searches
+    /// the samples and then walks at most `BOUNDARY_SAMPLE_INTERVAL - 1`
+    /// characters, so it stays O(1) while the table costs a fraction of an entry
+    /// per character rather than a whole one — a prefix-only match on a
+    /// multi-megabyte subject no longer retains a table larger than the subject.
     fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
         self.unicode_boundaries.get_or_init(|| {
             let view = self.as_str(true);
             let code_units = &self.subject.code_units;
-            let mut boundaries = Vec::with_capacity(code_units.len() + 1);
+            let mut boundaries =
+                Vec::with_capacity(code_units.len() / BOUNDARY_SAMPLE_INTERVAL + 2);
             let mut byte = 0;
             let mut utf16 = 0;
+            let mut chars = 0usize;
             boundaries.push(RegexInputBoundary { byte, utf16 });
 
             while utf16 < code_units.len() {
-                let code_unit_count = if (0xD800..=0xDBFF).contains(&code_units[utf16])
-                    && utf16 + 1 < code_units.len()
-                    && (0xDC00..=0xDFFF).contains(&code_units[utf16 + 1])
-                {
-                    2
-                } else {
-                    1
-                };
                 let encoded = view[byte..]
                     .chars()
                     .next()
                     .expect("each UTF-16 character must have a regex input character");
                 byte += encoded.len_utf8();
-                utf16 += code_unit_count;
-                boundaries.push(RegexInputBoundary { byte, utf16 });
+                utf16 += utf16_char_width(code_units, utf16);
+                chars += 1;
+                if chars.is_multiple_of(BOUNDARY_SAMPLE_INTERVAL) {
+                    boundaries.push(RegexInputBoundary { byte, utf16 });
+                }
             }
 
             debug_assert_eq!(byte, view.len());
-            // One entry per character, not per code unit, so a surrogate-heavy
-            // subject leaves up to half the reservation unused for the life of
-            // the cache.
+            // The end of the subject must always be addressable, even when the
+            // character count is not a multiple of the sample interval.
+            if !chars.is_multiple_of(BOUNDARY_SAMPLE_INTERVAL) {
+                boundaries.push(RegexInputBoundary { byte, utf16 });
+            }
             boundaries.shrink_to_fit();
             boundaries
         })
@@ -455,36 +485,130 @@ impl RegexInput {
     fn unicode_utf16_to_byte_offset(&self, offset: usize) -> usize {
         let target = offset.min(self.subject.len());
         let boundaries = self.unicode_boundaries();
-        match boundaries.binary_search_by_key(&target, |boundary| boundary.utf16) {
-            Ok(index) => boundaries[index].byte,
-            // A UTF-16 index within a surrogate pair refers to the character
-            // that starts at the preceding code-unit boundary.
-            Err(index) => boundaries[index.saturating_sub(1)].byte,
+        let start = match boundaries.binary_search_by_key(&target, |boundary| boundary.utf16) {
+            Ok(index) => return boundaries[index].byte,
+            Err(index) => boundaries[index.saturating_sub(1)],
+        };
+
+        // Walk the sampled span. A UTF-16 index within a surrogate pair refers
+        // to the character that starts at the preceding code-unit boundary, so
+        // stop at the last character beginning at or before `target`.
+        let view = self.as_str(true);
+        let code_units = &self.subject.code_units;
+        let mut byte = start.byte;
+        let mut utf16 = start.utf16;
+        while utf16 < target {
+            let width = utf16_char_width(code_units, utf16);
+            if utf16 + width > target {
+                break;
+            }
+            byte += view[byte..]
+                .chars()
+                .next()
+                .expect("each UTF-16 character must have a regex input character")
+                .len_utf8();
+            utf16 += width;
         }
+        byte
     }
 
     fn unicode_byte_offset_to_utf16(&self, offset: usize) -> usize {
-        let target = offset.min(self.as_str(true).len());
+        let view = self.as_str(true);
+        let target = offset.min(view.len());
         let boundaries = self.unicode_boundaries();
-        match boundaries.binary_search_by_key(&target, |boundary| boundary.byte) {
-            Ok(index) => boundaries[index].utf16,
-            Err(index) => boundaries[index.saturating_sub(1)].utf16,
+        let start = match boundaries.binary_search_by_key(&target, |boundary| boundary.byte) {
+            Ok(index) => return boundaries[index].utf16,
+            Err(index) => boundaries[index.saturating_sub(1)],
+        };
+
+        let code_units = &self.subject.code_units;
+        let mut byte = start.byte;
+        let mut utf16 = start.utf16;
+        while byte < target {
+            let encoded = view[byte..]
+                .chars()
+                .next()
+                .expect("each UTF-16 character must have a regex input character");
+            if byte + encoded.len_utf8() > target {
+                break;
+            }
+            byte += encoded.len_utf8();
+            utf16 += utf16_char_width(code_units, utf16);
         }
+        utf16
     }
 
-    /// Byte offset of every UTF-16 code unit in the non-Unicode view, plus a
-    /// trailing total length. That view encodes each code unit as exactly one
-    /// character (a supplementary scalar arrives as a surrogate pair and
-    /// becomes two PUA characters), so a code-unit offset indexes this table
-    /// directly instead of rescanning the subject on every exec.
+    /// Byte offset of every [`BOUNDARY_SAMPLE_INTERVAL`]-th UTF-16 code unit in
+    /// the non-Unicode view, plus a trailing total length. That view encodes
+    /// each code unit as exactly one character (a supplementary scalar arrives
+    /// as a surrogate pair and becomes two PUA characters), so a code-unit
+    /// offset divides straight into a sample and then walks at most one
+    /// interval — no rescanning the subject on every exec, and no entry
+    /// retained per code unit.
     fn non_unicode_offsets(&self) -> &[usize] {
         self.non_unicode_offsets.get_or_init(|| {
             let view = self.as_str(false);
-            let mut offsets = Vec::with_capacity(self.subject.len() + 1);
-            offsets.extend(view.char_indices().map(|(byte, _)| byte));
+            let mut offsets = Vec::with_capacity(self.subject.len() / BOUNDARY_SAMPLE_INTERVAL + 2);
+            offsets.extend(
+                view.char_indices()
+                    .step_by(BOUNDARY_SAMPLE_INTERVAL)
+                    .map(|(byte, _)| byte),
+            );
+            // One past the final code unit, so the end of the subject is
+            // addressable whatever the code-unit count is modulo the interval.
             offsets.push(view.len());
+            offsets.shrink_to_fit();
             offsets
         })
+    }
+
+    fn non_unicode_utf16_to_byte_offset(&self, offset: usize) -> usize {
+        let view = self.as_str(false);
+        let target = offset.min(self.subject.len());
+        if target == self.subject.len() {
+            return view.len();
+        }
+        let offsets = self.non_unicode_offsets();
+        let sample = target / BOUNDARY_SAMPLE_INTERVAL;
+        let mut byte = offsets[sample];
+        let mut unit = sample * BOUNDARY_SAMPLE_INTERVAL;
+        while unit < target {
+            byte += view[byte..]
+                .chars()
+                .next()
+                .expect("each code unit must have a non-Unicode view character")
+                .len_utf8();
+            unit += 1;
+        }
+        byte
+    }
+
+    fn non_unicode_byte_offset_to_utf16(&self, offset: usize) -> usize {
+        let view = self.as_str(false);
+        let target = offset.min(view.len());
+        let offsets = self.non_unicode_offsets();
+        let sample = match offsets.binary_search(&target) {
+            // The final entry is the total length, one past the last code unit.
+            Ok(index) if index + 1 == offsets.len() => return self.subject.len(),
+            Ok(index) => return index * BOUNDARY_SAMPLE_INTERVAL,
+            Err(index) => index.saturating_sub(1),
+        };
+        let mut byte = offsets[sample];
+        let mut unit = sample * BOUNDARY_SAMPLE_INTERVAL;
+        while byte < target {
+            let encoded = view[byte..]
+                .chars()
+                .next()
+                .expect("each code unit must have a non-Unicode view character");
+            // A byte offset inside a character refers to the code unit that
+            // character starts at.
+            if byte + encoded.len_utf8() > target {
+                break;
+            }
+            byte += encoded.len_utf8();
+            unit += 1;
+        }
+        unit
     }
 
     /// Map a UTF-16 code-unit offset to a byte offset within `view`.
@@ -504,10 +628,7 @@ impl RegexInput {
             RegexView::Wtf8 => utf16_to_wtf8_byte_offset(self.wtf8(), offset),
             _ if self.ascii => offset.min(self.subject.len()),
             RegexView::Unicode => self.unicode_utf16_to_byte_offset(offset),
-            RegexView::NonUnicode => {
-                let offsets = self.non_unicode_offsets();
-                offsets[offset.min(offsets.len() - 1)]
-            }
+            RegexView::NonUnicode => self.non_unicode_utf16_to_byte_offset(offset),
         }
     }
 
@@ -520,15 +641,7 @@ impl RegexInput {
             RegexView::Wtf8 => wtf8_byte_offset_to_utf16(self.wtf8(), offset),
             _ if self.ascii => offset,
             RegexView::Unicode => self.unicode_byte_offset_to_utf16(offset),
-            RegexView::NonUnicode => {
-                let offsets = self.non_unicode_offsets();
-                match offsets.binary_search(&offset) {
-                    Ok(index) => index,
-                    // A byte offset inside a character refers to the code unit
-                    // that character starts at.
-                    Err(index) => index.saturating_sub(1),
-                }
-            }
+            RegexView::NonUnicode => self.non_unicode_byte_offset_to_utf16(offset),
         }
     }
 }
