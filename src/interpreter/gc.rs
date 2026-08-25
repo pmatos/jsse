@@ -352,6 +352,9 @@ impl Interpreter {
                 Self::collect_value_roots(val, &mut roots);
             }
         }
+        for for_of_stack in self.generator_for_of_stacks.values() {
+            Self::collect_for_of_stack_roots(for_of_stack, &mut roots, &mut seen_envs);
+        }
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
@@ -365,12 +368,7 @@ impl Interpreter {
             if let Some(ref v) = afs.saved_finally_exception {
                 Self::collect_value_roots(v, &mut roots);
             }
-            for loop_state in &afs.for_of_stack {
-                Self::collect_env_roots(&loop_state.outer_env, &mut roots, &mut seen_envs);
-                if let Some(ref env) = loop_state.iteration_env {
-                    Self::collect_env_roots(env, &mut roots, &mut seen_envs);
-                }
-            }
+            Self::collect_for_of_stack_roots(&afs.for_of_stack, &mut roots, &mut seen_envs);
         }
 
         (roots, seen_envs)
@@ -632,6 +630,7 @@ impl Interpreter {
         self.function_realm_map.remove(&id);
         self.iterator_next_cache.remove(&id);
         self.generator_inline_iters.remove(&id);
+        self.generator_for_of_stacks.remove(&id);
     }
 
     fn gc_collect_major(&mut self) {
@@ -1014,6 +1013,23 @@ impl Interpreter {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Roots the environments a suspended driver's for-of stack still holds.
+    /// Shared by the async-function states and the generator side table so a
+    /// new field on `ForOfLoopState` cannot be traced in one and missed in the
+    /// other.
+    fn collect_for_of_stack_roots(
+        for_of_stack: &[ForOfLoopState],
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+    ) {
+        for loop_state in for_of_stack {
+            Self::collect_env_roots(&loop_state.outer_env, worklist, seen_envs);
+            if let Some(ref env) = loop_state.iteration_env {
+                Self::collect_env_roots(env, worklist, seen_envs);
+            }
         }
     }
 

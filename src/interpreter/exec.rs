@@ -1170,11 +1170,7 @@ impl Interpreter {
                 }
             }
             if is_using {
-                let hint = if decl.kind == VarKind::AwaitUsing {
-                    DisposeHint::Async
-                } else {
-                    DisposeHint::Sync
-                };
+                let hint = DisposeHint::for_var_kind(decl.kind);
                 if let Err(e) = self.add_disposable_resource(env, &val, hint) {
                     return Completion::Throw(e);
                 }
@@ -2104,11 +2100,7 @@ impl Interpreter {
                         &for_env
                     };
                     if is_using {
-                        let hint = if decl.kind == VarKind::AwaitUsing {
-                            DisposeHint::Async
-                        } else {
-                            DisposeHint::Sync
-                        };
+                        let hint = DisposeHint::for_var_kind(decl.kind);
                         if let Err(e) = self.add_disposable_resource(bind_env, &val, hint) {
                             self.iterator_close(iterator, e.clone());
                             return Completion::Throw(e);

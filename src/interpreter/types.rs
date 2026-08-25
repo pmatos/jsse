@@ -329,12 +329,12 @@ pub(crate) struct AsyncFunctionState {
     pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
-    pub for_of_stack: Vec<AsyncForOfLoopState>,
+    pub for_of_stack: Vec<ForOfLoopState>,
     pub module_path: Option<super::ModuleKey>,
 }
 
 #[derive(Clone)]
-pub(crate) struct AsyncForOfLoopState {
+pub(crate) struct ForOfLoopState {
     pub(crate) iter_var: String,
     /// The labels attached to this iteration statement. `LoopContinues` uses
     /// this set to decide whether a labelled continue begins its next iteration.
@@ -344,6 +344,8 @@ pub(crate) struct AsyncForOfLoopState {
     /// Depth of the driver's try stack when the loop began, so an abrupt
     /// completion can tell a `finally` lexically inside the loop (which runs
     /// before IteratorClose) from one outside it (which runs after).
+    /// The async-function and generator drivers use the same boundary while
+    /// unwinding their saved loop state.
     pub(crate) try_depth: usize,
     /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
     pub(crate) outer_env: EnvRef,
@@ -351,7 +353,7 @@ pub(crate) struct AsyncForOfLoopState {
     pub(crate) iteration_env: Option<EnvRef>,
 }
 
-impl AsyncForOfLoopState {
+impl ForOfLoopState {
     pub(crate) fn effective_env(&self) -> &EnvRef {
         self.iteration_env.as_ref().unwrap_or(&self.outer_env)
     }
@@ -748,6 +750,18 @@ pub(crate) struct Environment {
 pub(crate) enum DisposeHint {
     Sync,
     Async,
+}
+
+impl DisposeHint {
+    /// The hint a `using` / `await using` declaration disposes its resources
+    /// with. Non-`using` kinds never reach this.
+    pub(crate) fn for_var_kind(kind: VarKind) -> Self {
+        if kind == VarKind::AwaitUsing {
+            Self::Async
+        } else {
+            Self::Sync
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

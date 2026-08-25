@@ -250,6 +250,7 @@ pub(crate) struct Interpreter {
     /// the native-stack guard fires.
     pub(crate) active_array_joins: Vec<u64>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
+    pub(crate) generator_for_of_stacks: FxHashMap<u64, Vec<ForOfLoopState>>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
@@ -560,6 +561,7 @@ impl Interpreter {
             pending_iter_close: Vec::new(),
             active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
+            generator_for_of_stacks: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
