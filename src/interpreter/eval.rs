@@ -7750,11 +7750,18 @@ impl Interpreter {
         };
         // Step 6: Walk O.[[GetPrototypeOf]]() chain (proxy-aware)
         let mut current_val = obj.clone();
+        let mut proxy_depth = 0;
         while let Some(current_obj) = current_val
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
         {
             let current_id = current_obj.id;
+            if self.get_proxy_info(current_id).is_some() {
+                proxy_depth = match self.advance_proxy_chain_depth(proxy_depth) {
+                    Ok(depth) => depth,
+                    Err(e) => return Completion::Throw(e),
+                };
+            }
             let next = match self.proxy_get_prototype_of(current_id) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),

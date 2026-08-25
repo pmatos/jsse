@@ -406,6 +406,16 @@ pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
 /// leaving ample headroom for the error object's own construction.
 pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
 
+/// Maximum number of Proxy forwarding seams one prototype-chain operation may
+/// cross before reporting stack exhaustion. Ordinary-only chains are not
+/// counted: `OrdinarySetPrototypeOf` prevents them from cycling, and their hot
+/// iterative/tail-recursive paths already handle very deep acyclic chains.
+///
+/// A Proxy can legally hide a cycle from `OrdinarySetPrototypeOf`. Keeping this
+/// below the JS call-depth ceiling leaves enough native stack to construct and
+/// throw a catchable `RangeError` instead of reaching SIGABRT first.
+pub(crate) const PROXY_CHAIN_DEPTH_LIMIT: usize = 4_000;
+
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
 const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 

@@ -36,6 +36,16 @@ impl SetOutcome {
 }
 
 impl Interpreter {
+    /// Advance the resource counter shared by Proxy-mediated prototype-chain
+    /// walks. The counter is local to one internal-method operation, so user
+    /// code that starts a nested operation gets an independent budget.
+    pub(crate) fn advance_proxy_chain_depth(&mut self, depth: usize) -> Result<usize, JsValue> {
+        if depth >= PROXY_CHAIN_DEPTH_LIMIT {
+            return Err(self.create_error("RangeError", "Maximum call stack size exceeded"));
+        }
+        Ok(depth + 1)
+    }
+
     /// Canonical [[Set]] entry point (§10.1.9 OrdinarySet + exotic dispatch).
     /// Handles proxy `set` trap, TypedArray integer-index element set,
     /// accessor setter invocation, prototype-chain walk, and receiver logic.
@@ -110,6 +120,16 @@ impl Interpreter {
         key: &K,
         this_val: &JsValue,
     ) -> Completion {
+        self.get_object_property_with_proxy_depth(obj_id, key, this_val, 0)
+    }
+
+    fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        this_val: &JsValue,
+        proxy_depth: usize,
+    ) -> Completion {
         // Single-borrow fast path: classify object and check own property in one borrow
         if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
@@ -157,7 +177,12 @@ impl Interpreter {
                 drop(b);
                 if let Some(proto_rc) = proto {
                     let proto_id = proto_rc;
-                    return self.get_object_property(proto_id, key, this_val);
+                    return self.get_object_property_with_proxy_depth(
+                        proto_id,
+                        key,
+                        this_val,
+                        proxy_depth,
+                    );
                 }
                 return Completion::Normal(JsValue::UNDEFINED);
             }
@@ -165,7 +190,7 @@ impl Interpreter {
         }
 
         // Slow path: proxy or module namespace objects
-        self.get_object_property_slow(obj_id, key, this_val)
+        self.get_object_property_slow(obj_id, key, this_val, proxy_depth)
     }
 
     fn get_object_property_slow<K: PropertyKeyLike + ?Sized>(
@@ -173,6 +198,7 @@ impl Interpreter {
         obj_id: u64,
         key: &K,
         this_val: &JsValue,
+        proxy_depth: usize,
     ) -> Completion {
         // Check if object is a proxy
         if self.get_proxy_info(obj_id).is_some() {
@@ -216,7 +242,13 @@ impl Interpreter {
                 Ok(None) => {
                     // No trap, fall through to target
                     if let Some(target_id) = target_val.as_object_id() {
-                        return self.get_object_property(target_id, key, this_val);
+                        let next_depth = match self.advance_proxy_chain_depth(proxy_depth) {
+                            Ok(depth) => depth,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        return self.get_object_property_with_proxy_depth(
+                            target_id, key, this_val, next_depth,
+                        );
                     }
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
@@ -283,7 +315,7 @@ impl Interpreter {
                 };
                 if let Some(proto_rc) = proto {
                     let proto_id = proto_rc;
-                    self.get_object_property(proto_id, key, this_val)
+                    self.get_object_property_with_proxy_depth(proto_id, key, this_val, proxy_depth)
                 } else {
                     Completion::Normal(JsValue::UNDEFINED)
                 }
@@ -296,6 +328,15 @@ impl Interpreter {
         &mut self,
         obj_id: u64,
         key: &K,
+    ) -> Result<bool, JsValue> {
+        self.proxy_has_property_with_proxy_depth(obj_id, key, 0)
+    }
+
+    fn proxy_has_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        proxy_depth: usize,
     ) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
@@ -325,7 +366,9 @@ impl Interpreter {
                 }
                 Ok(None) => {
                     if let Some(target_id) = target_val.as_object_id() {
-                        return self.proxy_has_property(target_id, key);
+                        let next_depth = self.advance_proxy_chain_depth(proxy_depth)?;
+                        return self
+                            .proxy_has_property_with_proxy_depth(target_id, key, next_depth);
                     }
                     Ok(false)
                 }
@@ -360,7 +403,7 @@ impl Interpreter {
             let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
-                return self.proxy_has_property(proto_id, key);
+                return self.proxy_has_property_with_proxy_depth(proto_id, key, proxy_depth);
             }
             Ok(false)
         } else {
@@ -760,6 +803,17 @@ impl Interpreter {
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<SetOutcome, JsValue> {
+        self.proxy_set_with_outcome_and_proxy_depth(obj_id, key, value, receiver, 0)
+    }
+
+    fn proxy_set_with_outcome_and_proxy_depth<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        value: JsValue,
+        receiver: &JsValue,
+        proxy_depth: usize,
+    ) -> Result<SetOutcome, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = self.symbol_key_to_jsvalue(key);
@@ -804,7 +858,10 @@ impl Interpreter {
                 }
                 Ok(None) => {
                     if let Some(target_id) = target_val.as_object_id() {
-                        return self.proxy_set_with_outcome(target_id, key, value, receiver);
+                        let next_depth = self.advance_proxy_chain_depth(proxy_depth)?;
+                        return self.proxy_set_with_outcome_and_proxy_depth(
+                            target_id, key, value, receiver, next_depth,
+                        );
                     }
                     Ok(SetOutcome::Rejected)
                 }
@@ -983,7 +1040,13 @@ impl Interpreter {
             let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
-                return self.proxy_set_with_outcome(proto_id, key, value, receiver);
+                return self.proxy_set_with_outcome_and_proxy_depth(
+                    proto_id,
+                    key,
+                    value,
+                    receiver,
+                    proxy_depth,
+                );
             }
             // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
             // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
@@ -1728,6 +1791,7 @@ impl Interpreter {
         let mut seen = HashSet::new();
         let mut keys = Vec::new();
         let mut current_id = Some(obj_id);
+        let mut proxy_depth = 0;
 
         while let Some(cid) = current_id {
             // Get own keys for current object (proxy-aware)
@@ -1751,6 +1815,9 @@ impl Interpreter {
             }
 
             // Walk prototype chain (proxy-aware)
+            if self.get_proxy_info(cid).is_some() {
+                proxy_depth = self.advance_proxy_chain_depth(proxy_depth)?;
+            }
             current_id = self.proxy_get_prototype_of(cid)?.as_object_id();
         }
         Ok(keys)
