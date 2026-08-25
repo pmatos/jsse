@@ -3440,12 +3440,13 @@ mod node_host_tests {
               typeof __host_hrtime,
               typeof __host_random_bytes,
               typeof __host_proxy_target,
+              typeof __host_array_extra_keys,
             ].join(",");
             "#,
         );
         assert_eq!(
             global_string(&interp, "r"),
-            "undefined,undefined,undefined,undefined,undefined"
+            "undefined,undefined,undefined,undefined,undefined,undefined"
         );
     }
 
@@ -3453,13 +3454,13 @@ mod node_host_tests {
     fn host_globals_are_non_enumerable_functions() {
         assert_node_ok(
             r#"
-            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes","__host_proxy_target"]) {
+            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes","__host_proxy_target","__host_array_extra_keys"]) {
               const d = Object.getOwnPropertyDescriptor(globalThis, name);
               if (!d) throw new Error(name + " missing");
               if (d.enumerable) throw new Error(name + " is enumerable");
-              // node-shim.js deletes __host_proxy_target under "use strict" to
-              // keep the Proxy-metadata seam private; a non-configurable
-              // binding would make that delete throw and kill the prelude.
+              // node-shim.js deletes its metadata hooks under "use strict" to
+              // keep the seams private; a non-configurable binding would make
+              // that delete throw and kill the prelude.
               if (!d.configurable) throw new Error(name + " is not configurable");
               if (typeof globalThis[name] !== "function") throw new Error(name + " not a function");
               if (Object.keys(globalThis).includes(name)) throw new Error(name + " shows in keys");
@@ -3550,6 +3551,54 @@ mod node_host_tests {
             revocable.revoke();
             if (__host_proxy_target(revocable.proxy) !== null) {
               throw new Error("revoked Proxy marker");
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_array_extra_keys_filters_dense_indices_without_getting_values() {
+        assert_node_ok(
+            r#"
+            let getterCalls = 0;
+            const a = new Array(100000).fill(1);
+            a.z = 2;
+            Object.defineProperty(a, "getter", {
+              get() { getterCalls++; throw new Error("named getter ran"); },
+              enumerable: true,
+              configurable: true,
+            });
+            Object.defineProperty(a, "hidden", {
+              value: 3,
+              enumerable: false,
+              configurable: true,
+            });
+            Object.defineProperty(a, "2", {
+              get() { getterCalls++; throw new Error("index getter ran"); },
+              enumerable: true,
+              configurable: true,
+            });
+            a["4294967295"] = "max";
+            a["-0"] = "minus";
+            Object.defineProperty(a, "+1", {
+              value: "plus",
+              enumerable: true,
+              configurable: true,
+            });
+            a["01"] = "leading";
+            a["1e0"] = "exponential";
+            a[Symbol("marker")] = 4;
+
+            const keys = __host_array_extra_keys(a);
+            if (keys.join(",") !== "z,getter,4294967295,-0,+1,01,1e0") {
+              throw new Error("wrong keys: " + keys.join(","));
+            }
+            if (getterCalls !== 0) throw new Error("getter invoked");
+            if (__host_array_extra_keys({ z: 1 }).length !== 0) {
+              throw new Error("ordinary object accepted");
+            }
+            if (__host_array_extra_keys(1).length !== 0) {
+              throw new Error("primitive accepted");
             }
             "#,
         );

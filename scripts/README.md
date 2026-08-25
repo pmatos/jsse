@@ -45,15 +45,17 @@ The shim's readable-output layer (`process`, the full `console` method set, and
 the `util.format` / `util.inspect` core they share) is built on top of the
 flag-gated Rust host floor (issue #229): `__host_write` (byte-accurate fd I/O),
 `__host_hrtime` (monotonic clock), `__host_exit` (real process exit), and
-`__host_proxy_target` (trap-free Proxy metadata for inspection). The runner
-therefore invokes **jsse with `--node`** so those primitives exist (never Node —
-it has no such flag and doesn't need one). The shim is guarded to be a complete
-no-op on real Node, where `process`, the full `console`, and `require('util')`
-already exist; that inertness is what lets the identical bundle run on Node as
-the reference oracle. The shim captures `__host_proxy_target` and immediately
-removes its configurable global binding, keeping the Proxy abstraction bypass
-private from subsequently evaluated library code. When the floor is absent
-(jsse without `--node`) each surface degrades to a pure-JS fallback.
+`__host_proxy_target` (trap-free Proxy metadata for inspection), and
+`__host_array_extra_keys` (bounded Array named-key metadata). The runner
+therefore invokes **jsse with `--node`** so those primitives exist (never Node
+— it has no such flag and doesn't need one). The shim is guarded to be a
+complete no-op on real Node, where `process`, the full `console`, and
+`require('util')` already exist; that inertness is what lets the identical
+bundle run on Node as the reference oracle. The shim captures both inspection
+metadata hooks and immediately removes their configurable global bindings,
+keeping the internal metadata bypass private from subsequently evaluated
+library code. When the floor is absent (jsse without `--node`) each surface
+degrades to a pure-JS fallback.
 
 ## Running
 

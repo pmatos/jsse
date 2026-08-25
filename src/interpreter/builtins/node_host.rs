@@ -1,12 +1,12 @@
 //! Node host-compat "syscall floor" (issue #229).
 //!
 //! The genuinely-cannot-be-pure-JS primitives — byte I/O, OS entropy, a
-//! monotonic high-resolution clock, the process-exit path, and trap-free Proxy
-//! metadata — exposed to the Node prelude only and gated behind the `--node`
-//! CLI flag. When the gate is off (the default, and always the case under
-//! test262) none of these globals are installed and every host-floor check
-//! elsewhere in the interpreter is inert, so the default global environment is
-//! byte-identical to a build without this feature.
+//! monotonic high-resolution clock, the process-exit path, and trap-free
+//! inspection metadata — exposed to the Node prelude only and gated behind the
+//! `--node` CLI flag. When the gate is off (the default, and always the case
+//! under test262) none of these globals are installed and every host-floor
+//! check elsewhere in the interpreter is inert, so the default global
+//! environment is byte-identical to a build without this feature.
 //!
 //! The primitives are installed as **non-enumerable** properties named
 //! `__host_*` on the global object. They are internal plumbing: the higher-level
@@ -183,5 +183,51 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_proxy_target", proxy_target_fn);
+
+        // __host_array_extra_keys(value) -> Array<string>
+        //
+        // Trap- and value-read-free metadata for util.inspect's Array
+        // presentation. Dense elements live in the Array backing store; scan
+        // only descriptor-backed property order so rendering extra named
+        // properties does not undo maxArrayLength's O(100) element cap. The
+        // shim passes an already-unwrapped Proxy target and deletes this global
+        // immediately after capture.
+        let array_extra_keys_fn = self.create_function(JsFunction::native(
+            "__host_array_extra_keys".to_string(),
+            1,
+            |interp, _this, args| {
+                let mut keys = Vec::new();
+                if let Some(obj_id) = args.first().and_then(JsValue::as_object_id)
+                    && let Some(obj) = interp.get_object_cell(obj_id)
+                {
+                    let obj = obj.borrow();
+                    if obj.array_elements().is_some() {
+                        for key in &obj.property_order {
+                            // Canonical array indices always begin with an
+                            // ASCII digit. Keep the guard explicit because the
+                            // engine-wide parser currently accepts a leading
+                            // `+`, while "+1" is a named property here.
+                            let is_array_index = key
+                                .as_bytes()
+                                .first()
+                                .is_some_and(|byte| byte.is_ascii_digit())
+                                && parse_array_index(key).is_some();
+                            if key.is_symbol() || is_array_index {
+                                continue;
+                            }
+                            if obj
+                                .properties
+                                .get(key)
+                                .is_some_and(|desc| desc.enumerable == Some(true))
+                            {
+                                keys.push(JsValue::string(key.to_js_string()));
+                            }
+                        }
+                    }
+                }
+                Completion::Normal(interp.create_array(keys))
+            },
+        ));
+        self.install_host_global("__host_array_extra_keys", array_extra_keys_fn);
     }
 }

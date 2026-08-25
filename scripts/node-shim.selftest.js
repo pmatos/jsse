@@ -85,6 +85,11 @@ eq(
   "undefined",
   "shim hides the Proxy-target host hook"
 );
+eq(
+  typeof globalThis.__host_array_extra_keys,
+  "undefined",
+  "shim hides the array-key host hook"
+);
 
 // ---- util.format: %s ------------------------------------------------------
 eq(util.format("%s", "hi"), "hi", "%s string");
@@ -1142,16 +1147,59 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     arr.indexOf("1") !== -1 && arr.indexOf("2") !== -1 && arr.indexOf("3") !== -1,
     "inspect renders array elements"
   );
+  var arrayWithProperty = [1];
+  arrayWithProperty.z = 2;
+  eq(
+    util.inspect(arrayWithProperty),
+    "[ 1, z: 2 ]",
+    "inspect renders array extra properties"
+  );
+  var emptyArrayWithProperty = [];
+  emptyArrayWithProperty.z = 2;
+  eq(
+    util.inspect(emptyArrayWithProperty),
+    "[ z: 2 ]",
+    "inspect renders empty-array extra properties"
+  );
+  var namedArrayGetterCalls = 0;
+  var arrayWithGetter = [1];
+  Object.defineProperty(arrayWithGetter, "z", {
+    get: function () {
+      namedArrayGetterCalls++;
+      throw new Error("boom");
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  eq(
+    util.inspect(arrayWithGetter),
+    "[ 1, z: [Getter] ]",
+    "inspect renders array extra getters from descriptors"
+  );
+  eq(
+    namedArrayGetterCalls,
+    0,
+    "inspect does not invoke array extra getters"
+  );
+  var arrayWithNumericNames = [];
+  arrayWithNumericNames["4294967295"] = "max";
+  arrayWithNumericNames["-0"] = "minus";
+  eq(
+    util.inspect(arrayWithNumericNames),
+    "[ '4294967295': 'max', '-0': 'minus' ]",
+    "inspect preserves numeric-looking array property names"
+  );
   var denseOverLimit = [];
   var denseExpectedParts = [];
   for (var denseIndex = 0; denseIndex < 101; denseIndex++) {
     denseOverLimit.push(denseIndex);
     if (denseIndex < 100) denseExpectedParts.push(String(denseIndex));
   }
+  denseOverLimit.z = "tail";
   eq(
     util.inspect(denseOverLimit, { breakLength: Infinity, compact: true }),
-    "[ " + denseExpectedParts.join(", ") + ", ... 1 more item ]",
-    "inspect caps dense arrays at 100 entries"
+    "[ " + denseExpectedParts.join(", ") + ", ... 1 more item, z: 'tail' ]",
+    "inspect caps dense arrays before extra properties"
   );
   eq(
     util.inspect(new Array(1000000)),
@@ -1233,12 +1281,15 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
       throw new Error("Proxy getOwnPropertyDescriptor trap called");
     },
   };
-  var arrayProxy = new Proxy([1, , 3], proxyHandler);
+  var arrayProxyTarget = [1, , 3];
+  arrayProxyTarget.z = 4;
+  var arrayProxy = new Proxy(arrayProxyTarget, proxyHandler);
   var inspectedArrayProxy = util.inspect(arrayProxy);
   truthy(
     inspectedArrayProxy.indexOf("1") !== -1 &&
       inspectedArrayProxy.indexOf("3") !== -1 &&
-      inspectedArrayProxy.indexOf("empty item") !== -1,
+      inspectedArrayProxy.indexOf("empty item") !== -1 &&
+      inspectedArrayProxy.indexOf("z: 4") !== -1,
     "inspect renders an array-target Proxy without traps"
   );
   eq(proxyCalls, 0, "inspect invokes no array-target Proxy traps");
