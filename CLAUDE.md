@@ -80,7 +80,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 ## Execution Counters (performance investigations)
 - Off by default and absent from the shipped binary. Build with
   `cargo build --release --features perf-counters`; every run then writes
-  tab-separated counters to **stderr** at exit.
+  tab-separated counters to **stderr** at exit — file, `-e`, `--prelude`, and
+  REPL alike (covered by `tests/perf_counters_report_paths.rs`).
 - Reports the compiled/tree-walker split by **work** (VM opcodes vs
   `exec_statement`/`eval_expr` entries), not just by invocation — the two
   disagree by an order of magnitude on real code, see
