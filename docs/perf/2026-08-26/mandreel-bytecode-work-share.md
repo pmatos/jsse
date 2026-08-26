@@ -24,14 +24,14 @@ saving (~4.5 s) and its per-entry cost (~4.5 s) cancel to within the noise of a
 | VM opcodes dispatched | 0 | 202,105,685 |
 | tree-walker work units | 1,548,788,858 | 1,359,253,247 |
 | body dispatches — compiled | 0 | 12,737,766 (96.5%) |
-| body dispatches — AST fallback | 13,195,919 | 458,153 (3.5%) |
+| body dispatches — AST fallback | 13,195,918 | 458,152 (3.5%) |
 | work per compiled body | — | **15.87 ops** |
-| work per AST-fallback body | 117.37 units | **2,966.81 units** |
+| work per AST-fallback body | 117.37 units | **2,966.82 units** |
 
 Enabling `--bytecode` moves 189.5 M of 1.55 B tree-walker work units (12.2%)
 into the VM, where they become 202.1 M opcodes. A VM opcode and an `eval_expr`
 entry are not equal-cost units, so 12–13% is directional, not exact — but two
-orders of magnitude between 15.87 and 2,966.81 is not a units artifact.
+orders of magnitude between 15.87 and 2,966.82 is not a units artifact.
 
 The invocation share and the work share disagree by a factor of ~7 because
 compiled bodies are tiny and fallback bodies are enormous. Concretely, 12.35 M
@@ -280,10 +280,12 @@ OfflineAssembler.
 
 - Counters: `cargo build --release --features perf-counters`, reported to stderr
   at exit. Re-collected after the #537 review fixes (strict tail-call counting,
-  generator/eval attribution frames, all-exit-path reporting); every figure above
-  was unchanged except `body_dispatch_ast`, which gained the one top-level script
-  body that now carries its own frame. Every count is deterministic; runs on
-  three different builds reported identical totals (`ast_work_units` 1,548,788,858 and
+  generator/eval attribution frames, all-exit-path reporting, and keeping
+  non-function body executions out of the invocation split); every figure above
+  is unchanged from the first collection. The top-level script body now shows up
+  as `body_non_function_execs` 1 rather than inflating `body_dispatch_ast`, which
+  is why that row reads 458,152 and not 458,153. Every count is deterministic;
+  runs on four different builds reported identical totals (`ast_work_units` 1,548,788,858 and
   `sortMinDown` 514,810,993 both reproduced exactly), so a shared host under
   variable load does not compromise them.
 - Timing: the pristine `HEAD` binary (`24dbeda`), built before any
