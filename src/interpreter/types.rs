@@ -1400,7 +1400,7 @@ pub(crate) enum IteratorState {
     RegExpStringIterator {
         source: String,
         flags: String,
-        string: String,
+        string: JsString,
         global: bool,
         last_index: usize,
         done: bool,

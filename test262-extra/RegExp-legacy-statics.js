@@ -1,10 +1,17 @@
-// Tests the value behavior of legacy RegExp static properties after exec/test.
-// Spec: ECMAScript 2024, Annex B.1.2 — Legacy RegExp Features
-//
-// test262 only covers property descriptors and `this`-value validation for
-// the legacy accessors. This test fills the value-behavior gap: after a
-// successful match, the legacy statics must reflect the input, captures,
-// and context strings.
+/*---
+esid: sec-legacy-regexp-features
+description: >
+  Legacy RegExp static properties report the value of the last successful
+  match: input, lastMatch, lastParen, leftContext, rightContext and $1-$9.
+info: |
+  Annex B.1.2 Legacy RegExp Features
+
+  test262 only covers property descriptors and `this`-value validation for
+  the legacy accessors. This test fills the value-behavior gap: after a
+  successful match, the legacy statics must reflect the input, captures,
+  and context strings.
+features: [legacy-regexp]
+---*/
 
 // --- Setup: a match that exercises all legacy statics ---
 var re = /(\d+)-(\w+)/;
@@ -71,6 +78,64 @@ if (RegExp.input !== "overridden") {
 if (RegExp["$_"] !== "overridden") {
   throw new Test262Error('RegExp.$_ after set should be "overridden", got: ' + RegExp["$_"]);
 }
+// Setting [[RegExpInput]] must not alter contexts retained from the last match.
+if (RegExp.leftContext !== "abc " || RegExp.rightContext !== " def") {
+  throw new Test262Error("setting RegExp.input changed the last match contexts");
+}
+
+// Retained input and lazily materialized contexts preserve raw UTF-16 code
+// units, including unpaired surrogates.
+var surrogateInput = "\ud800A\udc00";
+/A/.exec(surrogateInput);
+if (
+  RegExp.input.length !== 3 ||
+  RegExp.input.charCodeAt(0) !== 0xd800 ||
+  RegExp.input.charCodeAt(2) !== 0xdc00
+) {
+  throw new Test262Error("RegExp.input did not preserve lone surrogates");
+}
+if (
+  RegExp.leftContext.length !== 1 ||
+  RegExp.leftContext.charCodeAt(0) !== 0xd800
+) {
+  throw new Test262Error("RegExp.leftContext did not preserve the lead surrogate");
+}
+if (
+  RegExp.rightContext.length !== 1 ||
+  RegExp.rightContext.charCodeAt(0) !== 0xdc00
+) {
+  throw new Test262Error("RegExp.rightContext did not preserve the trail surrogate");
+}
+
+// Unicode match offsets must be translated back through the original UTF-16
+// subject. A genuine scalar in JSSE's lone-surrogate PUA range must count as
+// its two original code units rather than as a one-unit surrogate sentinel.
+var supplementaryPua = String.fromCharCode(0xdb80, 0xdc00);
+var puaContextInput = supplementaryPua + "x" + supplementaryPua;
+
+function assertSupplementaryPuaContexts(re, label) {
+  var puaMatch = re.exec(puaContextInput);
+  if (puaMatch.index !== 2) {
+    throw new Test262Error(label + " match index should be 2, got " + puaMatch.index);
+  }
+  if (
+    RegExp.leftContext.length !== 2 ||
+    RegExp.leftContext.charCodeAt(0) !== 0xdb80 ||
+    RegExp.leftContext.charCodeAt(1) !== 0xdc00
+  ) {
+    throw new Test262Error(label + " leftContext split a supplementary PUA scalar");
+  }
+  if (
+    RegExp.rightContext.length !== 2 ||
+    RegExp.rightContext.charCodeAt(0) !== 0xdb80 ||
+    RegExp.rightContext.charCodeAt(1) !== 0xdc00
+  ) {
+    throw new Test262Error(label + " rightContext split a supplementary PUA scalar");
+  }
+}
+
+assertSupplementaryPuaContexts(/x/, "non-Unicode");
+assertSupplementaryPuaContexts(/x/u, "Unicode");
 
 // --- Subclass receiver throws TypeError ---
 class MyRegExp extends RegExp {}
