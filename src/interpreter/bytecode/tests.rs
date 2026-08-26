@@ -1,11 +1,11 @@
 use super::chunk::{Chunk, Constant};
-use super::compiler::compile_body;
+use super::compiler::{compile_body, compile_script_body};
 use super::op::Op;
 use super::vm::run_chunk;
 use crate::ast::{Expression, Literal, Statement};
 use crate::interpreter::Interpreter;
 use crate::interpreter::types::Completion;
-use crate::types::JsValue;
+use crate::types::{JsString, JsValue};
 
 fn run(chunk: Chunk) -> Completion {
     let mut interp = Interpreter::new();
@@ -37,6 +37,52 @@ fn eval_with_mode(source: &str, bytecode: bool) -> (JsValue, usize) {
         .get_global_var_ref("__r")
         .unwrap_or(JsValue::UNDEFINED);
     (v, interp.bytecode_chunks_executed)
+}
+
+fn eval_script_completion_with_mode(source: &str, bytecode: bool) -> (Completion, usize) {
+    use crate::parser::Parser;
+    let mut p = Parser::new(source).expect("parser init");
+    let program = p.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = bytecode;
+    let completion = interp.run(&program);
+    (completion, interp.bytecode_chunks_executed)
+}
+
+fn assert_script_completion_number(source: &str, expected: f64) {
+    let (tree, tree_count) = eval_script_completion_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_script_completion_with_mode(source, true);
+    assert_eq!(tree_count, 0, "tree-walker mode ran bytecode for {source}");
+    assert_eq!(
+        bytecode_count, 1,
+        "eligible Script Body did not run exactly one chunk for {source}"
+    );
+    for (mode, completion) in [("tree-walker", tree), ("bytecode", bytecode)] {
+        match completion {
+            Completion::Normal(value) => assert_eq!(
+                value.as_number(),
+                Some(expected),
+                "{mode} completion for {source}: {value:?}"
+            ),
+            other => panic!("{mode} completion for {source}: {other:?}"),
+        }
+    }
+}
+
+fn assert_script_completion_undefined(source: &str) {
+    let (tree, tree_count) = eval_script_completion_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_script_completion_with_mode(source, true);
+    assert_eq!(tree_count, 0, "tree-walker mode ran bytecode for {source}");
+    assert_eq!(
+        bytecode_count, 1,
+        "eligible Script Body did not run exactly one chunk for {source}"
+    );
+    for (mode, completion) in [("tree-walker", tree), ("bytecode", bytecode)] {
+        match completion {
+            Completion::Normal(value) if value.is_undefined() => {}
+            other => panic!("{mode} completion for {source}: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -411,6 +457,24 @@ fn compile_body_empty_returns_undefined() {
 }
 
 #[test]
+fn compile_script_body_returns_statement_completion() {
+    let body = vec![Statement::Expression(Expression::Literal(Literal::Number(
+        42.0,
+    )))];
+    let chunk = compile_script_body(&body).expect("compile script");
+    match run(chunk) {
+        Completion::Normal(value) => assert_eq!(value.as_number(), Some(42.0)),
+        other => panic!("expected Normal(Number(42.0)), got {other:?}"),
+    }
+
+    let empty_chunk = compile_script_body(&[]).expect("compile empty script");
+    match run(empty_chunk) {
+        Completion::Empty => {}
+        other => panic!("expected Empty, got {other:?}"),
+    }
+}
+
+#[test]
 fn compile_body_bare_return_yields_undefined() {
     let body = vec![Statement::Return(None)];
     let chunk = compile_body(&body).expect("compile");
@@ -677,7 +741,10 @@ fn add_string_and_number_falls_through_to_string_concat() {
             Op::Add as u8,
             Op::Return as u8,
         ],
-        constants: vec![Constant::String("x".into()), Constant::Number(1.0)],
+        constants: vec![
+            Constant::String(JsString::from_str("x")),
+            Constant::Number(1.0),
+        ],
         names: vec![],
         var_names: vec![],
         max_stack: 2,
@@ -1033,6 +1100,160 @@ fn numeric_for_loop_takes_bytecode_path() {
         "var __r = (function(n){ var sum = 0; for (var i = 0; i < n; i++) { sum += i; } return sum; })(10);",
         45.0,
     );
+}
+
+#[test]
+fn top_level_numeric_for_loop_takes_bytecode_path() {
+    let source = "var __r = 0; for (var i = 0; i < 10; i++) { __r += i; }";
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(
+        bytecode_count, 1,
+        "the eligible Script Body must execute exactly one bytecode chunk"
+    );
+    assert_eq!(value.as_number(), Some(45.0));
+}
+
+#[test]
+fn top_level_bytecode_var_is_a_global_property() {
+    use crate::parser::Parser;
+
+    let mut parser = Parser::new("var topLevelBytecodeGlobal = 42;").expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let completion = interp.run(&program);
+
+    assert!(matches!(completion, Completion::Empty));
+    assert_eq!(interp.bytecode_chunks_executed, 1);
+    let global_id = interp
+        .realm()
+        .global_env
+        .borrow()
+        .global_object_id
+        .expect("global object");
+    let descriptor = interp
+        .get_object(global_id)
+        .expect("global object cell")
+        .borrow()
+        .get_own_property("topLevelBytecodeGlobal")
+        .expect("global var property");
+    assert_eq!(
+        descriptor.value.and_then(|value| value.as_number()),
+        Some(42.0)
+    );
+    assert_eq!(descriptor.configurable, Some(false));
+}
+
+#[test]
+fn top_level_bytecode_var_redeclaration_preserves_existing_global_property() {
+    use crate::parser::Parser;
+
+    for bytecode in [false, true] {
+        let mut interp = Interpreter::new();
+        interp.bytecode_enabled = bytecode;
+
+        let mut setup = Parser::new(
+            "Object.defineProperty(globalThis, 'existingBytecodeGlobal', { \
+                value: 17, writable: true, configurable: true \
+            });",
+        )
+        .expect("setup parser init");
+        let setup_program = setup.parse_program().expect("parse setup");
+        assert!(matches!(interp.run(&setup_program), Completion::Normal(_)));
+
+        let mut redeclaration = Parser::new("var existingBytecodeGlobal; existingBytecodeGlobal;")
+            .expect("redeclaration parser init");
+        let redeclaration_program = redeclaration.parse_program().expect("parse redeclaration");
+        let completion = interp.run(&redeclaration_program);
+
+        let Completion::Normal(value) = completion else {
+            panic!("expected normal Script completion, got {completion:?}");
+        };
+        assert_eq!(value.as_number(), Some(17.0));
+        assert_eq!(interp.bytecode_chunks_executed, usize::from(bytecode));
+    }
+}
+
+#[test]
+fn top_level_bytecode_checks_global_declarations_before_execution() {
+    use crate::parser::Parser;
+
+    for bytecode in [false, true] {
+        let mut parser = Parser::new("var blockedBytecodeGlobal = 1; 2;").expect("parser init");
+        let program = parser.parse_program().expect("parse");
+        let mut interp = Interpreter::new();
+        interp.bytecode_enabled = bytecode;
+        let global_id = interp
+            .realm()
+            .global_env
+            .borrow()
+            .global_object_id
+            .expect("global object");
+        interp
+            .get_object(global_id)
+            .expect("global object cell")
+            .borrow_mut()
+            .extensible = false;
+
+        assert!(matches!(interp.run(&program), Completion::Throw(_)));
+        assert!(interp.get_global_var_ref("blockedBytecodeGlobal").is_none());
+        assert_eq!(
+            interp.bytecode_chunks_executed, 0,
+            "declaration failure must prevent chunk execution"
+        );
+    }
+}
+
+#[test]
+fn script_statement_list_completion_matches_tree_walker() {
+    assert_script_completion_number("1;", 1.0);
+    assert_script_completion_number("1; ; var ignored;", 1.0);
+    assert_script_completion_number("1; if (true) { 2; }", 2.0);
+    assert_script_completion_undefined("1; if (false) { 2; }");
+    assert_script_completion_undefined("1; if (true) { var ignored; }");
+    assert_script_completion_undefined("1; for (var i = 0; i < 0; i++) { 2; }");
+    assert_script_completion_number("for (var i = 0; i < 3; i++) { i; }", 2.0);
+    assert_script_completion_undefined("for (var i = 0; i < 3; i++) {}");
+    assert_script_completion_number("while (false) {}; 3;", 3.0);
+}
+
+#[test]
+fn script_completion_value_is_rooted_across_nested_gc() {
+    use crate::parser::Parser;
+
+    let source = "var collect = $262.gc; Object(); var ignored = collect();";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+
+    let completion = interp.run(&program);
+    assert_eq!(interp.bytecode_chunks_executed, 1);
+    let object_id = match completion {
+        Completion::Normal(value) => value
+            .as_object_id()
+            .unwrap_or_else(|| panic!("expected object completion, got {value:?}")),
+        other => panic!("expected normal object completion, got {other:?}"),
+    };
+    assert!(
+        interp.get_object(object_id).is_some(),
+        "the completion object must survive collection in a later initializer"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "script chunk roots must be released at exit"
+    );
+}
+
+#[test]
+fn script_direct_eval_stays_on_tree_walker() {
+    let source = "var __r = eval('1 + 2');";
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(
+        bytecode_count, 0,
+        "direct eval must keep the Script ineligible"
+    );
+    assert_eq!(value.as_number(), Some(3.0));
 }
 
 #[test]
@@ -1472,4 +1693,15 @@ fn member_calls_and_nested_tail_positions_remain_ineligible() {
         compile_body(&[Statement::Return(Some(nested_tail_call))]),
         Err(CompileError::Unsupported(_))
     ));
+}
+
+#[test]
+fn top_level_bytecode_string_literals_preserve_utf16_code_units() {
+    let source = r#"var __r = "\uD800" === "\uFFFD";"#;
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(
+        bytecode_count, 1,
+        "the eligible Script Body must execute through bytecode"
+    );
+    assert_eq!(value.as_boolean(), Some(false));
 }

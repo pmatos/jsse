@@ -8,13 +8,43 @@ impl Interpreter {
 
     /// Execute a `Body` as a unit, switching to that body's IC store for the
     /// duration and restoring the parent body's handle on return. Used for
-    /// top-level scripts, function bodies, `eval` programs, and dynamically
-    /// created functions. See `docs/adr/0001-inline-cache-ast-seam.md`.
+    /// tree-walker script fallback, generator/state-machine Bodies, and other
+    /// dynamically executed Bodies. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
         let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), env, None);
         self.leave_ic_body(prev);
         result
+    }
+
+    /// Execute a Script Body through the opt-in bytecode path when the entire
+    /// Body is eligible. Script declaration instantiation and StatementList
+    /// completion semantics differ from a function body's, so this is a
+    /// separate entry point rather than a synthetic function dispatch.
+    pub(crate) fn exec_script_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        if self.bytecode_enabled
+            && let Ok(chunk) =
+                crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice())
+        {
+            let prev = self.enter_ic_body(body);
+            let result =
+                if let Some(err) = self.instantiate_body_declarations(body.as_slice(), env, None) {
+                    err
+                } else {
+                    self.call_stack_envs.push(env.clone());
+                    let result = crate::interpreter::bytecode::vm::run_script_chunk(
+                        self,
+                        &chunk,
+                        env,
+                        JsValue::UNDEFINED,
+                    );
+                    self.call_stack_envs.pop();
+                    result
+                };
+            self.leave_ic_body(prev);
+            return result;
+        }
+        self.exec_body(body, env)
     }
 
     /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
@@ -57,6 +87,21 @@ impl Interpreter {
         env: &EnvRef,
         analysis: Option<&Rc<HoistAnalysis>>,
     ) -> Completion {
+        if let Some(err) = self.instantiate_body_declarations(stmts, env, analysis) {
+            return err;
+        }
+        self.exec_prepared_statements(stmts, env)
+    }
+
+    /// Perform the declaration-instantiation half of Body execution. Keeping
+    /// this separate lets eligible Script Bodies establish global bindings
+    /// before entering the VM, exactly as the tree-walker does.
+    fn instantiate_body_declarations(
+        &mut self,
+        stmts: &[Statement],
+        env: &EnvRef,
+        analysis: Option<&Rc<HoistAnalysis>>,
+    ) -> Option<Completion> {
         // Hoist var and function declarations
         let var_scope = Environment::find_var_scope(env);
         let is_global = var_scope.borrow().global_object_id.is_some();
@@ -65,7 +110,7 @@ impl Interpreter {
         // §16.1.7 GlobalDeclarationInstantiation: pre-check CanDeclareGlobalFunction
         // and CanDeclareGlobalVar before any hoisting takes place.
         if is_global && let Some(err) = self.check_global_declarations(stmts, env) {
-            return err;
+            return Some(err);
         }
 
         // Hoist var declarations. When a cached analysis is present, declare from
@@ -191,6 +236,10 @@ impl Interpreter {
             }
         }
 
+        None
+    }
+
+    fn exec_prepared_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {

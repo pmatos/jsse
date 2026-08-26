@@ -169,8 +169,31 @@ pub(crate) fn run_chunk(
     env: &EnvRef,
     this_value: JsValue,
 ) -> Completion {
+    run_chunk_with_var_prologue(interp, chunk, env, this_value, true)
+}
+
+/// Run a Script chunk after its caller has completed
+/// GlobalDeclarationInstantiation. Unlike function chunks, Script chunks must
+/// not create declarative `var` bindings: global vars remain backed by global
+/// object properties, including properties that predate the Script.
+pub(crate) fn run_script_chunk(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    env: &EnvRef,
+    this_value: JsValue,
+) -> Completion {
+    run_chunk_with_var_prologue(interp, chunk, env, this_value, false)
+}
+
+fn run_chunk_with_var_prologue(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    env: &EnvRef,
+    this_value: JsValue,
+    declare_chunk_vars: bool,
+) -> Completion {
     let gc_frame = interp.gc_bytecode_roots.len();
-    let result = run_chunk_inner(interp, chunk, env, this_value);
+    let result = run_chunk_inner(interp, chunk, env, this_value, declare_chunk_vars);
     interp.gc_bytecode_roots.truncate(gc_frame);
     result
 }
@@ -180,17 +203,21 @@ fn run_chunk_inner(
     chunk: &Chunk,
     env: &EnvRef,
     _this: JsValue,
+    declare_chunk_vars: bool,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
-    let var_scope = Environment::find_var_scope(env);
-    for &name_idx in &chunk.var_names {
-        let name = &chunk.names[name_idx as usize];
-        if !var_scope.borrow().bindings.contains_key(name.as_ref()) {
-            var_scope.borrow_mut().declare(name, BindingKind::Var);
+    if declare_chunk_vars {
+        let var_scope = Environment::find_var_scope(env);
+        for &name_idx in &chunk.var_names {
+            let name = &chunk.names[name_idx as usize];
+            if !var_scope.borrow().bindings.contains_key(name.as_ref()) {
+                var_scope.borrow_mut().declare(name, BindingKind::Var);
+            }
         }
     }
     let mut stack: Vec<JsValue> = Vec::with_capacity(chunk.max_stack as usize);
     let mut refs: Vec<IdentifierRef> = Vec::with_capacity(chunk.max_refs as usize);
+    let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
     loop {
         let op_byte = chunk.code[pc];
@@ -369,6 +396,15 @@ fn run_chunk_inner(
             Op::ReturnUndefined => {
                 return Completion::Return(JsValue::UNDEFINED);
             }
+            Op::ReturnCompletion => {
+                return match completion_value.take() {
+                    Some(value) => {
+                        unroot_stack_value(interp, &value);
+                        Completion::Normal(value)
+                    }
+                    None => Completion::Empty,
+                };
+            }
             Op::Call | Op::ReturnCall => {
                 let argc = decode_u16(chunk, pc) as usize;
                 pc += 2;
@@ -534,6 +570,13 @@ fn run_chunk_inner(
             }
             Op::Pop => {
                 pop_value(interp, &mut stack, "stack underflow on Pop");
+            }
+            Op::SetCompletion => {
+                let value = pop_value(interp, &mut stack, "stack underflow on SetCompletion");
+                if let Some(previous) = completion_value.replace(value.clone()) {
+                    unroot_stack_value(interp, &previous);
+                }
+                root_stack_value(interp, &value);
             }
             Op::Jump => {
                 let offset = decode_i16(chunk, pc) as i32;
