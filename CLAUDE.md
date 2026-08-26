@@ -77,6 +77,24 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
 
+## Execution Counters (performance investigations)
+- Off by default and absent from the shipped binary. Build with
+  `cargo build --release --features perf-counters`; every run then writes
+  tab-separated counters to **stderr** at exit.
+- Reports the compiled/tree-walker split by **work** (VM opcodes vs
+  `exec_statement`/`eval_expr` entries), not just by invocation — the two
+  disagree by an order of magnitude on real code, see
+  `docs/perf/2026-08-26/mandreel-bytecode-work-share.md`.
+- `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
+  AST variant (`statement:Labeled`), `BODY` per-function tree-walker work units
+  spent *exclusive* of nested bodies, plus GC collection counts and time.
+- Every count is deterministic, so a shared/loaded host does not compromise it.
+  **Never time an instrumented build** — take counts from the feature build and
+  wall times from the default build.
+- JetStream per-phase driver: `scripts/gen-mandreel-phases.py <mandreel.js> -o
+  driver.js [--subphases]`. Op-mix microbenchmark:
+  `benchmarks/scripts/bench_opmix.js`.
+
 ## Mutation Testing
 - Local-only (not in CI). Driver: `./scripts/run-mutants.sh` (forwards args to `cargo mutants`).
 - Requires `cargo install cargo-mutants --locked` and `uv` on PATH (or at `~/.local/bin/uv`).

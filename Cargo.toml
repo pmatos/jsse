@@ -3,6 +3,11 @@ name = "jsse"
 version = "0.5.0"
 edition = "2024"
 
+[features]
+# Opt-in execution counters for performance investigations (issue #526).
+# Off by default so the shipped binary carries no counter writes.
+perf-counters = []
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 num-bigint = "0.5"

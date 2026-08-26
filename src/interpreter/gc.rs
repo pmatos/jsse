@@ -275,10 +275,29 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_safepoint(&mut self) {
-        match self.gc.begin_collection() {
-            Some(CollectionKind::Minor) => self.gc_collect_minor(),
-            Some(CollectionKind::Major) => self.gc_collect_major(),
+        let kind = self.gc.begin_collection();
+        #[cfg(feature = "perf-counters")]
+        let start = std::time::Instant::now();
+        match kind {
+            Some(CollectionKind::Minor) => {
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.gc_minor += 1;
+                }
+                self.gc_collect_minor();
+            }
+            Some(CollectionKind::Major) => {
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.gc_major += 1;
+                }
+                self.gc_collect_major();
+            }
             None => {}
+        }
+        #[cfg(feature = "perf-counters")]
+        if kind.is_some() {
+            self.perf.gc_nanos += start.elapsed().as_nanos();
         }
     }
 

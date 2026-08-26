@@ -35,6 +35,8 @@ pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
 mod object_arena;
+#[cfg(feature = "perf-counters")]
+pub(crate) mod perf_counters;
 pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
@@ -313,6 +315,10 @@ pub(crate) struct Interpreter {
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
     pub(crate) bytecode_enabled: bool,
     pub(crate) bytecode_chunks_executed: usize,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) perf: perf_counters::PerfCounters,
+    #[cfg(feature = "perf-counters")]
+    perf_name_cache: rustc_hash::FxHashMap<u64, std::rc::Rc<str>>,
     /// Node host-compat "syscall floor" gate (issue #229). When false (the
     /// default, and always the case under test262), no `__host_*` globals are
     /// installed and every host-floor check below is inert — the global
@@ -623,6 +629,10 @@ impl Interpreter {
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
             bytecode_enabled: false,
             bytecode_chunks_executed: 0,
+            #[cfg(feature = "perf-counters")]
+            perf: perf_counters::PerfCounters::default(),
+            #[cfg(feature = "perf-counters")]
+            perf_name_cache: rustc_hash::FxHashMap::default(),
             node_host_enabled: false,
             pending_exit: None,
             dispatching_timers: false,
@@ -1855,6 +1865,13 @@ impl Interpreter {
     #[allow(dead_code)]
     pub(crate) fn ic_slow_path_count(&self) -> u64 {
         self.ic_slow_path_count.get()
+    }
+
+    /// Renders the opt-in execution counters (issue #526) as one
+    /// tab-separated line per metric.
+    #[cfg(feature = "perf-counters")]
+    pub(crate) fn perf_counters_report(&self) -> String {
+        self.perf.report()
     }
 
     /// Total call-IC hits since interpreter construction. Phase 3.

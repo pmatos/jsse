@@ -394,6 +394,10 @@ impl Interpreter {
     }
 
     pub(crate) fn eval_expr(&mut self, expr: &Expression, env: &EnvRef) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.ast_exprs += 1;
+        }
         // Catchable stack-depth guard for expression evaluation. Every
         // expression node — and each recursive descent into an operand —
         // funnels through here, so bounding this depth bounds the native
@@ -2047,6 +2051,10 @@ impl Interpreter {
                 BytecodeCacheState::Ineligible => None,
                 BytecodeCacheState::Untried => match compiler::compile_body(body.as_slice()) {
                     Ok(c) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.compile_ok += 1;
+                        }
                         let rc = Rc::new(c);
                         if let Some(o) = self.get_object(func_obj_id) {
                             o.borrow_mut().bytecode_cache =
@@ -2054,7 +2062,15 @@ impl Interpreter {
                         }
                         Some(rc)
                     }
-                    Err(_) => {
+                    Err(_e) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
+                                reason,
+                            ) = _e;
+                            let name = self.perf_body_name(func_obj_id);
+                            self.perf.record_bail(reason, name);
+                        }
                         if let Some(o) = self.get_object(func_obj_id) {
                             o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
                         }
@@ -2063,11 +2079,21 @@ impl Interpreter {
                 },
             };
             if let Some(chunk) = chunk {
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.body_compiled += 1;
+                }
                 let prev = self.enter_ic_body(body);
                 let result = vm::run_chunk(self, &chunk, exec_env, this_val.clone());
                 self.leave_ic_body(prev);
                 return result;
             }
+        }
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_ast += 1;
+            let name = self.perf_body_name(func_obj_id);
+            self.perf.enter_ast_body(name);
         }
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
@@ -2075,7 +2101,30 @@ impl Interpreter {
         let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis));
         self.leave_ic_body(prev);
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         result
+    }
+
+    /// A stable label for a function body in counter output (issue #526).
+    /// Interned per object id so ranking millions of dispatches does not
+    /// allocate a fresh `String` each time.
+    #[cfg(feature = "perf-counters")]
+    fn perf_body_name(&mut self, func_obj_id: u64) -> std::rc::Rc<str> {
+        if let Some(cached) = self.perf_name_cache.get(&func_obj_id) {
+            return cached.clone();
+        }
+        let name = self
+            .get_object(func_obj_id)
+            .and_then(|o| match o.borrow().callable {
+                Some(JsFunction::User { ref name, .. }) => name.clone(),
+                _ => None,
+            })
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| format!("<anonymous#{func_obj_id}>"));
+        let interned: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
+        self.perf_name_cache.insert(func_obj_id, interned.clone());
+        interned
     }
 
     pub(super) fn eval_binary(
@@ -5531,6 +5580,10 @@ impl Interpreter {
                 };
                 let result = match func {
                     JsFunction::Native(_, _, f, _) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.calls_to_native += 1;
+                        }
                         let caller_realm = self.current_realm_id;
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
                             self.current_realm_id = fn_realm;
@@ -5563,6 +5616,10 @@ impl Interpreter {
                         has_simple_params,
                         ..
                     } => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.calls_to_user += 1;
+                        }
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
                         let caller_realm = self.current_realm_id;
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {

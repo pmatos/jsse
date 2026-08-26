@@ -933,6 +933,10 @@ impl Interpreter {
     }
 
     pub(crate) fn exec_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.ast_stmts += 1;
+        }
         match stmt {
             Statement::Empty => Completion::Empty,
             Statement::Expression(expr) => self.eval_expr(expr, env),

@@ -130,6 +130,8 @@ fn execute_code(
 ) -> ExitCode {
     let mut interp = new_interp(can_block, bytecode, node);
     let result = run_source_with_interp(&mut interp, code, is_module, path);
+    #[cfg(feature = "perf-counters")]
+    eprint!("{}", interp.perf_counters_report());
     exit_code_from_result(&interp, result)
 }
 

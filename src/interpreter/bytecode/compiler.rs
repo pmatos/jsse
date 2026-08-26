@@ -393,7 +393,7 @@ impl Compiler {
             Expression::Call(callee, args, site_id) => {
                 self.compile_call(callee, args, Op::Call, *site_id)
             }
-            _ => Err(CompileError::Unsupported("expression")),
+            _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
     }
 
@@ -623,7 +623,7 @@ impl Compiler {
                 self.pop_n(1);
                 Ok(())
             }
-            _ => Err(CompileError::Unsupported("statement")),
+            _ => Err(CompileError::Unsupported(statement_kind(stmt))),
         }
     }
 
@@ -673,6 +673,78 @@ fn ends_with_return(code: &[u8]) -> bool {
         code.last().copied().and_then(Op::from_u8),
         Some(Op::Return) | Some(Op::ReturnUndefined)
     )
+}
+
+/// Names the statement kind a bail was blamed on. A label reading only
+/// "statement" cannot tell an eligibility expansion which construct to reach
+/// for next (issue #524), so the catch-all arm names the variant. Exhaustive on
+/// purpose: a new AST variant fails to compile here until it is classified.
+fn statement_kind(node: &Statement) -> &'static str {
+    match node {
+        Statement::Empty => "statement:Empty",
+        Statement::Expression { .. } => "statement:Expression",
+        Statement::Block { .. } => "statement:Block",
+        Statement::Variable { .. } => "statement:Variable",
+        Statement::If { .. } => "statement:If",
+        Statement::While { .. } => "statement:While",
+        Statement::DoWhile { .. } => "statement:DoWhile",
+        Statement::For { .. } => "statement:For",
+        Statement::ForIn { .. } => "statement:ForIn",
+        Statement::ForOf { .. } => "statement:ForOf",
+        Statement::Return { .. } => "statement:Return",
+        Statement::Break { .. } => "statement:Break",
+        Statement::Continue { .. } => "statement:Continue",
+        Statement::Throw { .. } => "statement:Throw",
+        Statement::Try { .. } => "statement:Try",
+        Statement::Switch { .. } => "statement:Switch",
+        Statement::Labeled { .. } => "statement:Labeled",
+        Statement::With { .. } => "statement:With",
+        Statement::Debugger => "statement:Debugger",
+        Statement::FunctionDeclaration { .. } => "statement:FunctionDeclaration",
+        Statement::ClassDeclaration { .. } => "statement:ClassDeclaration",
+    }
+}
+
+/// The expression counterpart of [`statement_kind`], and exhaustive for the
+/// same reason.
+fn expression_kind(node: &Expression) -> &'static str {
+    match node {
+        Expression::Literal { .. } => "expression:Literal",
+        Expression::Identifier { .. } => "expression:Identifier",
+        Expression::This => "expression:This",
+        Expression::Super => "expression:Super",
+        Expression::Array { .. } => "expression:Array",
+        Expression::Object { .. } => "expression:Object",
+        Expression::Function { .. } => "expression:Function",
+        Expression::ArrowFunction { .. } => "expression:ArrowFunction",
+        Expression::Class { .. } => "expression:Class",
+        Expression::Unary { .. } => "expression:Unary",
+        Expression::Binary { .. } => "expression:Binary",
+        Expression::Logical { .. } => "expression:Logical",
+        Expression::Update { .. } => "expression:Update",
+        Expression::Assign { .. } => "expression:Assign",
+        Expression::Conditional { .. } => "expression:Conditional",
+        Expression::Call { .. } => "expression:Call",
+        Expression::New { .. } => "expression:New",
+        Expression::Member { .. } => "expression:Member",
+        Expression::OptionalChain { .. } => "expression:OptionalChain",
+        Expression::Comma { .. } => "expression:Comma",
+        Expression::Spread { .. } => "expression:Spread",
+        Expression::Yield { .. } => "expression:Yield",
+        Expression::Await { .. } => "expression:Await",
+        Expression::TaggedTemplate { .. } => "expression:TaggedTemplate",
+        Expression::Template { .. } => "expression:Template",
+        Expression::Typeof { .. } => "expression:Typeof",
+        Expression::Void { .. } => "expression:Void",
+        Expression::Delete { .. } => "expression:Delete",
+        Expression::Sequence { .. } => "expression:Sequence",
+        Expression::Import { .. } => "expression:Import",
+        Expression::ImportDefer { .. } => "expression:ImportDefer",
+        Expression::ImportSource { .. } => "expression:ImportSource",
+        Expression::ImportMeta => "expression:ImportMeta",
+        Expression::NewTarget => "expression:NewTarget",
+        Expression::PrivateIdentifier { .. } => "expression:PrivateIdentifier",
+    }
 }
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {

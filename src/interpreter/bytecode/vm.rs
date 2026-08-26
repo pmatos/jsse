@@ -222,6 +222,8 @@ fn run_chunk_inner(
     loop {
         let op_byte = chunk.code[pc];
         let op = Op::from_u8(op_byte).expect("invalid opcode");
+        #[cfg(feature = "perf-counters")]
+        interp.perf.record_op(op);
         pc += 1;
         match op {
             Op::LoadConst => {
@@ -457,6 +459,10 @@ fn run_chunk_inner(
                 // nested invocation even though they have been removed from
                 // the operand Vec. A callee can execute arbitrary JS and hit
                 // any number of safepoints before returning.
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.calls_from_vm += 1;
+                }
                 let result = if probe_hit {
                     interp.call_function_ic_validated(&callee, &this_value, &args)
                 } else {
