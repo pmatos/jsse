@@ -83,3 +83,50 @@ fn repl_path_emits_exactly_one_report() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(report_count(&stderr), 1, "stderr was:\n{stderr}");
 }
+
+/// Generator and `eval` bodies bypass `dispatch_body`, so without frames of
+/// their own their work units are credited to the calling function — the
+/// `BODY` ranking's whole purpose is defeated (#537 review). Measured before
+/// the fix, `caller` reported 16,020 exclusive units; its real total is 13.
+#[test]
+fn generator_and_eval_work_is_not_credited_to_the_caller() {
+    let dir = scratch("attribution");
+    fs::write(
+        dir.join("main.js"),
+        "function* gen(n) { var s = 0; for (var i = 0; i < n; i++) { s += i; } yield s; }\n\
+         function caller() { var t = 0; for (var g of gen(2000)) { t += g; } return t; }\n\
+         function evalCaller() { var r = 0; for (var i = 0; i < 200; i++) { r += eval(\"i + 1\"); } return r; }\n\
+         caller(); evalCaller();\n",
+    )
+    .expect("write main");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["main.js"])
+        .output()
+        .expect("run jsse");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let row = |name: &str| -> Option<u64> {
+        stderr
+            .lines()
+            .find(|l| l.starts_with(&format!("BODY\t{name}\t")))
+            .and_then(|l| l.split('\t').nth(2))
+            .and_then(|n| n.parse().ok())
+    };
+
+    let generator = row("<generator/async/script body>")
+        .unwrap_or_else(|| panic!("no generator BODY row; stderr:\n{stderr}"));
+    let eval_body =
+        row("<eval>").unwrap_or_else(|| panic!("no <eval> BODY row; stderr:\n{stderr}"));
+    let caller = row("caller").unwrap_or_else(|| panic!("no caller BODY row; stderr:\n{stderr}"));
+
+    assert!(
+        generator > 1000,
+        "the generator's own loop must be credited to it, got {generator}"
+    );
+    assert!(eval_body > 0, "eval'd code must be credited to <eval>");
+    assert!(
+        caller < 100,
+        "caller must not absorb the generator's work, got {caller}"
+    );
+}

@@ -51,6 +51,11 @@ pub(crate) struct PerfCounters {
     pub(crate) bail_by_name: FxHashMap<Rc<str>, &'static str>,
     /// (name, ast units at entry, units consumed by nested bodies).
     ast_body_stack: Vec<(Rc<str>, u64, u64)>,
+    /// Interned labels for the two body paths that carry no function object,
+    /// so framing them costs an `Rc` clone rather than an allocation per entry
+    /// (generator replay re-executes bodies, so this path is hot).
+    pub(crate) name_non_function_body: Rc<str>,
+    pub(crate) name_eval_body: Rc<str>,
 }
 
 impl Default for PerfCounters {
@@ -73,6 +78,8 @@ impl Default for PerfCounters {
             ast_body_units: FxHashMap::default(),
             bail_by_name: FxHashMap::default(),
             ast_body_stack: Vec::new(),
+            name_non_function_body: Rc::from("<generator/async/script body>"),
+            name_eval_body: Rc::from("<eval>"),
         }
     }
 }
@@ -285,6 +292,16 @@ mod tests {
         let get = out.find("OP\tGetElement").expect("GetElement row");
         assert!(add < get, "{out}");
         assert!(out.contains("OP\tAdd\t2\t66.67%\n"), "{out}");
+    }
+
+    /// The two synthetic labels must be distinct interned values, since a
+    /// generator body and an `eval` body are separate buckets in the ranking.
+    #[test]
+    fn synthetic_body_labels_are_distinct() {
+        let p = PerfCounters::default();
+        assert_ne!(p.name_non_function_body.as_ref(), p.name_eval_body.as_ref());
+        assert!(p.name_non_function_body.starts_with('<'));
+        assert!(p.name_eval_body.starts_with('<'));
     }
 
     /// A body that never bailed is reported with a `-` reason rather than

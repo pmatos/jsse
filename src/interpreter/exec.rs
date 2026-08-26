@@ -11,9 +11,23 @@ impl Interpreter {
     /// tree-walker script fallback, generator/state-machine Bodies, and other
     /// dynamically executed Bodies. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        // Generator/async state machines and the script-body fallback reach
+        // statement execution here rather than through `dispatch_body`, so
+        // without a frame of their own their work units would be credited to
+        // whichever ordinary body happens to be on the attribution stack —
+        // silently inflating that caller's exclusive total (#537 review).
+        // These bodies carry no function object, hence the synthetic label.
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_ast += 1;
+            let name = self.perf.name_non_function_body.clone();
+            self.perf.enter_ast_body(name);
+        }
         let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), env, None);
         self.leave_ic_body(prev);
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         result
     }
 
@@ -56,6 +70,14 @@ impl Interpreter {
     /// semantics would corrupt those bindings. Returns the last statement's
     /// completion value (eval's result), matching PerformEval / PerformShadowRealmEval.
     pub(crate) fn exec_eval_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        // Same attribution gap as `exec_body`: eval'd code never passes through
+        // `dispatch_body`, so it needs its own frame (#537 review).
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_ast += 1;
+            let name = self.perf.name_eval_body.clone();
+            self.perf.enter_ast_body(name);
+        }
         let prev = self.enter_ic_body(body);
         let mut last = Completion::Empty;
         for stmt in body.as_slice() {
@@ -73,6 +95,8 @@ impl Interpreter {
             }
         }
         self.leave_ic_body(prev);
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         last
     }
 

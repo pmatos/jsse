@@ -65,7 +65,12 @@ Counters fall into four groups:
   metric both issues already have), reported beside work per invocation so the
   two can never again be confused.
 - **Per-body attribution.** For each AST-fallback body, the work units it spent
-  *exclusive* of nested bodies. An entry/exit stack records the unit counter at
+  *exclusive* of nested bodies. Generator/async, top-level script, and `eval`
+  bodies reach statement execution through `exec_body`/`exec_eval_body` rather
+  than `dispatch_body` and carry no function object, so each gets a frame under
+  a synthetic label — without one, their work would be credited to whichever
+  ordinary body sits below them on the stack, which is the single largest way
+  this ranking can lie. An entry/exit stack records the unit counter at
   entry and charges each body's inclusive cost to its caller's child total, so
   no unit is counted twice and a body that merely calls other bodies is not
   credited with their work. Bodies are keyed by function name, interned per
