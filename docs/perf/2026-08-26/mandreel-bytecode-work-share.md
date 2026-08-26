@@ -6,10 +6,18 @@ actually go inside compiled execution" — and corrects the metric both #526 and
 
 ## Headline
 
-`mandreel`'s 96.5% compiled-**invocation** share is an artifact of counting
-invocations. By **work**, the VM covers roughly 13% of interpretive execution;
-two functions the compiler rejects hold 69.5% of the tree-walker work that
-remains, and ~61% of all interpretive work in the run.
+Two findings, one diagnostic and one causal.
+
+**The metric misleads.** `mandreel`'s 96.5% compiled-**invocation** share is an
+artifact of counting invocations. By **work**, the VM covers roughly 13% of
+interpretive execution; two functions the compiler rejects hold 69.5% of the
+tree-walker work that remains, and ~61% of all interpretive work in the run.
+
+**The flat wall clock is arithmetic, not a mystery.** The VM saves ~22 ns per
+opcode dispatched and costs ~350 ns per compiled-body entry, so a body breaks
+even at ~16 opcodes. mandreel's compiled bodies average **15.87**. Its opcode
+saving (~4.5 s) and its per-entry cost (~4.5 s) cancel to within the noise of a
+205 s run — and the 96.5% invocation share is precisely *why* they cancel.
 
 | metric | default | `--bytecode` |
 | --- | --- | --- |
@@ -82,16 +90,20 @@ _3: while(true){
 
 All three are refuted or negligible.
 
-**H1 — `Call` bridging dominates.** Refuted. Only **384,216 of 13,195,918**
-`[[Call]]`s (2.9%) originate inside compiled code. The compiled bodies are
-leaves; they barely call anything. Call bridging cannot dominate a cost it
-touches 2.9% of.
+**H1 — `Call` bridging dominates.** Refuted as stated, but it is the closest of
+the three to the real answer. Only **384,216 of 13,195,918** `[[Call]]`s (2.9%)
+originate inside compiled code, so bridging *out of* the VM cannot dominate
+anything. What does matter is the cost of entering a compiled body at all —
+paid on all 12.7 M entries regardless of who calls them, and quantified below.
+The issue looked at the right seam from the wrong side.
 
-**H2 — shared MOP paths.** Not the binding constraint at workload level.
-Member/element opcodes are 7.5 M of 202.1 M VM ops (3.7%): `GetElement`
-4,090,353, `SetElement` 3,384,860, `GetProp` 39,774. Native calls are 396,525
-(3.0% of all calls). But see "The element-access trap" below — H2 is wrong about
-*today's* cost and right about *tomorrow's*.
+**H2 — shared MOP paths.** Right in spirit, wrong as an explanation of the flat
+result. Member/element opcodes are only 7.5 M of 202.1 M VM ops (3.7%):
+`GetElement` 4,090,353, `SetElement` 3,384,860, `GetProp` 39,774; native calls
+are 396,525 (3.0% of all calls). Shared MOP cost *is* what stops the VM's
+percentage win from being as large as `arith`'s — see the `elem` row below — but
+it does so by enlarging the denominator equally for both engines, not by making
+compiled code slower. It is not what cancels mandreel.
 
 **H3 — one-shot compile overhead.** Negligible. 181 compile attempts total
 (79 successes, 102 bails) for the whole 3.5-minute run.
@@ -132,10 +144,10 @@ section), so the expected end-to-end gain is roughly 0.13 x 0.15 = **~2%** —
 below this measurement's noise floor. The two numbers are not in tension; the
 coverage is simply too small for the speedup to surface.
 
-## What the VM is actually faster at
+## What the VM is actually faster at, and what it costs
 
-The work-share number says the VM barely gets to run. It does not say the VM
-would help if it did. `benchmarks/scripts/bench_opmix.js` answers that: four
+The work-share number says the VM barely gets to run. It does not say what
+happens where it does. `benchmarks/scripts/bench_opmix.js` answers that: four
 loops of equal iteration count, differing only in the kind of work each
 iteration does.
 
@@ -147,56 +159,100 @@ iteration does.
 | `mixed` — mandreel's own mix of all three | 8,676 [8,180-10,222] | 7,487 [7,072-10,359] | **-13.7%** |
 
 Medians of 7 pinned repeats, `[min-max]`. Every row exceeds the 5% stability
-threshold `benchmark_protocol.py` uses, from occasional interference on this
-shared host; the medians held to within ~2 points across every partial view of
-the sweep (n=1 through n=7), so the ordering is robust even though individual
-runs are not. `called` and `mixed` overlap heavily and should not be read as
-separable from each other.
+threshold `benchmark_protocol.py` uses, from interference on this shared host;
+the medians held to within ~2 points across every partial view of the sweep
+(n=1 through n=7). `arith` reproduces the ~-29% quoted in #524, which validates
+the harness.
 
-The VM wins on every shape, but the win shrinks sharply as soon as the loop does
-anything besides arithmetic. Pure register arithmetic reproduces the ~-29%
-figure quoted in #524, which validates the harness. Adding typed-array element
-traffic to the identical loop structure gives up a third of that win; adding
-leaf calls gives up nearly two-thirds; mandreel's own mix of both lands between
-them. Cheaper opcode dispatch is only decisive when there is little else in the
-iteration that both engines pay for equally.
+Percentages alone would suggest element traffic and calls both erode the VM's
+advantage. **They do not erode it the same way, and reading only the
+percentages gets the cause wrong.** Counting the opcodes each variant actually
+dispatches (same driver, `--features perf-counters`, in
+`opmix-opcounts.tsv`) and converting to absolute time per iteration:
 
-The element-traffic decay has a specific, single-site cause. The tree-walker's
-computed member read has a numeric-index fast path (`eval_member`,
-`src/interpreter/eval/access.rs:745`): for a Number key on a typed array it
-calls `typed_array_get_index` directly, allocating nothing. The VM's
-`Op::GetElement` has none. `member_get_computed`
+| variant | opcodes / iter | compiled entries / iter | default µs/iter | `--bytecode` µs/iter | **saving** |
+| --- | --- | --- | --- | --- | --- |
+| `arith` | 49 | 0 | 4.11 | 2.94 | **1.169 µs** |
+| `elem` | 55 | 0 | 6.36 | 5.17 | **1.193 µs** |
+| `called` | 55 | 2 | 5.87 | 5.23 | **0.635 µs** |
+| `mixed` | 71 | 1 | 8.68 | 7.49 | **1.189 µs** |
+
+`elem` dispatches only 12% more opcodes than `arith`, so its smaller percentage
+is not an opcode-count artifact — and its **absolute** saving is identical to
+`arith`'s. Element traffic simply adds cost that *neither* engine reduces,
+enlarging the denominator. The only variant whose absolute saving collapses is
+the one that adds calls.
+
+Fitting `saving = a·opcodes − b·entries` across the pairs gives
+
+- **a ≈ 20-24 ns saved per opcode dispatched**, and
+- **b ≈ 230-505 ns lost per compiled-body entry** (call-free rows pin `a`; the
+  two call-bearing rows pin `b`, which is why its spread is wider).
+
+So a compiled body only pays for itself above roughly **b/a ≈ 16 opcodes**.
+
+### Why mandreel is exactly flat
+
+mandreel's compiled bodies average **15.87 opcodes**. It sits on the break-even
+point, and the two terms cancel:
+
+| term | value |
+| --- | --- |
+| opcode saving | 202,105,685 ops × ~22 ns = **~4.5 s** |
+| per-entry cost | 12,737,766 entries × ~350 ns = **~4.5 s** |
+| net | **~0 s of 205.1 s** |
+
+Across the plausible `a`/`b` range the model predicts between **-0.3% and
++0.4%**; the sweep measured +1.3% with overlapping ranges, i.e.
+indistinguishable from zero. The flat wall clock is not a mystery to be
+explained by any of H1/H2/H3 — it is arithmetic. And the 96.5% invocation share
+is the *reason* it cancels: 12.7 M entries is a huge multiplier on `b`, while
+15.87 opcodes each is a tiny multiplier on `a`.
+
+### A code asymmetry the numbers do not convict
+
+The tree-walker's computed member read has a numeric-index fast path
+(`eval_member`, `src/interpreter/eval/access.rs:745`): for a Number key on a
+typed array it calls `typed_array_get_index` directly, allocating nothing. The
+VM's `Op::GetElement` has none — `member_get_computed`
 (`src/interpreter/bytecode/vm.rs:110`) calls `to_property_key` unconditionally,
-which for an integer index does `(trunc as u32).to_string()` and then
-`JsPropertyKey::from(String)` — **two heap allocations per element read** —
-before a string-keyed `get_object_property` re-derives the index from the string
-it just built. `Op::GetElement` also re-roots the whole operand stack per
-access. So a compiled body's element reads take a slower path than the same
-reads in the tree-walker, and only the VM's cheaper dispatch keeps the net
-result positive.
+costing a `u32::to_string()` plus an `Arc<[u8]>` allocation before
+`get_object_property` re-derives the index from the string it just built.
 
-This matters for the sequencing below, because `sortMinDown` and `sortMaxDown`
-are exactly the element-heavy shape — `heap32[…]`/`heapU16[…]` on nearly every
-line.
+That asymmetry is real in the code. But it does **not** show up in these
+numbers: if the VM paid a meaningful extra cost per element read, `elem`'s
+absolute saving would be *below* `arith`'s, and it is marginally above. `elem`
+does two such reads per iteration, so the penalty is bounded at well under
+~25 ns per read here — below this measurement's resolution. Worth fixing for
+its own sake (#538), but it is not what is holding mandreel back, and the
+earlier draft of this report was wrong to sequence work behind it.
 
 ## What to do next
 
-1. **Expand eligibility to labeled loops with labeled `break`/`continue`**
-   (#524 item 2). This is the lever: it is what reaches mandreel's 69.5%.
-   Nothing else in the measurement moves that work. Expect the `elem`/`mixed`
-   win on the bodies it moves, not the `arith` one — `sortMinDown` and
-   `sortMaxDown` are element-heavy with almost no calls, so -14% to -19% on
-   them is the plausible band. Against the ~61% of total interpretive work they
-   hold, that projects to roughly **-9% to -12% on mandreel's wall clock** —
-   modest, but the first non-zero movement this benchmark has shown, and a
-   falsifiable prediction rather than a hope.
-2. **Then give `Op::GetElement`/`Op::SetElement` the numeric-index fast path the
-   tree-walker already has.** It is a multiplier on step 1 rather than a
-   precondition — measured, it is the difference between the `arith` and `elem`
-   columns — and it is a single-site change with no eligibility risk.
-3. **Do not** invest in call-site IC depth or the remaining `Call` opcode
-   plumbing (#398) for mandreel's sake. 2.9% of `[[Call]]`s originate inside
-   compiled code; there is nothing there to win.
+1. **Cut the per-entry cost of a compiled body.** This is the lever the
+   measurement actually identifies, and it is the one that makes mandreel move
+   without any eligibility change. `run_chunk_inner` allocates two fresh `Vec`s
+   per entry (`Vec::with_capacity(max_stack)` and `max_refs`) and re-runs the
+   `var_names` declaration prologue; pooling the operand and reference stacks on
+   the `Interpreter` and indexing from a saved base would remove the allocations
+   outright. Every 100 ns cut from `b` lowers the break-even body size by ~4.5
+   opcodes, and mandreel's 12.7 M entries are all just below the current
+   threshold. Filed as #539.
+2. **Expand eligibility to labeled loops with labeled `break`/`continue`**
+   (#524 item 2), which is what reaches the 69.5%. Projecting this in wall time
+   rather than in work-unit share: mandreel converts AST work units to opcodes
+   at 202.1 M / 189.5 M ≈ 1.07, so `sortMinDown` + `sortMaxDown`'s 944.9 M
+   exclusive units become roughly 1.01 G opcodes. At ~22 ns/op that is **~22 s
+   saved**, against a per-entry cost of 29,164 × 350 ns ≈ 0.01 s — their
+   op-per-entry ratio is ~34,600, three orders of magnitude past break-even. So
+   **≈ -10% on mandreel's 205 s**, and unlike step 1 it does not depend on `b`
+   at all. (The 1.07 conversion ratio is measured on a different body mix, so
+   treat the figure as one significant digit.)
+3. **Then** `Op::GetElement`/`Op::SetElement`'s numeric-index fast path (#538) —
+   a real asymmetry, but bounded above by these measurements at a cost too small
+   to sequence other work behind.
+4. **Not** call-site IC depth or the remaining `Call` opcode plumbing (#398),
+   for mandreel's sake. 2.9% of `[[Call]]`s originate inside compiled code.
 
 For #524 specifically, the measured bail order **contradicts the order that
 issue guessed**. Its stated "expected-biggest real-code blocker" is

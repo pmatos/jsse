@@ -1,0 +1,7 @@
+# Per-variant opcode/entry counts for bench_opmix.js (issue #526)
+# jsse --bytecode --features perf-counters, N=100000 (+1000 warmup)
+# variant<TAB>vm_ops<TAB>compiled_body_entries<TAB>calls_from_vm
+arith	4949052	2	0
+elem	5555032	2	0
+called	5555028	202002	202000
+mixed	7171032	101002	101000
