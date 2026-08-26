@@ -3,9 +3,9 @@ PERF	ast_stmt_execs	212930929
 PERF	ast_expr_evals	1146322318
 PERF	ast_work_units	1359253247
 PERF	body_dispatch_compiled	12737766
-PERF	body_dispatch_ast	458152
+PERF	body_dispatch_ast	458153
 PERF	vm_ops_per_compiled_body	15.87
-PERF	ast_units_per_ast_body	2966.82
+PERF	ast_units_per_ast_body	2966.81
 PERF	compile_ok	79
 PERF	compile_bail	102
 PERF	calls_from_vm	384216
@@ -13,7 +13,7 @@ PERF	calls_to_native	396525
 PERF	calls_to_user	13195918
 PERF	gc_minor	0
 PERF	gc_major	1
-PERF	gc_ms	1
+PERF	gc_ms	2
 BAIL	statement:Labeled	47
 BAIL	call callee	39
 BAIL	expression:New	6

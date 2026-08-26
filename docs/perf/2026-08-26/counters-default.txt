@@ -3,7 +3,7 @@ PERF	ast_stmt_execs	261940782
 PERF	ast_expr_evals	1286848076
 PERF	ast_work_units	1548788858
 PERF	body_dispatch_compiled	0
-PERF	body_dispatch_ast	13195918
+PERF	body_dispatch_ast	13195919
 PERF	ast_units_per_ast_body	117.37
 PERF	compile_ok	0
 PERF	compile_bail	0
@@ -12,7 +12,7 @@ PERF	calls_to_native	396525
 PERF	calls_to_user	13195918
 PERF	gc_minor	0
 PERF	gc_major	1
-PERF	gc_ms	1
+PERF	gc_ms	2
 BODY	_ZN20btAxisSweep3InternalItE11sortMinDownEitP12btDispatcherb	514810993	33.24%	15078	-
 BODY	_ZN20btAxisSweep3InternalItE11sortMaxDownEitP12btDispatcherb	430101850	27.77%	14086	-
 BODY	uint	74141692	4.79%	12345394	-
