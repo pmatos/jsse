@@ -134,6 +134,36 @@ uv run python scripts/run-jetstream.py --test OfflineAssembler --iterations 1 --
 ```
 
 The runner covers pure-JS JetStream 3 workloads and skips Wasm/Worker-dependent tests.
+Each workload is measured three times by default. The reported score is derived
+from the median of the measured times, and the min-max range of the repeats is
+printed alongside it; a range above 5% is flagged `UNSTABLE`. Controlled runs
+refuse a one-minute load average above 1.5 and use the maximum-frequency CPU
+cluster when Linux cpufreq data and `taskset` are available. Use `--repeats` and
+`--idle-threshold` to tune the protocol; `--no-idle-gate` is intended only for
+diagnostic or parallel runs. JSON output includes the repeat samples and a
+host/load/topology fingerprint.
+
+A refused run exits **3** (distinct from argparse's 2) and leaves any existing
+`jetstream-results.json` untouched, so a truncated suite cannot overwrite a
+complete baseline. This protection also applies when `--json` names that file
+through an equivalent absolute or symlinked path; choose a distinct output path
+to retain partial refusal evidence. Because a single-threaded benchmark
+contributes roughly 1.0 to the one-minute average itself, the default 1.5
+threshold leaves only about 0.5 of headroom for foreign load; raise
+`--idle-threshold` on a host with unavoidable background activity rather than
+disabling the gate.
+
+To confirm the gate actually fires, run the suite against a synthetic load.
+One `yes` asymptotes the one-minute average to only ~1.0, which is *below* the
+1.5 default, so use enough burners to clear the threshold:
+
+```bash
+for _ in 1 2 3; do yes > /dev/null & done
+sleep 60   # let the 1-minute average converge
+uv run python scripts/run-jetstream.py --test Air --iterations 1
+# expect: "BUSY  Air  (loadavg1 ... exceeds idle threshold 1.50)" and exit 3
+kill %1 %2 %3
+```
 
 ## Running the Node-compat library tests
 
