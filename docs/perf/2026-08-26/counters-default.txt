@@ -1,0 +1,55 @@
+PERF	vm_ops	0
+PERF	ast_stmt_execs	261940782
+PERF	ast_expr_evals	1286848076
+PERF	ast_work_units	1548788858
+PERF	body_dispatch_compiled	0
+PERF	body_dispatch_ast	13195918
+PERF	ast_units_per_ast_body	117.37
+PERF	compile_ok	0
+PERF	compile_bail	0
+PERF	calls_from_vm	0
+PERF	calls_to_native	396525
+PERF	calls_to_user	13195918
+PERF	gc_minor	0
+PERF	gc_major	1
+PERF	gc_ms	1
+BODY	_ZN20btAxisSweep3InternalItE11sortMinDownEitP12btDispatcherb	514810993	33.24%	15078	-
+BODY	_ZN20btAxisSweep3InternalItE11sortMaxDownEitP12btDispatcherb	430101850	27.77%	14086	-
+BODY	uint	74141692	4.79%	12345394	-
+BODY	__runMandreelPhased	55682108	3.60%	1	-
+BODY	my_mandreel_call_constructors	55681055	3.60%	1	-
+BODY	initHeap	47726644	3.08%	1	-
+BODY	_ZN16btCollisionWorld18addCollisionObjectEP17btCollisionObjectss	45469952	2.94%	1922	-
+BODY	_ZL10insertleafP6btDbvtP10btDbvtNodeS2_	42321640	2.73%	9603	-
+BODY	_ZN15btTransformUtil18integrateTransformERK11btTransformRK9btVector3S5_fRS0_	33676800	2.17%	38400	-
+BODY	_ZN20btAxisSweep3InternalItE7setAabbEP17btBroadphaseProxyRK9btVector3S5_P12btDispatcher	20238093	1.31%	19220	-
+BODY	_ZN11btRigidBody18proceedToTransformERK11btTransform	19353600	1.25%	19200	-
+BODY	_ZN16btDbvtBroadphase7setAabbEP17btBroadphaseProxyRK9btVector3S4_P12btDispatcher	16141381	1.04%	19220	-
+BODY	_ZN23btDiscreteDynamicsWorld16solveConstraintsER19btContactSolverInfo	15798384	1.02%	20	-
+BODY	_Z15btTransformAabbRK9btVector3S1_fRK11btTransformRS_S5_	14862090	0.96%	23042	-
+BODY	_ZNK20btAxisSweep3InternalItE8quantizeEPtRK9btVector3i	13150324	0.85%	42284	-
+BODY	_ZN11btRigidBody19updateInertiaTensorEv	10265292	0.66%	21122	-
+BODY	_ZNK11btMatrix3x311getRotationER12btQuaternion	10060800	0.65%	38400	-
+BODY	_ZN20btAlignedObjectArrayI9btElementE17quickSortInternalI31btUnionFindElementSortPredicateEEvT_ii	9505760	0.61%	10220	-
+BODY	_ZN11btRigidBody19integrateVelocitiesEf	8697600	0.56%	19200	-
+BODY	_ZN16btCollisionWorld11updateAabbsEv	8539000	0.55%	20	-
+BODY	_ZZN23btDiscreteDynamicsWorld16solveConstraintsER19btContactSolverInfoEN27InplaceSolverIslandCallback13ProcessIslandEPP17btCollisionObjectiPP20btPersistentManifoldii	7500840	0.48%	19200	-
+BODY	block_locate_free	6997159	0.45%	8072	-
+BODY	_ZN20btAxisSweep3InternalItE9sortMaxUpEitP12btDispatcherb	6367457	0.41%	931	-
+BODY	block_prepare_used	6231564	0.40%	8072	-
+BODY	_ZL10removeleafP6btDbvtP10btDbvtNode	6229117	0.40%	7681	-
+BODY	_ZN6btDbvt6updateEP10btDbvtNodeR12btDbvtAabbMmRK9btVector3f	5688338	0.37%	19220	-
+BODY	_ZN23btDiscreteDynamicsWorld21updateActivationStateEf	4614500	0.30%	20	-
+BODY	_ZN23btDiscreteDynamicsWorld19integrateTransformsEf	4441860	0.29%	20	-
+BODY	_ZN11btRigidBody12applyDampingEf	4435200	0.29%	19200	-
+BODY	_ZN23btDiscreteDynamicsWorld12applyGravityEv	3975500	0.26%	20	-
+BODY	_ZN23btDiscreteDynamicsWorld25predictUnconstraintMotionEf	3827100	0.25%	20	-
+BODY	_ZNK34btPolyhedralConvexAabbCachingShape7getAabbERK11btTransformR9btVector3S4_	3617594	0.23%	23042	-
+BODY	_ZN25btSimulationIslandManager21updateActivationStateEP16btCollisionWorldP12btDispatcher	3511565	0.23%	20	-
+BODY	_ZN25btSimulationIslandManager26storeIslandActivationStateEP16btCollisionWorld	3190340	0.21%	20	-
+BODY	_ZN20btAxisSweep3InternalItE11createProxyERK9btVector3S3_iPvssP12btDispatcherS4_	2788822	0.18%	1922	-
+BODY	_ZN11btRigidBody14setupRigidBodyERKNS_27btRigidBodyConstructionInfoE	2315882	0.15%	1922	-
+BODY	_ZN15DemoApplication20localCreateRigidBodyEfRK11btTransformP16btCollisionShape	2158080	0.14%	1920	-
+BODY	_ZN23btDiscreteDynamicsWorld11clearForcesEv	2151360	0.14%	20	-
+BODY	_ZN23btDiscreteDynamicsWorld18saveKinematicStateEf	2115320	0.14%	20	-
+BODY	_ZN13BenchmarkDemo11initPhysicsEv	1931936	0.12%	2	-
