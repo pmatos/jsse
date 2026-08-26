@@ -11,23 +11,45 @@ impl Interpreter {
     /// tree-walker script fallback, generator/state-machine Bodies, and other
     /// dynamically executed Bodies. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        // Generator/async state machines and the script-body fallback reach
-        // statement execution here rather than through `dispatch_body`, so
-        // without a frame of their own their work units would be credited to
-        // whichever ordinary body happens to be on the attribution stack —
-        // silently inflating that caller's exclusive total (#537 review).
-        // These bodies carry no function object, hence the synthetic label.
         #[cfg(feature = "perf-counters")]
-        {
-            self.perf.body_ast += 1;
-            let name = self.perf.name_non_function_body.clone();
-            self.perf.enter_ast_body(name);
-        }
+        let label = self.perf.name_non_function_body.clone();
+        #[cfg(feature = "perf-counters")]
+        return self.exec_body_attributed(body, env, label);
+        #[cfg(not(feature = "perf-counters"))]
+        self.exec_body_inner(body, env)
+    }
+
+    /// Generator/async state machines, the script-body fallback, and `eval`
+    /// reach statement execution without passing through `dispatch_body`, so
+    /// without a frame of their own their work units are credited to whichever
+    /// ordinary body happens to be on the attribution stack — silently
+    /// inflating that caller's exclusive total (#537 review). These bodies
+    /// carry no function object, so each population gets a synthetic label.
+    ///
+    /// The execution count deliberately does NOT go to `body_ast`: this fires
+    /// once per state-machine step, not once per invocation, and `body_ast` is
+    /// the published denominator of the compiled/AST invocation split.
+    /// Counting steps there overstated AST invocations ~4x per yield and
+    /// understated the compiled share 5x on generator-heavy code (#537 review,
+    /// second pass).
+    #[cfg(feature = "perf-counters")]
+    fn exec_body_attributed(
+        &mut self,
+        body: &Body,
+        env: &EnvRef,
+        label: std::rc::Rc<str>,
+    ) -> Completion {
+        self.perf.body_non_function += 1;
+        self.perf.enter_ast_body(label);
+        let result = self.exec_body_inner(body, env);
+        self.perf.leave_ast_body();
+        result
+    }
+
+    fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
         let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), env, None);
         self.leave_ic_body(prev);
-        #[cfg(feature = "perf-counters")]
-        self.perf.leave_ast_body();
         result
     }
 
@@ -58,7 +80,15 @@ impl Interpreter {
             self.leave_ic_body(prev);
             return result;
         }
-        self.exec_body(body, env)
+        #[cfg(feature = "perf-counters")]
+        {
+            let label = self.perf.name_script_body.clone();
+            self.exec_body_attributed(body, env, label)
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        {
+            self.exec_body_inner(body, env)
+        }
     }
 
     /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
@@ -74,7 +104,7 @@ impl Interpreter {
         // `dispatch_body`, so it needs its own frame (#537 review).
         #[cfg(feature = "perf-counters")]
         {
-            self.perf.body_ast += 1;
+            self.perf.body_non_function += 1;
             let name = self.perf.name_eval_body.clone();
             self.perf.enter_ast_body(name);
         }

@@ -91,9 +91,15 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   spent *exclusive* of nested bodies, plus GC collection counts and time.
 - Generator/async, top-level script, and `eval` bodies do not pass through
   `dispatch_body` and carry no function object, so they are attributed to the
-  synthetic `BODY` rows `<generator/async/script body>` and `<eval>` rather than
-  by name. Their work is correctly kept off the calling function's exclusive
-  total; resolving them to individual function names is jsse#540.
+  synthetic `BODY` rows `<generator/async body>`, `<script body>`, and `<eval>`
+  rather than by name. Their work is correctly kept off the calling function's
+  exclusive total; resolving them to individual function names is jsse#540.
+- `body_dispatch_compiled` / `body_dispatch_ast` count **function invocations
+  only** — that is the split #524 published, so keep it comparable. Executions
+  of the non-`dispatch_body` paths are reported separately as
+  `body_non_function_execs`, which counts **executions, not invocations**:
+  generators replay, so one generator call with N yields registers roughly 4N
+  state-machine steps there.
 - Every count is deterministic, so a shared/loaded host does not compromise it.
   **Never time an instrumented build** — take counts from the feature build and
   wall times from the default build.

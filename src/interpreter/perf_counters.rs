@@ -26,9 +26,18 @@ pub(crate) struct PerfCounters {
     /// Tree-walker work units: `exec_statement` and `eval_expr` entries.
     pub(crate) ast_stmts: u64,
     pub(crate) ast_exprs: u64,
-    /// `dispatch_body` outcomes — the invocation split #524 measured.
+    /// `dispatch_body` outcomes — the invocation split #524 measured. These
+    /// two count *function invocations* and nothing else; the non-function
+    /// body paths below are deliberately kept out of them so the compiled/AST
+    /// share stays comparable with the figures already published for #524.
     pub(crate) body_compiled: u64,
     pub(crate) body_ast: u64,
+    /// Executions of the body paths that bypass `dispatch_body` (generator and
+    /// async state machines, the top-level script fallback, `eval`). This is a
+    /// count of *executions, not invocations*: a generator resumption
+    /// re-executes its body under replay, so one generator call with N yields
+    /// registers roughly 4N here.
+    pub(crate) body_non_function: u64,
     /// Compile attempts, and what each bail was blamed on.
     pub(crate) compile_ok: u64,
     pub(crate) compile_bail: FxHashMap<&'static str, u64>,
@@ -55,6 +64,7 @@ pub(crate) struct PerfCounters {
     /// so framing them costs an `Rc` clone rather than an allocation per entry
     /// (generator replay re-executes bodies, so this path is hot).
     pub(crate) name_non_function_body: Rc<str>,
+    pub(crate) name_script_body: Rc<str>,
     pub(crate) name_eval_body: Rc<str>,
 }
 
@@ -67,6 +77,7 @@ impl Default for PerfCounters {
             ast_exprs: 0,
             body_compiled: 0,
             body_ast: 0,
+            body_non_function: 0,
             compile_ok: 0,
             compile_bail: FxHashMap::default(),
             calls_from_vm: 0,
@@ -78,7 +89,8 @@ impl Default for PerfCounters {
             ast_body_units: FxHashMap::default(),
             bail_by_name: FxHashMap::default(),
             ast_body_stack: Vec::new(),
-            name_non_function_body: Rc::from("<generator/async/script body>"),
+            name_non_function_body: Rc::from("<generator/async body>"),
+            name_script_body: Rc::from("<script body>"),
             name_eval_body: Rc::from("<eval>"),
         }
     }
@@ -131,6 +143,11 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tast_work_units\t{ast_units}");
         let _ = writeln!(out, "PERF\tbody_dispatch_compiled\t{}", self.body_compiled);
         let _ = writeln!(out, "PERF\tbody_dispatch_ast\t{}", self.body_ast);
+        let _ = writeln!(
+            out,
+            "PERF\tbody_non_function_execs\t{}",
+            self.body_non_function
+        );
         if self.body_compiled != 0 {
             let _ = writeln!(
                 out,

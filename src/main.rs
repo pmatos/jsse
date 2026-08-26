@@ -94,6 +94,16 @@ fn report_perf_counters(interp: &interpreter::Interpreter) {
     eprint!("{}", interp.perf_counters_report());
 }
 
+/// Reports counters, then returns `code`. Used by the `run_main` early returns
+/// that bypass `exit_code_from_result` but have already executed JavaScript —
+/// a prelude that throws still accumulated counts worth reporting (#537
+/// review, second pass).
+fn exit_after_execution(_interp: &interpreter::Interpreter, code: u8) -> ExitCode {
+    #[cfg(feature = "perf-counters")]
+    report_perf_counters(_interp);
+    ExitCode::from(code)
+}
+
 fn exit_code_from_result(
     interp: &interpreter::Interpreter,
     result: Result<(), EngineError>,
@@ -279,7 +289,7 @@ fn run_main() -> ExitCode {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading prelude {}: {e}", prelude_path.display());
-                return ExitCode::from(1);
+                return exit_after_execution(&interp, 1);
             }
         };
         let prelude_result = run_source_with_interp(&mut interp, &source, false, None);
@@ -291,11 +301,11 @@ fn run_main() -> ExitCode {
             match e {
                 EngineError::Parse(msg) => {
                     eprintln!("SyntaxError in prelude: {msg}");
-                    return ExitCode::from(2);
+                    return exit_after_execution(&interp, 2);
                 }
                 EngineError::Runtime(msg) => {
                     eprintln!("Error in prelude: {msg}");
-                    return ExitCode::from(1);
+                    return exit_after_execution(&interp, 1);
                 }
             }
         }
@@ -310,7 +320,7 @@ fn run_main() -> ExitCode {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading {}: {e}", path.display());
-                return ExitCode::from(1);
+                return exit_after_execution(&interp, 1);
             }
         };
         let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");

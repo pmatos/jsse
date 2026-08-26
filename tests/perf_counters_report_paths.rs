@@ -84,6 +84,37 @@ fn repl_path_emits_exactly_one_report() {
     assert_eq!(report_count(&stderr), 1, "stderr was:\n{stderr}");
 }
 
+/// A prelude that fails still executed JavaScript, so its counters are still
+/// worth reporting — but those paths return straight out of `run_main` without
+/// reaching `exit_code_from_result`. Caught by the cross-harness reviewer on
+/// the second pass of the #537 review; all three emitted nothing beforehand.
+#[test]
+fn failing_prelude_paths_still_emit_exactly_one_report() {
+    let dir = scratch("prelude-failures");
+    fs::write(dir.join("ok.js"), "var ok = 1;\n").expect("write ok");
+    fs::write(dir.join("throws.js"), "var a = 1;\nnull.x;\n").expect("write throws");
+    fs::write(dir.join("syntax.js"), "var =;\n").expect("write syntax");
+
+    // (prelude file, description) — the third does not exist on disk at all.
+    for (prelude, what) in [
+        ("throws.js", "a prelude that throws"),
+        ("syntax.js", "a prelude with a syntax error"),
+        ("missing.js", "an unreadable prelude"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+            .current_dir(&dir)
+            .args(["--prelude", prelude, "ok.js"])
+            .output()
+            .expect("run jsse");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            report_count(&stderr),
+            1,
+            "{what} must still report exactly once; stderr was:\n{stderr}"
+        );
+    }
+}
+
 /// Generator and `eval` bodies bypass `dispatch_body`, so without frames of
 /// their own their work units are credited to the calling function — the
 /// `BODY` ranking's whole purpose is defeated (#537 review). Measured before
@@ -114,7 +145,7 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
             .and_then(|n| n.parse().ok())
     };
 
-    let generator = row("<generator/async/script body>")
+    let generator = row("<generator/async body>")
         .unwrap_or_else(|| panic!("no generator BODY row; stderr:\n{stderr}"));
     let eval_body =
         row("<eval>").unwrap_or_else(|| panic!("no <eval> BODY row; stderr:\n{stderr}"));
@@ -128,5 +159,57 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
     assert!(
         caller < 100,
         "caller must not absorb the generator's work, got {caller}"
+    );
+}
+
+/// `body_ast` is the published denominator of the compiled/AST *invocation*
+/// split — the metric #526's report is built on. `exec_body` fires once per
+/// generator state-machine step (~4x per yield), so counting those there
+/// understated the compiled share 5x on generator-heavy code: a workload with
+/// 2,000 compiled calls and one generator reported 20.0% compiled instead of
+/// ~99.9%. Those executions belong in `body_non_function_execs` instead.
+/// Caught by the local evaluator on the second pass of the #537 review.
+#[test]
+fn generator_replay_does_not_inflate_the_ast_invocation_count() {
+    let dir = scratch("invocation-split");
+    fs::write(
+        dir.join("main.js"),
+        "function hot(n) { var s = 0; for (var i = 0; i < n; i++) { s += i; } return s; }\n\
+         function* g(n) { for (var i = 0; i < n; i++) { yield i; } }\n\
+         var t = 0;\n\
+         for (var k = 0; k < 2000; k++) { t += hot(3); }\n\
+         for (var v of g(2000)) { t += v; }\n",
+    )
+    .expect("write main");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["--bytecode", "main.js"])
+        .output()
+        .expect("run jsse");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let perf = |key: &str| -> u64 {
+        stderr
+            .lines()
+            .find(|l| l.starts_with(&format!("PERF\t{key}\t")))
+            .and_then(|l| l.split('\t').nth(2))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no PERF {key} row; stderr:\n{stderr}"))
+    };
+
+    let compiled = perf("body_dispatch_compiled");
+    let ast = perf("body_dispatch_ast");
+    let non_function = perf("body_non_function_execs");
+
+    assert!(compiled > 1000, "hot() must compile, got {compiled}");
+    // The generator's thousands of state-machine steps must NOT land here.
+    assert!(
+        ast < 100,
+        "generator replay leaked into the AST invocation count: \
+         body_dispatch_ast={ast} against body_dispatch_compiled={compiled}"
+    );
+    assert!(
+        non_function > 1000,
+        "state-machine steps must be counted separately, got {non_function}"
     );
 }

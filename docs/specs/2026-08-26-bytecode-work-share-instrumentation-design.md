@@ -70,7 +70,13 @@ Counters fall into four groups:
   than `dispatch_body` and carry no function object, so each gets a frame under
   a synthetic label — without one, their work would be credited to whichever
   ordinary body sits below them on the stack, which is the single largest way
-  this ranking can lie. An entry/exit stack records the unit counter at
+  this ranking can lie. Their *execution* counts stay out of
+  `body_compiled`/`body_ast` — those two are the invocation split #524
+  published, and `exec_body` fires once per generator state-machine step, so
+  counting steps there understates the compiled share several-fold on
+  generator-heavy code. They are reported separately as
+  `body_non_function_execs`, explicitly a count of executions rather than
+  invocations. An entry/exit stack records the unit counter at
   entry and charges each body's inclusive cost to its caller's child total, so
   no unit is counted twice and a body that merely calls other bodies is not
   credited with their work. Bodies are keyed by function name, interned per
