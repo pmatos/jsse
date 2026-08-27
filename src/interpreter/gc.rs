@@ -275,29 +275,34 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_safepoint(&mut self) {
-        let kind = self.gc.begin_collection();
-        #[cfg(feature = "perf-counters")]
-        let start = std::time::Instant::now();
-        match kind {
+        // The clock starts inside the collecting arms, never before the match:
+        // safepoints are hit on every loop backedge, so an unconditional
+        // `Instant::now()` here would run millions of times per run to time
+        // the handful of collections that actually happen — inflating the very
+        // measurement overhead this feature is supposed to keep negligible
+        // (#537 review, third pass).
+        match self.gc.begin_collection() {
             Some(CollectionKind::Minor) => {
+                #[cfg(feature = "perf-counters")]
+                let start = std::time::Instant::now();
+                self.gc_collect_minor();
                 #[cfg(feature = "perf-counters")]
                 {
                     self.perf.gc_minor += 1;
+                    self.perf.gc_nanos += start.elapsed().as_nanos();
                 }
-                self.gc_collect_minor();
             }
             Some(CollectionKind::Major) => {
                 #[cfg(feature = "perf-counters")]
+                let start = std::time::Instant::now();
+                self.gc_collect_major();
+                #[cfg(feature = "perf-counters")]
                 {
                     self.perf.gc_major += 1;
+                    self.perf.gc_nanos += start.elapsed().as_nanos();
                 }
-                self.gc_collect_major();
             }
             None => {}
-        }
-        #[cfg(feature = "perf-counters")]
-        if kind.is_some() {
-            self.perf.gc_nanos += start.elapsed().as_nanos();
         }
     }
 
@@ -637,6 +642,12 @@ impl Interpreter {
     }
 
     fn free_gc_object(&mut self, id: u64) {
+        // `ObjectArena` recycles logical ids (its `free_list: Vec<u64>`), so a
+        // cached label keyed by id must die with the object or the next
+        // function to receive that id inherits this one's name — merging its
+        // work and bail reason into the wrong BODY row (#537 review).
+        #[cfg(feature = "perf-counters")]
+        self.perf_name_cache.remove(&id);
         if let Some(handle) = self.objects.get_cell(id) {
             let obj = handle.borrow_untracked();
             if let Some(buf_data) = obj.arraybuffer_data()

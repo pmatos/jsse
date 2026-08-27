@@ -17,6 +17,19 @@ use std::rc::Rc;
 /// Widest opcode discriminant plus one. The assertion below fails to compile
 /// if a new opcode outgrows the histogram.
 const OP_SLOTS: usize = 64;
+
+/// Identity of an attributed body: its display name plus the function object it
+/// came from. Two distinct functions can share a name, and keying on the name
+/// alone merged their work and let their bail reasons overwrite each other —
+/// the per-function ranking could then identify neither (#537 review, third
+/// pass). The id disambiguates internally; `report` only shows it when a name
+/// is actually ambiguous, so unique names stay readable.
+pub(crate) type BodyKey = (Rc<str>, u64);
+
+/// Identity for the synthetic bodies that have no function object at all
+/// (`<generator/async body>`, `<script body>`, `<module body>`, `<eval>`).
+/// Object ids are allocated upward from 0, so this can never collide.
+pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
 const _: () = assert!((Op::ReturnCompletion as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
@@ -54,17 +67,18 @@ pub(crate) struct PerfCounters {
     /// Per-body AST attribution. `invocation share` cannot localize cost — a
     /// single fallback body can wrap a whole loop — so bodies are ranked by
     /// the tree-walker work units they consume *exclusive* of nested bodies.
-    pub(crate) ast_body_units: FxHashMap<Rc<str>, (u64, u64)>,
+    pub(crate) ast_body_units: FxHashMap<BodyKey, (u64, u64)>,
     /// Which construct each named body bailed on, so an eligibility expansion
     /// can be aimed at the bodies that actually hold the work.
-    pub(crate) bail_by_name: FxHashMap<Rc<str>, &'static str>,
-    /// (name, ast units at entry, units consumed by nested bodies).
-    ast_body_stack: Vec<(Rc<str>, u64, u64)>,
+    pub(crate) bail_by_name: FxHashMap<BodyKey, &'static str>,
+    /// (key, ast units at entry, units consumed by nested bodies).
+    ast_body_stack: Vec<(BodyKey, u64, u64)>,
     /// Interned labels for the two body paths that carry no function object,
     /// so framing them costs an `Rc` clone rather than an allocation per entry
     /// (generator replay re-executes bodies, so this path is hot).
     pub(crate) name_non_function_body: Rc<str>,
     pub(crate) name_script_body: Rc<str>,
+    pub(crate) name_module_body: Rc<str>,
     pub(crate) name_eval_body: Rc<str>,
 }
 
@@ -91,6 +105,7 @@ impl Default for PerfCounters {
             ast_body_stack: Vec::new(),
             name_non_function_body: Rc::from("<generator/async body>"),
             name_script_body: Rc::from("<script body>"),
+            name_module_body: Rc::from("<module body>"),
             name_eval_body: Rc::from("<eval>"),
         }
     }
@@ -102,18 +117,18 @@ impl PerfCounters {
         self.vm_op_hist[op as usize] += 1;
     }
 
-    pub(crate) fn record_bail(&mut self, reason: &'static str, name: Rc<str>) {
+    pub(crate) fn record_bail(&mut self, reason: &'static str, name: Rc<str>, id: u64) {
         *self.compile_bail.entry(reason).or_insert(0) += 1;
-        self.bail_by_name.insert(name, reason);
+        self.bail_by_name.insert((name, id), reason);
     }
 
     fn ast_units(&self) -> u64 {
         self.ast_stmts + self.ast_exprs
     }
 
-    pub(crate) fn enter_ast_body(&mut self, name: Rc<str>) {
+    pub(crate) fn enter_ast_body(&mut self, name: Rc<str>, id: u64) {
         let at_entry = self.ast_units();
-        self.ast_body_stack.push((name, at_entry, 0));
+        self.ast_body_stack.push(((name, id), at_entry, 0));
     }
 
     /// Pops the innermost body, credits it the units it spent outside any
@@ -121,12 +136,12 @@ impl PerfCounters {
     /// so no unit is counted twice.
     pub(crate) fn leave_ast_body(&mut self) {
         let now = self.ast_units();
-        let Some((name, at_entry, children)) = self.ast_body_stack.pop() else {
+        let Some((key, at_entry, children)) = self.ast_body_stack.pop() else {
             return;
         };
         let inclusive = now.saturating_sub(at_entry);
         let exclusive = inclusive.saturating_sub(children);
-        let entry = self.ast_body_units.entry(name).or_insert((0, 0));
+        let entry = self.ast_body_units.entry(key).or_insert((0, 0));
         entry.0 += exclusive;
         entry.1 += 1;
         if let Some(parent) = self.ast_body_stack.last_mut() {
@@ -178,19 +193,39 @@ impl PerfCounters {
             let _ = writeln!(out, "BAIL\t{reason}\t{count}");
         }
 
+        // A name shared by several function objects is rendered `name#id`; a
+        // unique name stays bare, so the common case reads cleanly and only
+        // genuine ambiguity costs the reader anything.
+        let mut ids_per_name: FxHashMap<&Rc<str>, usize> = FxHashMap::default();
+        {
+            let mut seen: std::collections::HashSet<(&Rc<str>, u64)> =
+                std::collections::HashSet::new();
+            for (name, id) in self.ast_body_units.keys() {
+                if seen.insert((name, *id)) {
+                    *ids_per_name.entry(name).or_insert(0) += 1;
+                }
+            }
+        }
         let mut bodies: Vec<_> = self.ast_body_units.iter().collect();
         bodies.sort_by_key(|&(_, &(exclusive, _))| std::cmp::Reverse(exclusive));
         let ast_total: u64 = self.ast_body_units.values().map(|v| v.0).sum();
-        for (name, (exclusive, invocations)) in bodies.into_iter().take(40) {
+        for (key, (exclusive, invocations)) in bodies.into_iter().take(40) {
+            let (name, id) = key;
+            let ambiguous = ids_per_name.get(name).copied().unwrap_or(1) > 1;
+            let label = if ambiguous {
+                std::borrow::Cow::Owned(format!("{name}#{id}"))
+            } else {
+                std::borrow::Cow::Borrowed(name.as_ref())
+            };
             let share = if ast_total == 0 {
                 0.0
             } else {
                 100.0 * *exclusive as f64 / ast_total as f64
             };
-            let reason = self.bail_by_name.get(name).copied().unwrap_or("-");
+            let reason = self.bail_by_name.get(key).copied().unwrap_or("-");
             let _ = writeln!(
                 out,
-                "BODY\t{name}\t{exclusive}\t{share:.2}%\t{invocations}\t{reason}"
+                "BODY\t{label}\t{exclusive}\t{share:.2}%\t{invocations}\t{reason}"
             );
         }
 
@@ -219,14 +254,20 @@ mod tests {
         Rc::from(s)
     }
 
+    /// Test bodies get distinct synthetic identities unless a test is
+    /// deliberately exercising the same-name-different-object case.
+    fn key(s: &str, id: u64) -> BodyKey {
+        (Rc::from(s), id)
+    }
+
     /// A body that spends its own units is credited them.
     #[test]
     fn exclusive_attribution_credits_a_leaf_body() {
         let mut p = PerfCounters::default();
-        p.enter_ast_body(name("leaf"));
+        p.enter_ast_body(name("leaf"), 1);
         p.ast_exprs += 7;
         p.leave_ast_body();
-        assert_eq!(p.ast_body_units[&name("leaf")], (7, 1));
+        assert_eq!(p.ast_body_units[&key("leaf", 1)], (7, 1));
     }
 
     /// A caller must not be credited with work its callee did: the whole point
@@ -235,15 +276,15 @@ mod tests {
     #[test]
     fn exclusive_attribution_does_not_credit_a_caller_with_callee_work() {
         let mut p = PerfCounters::default();
-        p.enter_ast_body(name("caller"));
+        p.enter_ast_body(name("caller"), 1);
         p.ast_stmts += 2;
-        p.enter_ast_body(name("callee"));
+        p.enter_ast_body(name("callee"), 1);
         p.ast_exprs += 100;
         p.leave_ast_body();
         p.ast_stmts += 3;
         p.leave_ast_body();
-        assert_eq!(p.ast_body_units[&name("callee")], (100, 1));
-        assert_eq!(p.ast_body_units[&name("caller")], (5, 1));
+        assert_eq!(p.ast_body_units[&key("callee", 1)], (100, 1));
+        assert_eq!(p.ast_body_units[&key("caller", 1)], (5, 1));
     }
 
     /// Repeated invocations accumulate units and count.
@@ -251,11 +292,11 @@ mod tests {
     fn exclusive_attribution_accumulates_across_invocations() {
         let mut p = PerfCounters::default();
         for _ in 0..3 {
-            p.enter_ast_body(name("hot"));
+            p.enter_ast_body(name("hot"), 1);
             p.ast_exprs += 4;
             p.leave_ast_body();
         }
-        assert_eq!(p.ast_body_units[&name("hot")], (12, 3));
+        assert_eq!(p.ast_body_units[&key("hot", 1)], (12, 3));
     }
 
     /// An unbalanced leave (a body left without a matching enter) must not
@@ -264,10 +305,10 @@ mod tests {
     fn unbalanced_leave_is_ignored() {
         let mut p = PerfCounters::default();
         p.leave_ast_body();
-        p.enter_ast_body(name("body"));
+        p.enter_ast_body(name("body"), 1);
         p.ast_exprs += 1;
         p.leave_ast_body();
-        assert_eq!(p.ast_body_units[&name("body")], (1, 1));
+        assert_eq!(p.ast_body_units[&key("body", 1)], (1, 1));
     }
 
     #[test]
@@ -281,6 +322,46 @@ mod tests {
         assert_eq!(p.vm_op_hist[Op::Call as usize], 1);
     }
 
+    /// Two functions sharing a name must stay separate rows, and the id is
+    /// shown only for the ambiguous name — a unique name stays bare so the
+    /// common report reads cleanly (#537 review, third pass).
+    #[test]
+    fn report_disambiguates_only_ambiguous_names() {
+        let mut p = PerfCounters::default();
+        for (n, id, units) in [("same", 10u64, 700u64), ("same", 11, 20), ("solo", 12, 5)] {
+            p.enter_ast_body(name(n), id);
+            p.ast_exprs += units;
+            p.leave_ast_body();
+        }
+        let out = p.report();
+        assert!(out.contains("BODY\tsame#10\t700\t"), "{out}");
+        assert!(out.contains("BODY\tsame#11\t20\t"), "{out}");
+        assert!(out.contains("BODY\tsolo\t5\t"), "{out}");
+        assert!(
+            !out.contains("BODY\tsolo#"),
+            "unique name must stay bare:\n{out}"
+        );
+    }
+
+    /// A bail recorded against one of two same-named functions must not be
+    /// reported against the other.
+    #[test]
+    fn bail_reasons_do_not_leak_between_same_named_functions() {
+        let mut p = PerfCounters::default();
+        p.record_bail("statement:Try", name("same"), 10);
+        for id in [10u64, 11] {
+            p.enter_ast_body(name("same"), id);
+            p.ast_exprs += 1;
+            p.leave_ast_body();
+        }
+        let out = p.report();
+        assert!(
+            out.contains("BODY\tsame#10\t1\t50.00%\t1\tstatement:Try"),
+            "{out}"
+        );
+        assert!(out.contains("BODY\tsame#11\t1\t50.00%\t1\t-"), "{out}");
+    }
+
     #[test]
     fn report_renders_shares_bails_and_bodies() {
         let mut p = PerfCounters::default();
@@ -289,8 +370,8 @@ mod tests {
         p.record_op(Op::GetElement);
         p.body_compiled = 1;
         p.body_ast = 1;
-        p.record_bail("statement:Labeled", name("sortMinDown"));
-        p.enter_ast_body(name("sortMinDown"));
+        p.record_bail("statement:Labeled", name("sortMinDown"), 1);
+        p.enter_ast_body(name("sortMinDown"), 1);
         p.ast_exprs += 9;
         p.leave_ast_body();
         let out = p.report();
@@ -326,7 +407,7 @@ mod tests {
     #[test]
     fn report_marks_a_compiled_bodys_absent_bail_reason() {
         let mut p = PerfCounters::default();
-        p.enter_ast_body(name("plain"));
+        p.enter_ast_body(name("plain"), 1);
         p.ast_stmts += 1;
         p.leave_ast_body();
         assert!(p.report().contains("BODY\tplain\t1\t100.00%\t1\t-\n"));

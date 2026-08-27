@@ -40,7 +40,8 @@ impl Interpreter {
         label: std::rc::Rc<str>,
     ) -> Completion {
         self.perf.body_non_function += 1;
-        self.perf.enter_ast_body(label);
+        self.perf
+            .enter_ast_body(label, crate::interpreter::perf_counters::SYNTHETIC_BODY_ID);
         let result = self.exec_body_inner(body, env);
         self.perf.leave_ast_body();
         result
@@ -58,27 +59,54 @@ impl Interpreter {
     /// completion semantics differ from a function body's, so this is a
     /// separate entry point rather than a synthetic function dispatch.
     pub(crate) fn exec_script_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        if self.bytecode_enabled
-            && let Ok(chunk) =
-                crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice())
-        {
-            let prev = self.enter_ic_body(body);
-            let result =
-                if let Some(err) = self.instantiate_body_declarations(body.as_slice(), env, None) {
-                    err
-                } else {
-                    self.call_stack_envs.push(env.clone());
-                    let result = crate::interpreter::bytecode::vm::run_script_chunk(
-                        self,
-                        &chunk,
-                        env,
-                        JsValue::UNDEFINED,
-                    );
-                    self.call_stack_envs.pop();
-                    result
-                };
-            self.leave_ic_body(prev);
-            return result;
+        if self.bytecode_enabled {
+            // Compiled once and matched on, so the counter build does not pay a
+            // second compile. Both outcomes are recorded — a script-only
+            // workload previously reported compile_ok and BAIL as zero however
+            // the compile went. The execution counts as a non-function body,
+            // never in `body_compiled`, which is the published count of
+            // function invocations (#537 review, third pass).
+            match crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice()) {
+                Ok(chunk) => {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.compile_ok += 1;
+                        self.perf.body_non_function += 1;
+                    }
+                    let prev = self.enter_ic_body(body);
+                    let result = if let Some(err) =
+                        self.instantiate_body_declarations(body.as_slice(), env, None)
+                    {
+                        err
+                    } else {
+                        self.call_stack_envs.push(env.clone());
+                        let result = crate::interpreter::bytecode::vm::run_script_chunk(
+                            self,
+                            &chunk,
+                            env,
+                            JsValue::UNDEFINED,
+                        );
+                        self.call_stack_envs.pop();
+                        result
+                    };
+                    self.leave_ic_body(prev);
+                    return result;
+                }
+                Err(_e) => {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
+                            reason,
+                        ) = _e;
+                        let name = self.perf.name_script_body.clone();
+                        self.perf.record_bail(
+                            reason,
+                            name,
+                            crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                        );
+                    }
+                }
+            }
         }
         #[cfg(feature = "perf-counters")]
         {
@@ -106,7 +134,8 @@ impl Interpreter {
         {
             self.perf.body_non_function += 1;
             let name = self.perf.name_eval_body.clone();
-            self.perf.enter_ast_body(name);
+            self.perf
+                .enter_ast_body(name, crate::interpreter::perf_counters::SYNTHETIC_BODY_ID);
         }
         let prev = self.enter_ic_body(body);
         let mut last = Completion::Empty;

@@ -213,3 +213,122 @@ fn generator_replay_does_not_inflate_the_ast_invocation_count() {
         "state-machine steps must be counted separately, got {non_function}"
     );
 }
+
+/// A compiled top-level script recorded neither its compile nor its execution,
+/// while the fallback recorded both — an eligible script reported VM ops with
+/// `compile_ok` and every dispatch counter at zero (#537 review, third pass).
+/// Both outcomes are now recorded, and neither goes to `body_compiled`, which
+/// counts function invocations only.
+#[test]
+fn script_body_records_its_compile_outcome_but_not_a_function_invocation() {
+    let dir = scratch("script-compile");
+    fs::write(
+        dir.join("ok.js"),
+        "var s = 0; for (var i = 0; i < 5; i++) { s += i; } s;\n",
+    )
+    .expect("write eligible");
+    fs::write(
+        dir.join("bail.js"),
+        "function f(){ try { return 1; } catch(e) { return 0; } } f();\n",
+    )
+    .expect("write ineligible");
+
+    let perf = |file: &str, key: &str| -> u64 {
+        let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+            .current_dir(&dir)
+            .args(["--bytecode", file])
+            .output()
+            .expect("run jsse");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        stderr
+            .lines()
+            .find(|l| l.starts_with(&format!("PERF\t{key}\t")))
+            .and_then(|l| l.split('\t').nth(2))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no PERF {key}; stderr:\n{stderr}"))
+    };
+
+    assert!(
+        perf("ok.js", "vm_ops") > 0,
+        "eligible script must run compiled"
+    );
+    assert_eq!(
+        perf("ok.js", "compile_ok"),
+        1,
+        "its compile must be recorded"
+    );
+    assert_eq!(perf("ok.js", "body_non_function_execs"), 1);
+    // A script is not a function invocation — these must stay untouched.
+    assert_eq!(perf("ok.js", "body_dispatch_compiled"), 0);
+    assert_eq!(perf("ok.js", "body_dispatch_ast"), 0);
+    // An ineligible script must surface its bail instead of reporting nothing.
+    assert!(
+        perf("bail.js", "compile_bail") > 0,
+        "script bail must be recorded"
+    );
+}
+
+/// Module items run through `exec_statement` without `dispatch_body`, so their
+/// work landed in `ast_work_units` under no `BODY` row at all (#537 review,
+/// third pass).
+#[test]
+fn module_body_gets_its_own_attribution_row() {
+    let dir = scratch("module-attribution");
+    fs::write(
+        dir.join("m.mjs"),
+        "var t = 0;\nfor (var i = 0; i < 3; i++) { t += i; }\nexport const v = t;\n",
+    )
+    .expect("write module");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["m.mjs"])
+        .output()
+        .expect("run jsse");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.starts_with("BODY\t<module body>\t")),
+        "module work must be attributed, not orphaned; stderr:\n{stderr}"
+    );
+}
+
+/// Two distinct functions sharing a name merged into one `BODY` row with
+/// combined work, so the ranking could identify neither (#537 review, third
+/// pass). The id disambiguates them; unique names must stay bare.
+#[test]
+fn same_named_functions_get_separate_body_rows() {
+    let dir = scratch("same-name");
+    fs::write(
+        dir.join("main.js"),
+        "function outer1() { function same() { var s = 0; for (var i = 0; i < 900; i++) { s += i; } return s; } return same(); }\n\
+         function outer2() { function same() { var s = 0; for (var i = 0; i < 30; i++) { s += i; } return s; } return same(); }\n\
+         outer1(); outer2();\n",
+    )
+    .expect("write main");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["main.js"])
+        .output()
+        .expect("run jsse");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let same_rows: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("BODY\tsame#"))
+        .collect();
+    assert_eq!(
+        same_rows.len(),
+        2,
+        "both `same` functions must appear separately; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.lines().any(|l| l.starts_with("BODY\tsame\t")),
+        "the merged bare-name row must be gone; stderr:\n{stderr}"
+    );
+    // outer1/outer2 are unique, so they must NOT be suffixed.
+    assert!(
+        stderr.lines().any(|l| l.starts_with("BODY\touter1\t")),
+        "unique names must stay bare; stderr:\n{stderr}"
+    );
+}

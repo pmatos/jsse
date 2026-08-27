@@ -2069,7 +2069,7 @@ impl Interpreter {
                                 reason,
                             ) = _e;
                             let name = self.perf_body_name(func_obj_id);
-                            self.perf.record_bail(reason, name);
+                            self.perf.record_bail(reason, name, func_obj_id);
                         }
                         if let Some(o) = self.get_object(func_obj_id) {
                             o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
@@ -2093,7 +2093,7 @@ impl Interpreter {
         {
             self.perf.body_ast += 1;
             let name = self.perf_body_name(func_obj_id);
-            self.perf.enter_ast_body(name);
+            self.perf.enter_ast_body(name, func_obj_id);
         }
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.

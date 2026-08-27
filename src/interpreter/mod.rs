@@ -3568,6 +3568,17 @@ impl Interpreter {
 
         let prev_ic_handle = self.enter_ic_body(&program.body);
 
+        // Module items reach `exec_statement` without passing through
+        // `dispatch_body`, so without a frame their work lands in
+        // `ast_work_units` but in no BODY row — module-heavy runs could not
+        // localize their tree-walker work at all (#537 review, third pass).
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let name = self.perf.name_module_body.clone();
+            self.perf
+                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID);
+        }
         let mut err = None;
         for item in &program.module_items {
             match item {
@@ -3592,6 +3603,8 @@ impl Interpreter {
             }
         }
         module.borrow_mut().program_ast = None;
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         self.leave_ic_body(prev_ic_handle);
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
