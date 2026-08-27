@@ -92,11 +92,16 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Generator/async, top-level script, module, and `eval` bodies do not pass
   through `dispatch_body` and carry no function object, so they are attributed
   to the synthetic `BODY` rows `<generator/async body>`, `<script body>`,
-  `<module body>`, and `<eval>` rather than by name.
+  `<module body>`, and `<eval>` rather than by name. Their work is correctly kept
+  off the calling function's exclusive total; resolving the generator/async
+  bucket to individual function names is jsse#540.
 - `BODY` rows are keyed by function *identity*, not name. Two functions sharing
   a name render as `name#<object id>`; a unique name stays bare, so only genuine
-  ambiguity costs readability. Their work is correctly kept off the calling function's
-  exclusive total; resolving them to individual function names is jsse#540.
+  ambiguity costs readability.
+- `compile_ok` and the `BAIL` table cover **script** compile attempts as well as
+  function bodies, so a script-only workload no longer reports zero for both.
+  A compiled script counts as a `body_non_function_execs` execution, never as a
+  `body_dispatch_compiled` invocation.
 - `body_dispatch_compiled` / `body_dispatch_ast` count **function invocations
   only** — that is the split #524 published, so keep it comparable. Executions
   of the non-`dispatch_body` paths are reported separately as
