@@ -1705,3 +1705,41 @@ fn top_level_bytecode_string_literals_preserve_utf16_code_units() {
     );
     assert_eq!(value.as_boolean(), Some(false));
 }
+
+/// A strict-mode tail call leaves `run_chunk_inner` through the trampoline
+/// return, not the dispatch site, so `calls_from_vm` must be incremented
+/// before that early return or every strict tail call goes uncounted.
+///
+/// The five counted calls are exactly `outer`'s five `return leaf(n)` tail
+/// calls. `outer(total)` itself is *not* counted: the top-level script body
+/// contains function declarations, which the compiler rejects, so the loop runs
+/// on the tree-walker. Before the fix this assertion saw 0, not 5.
+#[cfg(feature = "perf-counters")]
+#[test]
+fn strict_tail_calls_are_counted_as_vm_issued_calls() {
+    let src = "'use strict';\
+               function leaf(n) { return n + 1; }\
+               function outer(n) { return leaf(n); }\
+               var total = 0;\
+               for (var i = 0; i < 5; i++) { total = outer(total); }\
+               total;";
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let mut parser = crate::parser::Parser::new(src).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let completion = interp.run(&program);
+    assert!(
+        matches!(completion, Completion::Normal(_) | Completion::Empty),
+        "{completion:?}"
+    );
+    assert!(
+        interp.perf.body_compiled > 0,
+        "outer() must compile for this test to exercise Op::ReturnCall"
+    );
+    assert_eq!(
+        interp.perf.calls_from_vm, 5,
+        "the five strict tail calls from outer()'s compiled body must be \
+         counted, but calls_from_vm was {}",
+        interp.perf.calls_from_vm
+    );
+}

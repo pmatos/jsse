@@ -11,6 +11,43 @@ impl Interpreter {
     /// tree-walker script fallback, generator/state-machine Bodies, and other
     /// dynamically executed Bodies. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        let label = self.perf.name_non_function_body.clone();
+        #[cfg(feature = "perf-counters")]
+        return self.exec_body_attributed(body, env, label);
+        #[cfg(not(feature = "perf-counters"))]
+        self.exec_body_inner(body, env)
+    }
+
+    /// Generator/async state machines, the script-body fallback, and `eval`
+    /// reach statement execution without passing through `dispatch_body`, so
+    /// without a frame of their own their work units are credited to whichever
+    /// ordinary body happens to be on the attribution stack — silently
+    /// inflating that caller's exclusive total (#537 review). These bodies
+    /// carry no function object, so each population gets a synthetic label.
+    ///
+    /// The execution count deliberately does NOT go to `body_ast`: this fires
+    /// once per state-machine step, not once per invocation, and `body_ast` is
+    /// the published denominator of the compiled/AST invocation split.
+    /// Counting steps there overstated AST invocations ~4x per yield and
+    /// understated the compiled share 5x on generator-heavy code (#537 review,
+    /// second pass).
+    #[cfg(feature = "perf-counters")]
+    fn exec_body_attributed(
+        &mut self,
+        body: &Body,
+        env: &EnvRef,
+        label: std::rc::Rc<str>,
+    ) -> Completion {
+        self.perf.body_non_function += 1;
+        self.perf
+            .enter_ast_body(label, crate::interpreter::perf_counters::SYNTHETIC_BODY_ID);
+        let result = self.exec_body_inner(body, env);
+        self.perf.leave_ast_body();
+        result
+    }
+
+    fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
         let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), env, None);
         self.leave_ic_body(prev);
@@ -22,29 +59,64 @@ impl Interpreter {
     /// completion semantics differ from a function body's, so this is a
     /// separate entry point rather than a synthetic function dispatch.
     pub(crate) fn exec_script_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        if self.bytecode_enabled
-            && let Ok(chunk) =
-                crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice())
-        {
-            let prev = self.enter_ic_body(body);
-            let result =
-                if let Some(err) = self.instantiate_body_declarations(body.as_slice(), env, None) {
-                    err
-                } else {
-                    self.call_stack_envs.push(env.clone());
-                    let result = crate::interpreter::bytecode::vm::run_script_chunk(
-                        self,
-                        &chunk,
-                        env,
-                        JsValue::UNDEFINED,
-                    );
-                    self.call_stack_envs.pop();
-                    result
-                };
-            self.leave_ic_body(prev);
-            return result;
+        if self.bytecode_enabled {
+            // Compiled once and matched on, so the counter build does not pay a
+            // second compile. Both outcomes are recorded — a script-only
+            // workload previously reported compile_ok and BAIL as zero however
+            // the compile went. The execution counts as a non-function body,
+            // never in `body_compiled`, which is the published count of
+            // function invocations (#537 review, third pass).
+            match crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice()) {
+                Ok(chunk) => {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.compile_ok += 1;
+                        self.perf.body_non_function += 1;
+                    }
+                    let prev = self.enter_ic_body(body);
+                    let result = if let Some(err) =
+                        self.instantiate_body_declarations(body.as_slice(), env, None)
+                    {
+                        err
+                    } else {
+                        self.call_stack_envs.push(env.clone());
+                        let result = crate::interpreter::bytecode::vm::run_script_chunk(
+                            self,
+                            &chunk,
+                            env,
+                            JsValue::UNDEFINED,
+                        );
+                        self.call_stack_envs.pop();
+                        result
+                    };
+                    self.leave_ic_body(prev);
+                    return result;
+                }
+                Err(_e) => {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
+                            reason,
+                        ) = _e;
+                        let name = self.perf.name_script_body.clone();
+                        self.perf.record_bail(
+                            reason,
+                            name,
+                            crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                        );
+                    }
+                }
+            }
         }
-        self.exec_body(body, env)
+        #[cfg(feature = "perf-counters")]
+        {
+            let label = self.perf.name_script_body.clone();
+            self.exec_body_attributed(body, env, label)
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        {
+            self.exec_body_inner(body, env)
+        }
     }
 
     /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
@@ -56,6 +128,15 @@ impl Interpreter {
     /// semantics would corrupt those bindings. Returns the last statement's
     /// completion value (eval's result), matching PerformEval / PerformShadowRealmEval.
     pub(crate) fn exec_eval_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        // Same attribution gap as `exec_body`: eval'd code never passes through
+        // `dispatch_body`, so it needs its own frame (#537 review).
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let name = self.perf.name_eval_body.clone();
+            self.perf
+                .enter_ast_body(name, crate::interpreter::perf_counters::SYNTHETIC_BODY_ID);
+        }
         let prev = self.enter_ic_body(body);
         let mut last = Completion::Empty;
         for stmt in body.as_slice() {
@@ -73,6 +154,8 @@ impl Interpreter {
             }
         }
         self.leave_ic_body(prev);
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         last
     }
 
@@ -933,6 +1016,10 @@ impl Interpreter {
     }
 
     pub(crate) fn exec_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.ast_stmts += 1;
+        }
         match stmt {
             Statement::Empty => Completion::Empty,
             Statement::Expression(expr) => self.eval_expr(expr, env),

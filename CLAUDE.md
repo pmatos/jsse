@@ -77,6 +77,51 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
 
+## Execution Counters (performance investigations)
+- Off by default and absent from the shipped binary. Build with
+  `cargo build --release --features perf-counters`; every run **that executes
+  JavaScript** then writes tab-separated counters to **stderr** at exit — file,
+  `-e`, `--prelude`, and REPL alike, including a prelude that throws (covered by
+  `tests/perf_counters_report_paths.rs`). A run that dies before any interpreter
+  exists — an unreadable main file on the no-prelude path — reports nothing,
+  deliberately: there are no counters to report, and an all-zero block would
+  read as a completed measurement of nothing.
+- Reports the compiled/tree-walker split by **work** (VM opcodes vs
+  `exec_statement`/`eval_expr` entries), not just by invocation — the two
+  disagree by an order of magnitude on real code, see
+  `docs/perf/2026-08-26/mandreel-bytecode-work-share.md`.
+- `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
+  AST variant (`statement:Labeled`), `BODY` per-function tree-walker work units
+  spent *exclusive* of nested bodies, plus GC collection counts and time.
+- Generator/async, top-level script, module, and `eval` bodies do not pass
+  through `dispatch_body` and carry no function object, so they are attributed
+  to the synthetic `BODY` rows `<generator/async body>`, `<script body>`,
+  `<module body>`, and `<eval>` rather than by name. Their work is correctly kept
+  off the calling function's exclusive total; resolving the generator/async
+  bucket to individual function names is jsse#540.
+- `BODY` rows are keyed by function *identity*, not name. Two functions sharing
+  a name render as `name#<object id>`; a unique name stays bare, so only genuine
+  ambiguity costs readability.
+- `compile_ok` and the `BAIL` table cover **script** compile attempts as well as
+  function bodies, so a script-only workload no longer reports zero for both.
+  A compiled script counts as a `body_non_function_execs` execution, never as a
+  `body_dispatch_compiled` invocation.
+- `body_dispatch_compiled` / `body_dispatch_ast` count **function invocations
+  only** — that is the split #524 published, so keep it comparable. Executions
+  of the non-`dispatch_body` paths are reported separately as
+  `body_non_function_execs`, which counts **executions, not invocations**:
+  generators replay, so one generator call with N yields registers roughly 4N
+  state-machine steps there.
+- `ast_units_per_ast_body` divides **function** work by function invocations —
+  its numerator is `ast_units_in_functions`, not the run-wide `ast_work_units`,
+  which also covers script/generator/module/eval work.
+- Every count is deterministic, so a shared/loaded host does not compromise it.
+  **Never time an instrumented build** — take counts from the feature build and
+  wall times from the default build.
+- JetStream per-phase driver: `scripts/gen-mandreel-phases.py <mandreel.js> -o
+  driver.js [--subphases]`. Op-mix microbenchmark:
+  `benchmarks/scripts/bench_opmix.js`.
+
 ## Mutation Testing
 - Local-only (not in CI). Driver: `./scripts/run-mutants.sh` (forwards args to `cargo mutants`).
 - Requires `cargo install cargo-mutants --locked` and `uv` on PATH (or at `~/.local/bin/uv`).

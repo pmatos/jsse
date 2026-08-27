@@ -43,6 +43,9 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+      - name: Clippy (perf-counters feature)
+        run: cargo clippy --features perf-counters -- -D warnings
+
       - name: Build
         run: cargo build --release
 

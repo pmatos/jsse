@@ -222,6 +222,8 @@ fn run_chunk_inner(
     loop {
         let op_byte = chunk.code[pc];
         let op = Op::from_u8(op_byte).expect("invalid opcode");
+        #[cfg(feature = "perf-counters")]
+        interp.perf.record_op(op);
         pc += 1;
         match op {
             Op::LoadConst => {
@@ -411,6 +413,15 @@ fn run_chunk_inner(
                 let site_id = CallSiteId(decode_u32(chunk, pc));
                 pc += 4;
                 let (callee, this_value, args) = take_call_operands(&mut stack, argc);
+                // Counted here, before the strict tail-call return below: that
+                // path leaves the VM without ever reaching the dispatch site,
+                // so incrementing later would omit every strict tail call from
+                // `calls_from_vm` and understate VM-issued calls on
+                // tail-call-heavy code.
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.calls_from_vm += 1;
+                }
                 if op == Op::ReturnCall && env.borrow().strict {
                     release_call_operands(interp, &callee, &this_value, &args);
                     return Completion::TailCall {

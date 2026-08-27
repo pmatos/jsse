@@ -33,4 +33,16 @@ else
 fi
 
 echo ""
+echo "=== clippy (perf-counters) ==="
+# The issue-#526 counter facility is behind a Cargo feature, so the default
+# clippy run above never compiles it. Lint it here or it rots silently.
+if $FIX; then
+    cargo clippy --fix --allow-dirty --allow-staged --features perf-counters -- -D warnings
+    echo "Fixed."
+else
+    cargo clippy --features perf-counters -- -D warnings
+    echo "Clippy OK."
+fi
+
+echo ""
 echo "All checks passed."

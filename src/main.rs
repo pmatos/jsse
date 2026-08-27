@@ -84,10 +84,32 @@ fn run_source_with_interp(
 /// throw is not reported as an error. `pending_exit` is always `None` unless the
 /// node host floor was enabled, so this is behaviour-identical to before when
 /// `--node` is absent.
+/// Emits the opt-in execution counters (issue #526). Called from every path
+/// that finishes executing JavaScript — `exit_code_from_result` covers the
+/// eval/file/prelude exits, and the REPL exits call it directly — so the
+/// documented "every instrumented run writes counters to stderr" holds rather
+/// than applying only to `execute_code`.
+#[cfg(feature = "perf-counters")]
+fn report_perf_counters(interp: &interpreter::Interpreter) {
+    eprint!("{}", interp.perf_counters_report());
+}
+
+/// Reports counters, then returns `code`. Used by the `run_main` early returns
+/// that bypass `exit_code_from_result` but have already executed JavaScript —
+/// a prelude that throws still accumulated counts worth reporting (#537
+/// review, second pass).
+fn exit_after_execution(_interp: &interpreter::Interpreter, code: u8) -> ExitCode {
+    #[cfg(feature = "perf-counters")]
+    report_perf_counters(_interp);
+    ExitCode::from(code)
+}
+
 fn exit_code_from_result(
     interp: &interpreter::Interpreter,
     result: Result<(), EngineError>,
 ) -> ExitCode {
+    #[cfg(feature = "perf-counters")]
+    report_perf_counters(interp);
     if let Some(code) = interp.pending_exit {
         return ExitCode::from((code as u32 & 0xff) as u8);
     }
@@ -252,7 +274,10 @@ fn run_main() -> ExitCode {
         }
 
         let mut interp = new_interp(cli.can_block, cli.bytecode, cli.node);
-        return run_repl(&mut interp);
+        let code = run_repl(&mut interp);
+        #[cfg(feature = "perf-counters")]
+        report_perf_counters(&interp);
+        return code;
     }
 
     // With preludes, we need to use a single interpreter instance
@@ -264,7 +289,7 @@ fn run_main() -> ExitCode {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading prelude {}: {e}", prelude_path.display());
-                return ExitCode::from(1);
+                return exit_after_execution(&interp, 1);
             }
         };
         let prelude_result = run_source_with_interp(&mut interp, &source, false, None);
@@ -276,11 +301,11 @@ fn run_main() -> ExitCode {
             match e {
                 EngineError::Parse(msg) => {
                     eprintln!("SyntaxError in prelude: {msg}");
-                    return ExitCode::from(2);
+                    return exit_after_execution(&interp, 2);
                 }
                 EngineError::Runtime(msg) => {
                     eprintln!("Error in prelude: {msg}");
-                    return ExitCode::from(1);
+                    return exit_after_execution(&interp, 1);
                 }
             }
         }
@@ -295,7 +320,7 @@ fn run_main() -> ExitCode {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading {}: {e}", path.display());
-                return ExitCode::from(1);
+                return exit_after_execution(&interp, 1);
             }
         };
         let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");
@@ -303,6 +328,9 @@ fn run_main() -> ExitCode {
         let result = run_source_with_interp(&mut interp, &source, is_module, Some(&abs_path));
         exit_code_from_result(&interp, result)
     } else {
-        run_repl(&mut interp)
+        let code = run_repl(&mut interp);
+        #[cfg(feature = "perf-counters")]
+        report_perf_counters(&interp);
+        code
     }
 }

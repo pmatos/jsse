@@ -35,6 +35,8 @@ pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
 mod object_arena;
+#[cfg(feature = "perf-counters")]
+pub(crate) mod perf_counters;
 pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
@@ -313,6 +315,17 @@ pub(crate) struct Interpreter {
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
     pub(crate) bytecode_enabled: bool,
     pub(crate) bytecode_chunks_executed: usize,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) perf: perf_counters::PerfCounters,
+    #[cfg(feature = "perf-counters")]
+    perf_name_cache: rustc_hash::FxHashMap<u64, (std::rc::Rc<str>, u64)>,
+    /// Monotonic body identity. `ObjectArena` recycles logical ids, so keying
+    /// attribution on an id lets a later same-named function collide with a
+    /// dead one's retained `ast_body_units` entry. This never repeats, and the
+    /// cache entry holding it is dropped in `free_gc_object`, so a recycled id
+    /// always draws a fresh one (#537 review, fourth pass).
+    #[cfg(feature = "perf-counters")]
+    perf_next_body_seq: u64,
     /// Node host-compat "syscall floor" gate (issue #229). When false (the
     /// default, and always the case under test262), no `__host_*` globals are
     /// installed and every host-floor check below is inert — the global
@@ -623,6 +636,12 @@ impl Interpreter {
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
             bytecode_enabled: false,
             bytecode_chunks_executed: 0,
+            #[cfg(feature = "perf-counters")]
+            perf: perf_counters::PerfCounters::default(),
+            #[cfg(feature = "perf-counters")]
+            perf_name_cache: rustc_hash::FxHashMap::default(),
+            #[cfg(feature = "perf-counters")]
+            perf_next_body_seq: 0,
             node_host_enabled: false,
             pending_exit: None,
             dispatching_timers: false,
@@ -1855,6 +1874,13 @@ impl Interpreter {
     #[allow(dead_code)]
     pub(crate) fn ic_slow_path_count(&self) -> u64 {
         self.ic_slow_path_count.get()
+    }
+
+    /// Renders the opt-in execution counters (issue #526) as one
+    /// tab-separated line per metric.
+    #[cfg(feature = "perf-counters")]
+    pub(crate) fn perf_counters_report(&self) -> String {
+        self.perf.report()
     }
 
     /// Total call-IC hits since interpreter construction. Phase 3.
@@ -3551,6 +3577,17 @@ impl Interpreter {
 
         let prev_ic_handle = self.enter_ic_body(&program.body);
 
+        // Module items reach `exec_statement` without passing through
+        // `dispatch_body`, so without a frame their work lands in
+        // `ast_work_units` but in no BODY row — module-heavy runs could not
+        // localize their tree-walker work at all (#537 review, third pass).
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let name = self.perf.name_module_body.clone();
+            self.perf
+                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID);
+        }
         let mut err = None;
         for item in &program.module_items {
             match item {
@@ -3575,6 +3612,8 @@ impl Interpreter {
             }
         }
         module.borrow_mut().program_ast = None;
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         self.leave_ic_body(prev_ic_handle);
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
