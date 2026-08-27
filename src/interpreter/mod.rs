@@ -318,7 +318,14 @@ pub(crate) struct Interpreter {
     #[cfg(feature = "perf-counters")]
     pub(crate) perf: perf_counters::PerfCounters,
     #[cfg(feature = "perf-counters")]
-    perf_name_cache: rustc_hash::FxHashMap<u64, std::rc::Rc<str>>,
+    perf_name_cache: rustc_hash::FxHashMap<u64, (std::rc::Rc<str>, u64)>,
+    /// Monotonic body identity. `ObjectArena` recycles logical ids, so keying
+    /// attribution on an id lets a later same-named function collide with a
+    /// dead one's retained `ast_body_units` entry. This never repeats, and the
+    /// cache entry holding it is dropped in `free_gc_object`, so a recycled id
+    /// always draws a fresh one (#537 review, fourth pass).
+    #[cfg(feature = "perf-counters")]
+    perf_next_body_seq: u64,
     /// Node host-compat "syscall floor" gate (issue #229). When false (the
     /// default, and always the case under test262), no `__host_*` globals are
     /// installed and every host-floor check below is inert — the global
@@ -633,6 +640,8 @@ impl Interpreter {
             perf: perf_counters::PerfCounters::default(),
             #[cfg(feature = "perf-counters")]
             perf_name_cache: rustc_hash::FxHashMap::default(),
+            #[cfg(feature = "perf-counters")]
+            perf_next_body_seq: 0,
             node_host_enabled: false,
             pending_exit: None,
             dispatching_timers: false,

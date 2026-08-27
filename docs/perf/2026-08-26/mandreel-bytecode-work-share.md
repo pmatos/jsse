@@ -26,12 +26,12 @@ saving (~4.5 s) and its per-entry cost (~4.5 s) cancel to within the noise of a
 | body dispatches — compiled | 0 | 12,737,766 (96.5%) |
 | body dispatches — AST fallback | 13,195,918 | 458,152 (3.5%) |
 | work per compiled body | — | **15.87 ops** |
-| work per AST-fallback body | 117.37 units | **2,966.82 units** |
+| work per AST-fallback body | 117.37 units | **2,966.80 units** |
 
 Enabling `--bytecode` moves 189.5 M of 1.55 B tree-walker work units (12.2%)
 into the VM, where they become 202.1 M opcodes. A VM opcode and an `eval_expr`
 entry are not equal-cost units, so 12–13% is directional, not exact — but two
-orders of magnitude between 15.87 and 2,966.82 is not a units artifact.
+orders of magnitude between 15.87 and 2,966.80 is not a units artifact.
 
 The invocation share and the work share disagree by a factor of ~7 because
 compiled bodies are tiny and fallback bodies are enormous. Concretely, 12.35 M
@@ -296,8 +296,10 @@ OfflineAssembler.
   reproduced exactly every time), so a shared host under variable load does not
   compromise them. Only two figures ever moved, both for known reasons:
   `compile_bail` 102 -> 103 once script-body compile outcomes began to be
-  recorded at all, and `body_dispatch_ast` briefly reading 458,153 under a
-  defect since fixed. No `BODY` row acquired a `#id` disambiguation suffix —
+  recorded at all, and `ast_units_per_ast_body` 2,966.82 -> 2,966.80 once that
+  average's numerator was narrowed to function work only, excluding the script
+  body's 7,787 units. (`body_dispatch_ast` also briefly read 458,153 under a
+  defect since fixed.) No `BODY` row acquired a `#id` disambiguation suffix —
   every mandreel name is unique — so these figures survived the switch to
   identity-keyed attribution unchanged.
 - Timing: the pristine `HEAD` binary (`24dbeda`), built before any

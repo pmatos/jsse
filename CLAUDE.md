@@ -79,9 +79,13 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 
 ## Execution Counters (performance investigations)
 - Off by default and absent from the shipped binary. Build with
-  `cargo build --release --features perf-counters`; every run then writes
-  tab-separated counters to **stderr** at exit — file, `-e`, `--prelude`, and
-  REPL alike (covered by `tests/perf_counters_report_paths.rs`).
+  `cargo build --release --features perf-counters`; every run **that executes
+  JavaScript** then writes tab-separated counters to **stderr** at exit — file,
+  `-e`, `--prelude`, and REPL alike, including a prelude that throws (covered by
+  `tests/perf_counters_report_paths.rs`). A run that dies before any interpreter
+  exists — an unreadable main file on the no-prelude path — reports nothing,
+  deliberately: there are no counters to report, and an all-zero block would
+  read as a completed measurement of nothing.
 - Reports the compiled/tree-walker split by **work** (VM opcodes vs
   `exec_statement`/`eval_expr` entries), not just by invocation — the two
   disagree by an order of magnitude on real code, see
@@ -108,6 +112,9 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   `body_non_function_execs`, which counts **executions, not invocations**:
   generators replay, so one generator call with N yields registers roughly 4N
   state-machine steps there.
+- `ast_units_per_ast_body` divides **function** work by function invocations —
+  its numerator is `ast_units_in_functions`, not the run-wide `ast_work_units`,
+  which also covers script/generator/module/eval work.
 - Every count is deterministic, so a shared/loaded host does not compromise it.
   **Never time an instrumented build** — take counts from the feature build and
   wall times from the default build.

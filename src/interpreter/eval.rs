@@ -2068,8 +2068,8 @@ impl Interpreter {
                             let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
                                 reason,
                             ) = _e;
-                            let name = self.perf_body_name(func_obj_id);
-                            self.perf.record_bail(reason, name, func_obj_id);
+                            let (name, seq) = self.perf_body_name(func_obj_id);
+                            self.perf.record_bail(reason, name, seq);
                         }
                         if let Some(o) = self.get_object(func_obj_id) {
                             o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
@@ -2092,8 +2092,8 @@ impl Interpreter {
         #[cfg(feature = "perf-counters")]
         {
             self.perf.body_ast += 1;
-            let name = self.perf_body_name(func_obj_id);
-            self.perf.enter_ast_body(name, func_obj_id);
+            let (name, seq) = self.perf_body_name(func_obj_id);
+            self.perf.enter_ast_body(name, seq);
         }
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
@@ -2110,7 +2110,7 @@ impl Interpreter {
     /// Interned per object id so ranking millions of dispatches does not
     /// allocate a fresh `String` each time.
     #[cfg(feature = "perf-counters")]
-    fn perf_body_name(&mut self, func_obj_id: u64) -> std::rc::Rc<str> {
+    fn perf_body_name(&mut self, func_obj_id: u64) -> (std::rc::Rc<str>, u64) {
         if let Some(cached) = self.perf_name_cache.get(&func_obj_id) {
             return cached.clone();
         }
@@ -2123,8 +2123,11 @@ impl Interpreter {
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("<anonymous#{func_obj_id}>"));
         let interned: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
-        self.perf_name_cache.insert(func_obj_id, interned.clone());
-        interned
+        let seq = self.perf_next_body_seq;
+        self.perf_next_body_seq += 1;
+        self.perf_name_cache
+            .insert(func_obj_id, (interned.clone(), seq));
+        (interned, seq)
     }
 
     pub(super) fn eval_binary(

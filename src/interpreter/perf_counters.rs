@@ -51,6 +51,12 @@ pub(crate) struct PerfCounters {
     /// re-executes its body under replay, so one generator call with N yields
     /// registers roughly 4N here.
     pub(crate) body_non_function: u64,
+    /// AST work units spent inside *function* bodies, exclusive of nested
+    /// bodies. `ast_units()` covers script/generator/module/eval work too, so
+    /// dividing it by `body_ast` — which counts function invocations only —
+    /// mixed populations: one 2-unit function call beside a generator reported
+    /// an average of 1,066 units per body (#537 review, fourth pass).
+    pub(crate) ast_units_in_functions: u64,
     /// Compile attempts, and what each bail was blamed on.
     pub(crate) compile_ok: u64,
     pub(crate) compile_bail: FxHashMap<&'static str, u64>,
@@ -92,6 +98,7 @@ impl Default for PerfCounters {
             body_compiled: 0,
             body_ast: 0,
             body_non_function: 0,
+            ast_units_in_functions: 0,
             compile_ok: 0,
             compile_bail: FxHashMap::default(),
             calls_from_vm: 0,
@@ -141,6 +148,9 @@ impl PerfCounters {
         };
         let inclusive = now.saturating_sub(at_entry);
         let exclusive = inclusive.saturating_sub(children);
+        if key.1 != SYNTHETIC_BODY_ID {
+            self.ast_units_in_functions += exclusive;
+        }
         let entry = self.ast_body_units.entry(key).or_insert((0, 0));
         entry.0 += exclusive;
         entry.1 += 1;
@@ -170,11 +180,19 @@ impl PerfCounters {
                 self.vm_ops as f64 / self.body_compiled as f64
             );
         }
+        let _ = writeln!(
+            out,
+            "PERF\tast_units_in_functions\t{}",
+            self.ast_units_in_functions
+        );
         if self.body_ast != 0 {
+            // Function work over function invocations. Using the run-wide
+            // `ast_units` here would divide script/generator/module/eval work
+            // by a function-only denominator.
             let _ = writeln!(
                 out,
                 "PERF\tast_units_per_ast_body\t{:.2}",
-                ast_units as f64 / self.body_ast as f64
+                self.ast_units_in_functions as f64 / self.body_ast as f64
             );
         }
         let _ = writeln!(out, "PERF\tcompile_ok\t{}", self.compile_ok);

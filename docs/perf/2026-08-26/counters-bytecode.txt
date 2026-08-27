@@ -6,7 +6,8 @@ PERF	body_dispatch_compiled	12737766
 PERF	body_dispatch_ast	458152
 PERF	body_non_function_execs	1
 PERF	vm_ops_per_compiled_body	15.87
-PERF	ast_units_per_ast_body	2966.82
+PERF	ast_units_in_functions	1359245460
+PERF	ast_units_per_ast_body	2966.80
 PERF	compile_ok	79
 PERF	compile_bail	103
 PERF	calls_from_vm	384216
