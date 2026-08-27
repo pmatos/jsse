@@ -8,13 +8,13 @@ PERF	body_non_function_execs	1
 PERF	vm_ops_per_compiled_body	15.87
 PERF	ast_units_per_ast_body	2966.82
 PERF	compile_ok	79
-PERF	compile_bail	102
+PERF	compile_bail	103
 PERF	calls_from_vm	384216
 PERF	calls_to_native	396525
 PERF	calls_to_user	13195918
 PERF	gc_minor	0
 PERF	gc_major	1
-PERF	gc_ms	3
+PERF	gc_ms	1
 BAIL	statement:Labeled	47
 BAIL	call callee	39
 BAIL	expression:New	6
@@ -22,6 +22,7 @@ BAIL	expression:This	4
 BAIL	expression:Typeof	2
 BAIL	constant pool overflow	1
 BAIL	expression:Object	1
+BAIL	lexical declaration	1
 BAIL	statement:Break	1
 BAIL	statement:Try	1
 BODY	_ZN20btAxisSweep3InternalItE11sortMinDownEitP12btDispatcherb	514810993	37.87%	15078	statement:Labeled

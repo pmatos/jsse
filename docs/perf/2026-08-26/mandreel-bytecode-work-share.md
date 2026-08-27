@@ -105,8 +105,8 @@ percentage win from being as large as `arith`'s — see the `elem` row below —
 it does so by enlarging the denominator equally for both engines, not by making
 compiled code slower. It is not what cancels mandreel.
 
-**H3 — one-shot compile overhead.** Negligible. 181 compile attempts total
-(79 successes, 102 bails) for the whole 3.5-minute run.
+**H3 — one-shot compile overhead.** Negligible. 182 compile attempts total
+(79 successes, 103 bails) for the whole 3.5-minute run.
 
 **Not hypothesized, and worth ruling out: GC.** One major collection, 1 ms.
 Irrelevant.
@@ -270,6 +270,12 @@ issue guessed**. Its stated "expected-biggest real-code blocker" is
 | `expression:Object` | 1 |
 | `statement:Break` | 1 |
 | `statement:Try` | 1 |
+| `lexical declaration` | 1 |
+
+The `lexical declaration` row is the top-level **script** body, whose compile
+outcome only became visible after a later review pass (#537) — and it is the
+harness's own `const __t0` timing marker on line 1, not mandreel code, so it
+says nothing about the benchmark. Every other row is a function body.
 
 Counts are per body, not per site, and one workload does not generalize — but
 they should replace the guess for mandreel-shaped code, and the same counters
@@ -284,10 +290,16 @@ OfflineAssembler.
   non-function body executions out of the invocation split); every figure above
   is unchanged from the first collection. The top-level script body now shows up
   as `body_non_function_execs` 1 rather than inflating `body_dispatch_ast`, which
-  is why that row reads 458,152 and not 458,153. Every count is deterministic;
-  runs on four different builds reported identical totals (`ast_work_units` 1,548,788,858 and
-  `sortMinDown` 514,810,993 both reproduced exactly), so a shared host under
-  variable load does not compromise them.
+  is why that row reads 458,152 and not 458,153.
+- Every count is deterministic: runs on five successive builds reported identical
+  totals (`ast_work_units` 1,548,788,858 and `sortMinDown`'s 514,810,993 both
+  reproduced exactly every time), so a shared host under variable load does not
+  compromise them. Only two figures ever moved, both for known reasons:
+  `compile_bail` 102 -> 103 once script-body compile outcomes began to be
+  recorded at all, and `body_dispatch_ast` briefly reading 458,153 under a
+  defect since fixed. No `BODY` row acquired a `#id` disambiguation suffix —
+  every mandreel name is unique — so these figures survived the switch to
+  identity-keyed attribution unchanged.
 - Timing: the pristine `HEAD` binary (`24dbeda`), built before any
   instrumentation existed, pinned with `taskset` to one CPU, run serially with
   nothing else on the box, medians of repeated runs with `/proc/loadavg`
