@@ -1,3 +1,41 @@
+# [0.6.0](https://github.com/pmatos/jsse/compare/v0.5.0...v0.6.0) (2026-08-30)
+
+
+### Bug Fixes
+
+* **array:** enumerate dynamically added elements ([#520](https://github.com/pmatos/jsse/issues/520)) ([908365a](https://github.com/pmatos/jsse/commit/908365a7ca0edd2708c4874837781c30dbb8527c))
+* **gc:** keep pending promise resolvers reachable ([#499](https://github.com/pmatos/jsse/issues/499)) ([fad328f](https://github.com/pmatos/jsse/commit/fad328ff90dc7de2095b7f4d1adaeef82de3046d))
+* **interpreter:** bound per-body inline-cache storage ([#503](https://github.com/pmatos/jsse/issues/503)) ([f5de46e](https://github.com/pmatos/jsse/commit/f5de46ee712920635cace3754ccdfe7e3d45740a))
+* **interpreter:** bound proxy prototype cycles ([#519](https://github.com/pmatos/jsse/issues/519)) ([ec908a8](https://github.com/pmatos/jsse/commit/ec908a8fff01fff57a6e122428bc43ba481646e9))
+* **interpreter:** discard exited async for-of bindings ([#504](https://github.com/pmatos/jsse/issues/504)) ([15e55df](https://github.com/pmatos/jsse/commit/15e55dfa007626141e50c58b6983a7a5c8682eb5))
+* **interpreter:** honor proxy descriptors in enumerable own keys ([#490](https://github.com/pmatos/jsse/issues/490)) ([fbf02c8](https://github.com/pmatos/jsse/commit/fbf02c88d2ba12a46931484fd57dcfe8cd888a20))
+* **interpreter:** preserve generator for-of lexical bindings ([#508](https://github.com/pmatos/jsse/issues/508)) ([d329a4b](https://github.com/pmatos/jsse/commit/d329a4b3ac4a5f38df0f903c33e33c8711cfe16a))
+* **interpreter:** preserve nested async for-of environments ([#486](https://github.com/pmatos/jsse/issues/486)) ([3590776](https://github.com/pmatos/jsse/commit/3590776cefe9e0b7d42497e843c35b98faaee48b))
+* **interpreter:** preserve try clause continuation states ([#507](https://github.com/pmatos/jsse/issues/507)) ([8adc42f](https://github.com/pmatos/jsse/commit/8adc42f0fca03e66197fbae017a05cf3fc6e55f8))
+* **interpreter:** resolve inline labelled continue targets ([#510](https://github.com/pmatos/jsse/issues/510)) ([07c2600](https://github.com/pmatos/jsse/commit/07c2600ca82bec33ebe5a630e0fc203ed8db8379))
+* **interpreter:** root computed member target base ([#514](https://github.com/pmatos/jsse/issues/514)) ([534d914](https://github.com/pmatos/jsse/commit/534d91455a0a3828a0d096cff67c0ae737faf198))
+* **interpreter:** root destructuring targets, keys, and rest values ([#498](https://github.com/pmatos/jsse/issues/498)) ([c2efa6f](https://github.com/pmatos/jsse/commit/c2efa6f14299f6586104a9ccdf72fde4754cc29c))
+* **interpreter:** root object destructuring sources ([#513](https://github.com/pmatos/jsse/issues/513)) ([de9eaef](https://github.com/pmatos/jsse/commit/de9eaefe4cccb57821dedb4a261e70eeec7d24f7))
+* **interpreter:** route async continue through finally ([#509](https://github.com/pmatos/jsse/issues/509)) ([0d05a31](https://github.com/pmatos/jsse/commit/0d05a31026f4a235300d3180b772680255c09f17))
+* **interpreter:** route typed-array element writes through the canonical ToNumber ([#481](https://github.com/pmatos/jsse/issues/481)) ([432b0f0](https://github.com/pmatos/jsse/commit/432b0f076d1379a1e4ab83e628bca2b712f30345))
+* **modules:** honor JSON import attributes ([#487](https://github.com/pmatos/jsse/issues/487)) ([cddeaf8](https://github.com/pmatos/jsse/commit/cddeaf85d05cffc212d23397047de21bcc015010))
+* **node-shim:** avoid invoking user code during inspect ([#497](https://github.com/pmatos/jsse/issues/497)) ([0e48d5c](https://github.com/pmatos/jsse/commit/0e48d5c0a6fcca65fe950aae0cb48a33409fdd61))
+* **node-shim:** cap inspected array entries ([#518](https://github.com/pmatos/jsse/issues/518)) ([e73e427](https://github.com/pmatos/jsse/commit/e73e42716fc5f782d7869b985e636b262240ccad))
+* **node-shim:** render array extra properties ([#521](https://github.com/pmatos/jsse/issues/521)) ([c08ed03](https://github.com/pmatos/jsse/commit/c08ed03a9f92b7585427d18836757aa70706ce20))
+* **test262:** collect extra module tests ([#485](https://github.com/pmatos/jsse/issues/485)) ([618b76a](https://github.com/pmatos/jsse/commit/618b76a2203733dc42d9a65a4eafa2191911b062))
+
+
+### Features
+
+* **perf:** measure the bytecode VM's work share on mandreel ([#537](https://github.com/pmatos/jsse/issues/537)) ([285b131](https://github.com/pmatos/jsse/commit/285b131cfa47935a8fd443a1d9d49ae0ec6140d3))
+
+
+### Performance Improvements
+
+* **bytecode:** compile top-level script bodies ([#531](https://github.com/pmatos/jsse/issues/531)) ([1483b43](https://github.com/pmatos/jsse/commit/1483b43a92a484414bfedcad4688397ebe7d19b7))
+* **regexp:** cache converted exec subjects ([#532](https://github.com/pmatos/jsse/issues/532)) ([24dbeda](https://github.com/pmatos/jsse/commit/24dbeda6a753fc08a16a8f8760d2df70686d9f53))
+* **string:** slice substring directly in UTF-16 ([#511](https://github.com/pmatos/jsse/issues/511)) ([0170f6f](https://github.com/pmatos/jsse/commit/0170f6f0c4c6b3a2eaeedf71d6087cfdb8571d6b))
+
 # [0.5.0](https://github.com/pmatos/jsse/compare/v0.4.18...v0.5.0) (2026-08-23)
 
 
