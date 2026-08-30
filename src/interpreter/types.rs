@@ -3447,42 +3447,28 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
     true
 }
 
-fn typed_array_get_index_shared(
-    kind: TypedArrayKind,
-    sab: &SharedBufferInner,
-    offset: usize,
-) -> JsValue {
+/// Decode one typed-array element of `kind` from `buf` at byte `offset`.
+///
+/// The single source of truth for the byte->JsValue mapping shared by every
+/// buffer flavour (shared and non-shared). Returns `undefined` when the element
+/// would read past the end of `buf`, matching the out-of-bounds behaviour the
+/// exotic `[[Get]]` requires.
+fn decode_ta_element(kind: TypedArrayKind, buf: &[u8], offset: usize) -> JsValue {
+    if offset + kind.bytes_per_element() > buf.len() {
+        return JsValue::UNDEFINED;
+    }
     match kind {
-        TypedArrayKind::Int8 => sab.with_read(|buf| {
-            if offset + 1 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
-            JsValue::number(buf[offset] as i8 as f64)
-        }),
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => sab.with_read(|buf| {
-            if offset + 1 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
-            JsValue::number(buf[offset] as f64)
-        }),
-        TypedArrayKind::Int16 => sab.with_read(|buf| {
-            if offset + 2 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
+        TypedArrayKind::Int8 => JsValue::number(buf[offset] as i8 as f64),
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::number(buf[offset] as f64),
+        TypedArrayKind::Int16 => {
             let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
             JsValue::number(v as f64)
-        }),
-        TypedArrayKind::Uint16 => sab.with_read(|buf| {
-            if offset + 2 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
+        }
+        TypedArrayKind::Uint16 => {
             let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
             JsValue::number(v as f64)
-        }),
-        TypedArrayKind::Int32 => sab.with_read(|buf| {
-            if offset + 4 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
+        }
+        TypedArrayKind::Int32 => {
             let v = i32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
@@ -3490,11 +3476,8 @@ fn typed_array_get_index_shared(
                 buf[offset + 3],
             ]);
             JsValue::number(v as f64)
-        }),
-        TypedArrayKind::Uint32 => sab.with_read(|buf| {
-            if offset + 4 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
+        }
+        TypedArrayKind::Uint32 => {
             let v = u32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
@@ -3502,40 +3485,8 @@ fn typed_array_get_index_shared(
                 buf[offset + 3],
             ]);
             JsValue::number(v as f64)
-        }),
-        TypedArrayKind::BigInt64 => sab.with_read(|buf| {
-            if offset + 8 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
-                i64::from_ne_bytes(bytes),
-            )))
-        }),
-        TypedArrayKind::BigUint64 => sab.with_read(|buf| {
-            if offset + 8 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
-                u64::from_ne_bytes(bytes),
-            )))
-        }),
-        TypedArrayKind::Float16 => sab.with_read(|buf| {
-            if offset + 2 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
-            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
-                bits,
-            ))
-        }),
-        TypedArrayKind::Float32 => sab.with_read(|buf| {
-            if offset + 4 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
+        }
+        TypedArrayKind::Float32 => {
             let v = f32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
@@ -3543,16 +3494,96 @@ fn typed_array_get_index_shared(
                 buf[offset + 3],
             ]);
             JsValue::number(v as f64)
-        }),
-        TypedArrayKind::Float64 => sab.with_read(|buf| {
-            if offset + 8 > buf.len() {
-                return JsValue::UNDEFINED;
-            }
+        }
+        TypedArrayKind::Float64 => {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
             JsValue::number(f64::from_ne_bytes(bytes))
-        }),
+        }
+        TypedArrayKind::BigInt64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                i64::from_ne_bytes(bytes),
+            )))
+        }
+        TypedArrayKind::BigUint64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                u64::from_ne_bytes(bytes),
+            )))
+        }
+        TypedArrayKind::Float16 => {
+            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                bits,
+            ))
+        }
     }
+}
+
+/// Encode `value` as one typed-array element of `kind` into `buf` at byte
+/// `offset`, applying the element's numeric coercion (ToInt8 .. ToNumber).
+///
+/// The mirror of [`decode_ta_element`]: the single source of truth for the
+/// JsValue->byte mapping shared by every buffer flavour. Returns `false`
+/// (writing nothing) when the element would write past the end of `buf`.
+fn encode_ta_element(kind: TypedArrayKind, buf: &mut [u8], offset: usize, value: &JsValue) -> bool {
+    if offset + kind.bytes_per_element() > buf.len() {
+        return false;
+    }
+    match kind {
+        TypedArrayKind::Int8 => {
+            buf[offset] = to_int8(value) as u8;
+        }
+        TypedArrayKind::Uint8 => {
+            buf[offset] = to_uint8(value);
+        }
+        TypedArrayKind::Uint8Clamped => {
+            buf[offset] = to_uint8_clamped(value);
+        }
+        TypedArrayKind::Int16 => {
+            buf[offset..offset + 2].copy_from_slice(&to_int16(value).to_ne_bytes());
+        }
+        TypedArrayKind::Uint16 => {
+            buf[offset..offset + 2].copy_from_slice(&to_uint16(value).to_ne_bytes());
+        }
+        TypedArrayKind::Int32 => {
+            buf[offset..offset + 4].copy_from_slice(&to_int32(value).to_ne_bytes());
+        }
+        TypedArrayKind::Uint32 => {
+            buf[offset..offset + 4].copy_from_slice(&to_uint32(value).to_ne_bytes());
+        }
+        TypedArrayKind::Float32 => {
+            let n = to_number(value);
+            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
+        }
+        TypedArrayKind::Float64 => {
+            let n = to_number(value);
+            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+        }
+        TypedArrayKind::BigInt64 => {
+            buf[offset..offset + 8].copy_from_slice(&to_bigint64(value).to_ne_bytes());
+        }
+        TypedArrayKind::BigUint64 => {
+            buf[offset..offset + 8].copy_from_slice(&to_biguint64(value).to_ne_bytes());
+        }
+        TypedArrayKind::Float16 => {
+            let n = to_number(value);
+            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
+            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
+        }
+    }
+    true
+}
+
+fn typed_array_get_index_shared(
+    kind: TypedArrayKind,
+    sab: &SharedBufferInner,
+    offset: usize,
+) -> JsValue {
+    sab.with_read(|buf| decode_ta_element(kind, buf, offset))
 }
 
 pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
@@ -3564,77 +3595,7 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
     if let BufferData::Shared(sab) = &*buf_borrow {
         return typed_array_get_index_shared(ta.kind, sab, offset);
     }
-    buf_borrow.with_read(|buf| {
-        if offset + ta.kind.bytes_per_element() > buf.len() {
-            return JsValue::UNDEFINED;
-        }
-        match ta.kind {
-            TypedArrayKind::Int8 => JsValue::number(buf[offset] as i8 as f64),
-            TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
-                JsValue::number(buf[offset] as f64)
-            }
-            TypedArrayKind::Int16 => {
-                let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::number(v as f64)
-            }
-            TypedArrayKind::Uint16 => {
-                let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::number(v as f64)
-            }
-            TypedArrayKind::Int32 => {
-                let v = i32::from_ne_bytes([
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                ]);
-                JsValue::number(v as f64)
-            }
-            TypedArrayKind::Uint32 => {
-                let v = u32::from_ne_bytes([
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                ]);
-                JsValue::number(v as f64)
-            }
-            TypedArrayKind::Float32 => {
-                let v = f32::from_ne_bytes([
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                ]);
-                JsValue::number(v as f64)
-            }
-            TypedArrayKind::Float64 => {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::number(f64::from_ne_bytes(bytes))
-            }
-            TypedArrayKind::BigInt64 => {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
-                    i64::from_ne_bytes(bytes),
-                )))
-            }
-            TypedArrayKind::BigUint64 => {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
-                    u64::from_ne_bytes(bytes),
-                )))
-            }
-            TypedArrayKind::Float16 => {
-                let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
-                    bits,
-                ))
-            }
-        }
-    })
+    buf_borrow.with_read(|buf| decode_ta_element(ta.kind, buf, offset))
 }
 
 fn typed_array_set_index_shared(
@@ -3643,105 +3604,7 @@ fn typed_array_set_index_shared(
     offset: usize,
     value: &JsValue,
 ) -> bool {
-    match kind {
-        TypedArrayKind::Int8 => sab.with_write(|buf| {
-            if offset + 1 > buf.len() {
-                return false;
-            }
-            let v = to_int8(value);
-            buf[offset] = v as u8;
-            true
-        }),
-        TypedArrayKind::Uint8 => sab.with_write(|buf| {
-            if offset + 1 > buf.len() {
-                return false;
-            }
-            let v = to_uint8(value);
-            buf[offset] = v;
-            true
-        }),
-        TypedArrayKind::Uint8Clamped => sab.with_write(|buf| {
-            if offset + 1 > buf.len() {
-                return false;
-            }
-            let v = to_uint8_clamped(value);
-            buf[offset] = v;
-            true
-        }),
-        TypedArrayKind::Int16 => sab.with_write(|buf| {
-            if offset + 2 > buf.len() {
-                return false;
-            }
-            let v = to_int16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Uint16 => sab.with_write(|buf| {
-            if offset + 2 > buf.len() {
-                return false;
-            }
-            let v = to_uint16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Int32 => sab.with_write(|buf| {
-            if offset + 4 > buf.len() {
-                return false;
-            }
-            let v = to_int32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Uint32 => sab.with_write(|buf| {
-            if offset + 4 > buf.len() {
-                return false;
-            }
-            let v = to_uint32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::BigInt64 => sab.with_write(|buf| {
-            if offset + 8 > buf.len() {
-                return false;
-            }
-            let v = to_bigint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::BigUint64 => sab.with_write(|buf| {
-            if offset + 8 > buf.len() {
-                return false;
-            }
-            let v = to_biguint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Float16 => sab.with_write(|buf| {
-            if offset + 2 > buf.len() {
-                return false;
-            }
-            let n = to_number(value);
-            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
-            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Float32 => sab.with_write(|buf| {
-            if offset + 4 > buf.len() {
-                return false;
-            }
-            let n = to_number(value);
-            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Float64 => sab.with_write(|buf| {
-            if offset + 8 > buf.len() {
-                return false;
-            }
-            let n = to_number(value);
-            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
-            true
-        }),
-    }
+    sab.with_write(|buf| encode_ta_element(kind, buf, offset, value))
 }
 
 pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
@@ -3751,63 +3614,7 @@ pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsV
         return typed_array_set_index_shared(ta.kind, sab, offset, value);
     }
     drop(buf_borrow);
-    (*ta.buffer.borrow_mut()).with_write(|buf| {
-        if offset + ta.kind.bytes_per_element() > buf.len() {
-            return false;
-        }
-        match ta.kind {
-            TypedArrayKind::Int8 => {
-                let v = to_int8(value);
-                buf[offset] = v as u8;
-            }
-            TypedArrayKind::Uint8 => {
-                let v = to_uint8(value);
-                buf[offset] = v;
-            }
-            TypedArrayKind::Uint8Clamped => {
-                let v = to_uint8_clamped(value);
-                buf[offset] = v;
-            }
-            TypedArrayKind::Int16 => {
-                let v = to_int16(value);
-                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Uint16 => {
-                let v = to_uint16(value);
-                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Int32 => {
-                let v = to_int32(value);
-                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Uint32 => {
-                let v = to_uint32(value);
-                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Float32 => {
-                let n = to_number(value);
-                buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
-            }
-            TypedArrayKind::Float64 => {
-                let n = to_number(value);
-                buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
-            }
-            TypedArrayKind::BigInt64 => {
-                let v = to_bigint64(value);
-                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::BigUint64 => {
-                let v = to_biguint64(value);
-                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Float16 => {
-                let n = to_number(value);
-                let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
-                buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
-            }
-        }
-        true
-    })
+    (*ta.buffer.borrow_mut()).with_write(|buf| encode_ta_element(ta.kind, buf, offset, value))
 }
 
 // Typed-array element writes coerce their value with the single canonical
@@ -4307,5 +4114,307 @@ mod string_exotic_index_tests {
     #[test]
     fn length_word_is_not_an_index() {
         assert_eq!(string_exotic_index("length", 3), None);
+    }
+}
+
+#[cfg(test)]
+mod typed_array_codec_tests {
+    //! Behavioural tests for the shared element codec used by every typed-array
+    //! `[[Get]]`/`[[Set]]`. Expected values are drawn from independent sources of
+    //! truth: two's-complement / IEEE-754 byte layouts, the spec's ToInt/ToUint
+    //! wrapping rules (§7.1.x), and known half-float bit patterns — never
+    //! recomputed the way the codec computes them.
+    use super::{TypedArrayKind, decode_ta_element, encode_ta_element};
+    use crate::types::{JsBigInt, JsValue};
+
+    fn num(v: &JsValue) -> f64 {
+        v.as_number().expect("expected a number JsValue")
+    }
+
+    // --- decode: integers ---
+
+    #[test]
+    fn decode_int8_reads_twos_complement() {
+        // 0xFF as a signed byte is -1.
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Int8, &[0xFF], 0)),
+            -1.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Int8, &[0x80], 0)),
+            -128.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Int8, &[0x7F], 0)),
+            127.0
+        );
+    }
+
+    #[test]
+    fn decode_uint8_variants_read_raw_byte() {
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Uint8, &[0xFF], 0)),
+            255.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Uint8Clamped, &[0xFF], 0)),
+            255.0
+        );
+    }
+
+    #[test]
+    fn decode_multibyte_ints_round_trip_native_encoding() {
+        // Build inputs with std's encoder (independent of our from_ne_bytes decode).
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Int16,
+                &(-2i16).to_ne_bytes(),
+                0
+            )),
+            -2.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Uint16,
+                &(0xBEEFu16).to_ne_bytes(),
+                0
+            )),
+            48879.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Int32,
+                &(-2i32).to_ne_bytes(),
+                0
+            )),
+            -2.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Uint32,
+                &(0xDEADBEEFu32).to_ne_bytes(),
+                0
+            )),
+            3_735_928_559.0
+        );
+    }
+
+    #[test]
+    fn decode_reads_at_nonzero_offset() {
+        let mut buf = vec![0u8; 8];
+        buf[4..8].copy_from_slice(&(0x0102_0304u32).to_ne_bytes());
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Uint32, &buf, 4)),
+            16_909_060.0
+        );
+    }
+
+    // --- decode: floats ---
+
+    #[test]
+    fn decode_float32_and_float64_round_trip() {
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float32,
+                &1.5f32.to_ne_bytes(),
+                0
+            )),
+            1.5
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float64,
+                &6.5f64.to_ne_bytes(),
+                0
+            )),
+            6.5
+        );
+    }
+
+    #[test]
+    fn decode_float16_known_bit_patterns() {
+        // IEEE-754 half: 0x3C00 == 1.0, 0xC000 == -2.0.
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float16,
+                &0x3C00u16.to_ne_bytes(),
+                0
+            )),
+            1.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float16,
+                &0xC000u16.to_ne_bytes(),
+                0
+            )),
+            -2.0
+        );
+    }
+
+    // --- decode: bigint ---
+
+    #[test]
+    fn decode_bigint64_sign_extends() {
+        let v = decode_ta_element(TypedArrayKind::BigInt64, &(-5i64).to_ne_bytes(), 0);
+        let got = v.with_bigint(|b| b.clone()).expect("expected a bigint");
+        assert_eq!(got, num_bigint::BigInt::from(-5i64));
+    }
+
+    #[test]
+    fn decode_biguint64_is_unsigned() {
+        let v = decode_ta_element(TypedArrayKind::BigUint64, &u64::MAX.to_ne_bytes(), 0);
+        let got = v.with_bigint(|b| b.clone()).expect("expected a bigint");
+        assert_eq!(got, num_bigint::BigInt::from(u64::MAX));
+    }
+
+    // --- decode: bounds ---
+
+    #[test]
+    fn decode_past_end_is_undefined() {
+        // Int32 needs 4 bytes; a 3-byte buffer cannot supply one at offset 0.
+        assert!(decode_ta_element(TypedArrayKind::Int32, &[0, 0, 0], 0).is_undefined());
+        // Exactly-fits succeeds; one past the last full element does not.
+        let buf = [0u8; 4];
+        assert!(!decode_ta_element(TypedArrayKind::Int16, &buf, 2).is_undefined());
+        assert!(decode_ta_element(TypedArrayKind::Int16, &buf, 3).is_undefined());
+    }
+
+    // --- encode: integer coercion (spec ToInt/ToUint wrapping) ---
+
+    #[test]
+    fn encode_int8_wraps_modulo_256() {
+        // ToInt8(300) = 300 - 256 = 44.
+        let mut buf = [0u8; 1];
+        assert!(encode_ta_element(
+            TypedArrayKind::Int8,
+            &mut buf,
+            0,
+            &JsValue::number(300.0)
+        ));
+        assert_eq!(buf[0] as i8, 44);
+        // ToInt8(-1) = -1 == 0xFF.
+        assert!(encode_ta_element(
+            TypedArrayKind::Int8,
+            &mut buf,
+            0,
+            &JsValue::number(-1.0)
+        ));
+        assert_eq!(buf[0], 0xFF);
+    }
+
+    #[test]
+    fn encode_uint8_clamped_rounds_half_to_even() {
+        let mut buf = [0u8; 1];
+        // 2.5 -> 2 (round half to even), 3.5 -> 4, 256 -> 255 (clamp), -1 -> 0.
+        for (input, expected) in [(2.5, 2u8), (3.5, 4), (256.0, 255), (-1.0, 0)] {
+            assert!(encode_ta_element(
+                TypedArrayKind::Uint8Clamped,
+                &mut buf,
+                0,
+                &JsValue::number(input)
+            ));
+            assert_eq!(buf[0], expected, "clamp({input})");
+        }
+    }
+
+    #[test]
+    fn encode_int32_matches_native_encoding() {
+        let mut buf = [0u8; 4];
+        assert!(encode_ta_element(
+            TypedArrayKind::Int32,
+            &mut buf,
+            0,
+            &JsValue::number(-2.0)
+        ));
+        assert_eq!(buf, (-2i32).to_ne_bytes());
+    }
+
+    // --- encode: floats ---
+
+    #[test]
+    fn encode_float64_matches_native_encoding() {
+        let mut buf = [0u8; 8];
+        assert!(encode_ta_element(
+            TypedArrayKind::Float64,
+            &mut buf,
+            0,
+            &JsValue::number(6.5)
+        ));
+        assert_eq!(buf, 6.5f64.to_ne_bytes());
+    }
+
+    #[test]
+    fn encode_float32_narrows_then_encodes() {
+        let mut buf = [0u8; 4];
+        assert!(encode_ta_element(
+            TypedArrayKind::Float32,
+            &mut buf,
+            0,
+            &JsValue::number(1.5)
+        ));
+        assert_eq!(buf, 1.5f32.to_ne_bytes());
+    }
+
+    // --- encode: bigint ---
+
+    #[test]
+    fn encode_bigint64_matches_native_encoding() {
+        let mut buf = [0u8; 8];
+        let value = JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(-5i64)));
+        assert!(encode_ta_element(
+            TypedArrayKind::BigInt64,
+            &mut buf,
+            0,
+            &value
+        ));
+        assert_eq!(buf, (-5i64).to_ne_bytes());
+    }
+
+    // --- encode: bounds ---
+
+    #[test]
+    fn encode_past_end_returns_false_and_writes_nothing() {
+        let mut buf = [0u8; 3];
+        assert!(!encode_ta_element(
+            TypedArrayKind::Int32,
+            &mut buf,
+            0,
+            &JsValue::number(1.0)
+        ));
+        assert_eq!(
+            buf, [0u8; 3],
+            "buffer must be untouched on out-of-bounds write"
+        );
+    }
+
+    // --- round-trip: encode then decode is identity ---
+
+    #[test]
+    fn encode_decode_round_trips_per_kind() {
+        let cases: &[(TypedArrayKind, f64)] = &[
+            (TypedArrayKind::Int8, -3.0),
+            (TypedArrayKind::Uint8, 200.0),
+            (TypedArrayKind::Int16, -1234.0),
+            (TypedArrayKind::Uint16, 40000.0),
+            (TypedArrayKind::Int32, -70000.0),
+            (TypedArrayKind::Uint32, 3_000_000_000.0),
+            (TypedArrayKind::Float32, 1.5),
+            (TypedArrayKind::Float64, -9.5),
+        ];
+        for &(kind, value) in cases {
+            let mut buf = vec![0u8; kind.bytes_per_element()];
+            assert!(
+                encode_ta_element(kind, &mut buf, 0, &JsValue::number(value)),
+                "encode {}",
+                kind.name()
+            );
+            assert_eq!(
+                num(&decode_ta_element(kind, &buf, 0)),
+                value,
+                "round-trip {}",
+                kind.name()
+            );
+        }
     }
 }
