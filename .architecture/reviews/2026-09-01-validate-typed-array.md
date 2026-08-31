@@ -151,4 +151,62 @@ No candidate tripped a hard filter (leverage 1, blast radius 5, ADR conflict, al
 
 ## Design
 
-_Written in step 4 (design-it-twice + adjudication). Filled after this report was first committed._
+Three interfaces were designed in parallel (design-it-twice), then adjudicated by a
+fourth agent that authored none of them, against the fixed criteria depth ▸ locality
+▸ seam placement ▸ test surface ▸ blast radius.
+
+### Design A — minimal free function (WINNER)
+
+```rust
+fn validate_typed_array(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<TypedArrayInfo, Completion>
+```
+
+Mirrors the proven sibling `validate_uint8array` (`typedarray.rs:5879`) with the kind
+gate dropped and `check_detached_or_out_of_bounds` folded in. Each of the 17 read-mode
+Shape-A sites becomes the adapter `let ta = match validate_typed_array(interp, this_val)
+{ Ok(ta) => ta, Err(c) => return c };`. **Hides**: the `as_object_id → get_object →
+borrow → typed_array_info` chain, the borrow-scoping-then-clone discipline, the
+detached/OOB check, and the doubled `"not a TypedArray"` throw. Zero new vocabulary.
+Sites that need the object id re-derive it with an infallible
+`this_val.as_object_id().unwrap()` (validation already proved the receiver is an object).
+
+### Design B — access-mode parametric / spec-faithful (runner-up design's sibling; rejected)
+
+`enum AccessMode { Read, Write }` + `struct ValidatedTypedArray { info, object_id,
+buffer_object_id }` + `validate_typed_array(interp, this, access) -> Result<…>`. Folds
+the write-mode immutable-buffer check into the seam **in spec order** and centralizes it
+for ~6 write sites, returning a richer record. **Rejected**: it *moves* the immutability
+check ahead of argument coercion at those 6 sites — an observable throw-ordering change —
+and expands scope from 17 to ~23 sites. Both are behaviour changes the pick's
+blast-radius-1 / behaviour-preserving score did not account for, and this is an
+unattended run. It also charges every read caller an enum token and two ignored struct
+fields, lowering depth for the common caller.
+
+### Design C — control-inverting combinator (RUNNER-UP DESIGN)
+
+`fn with_typed_array<F: FnOnce(&mut Interpreter, TypedArrayInfo) -> Completion>(&mut self,
+this_val, access, body) -> Completion`, an inherent method that owns the borrow's whole
+lifetime and the throw-vs-run decision, making "held borrow across interpreter re-entry"
+unrepresentable and running `body` only on the happy path. Elegant and the strongest on
+*locality* of the borrow-bug class. **Why it lost — on Depth, the first criterion that
+separated it from A**: it hides slightly more behaviour but exports a larger interface
+and, uniquely, leaks control-flow caveats back to the caller (`return` exits only the
+closure; methods validating two typed arrays must not nest a second combinator; every
+body gains a rightward indent). Per unit of interface the common read caller must learn,
+it hides *less* than A's one-function-returning-a-known-type. It is also harder to unit
+test in isolation (needs a closure body), and blast radius is larger (every method body
+re-indents into a closure) — but Depth alone already ordered A ≻ C, so the later criteria
+were not reached.
+
+### Adjudication
+
+**Ranking A ≻ C ≻ B.** Depth alone orders all three: A hands the common read caller one
+function returning a type it already knows, hiding the entire prologue behind zero new
+vocabulary — the highest behaviour-hidden-per-interface-unit ratio. C's borrow-safety win
+is real but bundled with the heaviest interface and exported caveats; B forces write-path
+vocabulary onto every read caller and, disqualifyingly for an unattended run, changes
+observable ordering. Winner: **Design A**.
+
