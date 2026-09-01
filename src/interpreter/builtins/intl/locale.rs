@@ -38,6 +38,30 @@ fn canonical_unicode_subdivision_region(
     region_locale.id.region.map(|region| region.to_string())
 }
 
+struct RegionPreference {
+    region: String,
+    region_override: Option<String>,
+}
+
+fn compute_region_preference(locale: &IcuLocale) -> RegionPreference {
+    let region = locale
+        .id
+        .region
+        .map(|region| region.to_string())
+        .or_else(|| canonical_unicode_subdivision_region(locale, "sd"))
+        .or_else(|| {
+            let mut maximal = locale.clone();
+            LocaleExpander::new_extended().maximize(&mut maximal.id);
+            maximal.id.region.map(|region| region.to_string())
+        })
+        .unwrap_or_else(|| "001".to_string());
+
+    RegionPreference {
+        region,
+        region_override: canonical_unicode_subdivision_region(locale, "rg"),
+    }
+}
+
 fn set_unicode_keyword(locale: &mut IcuLocale, key_str: &str, value_str: &str) {
     if let Ok(key) = key_str.parse::<Key>()
         && let Ok(val) = value_str.parse::<Value>()
@@ -1743,5 +1767,30 @@ mod tests {
                 "{tag}"
             );
         }
+    }
+
+    #[test]
+    fn region_preference_uses_the_specified_signal_order() {
+        let cases = [
+            ("en-GB", "GB", None),
+            ("en-u-sd-gbeng", "GB", None),
+            ("th", "TH", None),
+            ("fa-JP-u-sd-inka-rg-afzzzz", "JP", Some("AF")),
+            ("eo", "001", None),
+        ];
+
+        for (tag, expected_region, expected_override) in cases {
+            let locale: IcuLocale = tag.parse().expect("test locale must parse");
+            let preference = compute_region_preference(&locale);
+            assert_eq!(preference.region, expected_region, "{tag}");
+            assert_eq!(
+                preference.region_override.as_deref(),
+                expected_override,
+                "{tag}"
+            );
+        }
+
+        let world: icu::locale::subtags::Region = "001".parse().expect("001 is a region");
+        assert_eq!(world.to_string(), "001");
     }
 }
