@@ -11,3 +11,5 @@ scripts/.unicode_cache/
 __pycache__/
 mutants.out/
 mutants.out.old/
+.entire/
+/perf-report.md
