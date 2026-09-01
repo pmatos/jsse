@@ -3879,12 +3879,11 @@ impl Interpreter {
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
         let my_ancestor = module.borrow().dfs_ancestor_index.unwrap_or(0);
         if my_dfs == my_ancestor {
-            let has_async = module.borrow().async_evaluation_order.is_some();
             while let Some(popped) = stack.pop() {
                 if let Some(popped_mod) = self.module_registry_get(&popped) {
-                    popped_mod.borrow_mut().cycle_root = Some(canon.clone());
-                    if !has_async {
-                        let mut pm = popped_mod.borrow_mut();
+                    let mut pm = popped_mod.borrow_mut();
+                    pm.cycle_root = Some(canon.clone());
+                    if pm.async_evaluation_order.is_none() {
                         pm.evaluated = true;
                         pm.is_evaluating = false;
                     }
