@@ -677,6 +677,15 @@ examples:
         ),
     )
     parser.add_argument(
+        "--clean-scratch",
+        action="store_true",
+        help=(
+            "Delete scratch files left behind by an earlier killed run, then "
+            "exit. Only run this while no other invocation is active: nothing "
+            "the sweep can see proves the run that created a file has died."
+        ),
+    )
+    parser.add_argument(
         "paths",
         nargs="*",
         help="Specific test files or directories to run (default: all tests)",
@@ -741,21 +750,28 @@ def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
     )
 
 
-def sweep_scratch_files(roots: list[Path], min_age_s: float) -> int:
+def sweep_scratch_files(roots: list[Path], min_age_s: float) -> tuple[int, int]:
     """Delete scratch files left behind by a run that was killed outright.
 
     SIGKILL runs neither the `finally` in `run_scenario` nor the worker's
-    termination handler, so nothing but a later sweep can reclaim those files.
+    termination handler, so nothing but an explicit sweep can reclaim those
+    files. Only names carrying `SCRATCH_PREFIX` are eligible.
 
-    Only names carrying `SCRATCH_PREFIX` are eligible. `roots` follows whatever
-    the caller selected, so this walks trees we do not own; unlinking there is
-    only defensible for a name that says we wrote it.
+    This is deliberately not part of a normal run. Nothing a sweep can see
+    establishes that the run which created a file has died: a file's age is
+    bounded by the *creating* run's `--timeout`, not this one's, and a worker
+    stalled on a loaded machine outlives any fixed cutoff. Sweeping
+    automatically would therefore let one invocation delete a live scratch file
+    out from under another, whose engine would then read a missing input and
+    record a false failure. The caller asserts that no other run is active.
 
-    `min_age_s` keeps a concurrent run's live scratch files out of scope: one is
-    at most a per-test timeout old, so anything older belongs to a dead run.
+    `min_age_s` is defence in depth for a mistaken invocation, not a liveness
+    test. Returns (removed, skipped_too_recent) so the caller can say what it
+    declined to touch rather than silently doing nothing.
     """
     cutoff = time.time() - min_age_s
     removed = 0
+    skipped = 0
     for root in roots:
         if not root.is_dir():
             continue
@@ -764,12 +780,13 @@ def sweep_scratch_files(roots: list[Path], min_age_s: float) -> int:
                 continue
             try:
                 if f.stat().st_mtime > cutoff:
+                    skipped += 1
                     continue
                 f.unlink()
             except OSError:
                 continue
             removed += 1
-    return removed
+    return removed, skipped
 
 
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
@@ -865,10 +882,18 @@ def main():
 
     selected_paths = args.paths if args.paths else None
 
-    sweep_roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
-    swept = sweep_scratch_files(sweep_roots, min_age_s=max(args.timeout * 2, 300))
-    if swept:
-        print(f"Removed {swept} scratch file(s) left by an earlier killed run.")
+    if args.clean_scratch:
+        roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
+        removed, skipped = sweep_scratch_files(
+            roots, min_age_s=max(args.timeout * 2, 300)
+        )
+        print(f"Removed {removed} scratch file(s) left by an earlier killed run.")
+        if skipped:
+            print(
+                f"Left {skipped} in place as too recent to be sure they are dead. "
+                "Re-run once no other invocation is active."
+            )
+        sys.exit(0)
 
     try:
         tests = find_tests(test262, selected_paths)

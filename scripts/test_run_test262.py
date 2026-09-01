@@ -136,6 +136,58 @@ class RunTest262ExitStatusTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
 
+    def test_a_normal_run_does_not_delete_scratch_files(self):
+        # Deleting on a normal run would let one invocation unlink a live
+        # scratch file belonging to another, whose engine would then read a
+        # missing input and record a false failure. Reclamation is opt-in.
+        stale = self.write_file(
+            f"test262/test/{PREFIX}a0o8myw6.js", "// leaked by a killed run\n"
+        )
+        old = time.time() - 10_000
+        os.utime(stale, (old, old))
+
+        # A directory selection, so the sweep root would have been a directory:
+        # with a single file the old automatic sweep silently did nothing.
+        result = self.run_runner(
+            self.write_engine(0), "--fail-on-failures", paths=("test262/test",)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(stale.exists(), "a normal run must not sweep")
+        # Still kept out of the run, which is what protects the totals.
+        self.assertIn("Files:   1", result.stdout)
+
+    def test_clean_scratch_removes_stale_files_and_exits(self):
+        stale = self.write_file(
+            f"test262/test/{PREFIX}a0o8myw6.js", "// leaked by a killed run\n"
+        )
+        old = time.time() - 10_000
+        os.utime(stale, (old, old))
+
+        result = self.run_runner(
+            self.write_engine(0), "--clean-scratch", paths=("test262/test",)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(stale.exists())
+        self.assertIn("Removed 1 scratch file(s)", result.stdout)
+        # Exited instead of running the suite.
+        self.assertNotIn("Files:", result.stdout)
+
+    def test_clean_scratch_reports_what_it_declined_to_delete(self):
+        live = self.write_file(
+            f"test262/test/{PREFIX}a0o8myw6.js", "// a concurrent run's file\n"
+        )
+
+        result = self.run_runner(
+            self.write_engine(0), "--clean-scratch", paths=("test262/test",)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(live.exists())
+        self.assertIn("Removed 0 scratch file(s)", result.stdout)
+        self.assertIn("Left 1 in place", result.stdout)
+
     def test_explicit_non_fixture_mjs_is_rejected(self):
         self.write_file("test262-extra/module-test.mjs")
 
@@ -262,9 +314,9 @@ class ScratchFileTests(unittest.TestCase):
     def test_sweep_removes_stale_scratch_files(self):
         stale = self.write_scratch(f"{PREFIX}a0o8myw6.js", age_s=10_000)
 
-        removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+        removed, skipped = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
-        self.assertEqual(removed, 1)
+        self.assertEqual((removed, skipped), (1, 0))
         self.assertFalse(stale.exists())
 
     def test_sweep_spares_stale_generic_tempfile_names(self):
@@ -272,17 +324,19 @@ class ScratchFileTests(unittest.TestCase):
         # real test shaped like one, is not ours to unlink.
         foreign = self.write_scratch("tmpa0o8myw6.js", age_s=10_000)
 
-        removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+        removed, skipped = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
-        self.assertEqual(removed, 0)
+        # Not even counted as skipped: it was never a candidate.
+        self.assertEqual((removed, skipped), (0, 0))
         self.assertTrue(foreign.exists())
 
     def test_sweep_spares_scratch_files_of_a_concurrent_run(self):
         live = self.write_scratch(f"{PREFIX}a0o8myw6.js")
 
-        removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+        removed, skipped = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
-        self.assertEqual(removed, 0)
+        # Reported as skipped so the caller can say why it deleted nothing.
+        self.assertEqual((removed, skipped), (0, 1))
         self.assertTrue(live.exists())
 
     def test_explicitly_named_scratch_file_is_not_collected(self):
