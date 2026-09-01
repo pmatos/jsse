@@ -285,6 +285,30 @@ class ScratchFileTests(unittest.TestCase):
         self.assertEqual(removed, 0)
         self.assertTrue(live.exists())
 
+    def test_explicitly_named_scratch_file_is_not_collected(self):
+        scratch = self.write_scratch(f"{PREFIX}a0o8myw6.js")
+
+        tests = runner.find_tests(self.root / "test262", [str(scratch)])
+
+        self.assertEqual(tests, [])
+
+    def test_explicitly_named_legacy_scratch_file_is_not_collected(self):
+        scratch = self.write_scratch("tmpa0o8myw6.js")
+
+        tests = runner.find_tests(self.root / "test262", [str(scratch)])
+
+        self.assertEqual(tests, [])
+
+    def test_glob_expanded_selection_drops_only_the_scratch_file(self):
+        # `run-test262.py test262/test/language/*.js` reaches find_tests as a
+        # list of explicit file paths, one of which may be a leaked scratch file.
+        sample = self.test_dir / "sample.js"
+        scratch = self.write_scratch(f"{PREFIX}a0o8myw6.js")
+
+        tests = runner.find_tests(self.root / "test262", [str(sample), str(scratch)])
+
+        self.assertEqual([p.name for p in tests], ["sample.js"])
+
     def test_sweep_leaves_real_tests_alone(self):
         sample = self.test_dir / "sample.js"
         decoy = self.write_scratch(f"{PREFIX}short.js", age_s=10_000)

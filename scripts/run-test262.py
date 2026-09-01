@@ -781,7 +781,15 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
         _raise_for_uncollected_mjs(selected, test262_dir)
         tests = []
         for path in selected:
-            if path.is_file() and path.suffix == ".js":
+            # A leaked scratch file reaches this branch when it is named
+            # directly or swept up by a shell glob, and the startup sweep skips
+            # it because a file is not a directory. Filter it here too, or it is
+            # counted as a test and inflates the selected run's total.
+            if (
+                path.is_file()
+                and path.suffix == ".js"
+                and not _is_uncollectable_scratch(path)
+            ):
                 tests.append(path)
             elif path.is_dir():
                 tests.extend(
