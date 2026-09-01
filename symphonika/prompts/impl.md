@@ -127,7 +127,14 @@ The PR must be **non-draft**. Do not use `--web`, `--draft`, or any flag that op
 
 ## If you cannot proceed
 
-Post one explanatory comment with `gh issue comment {{issue.number}} --body "<what blocked you and what would unblock it>"`, write the same explanation to `{{workspace.path}}/EVIDENCE.md`, and exit cleanly. Do not self-apply `needs-human` or any handoff label.
+Post one explanatory comment with `gh issue comment {{issue.number}} --body "<what blocked you and what would unblock it>"`, write the same explanation to `{{workspace.path}}/EVIDENCE.md`, and **exit non-zero (e.g. `exit 1`)**. Do not self-apply `needs-human` or any handoff label.
+
+The non-zero exit is what routes this run to `failed`. Exiting 0 sets
+`provider_success: true`, and if you had already committed even one TDD slice the
+`implement` transition's other two gates (`branch_ahead_of_base`,
+`branch_advanced_since_attempt_start`) are satisfied too — so a blocked run would advance to
+`code_review_fix`, which expects an open PR that does not exist. The four repair prompts in
+this contract exit non-zero on their blocked paths for the same reason.
 
 ## Defer to this contract
 
