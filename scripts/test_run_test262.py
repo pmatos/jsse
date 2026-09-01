@@ -291,6 +291,28 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertIn("could not remove", result.stderr)
         self.assertTrue(stale.exists())
 
+    def test_clean_scratch_exits_nonzero_when_a_directory_cannot_be_scanned(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        locked = self.root / "test262" / "test" / "locked"
+        locked.mkdir(parents=True)
+        hidden = locked / f"{PREFIX}a0o8myw6.js"
+        hidden.write_text("// unreachable\n", encoding="utf-8")
+        old = time.time() - 10_000
+        os.utime(hidden, (old, old))
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            result = self.run_runner(
+                self.write_engine(0), "--clean-scratch", paths=("test262/test",)
+            )
+        finally:
+            locked.chmod(mode)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not scan", result.stderr)
+        self.assertTrue(hidden.exists())
+
     def test_explicit_non_fixture_mjs_is_rejected(self):
         self.write_file("test262-extra/module-test.mjs")
 
@@ -417,11 +439,10 @@ class ScratchFileTests(unittest.TestCase):
     def test_sweep_removes_stale_scratch_files(self):
         stale = self.write_scratch(f"{PREFIX}a0o8myw6.js", age_s=10_000)
 
-        removed, skipped, failures = runner.sweep_scratch_files(
-            [self.test_dir], min_age_s=300
-        )
+        result = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
-        self.assertEqual((removed, skipped, failures), (1, 0, []))
+        self.assertEqual((result.removed, result.skipped_too_recent), (1, 0))
+        self.assertFalse(result.incomplete)
         self.assertFalse(stale.exists())
 
     def test_sweep_spares_stale_generic_tempfile_names(self):
@@ -429,23 +450,21 @@ class ScratchFileTests(unittest.TestCase):
         # real test shaped like one, is not ours to unlink.
         foreign = self.write_scratch("tmpa0o8myw6.js", age_s=10_000)
 
-        removed, skipped, failures = runner.sweep_scratch_files(
-            [self.test_dir], min_age_s=300
-        )
+        result = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
         # Not even counted as skipped: it was never a candidate.
-        self.assertEqual((removed, skipped, failures), (0, 0, []))
+        self.assertEqual((result.removed, result.skipped_too_recent), (0, 0))
+        self.assertFalse(result.incomplete)
         self.assertTrue(foreign.exists())
 
     def test_sweep_spares_scratch_files_of_a_concurrent_run(self):
         live = self.write_scratch(f"{PREFIX}a0o8myw6.js")
 
-        removed, skipped, failures = runner.sweep_scratch_files(
-            [self.test_dir], min_age_s=300
-        )
+        result = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
         # Reported as skipped so the caller can say why it deleted nothing.
-        self.assertEqual((removed, skipped, failures), (0, 1, []))
+        self.assertEqual((result.removed, result.skipped_too_recent), (0, 1))
+        self.assertFalse(result.incomplete)
         self.assertTrue(live.exists())
 
     def test_explicitly_named_scratch_file_is_not_collected(self):
@@ -478,17 +497,19 @@ class ScratchFileTests(unittest.TestCase):
         # no-op that still reports success.
         stale = self.write_scratch(f"{PREFIX}a0o8myw6.js", age_s=10_000)
 
-        removed, skipped, failures = runner.sweep_scratch_files([stale], min_age_s=300)
+        result = runner.sweep_scratch_files([stale], min_age_s=300)
 
-        self.assertEqual((removed, skipped, failures), (1, 0, []))
+        self.assertEqual((result.removed, result.skipped_too_recent), (1, 0))
+        self.assertFalse(result.incomplete)
         self.assertFalse(stale.exists())
 
     def test_sweep_spares_a_real_test_named_as_a_file_root(self):
         sample = self.test_dir / "sample.js"
 
-        removed, skipped, failures = runner.sweep_scratch_files([sample], min_age_s=300)
+        result = runner.sweep_scratch_files([sample], min_age_s=300)
 
-        self.assertEqual((removed, skipped, failures), (0, 0, []))
+        self.assertEqual((result.removed, result.skipped_too_recent), (0, 0))
+        self.assertFalse(result.incomplete)
         self.assertTrue(sample.exists())
 
     def test_sweep_reports_a_file_it_could_not_remove(self):
@@ -500,15 +521,36 @@ class ScratchFileTests(unittest.TestCase):
         mode = self.test_dir.stat().st_mode
         self.test_dir.chmod(0o500)
         try:
-            removed, skipped, failures = runner.sweep_scratch_files(
-                [self.test_dir], min_age_s=300
-            )
+            result = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
         finally:
             self.test_dir.chmod(mode)
 
-        self.assertEqual((removed, skipped), (0, 0))
-        self.assertEqual([p for p, _ in failures], [stale])
+        self.assertEqual((result.removed, result.skipped_too_recent), (0, 0))
+        self.assertEqual([p for p, _ in result.unremovable], [stale])
         self.assertTrue(stale.exists())
+
+    def test_sweep_reports_a_directory_it_could_not_scan(self):
+        # `Path.rglob` omits an unreadable subtree without a word, which would
+        # let an unscanned corner of the tree pass as swept.
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        locked = self.test_dir / "locked"
+        locked.mkdir()
+        hidden = locked / f"{PREFIX}a0o8myw6.js"
+        hidden.write_text("// unreachable\n", encoding="utf-8")
+        old = time.time() - 10_000
+        os.utime(hidden, (old, old))
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            result = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+        finally:
+            locked.chmod(mode)
+
+        self.assertEqual(result.removed, 0)
+        self.assertTrue(result.incomplete)
+        self.assertEqual([p for p, _ in result.unreadable], [locked])
+        self.assertTrue(hidden.exists())
 
     def test_sweep_leaves_real_tests_alone(self):
         sample = self.test_dir / "sample.js"

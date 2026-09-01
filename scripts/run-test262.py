@@ -28,6 +28,7 @@ import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 _main_pgid = None
 
@@ -497,22 +498,31 @@ def run_single_test(
         except OSError:
             return (scenario_id, False, "harness_error", 0.0)
 
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            prefix=SCRATCH_PREFIX,
-            suffix=".js",
-            delete=False,
-            encoding="utf-8",
-            newline="",
-            dir=str(test_file.parent),
-        ) as tmp:
-            # The file exists on disk from the moment it is created, so register
-            # it before writing. `combined` can be hundreds of KB, and a signal
-            # arriving during the write or the close would otherwise find
-            # `_active_scratch_path` still unset and exit without unlinking --
-            # leaving exactly the stray file this handler exists to prevent.
+        # The file exists on disk from inside `NamedTemporaryFile`, before it
+        # returns anything we could record. A handler firing in that gap would
+        # `os._exit` with nothing to unlink, so hold the termination signals
+        # across creation *and* registration; a signal sent while they are
+        # blocked stays pending and is delivered once the mask is restored,
+        # by which point there is a path to clean up.
+        blocked = {signal.SIGTERM, signal.SIGINT}
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix=SCRATCH_PREFIX,
+                suffix=".js",
+                delete=False,
+                encoding="utf-8",
+                newline="",
+                dir=str(test_file.parent),
+            )
             tmp_path = tmp.name
             _active_scratch_path = tmp_path
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+        # The write is already covered: the path is registered by now.
+        with tmp:
             tmp.write(combined)
 
     cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module, flags)
@@ -750,9 +760,26 @@ def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
     )
 
 
-def sweep_scratch_files(
-    roots: list[Path], min_age_s: float
-) -> tuple[int, int, list[tuple[Path, OSError]]]:
+class SweepResult(NamedTuple):
+    """Outcome of a sweep, in enough detail to never imply a false all-clear.
+
+    A bare count cannot distinguish "nothing to do" from "never looked", so
+    every way the sweep can fall short is reported separately: files left
+    because they are too recent to judge dead, files that resisted removal, and
+    directories that could not be traversed at all.
+    """
+
+    removed: int
+    skipped_too_recent: int
+    unremovable: list[tuple[Path, OSError]]
+    unreadable: list[tuple[Path, OSError]]
+
+    @property
+    def incomplete(self) -> bool:
+        return bool(self.unremovable or self.unreadable)
+
+
+def sweep_scratch_files(roots: list[Path], min_age_s: float) -> SweepResult:
     """Delete scratch files left behind by a run that was killed outright.
 
     SIGKILL runs neither the `finally` in `run_scenario` nor the worker's
@@ -768,14 +795,29 @@ def sweep_scratch_files(
     record a false failure. The caller asserts that no other run is active.
 
     `min_age_s` is defence in depth for a mistaken invocation, not a liveness
-    test. Returns (removed, skipped_too_recent, failures) so the caller can
-    distinguish "nothing to do" from "could not look" or "could not remove" --
-    reporting a count alone would let any of them read as an all-clear.
+    test. See `SweepResult` for why the outcome is more than a count.
     """
     cutoff = time.time() - min_age_s
     removed = 0
     skipped = 0
-    failures: list[tuple[Path, OSError]] = []
+    unremovable: list[tuple[Path, OSError]] = []
+    unreadable: list[tuple[Path, OSError]] = []
+
+    def _scan(directory: Path) -> list[Path]:
+        # `Path.rglob` swallows a directory it cannot read and simply omits that
+        # subtree, which would let an unreadable corner of the tree pass as
+        # swept. `os.walk` can at least tell us it happened.
+        found: list[Path] = []
+        for dirpath, _dirnames, filenames in os.walk(
+            directory, onerror=lambda e: unreadable.append((Path(e.filename), e))
+        ):
+            found.extend(
+                Path(dirpath) / name
+                for name in filenames
+                if name.startswith(SCRATCH_PREFIX) and name.endswith(".js")
+            )
+        return found
+
     for root in roots:
         # `paths` accepts individual files, and a shell glob over a directory
         # expands to them, so a file root has to be considered on its own terms
@@ -784,7 +826,7 @@ def sweep_scratch_files(
         if root.is_file():
             candidates = [root]
         elif root.is_dir():
-            candidates = root.rglob(f"{SCRATCH_PREFIX}*.js")
+            candidates = _scan(root)
         else:
             continue
         for f in candidates:
@@ -799,10 +841,10 @@ def sweep_scratch_files(
                 # A read-only checkout or changed directory permissions leaves a
                 # known stale file in place; swallowing that would let the run
                 # report success with the file still there.
-                failures.append((f, error))
+                unremovable.append((f, error))
                 continue
             removed += 1
-    return removed, skipped, failures
+    return SweepResult(removed, skipped, unremovable, unreadable)
 
 
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
@@ -888,18 +930,21 @@ def main():
             for r in missing:
                 print(f"Error: cleanup path not found: {r}", file=sys.stderr)
             sys.exit(2)
-        removed, skipped, failures = sweep_scratch_files(
-            roots, min_age_s=max(args.timeout * 2, 300)
+        result = sweep_scratch_files(roots, min_age_s=max(args.timeout * 2, 300))
+        print(
+            f"Removed {result.removed} scratch file(s) left by an earlier "
+            "killed run."
         )
-        print(f"Removed {removed} scratch file(s) left by an earlier killed run.")
-        if skipped:
+        if result.skipped_too_recent:
             print(
-                f"Left {skipped} in place as too recent to be sure they are dead. "
-                "Re-run once no other invocation is active."
+                f"Left {result.skipped_too_recent} in place as too recent to be "
+                "sure they are dead. Re-run once no other invocation is active."
             )
-        for path, error in failures:
+        for path, error in result.unreadable:
+            print(f"Error: could not scan {path}: {error}", file=sys.stderr)
+        for path, error in result.unremovable:
             print(f"Error: could not remove {path}: {error}", file=sys.stderr)
-        sys.exit(1 if failures else 0)
+        sys.exit(1 if result.incomplete else 0)
 
     engine_name = args.engine
     binary = args.binary
