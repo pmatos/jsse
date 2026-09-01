@@ -506,9 +506,14 @@ def run_single_test(
             newline="",
             dir=str(test_file.parent),
         ) as tmp:
-            tmp.write(combined)
+            # The file exists on disk from the moment it is created, so register
+            # it before writing. `combined` can be hundreds of KB, and a signal
+            # arriving during the write or the close would otherwise find
+            # `_active_scratch_path` still unset and exit without unlinking --
+            # leaving exactly the stray file this handler exists to prevent.
             tmp_path = tmp.name
-        _active_scratch_path = tmp_path
+            _active_scratch_path = tmp_path
+            tmp.write(combined)
 
     cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module, flags)
 

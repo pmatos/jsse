@@ -320,6 +320,62 @@ class ScratchFileTests(unittest.TestCase):
 
 
 class WorkerCleanupTests(unittest.TestCase):
+    def test_signal_during_the_write_still_unlinks_the_scratch_file(self):
+        """The scratch file exists on disk from creation, not from write.
+
+        So registration cannot wait until the write finishes: `combined` can be
+        hundreds of KB, and a signal landing inside that window would otherwise
+        find no path to unlink and leave the file behind in the submodule.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            test_dir = root / "test262" / "test" / "language"
+            test_dir.mkdir(parents=True)
+            test_file = test_dir / "sample.js"
+            test_file.write_text(frontmatter("flags: [raw]"), encoding="utf-8")
+
+            # Fire SIGTERM from inside `write`, i.e. after the file exists but
+            # before anything has been written to it.
+            code = textwrap.dedent(
+                f"""\
+                import os, runpy, signal, tempfile
+                runner = runpy.run_path({str(RUNNER)!r})
+                signal.signal(signal.SIGTERM, runner["_worker_cleanup_handler"])
+
+                real_ntf = tempfile.NamedTemporaryFile
+
+                def spy(*a, **kw):
+                    handle = real_ntf(*a, **kw)
+                    real_write = handle.write
+
+                    def write(data):
+                        os.kill(os.getpid(), signal.SIGTERM)
+                        return real_write(data)
+
+                    handle.write = write
+                    return handle
+
+                tempfile.NamedTemporaryFile = spy
+                runner["run_single_test"]((
+                    "sample.js",
+                    {str(test_file)!r},
+                    "default",
+                    5,
+                    {str(root / "test262")!r},
+                    "jsse",
+                    "/nonexistent/jsse-binary",
+                    False,
+                ))
+                """
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", code], capture_output=True, text=True
+            )
+
+            self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
+            leaked = sorted(p.name for p in test_dir.iterdir() if p != test_file)
+            self.assertEqual(leaked, [], f"scratch file left behind: {leaked}")
+
     def test_sigterm_handler_unlinks_the_in_flight_scratch_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             scratch = Path(tmpdir) / f"{PREFIX}a0o8myw6.js"
