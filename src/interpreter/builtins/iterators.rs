@@ -2328,6 +2328,296 @@ impl Interpreter {
             },
         );
 
+        // chunks(chunkSize)
+        self.define_method(iter_proto_id, "chunks", 1, |interp, this, args| {
+            if !this.is_object() {
+                return Completion::Throw(
+                    interp.create_type_error("Iterator.prototype.chunks called on non-object"),
+                );
+            }
+
+            let chunk_size = args
+                .first()
+                .and_then(JsValue::as_number)
+                .filter(|size| size.is_finite() && size.fract() == 0.0);
+            let Some(chunk_size) = chunk_size else {
+                let err = interp.create_type_error("chunkSize must be an integral Number");
+                let _ = iterator_close_with_completion(interp, this, Err(err.clone()));
+                return Completion::Throw(err);
+            };
+            if !(1.0..=u32::MAX as f64).contains(&chunk_size) {
+                let err =
+                    interp.create_error("RangeError", "chunkSize must be between 1 and 2**32 - 1");
+                let _ = iterator_close_with_completion(interp, this, Err(err.clone()));
+                return Completion::Throw(err);
+            }
+
+            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
+
+            let chunk_size = chunk_size as usize;
+            let buffer = interp.create_array(vec![]);
+            // state: (iter, next_method, rooted buffer, alive)
+            #[allow(clippy::type_complexity)]
+            let state: Rc<RefCell<(JsValue, JsValue, JsValue, bool)>> =
+                Rc::new(RefCell::new((iter, next_method, buffer, true)));
+
+            let state_next = state.clone();
+            let next_fn = interp.create_function(JsFunction::native(
+                "next".to_string(),
+                0,
+                move |interp, _this, _args| {
+                    let (iter, next_method, buffer, alive) = {
+                        let s = state_next.borrow();
+                        (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                    };
+                    if !alive {
+                        return Completion::Normal(
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                        );
+                    }
+
+                    loop {
+                        match iterator_step_value_getter(interp, &iter, &next_method) {
+                            Ok(Some(value)) => {
+                                let buffer_id = buffer
+                                    .as_object_id()
+                                    .expect("chunks buffer must be an Array object");
+                                let values = {
+                                    let cell = interp.get_object_cell_expect(buffer_id);
+                                    let mut obj = cell.borrow_mut();
+                                    let elements = obj
+                                        .array_elements_mut()
+                                        .expect("chunks buffer must have Array elements");
+                                    elements.push(value);
+                                    (elements.len() == chunk_size).then(|| elements.clone())
+                                };
+                                if let Some(values) = values {
+                                    interp
+                                        .get_object_cell_expect(buffer_id)
+                                        .borrow_mut()
+                                        .array_elements_mut()
+                                        .expect("chunks buffer must have Array elements")
+                                        .clear();
+                                    let chunk = interp.create_array(values);
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(chunk, false),
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                state_next.borrow_mut().3 = false;
+                                let buffer_id = buffer
+                                    .as_object_id()
+                                    .expect("chunks buffer must be an Array object");
+                                let values = {
+                                    let cell = interp.get_object_cell_expect(buffer_id);
+                                    cell.borrow()
+                                        .array_elements()
+                                        .expect("chunks buffer must have Array elements")
+                                        .clone()
+                                };
+                                if values.is_empty() {
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                                    );
+                                }
+                                interp
+                                    .get_object_cell_expect(buffer_id)
+                                    .borrow_mut()
+                                    .array_elements_mut()
+                                    .expect("chunks buffer must have Array elements")
+                                    .clear();
+                                let chunk = interp.create_array(values);
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(chunk, false),
+                                );
+                            }
+                            Err(e) => {
+                                state_next.borrow_mut().3 = false;
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+                },
+            ));
+
+            let state_ret = state.clone();
+            let return_fn = interp.create_function(JsFunction::native(
+                "return".to_string(),
+                0,
+                move |interp, _this, _args| {
+                    let (iter, alive) = {
+                        let s = state_ret.borrow();
+                        (s.0.clone(), s.3)
+                    };
+                    state_ret.borrow_mut().3 = false;
+                    if alive && let Err(e) = iterator_close_getter(interp, &iter) {
+                        return Completion::Throw(e);
+                    }
+                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
+                },
+            ));
+
+            let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+            {
+                let s = state.borrow();
+                interp.set_helper_gc_roots(&helper, vec![s.0.clone(), s.1.clone(), s.2.clone()]);
+            }
+            Completion::Normal(helper)
+        });
+
+        // windows(windowSize [, undersized])
+        self.define_method(iter_proto_id, "windows", 1, |interp, this, args| {
+            if !this.is_object() {
+                return Completion::Throw(
+                    interp.create_type_error("Iterator.prototype.windows called on non-object"),
+                );
+            }
+
+            let window_size = args
+                .first()
+                .and_then(JsValue::as_number)
+                .filter(|size| size.is_finite() && size.fract() == 0.0);
+            let Some(window_size) = window_size else {
+                let err = interp.create_type_error("windowSize must be an integral Number");
+                let _ = iterator_close_with_completion(interp, this, Err(err.clone()));
+                return Completion::Throw(err);
+            };
+            if !(1.0..=u32::MAX as f64).contains(&window_size) {
+                let err =
+                    interp.create_error("RangeError", "windowSize must be between 1 and 2**32 - 1");
+                let _ = iterator_close_with_completion(interp, this, Err(err.clone()));
+                return Completion::Throw(err);
+            }
+
+            let undersized = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+            let allow_partial = if undersized.is_undefined() {
+                false
+            } else {
+                match undersized.as_string().map(|s| s.to_rust_string()) {
+                    Some(mode) if mode == "only-full" => false,
+                    Some(mode) if mode == "allow-partial" => true,
+                    _ => {
+                        let err = interp
+                            .create_type_error("undersized must be 'only-full' or 'allow-partial'");
+                        let _ = iterator_close_with_completion(interp, this, Err(err.clone()));
+                        return Completion::Throw(err);
+                    }
+                }
+            };
+
+            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
+
+            let window_size = window_size as usize;
+            let buffer = interp.create_array(vec![]);
+            // state: (iter, next_method, rooted buffer, alive)
+            #[allow(clippy::type_complexity)]
+            let state: Rc<RefCell<(JsValue, JsValue, JsValue, bool)>> =
+                Rc::new(RefCell::new((iter, next_method, buffer, true)));
+
+            let state_next = state.clone();
+            let next_fn = interp.create_function(JsFunction::native(
+                "next".to_string(),
+                0,
+                move |interp, _this, _args| {
+                    let (iter, next_method, buffer, alive) = {
+                        let s = state_next.borrow();
+                        (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                    };
+                    if !alive {
+                        return Completion::Normal(
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                        );
+                    }
+
+                    loop {
+                        match iterator_step_value_getter(interp, &iter, &next_method) {
+                            Ok(Some(value)) => {
+                                let buffer_id = buffer
+                                    .as_object_id()
+                                    .expect("windows buffer must be an Array object");
+                                let values = {
+                                    let cell = interp.get_object_cell_expect(buffer_id);
+                                    let mut obj = cell.borrow_mut();
+                                    let elements = obj
+                                        .array_elements_mut()
+                                        .expect("windows buffer must have Array elements");
+                                    if elements.len() == window_size {
+                                        elements.remove(0);
+                                    }
+                                    elements.push(value);
+                                    (elements.len() == window_size).then(|| elements.clone())
+                                };
+                                if let Some(values) = values {
+                                    let window = interp.create_array(values);
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(window, false),
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                state_next.borrow_mut().3 = false;
+                                let buffer_id = buffer
+                                    .as_object_id()
+                                    .expect("windows buffer must be an Array object");
+                                let values = {
+                                    let cell = interp.get_object_cell_expect(buffer_id);
+                                    cell.borrow()
+                                        .array_elements()
+                                        .expect("windows buffer must have Array elements")
+                                        .clone()
+                                };
+                                if allow_partial && !values.is_empty() && values.len() < window_size
+                                {
+                                    let window = interp.create_array(values);
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(window, false),
+                                    );
+                                }
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                                );
+                            }
+                            Err(e) => {
+                                state_next.borrow_mut().3 = false;
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+                },
+            ));
+
+            let state_ret = state.clone();
+            let return_fn = interp.create_function(JsFunction::native(
+                "return".to_string(),
+                0,
+                move |interp, _this, _args| {
+                    let (iter, alive) = {
+                        let s = state_ret.borrow();
+                        (s.0.clone(), s.3)
+                    };
+                    state_ret.borrow_mut().3 = false;
+                    if alive && let Err(e) = iterator_close_getter(interp, &iter) {
+                        return Completion::Throw(e);
+                    }
+                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
+                },
+            ));
+
+            let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+            {
+                let s = state.borrow();
+                interp.set_helper_gc_roots(&helper, vec![s.0.clone(), s.1.clone(), s.2.clone()]);
+            }
+            Completion::Normal(helper)
+        });
+
         // flatMap(mapper)
         self.define_method(
             iter_proto_id,
