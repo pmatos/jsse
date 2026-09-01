@@ -1718,6 +1718,65 @@ impl Interpreter {
             }
         });
 
+        // join(separator)
+        self.define_method(iter_proto_id, "join", 1, |interp, this, args| {
+            if !this.is_object() {
+                return Completion::Throw(
+                    interp.create_type_error("Iterator.prototype.join called on non-object"),
+                );
+            }
+
+            let separator = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let separator = if separator.is_undefined() {
+                ",".to_string()
+            } else {
+                match interp.to_string_value(&separator) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = iterator_close_with_completion(interp, this, Err(error.clone()));
+                        return Completion::Throw(error);
+                    }
+                }
+            };
+
+            let (iterator, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(record) => record,
+                Err(error) => return Completion::Throw(error),
+            };
+            let mut result = String::new();
+            let mut first = true;
+
+            loop {
+                let value = match iterator_step_value_getter(interp, &iterator, &next_method) {
+                    Ok(Some(value)) => value,
+                    Ok(None) => {
+                        return Completion::Normal(JsValue::string(JsString::from_str(&result)));
+                    }
+                    Err(error) => return Completion::Throw(error),
+                };
+
+                if first {
+                    first = false;
+                } else {
+                    result.push_str(&separator);
+                }
+
+                if !value.is_nullish() {
+                    match interp.to_string_value(&value) {
+                        Ok(value_string) => result.push_str(&value_string),
+                        Err(error) => {
+                            let _ = iterator_close_with_completion(
+                                interp,
+                                &iterator,
+                                Err(error.clone()),
+                            );
+                            return Completion::Throw(error);
+                        }
+                    }
+                }
+            }
+        });
+
         // Lazy helpers: map, filter, take, drop, flatMap
         self.setup_iterator_lazy_helpers(iter_proto_id);
     }
