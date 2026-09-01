@@ -663,11 +663,21 @@ impl Interpreter {
                         let reject_result =
                             interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[e]);
                         interp.gc_unroot_frame(frame);
+                        // `cap.reject` can be a custom constructor's own
+                        // executor-provided function; a `__host_exit` inside it
+                        // (issue #242) must propagate rather than be discarded.
+                        if let Completion::Exit(code) = reject_result {
+                            return Completion::Exit(code);
+                        }
                         if let Completion::Throw(e2) = reject_result {
                             return Completion::Throw(e2);
                         }
                         Completion::Normal(cap.promise)
                     }
+                    // A `__host_exit` inside the callback (issue #242) must
+                    // propagate before `new_promise_capability` gets a chance to
+                    // run arbitrary constructor code.
+                    Completion::Exit(code) => Completion::Exit(code),
                     _ => {
                         let cap = match interp.new_promise_capability(this) {
                             Ok(cap) => cap,
