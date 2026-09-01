@@ -4260,6 +4260,22 @@ impl Interpreter {
         }
     }
 
+    fn is_module_scc_evaluated(&self, module_path: &ModuleKey) -> bool {
+        let module = match self.module_registry_get(&module_path.canonicalize()) {
+            Some(module) => module,
+            None => return false,
+        };
+        let module_ref = module.borrow();
+        let cycle_root = match module_ref.cycle_root.as_ref() {
+            Some(cycle_root) => cycle_root.clone(),
+            None => return module_ref.evaluated,
+        };
+        drop(module_ref);
+
+        self.module_registry_get(&cycle_root)
+            .is_some_and(|root| root.borrow().evaluated)
+    }
+
     /// Like resolve_module_specifier but doesn't need &mut self
     fn resolve_module_specifier_pure(
         &self,
@@ -4303,7 +4319,7 @@ impl Interpreter {
         };
 
         let module_ref = module.borrow();
-        if module_ref.evaluated {
+        if self.is_module_scc_evaluated(&canon) {
             return true;
         }
         if module_ref.is_evaluating {
