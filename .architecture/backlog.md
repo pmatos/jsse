@@ -11,9 +11,9 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Score**: 24/25 (leverage 5, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated — `src/interpreter/builtins/typedarray.rs`
 - **Modules**: `src/interpreter/builtins/typedarray.rs`
-- **Summary**: Collapse ~17 open-coded TypedArray receiver-validation prologues (brand check + detached/out-of-bounds check + clone + doubled `not a TypedArray` throw) behind one `validate_typed_array` seam, mirroring the existing kind-gated `validate_uint8array`.
+- **Summary**: Collapse open-coded TypedArray receiver-validation prologues (brand check + detached/out-of-bounds check + clone + doubled `not a TypedArray` throw) behind one `validate_typed_array` seam, mirroring the existing kind-gated `validate_uint8array`. Landed: 14 read-mode sites migrated; 3 (`slice`, `sort`, `toSorted`) kept — they hold the object borrow across their body.
 - **First seen**: 2026-09-01
-- **PR**: (pending)
+- **PR**: #543
 
 ## complete-state-machine-generator-ctor
 

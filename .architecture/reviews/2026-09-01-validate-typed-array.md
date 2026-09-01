@@ -210,3 +210,22 @@ is real but bundled with the heaviest interface and exported caveats; B forces w
 vocabulary onto every read caller and, disqualifyingly for an unattended run, changes
 observable ordering. Winner: **Design A**.
 
+### As landed — PR #543
+
+`validate_typed_array` added beside `validate_uint8array`. **14** read-mode sites migrated:
+`at`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `reverse`, `join`,
+`toLocaleString`, `toReversed`, `with`, `values`, `entries`, `keys`. **3** of the scored
+~17 (`slice`, `sort`, `toSorted`) resolved on inspection to a borrow-holding shape — they
+reference the object handle/borrow across their body — and were **kept** to preserve borrow
+granularity and keep the change behaviour-preserving. Two mechanical, behaviour-preserving
+deviations forced by clippy `-D warnings`: validate-only sites (`values`/`entries`/`keys`)
+use `if let Err(c) = validate_typed_array(...)` since they don't bind `ta`; trailing
+`return X;` became a tail expression `X` once the wrapper was removed.
+
+Test-first: 4 unit tests in `mod validate_typed_array_tests` pinned the seam and were seen
+to fail before the helper existed. Gate: `cargo build --release` clean; `cargo test --bin
+jsse --release` 600 passed; `./scripts/lint.sh` clean; **test262
+`built-ins/TypedArray/prototype/` 2792/2792, 0 regressions, +2 new passes** (the uniform
+`check_detached_or_out_of_bounds` fold-in fixed two previously-diverged getter cases);
+custom tests 13/13. Blast radius held at 1 file, as scored.
+
