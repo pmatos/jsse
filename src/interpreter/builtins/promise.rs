@@ -612,44 +612,45 @@ impl Interpreter {
             "try".to_string(),
             1,
             |interp, this, args| {
-                let cap = match interp.new_promise_capability(this) {
-                    Ok(cap) => cap,
-                    Err(e) => return Completion::Throw(e),
-                };
+                if !this.is_object() {
+                    return Completion::Throw(
+                        interp.create_type_error("Promise.try requires an object"),
+                    );
+                }
                 let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let call_args: Vec<JsValue> = if args.len() > 1 {
                     args[1..].to_vec()
                 } else {
                     vec![]
                 };
-                if !interp.is_callable(&callback) {
-                    let err = interp.create_type_error("Promise.try requires a callable");
-                    if let Completion::Throw(e) =
-                        interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[err])
-                    {
-                        return Completion::Throw(e);
-                    }
-                    return Completion::Normal(cap.promise);
-                }
                 let result = interp.call_function(&callback, &JsValue::UNDEFINED, &call_args);
                 match result {
-                    Completion::Normal(v) => {
-                        if let Completion::Throw(e) =
-                            interp.call_function(&cap.resolve, &JsValue::UNDEFINED, &[v])
-                        {
-                            return Completion::Throw(e);
+                    Completion::Normal(value) => {
+                        match interp.promise_resolve_with_constructor(this, &value) {
+                            Ok(promise) => Completion::Normal(promise),
+                            Err(e) => Completion::Throw(e),
                         }
                     }
                     Completion::Throw(e) => {
+                        let cap = match interp.new_promise_capability(this) {
+                            Ok(cap) => cap,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         if let Completion::Throw(e2) =
                             interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[e])
                         {
                             return Completion::Throw(e2);
                         }
+                        Completion::Normal(cap.promise)
                     }
-                    _ => {}
+                    _ => {
+                        let cap = match interp.new_promise_capability(this) {
+                            Ok(cap) => cap,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        Completion::Normal(cap.promise)
+                    }
                 }
-                Completion::Normal(cap.promise)
             },
         ));
         if let Some(o) = ctor.as_object_id()
