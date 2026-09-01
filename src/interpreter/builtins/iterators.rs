@@ -510,6 +510,15 @@ fn iterator_step_value_getter(
     Ok(Some(value))
 }
 
+fn iterator_join_to_string(interp: &mut Interpreter, value: &JsValue) -> Result<JsString, JsValue> {
+    let primitive = if value.is_object() {
+        interp.to_primitive(value, "string")?
+    } else {
+        value.clone()
+    };
+    interp.to_js_string(&primitive)
+}
+
 // IteratorClose per spec, taking a completion and returning updated completion.
 // If completion is Err (throw), the original error is preserved even if .return() throws.
 fn iterator_close_with_completion(
@@ -1728,9 +1737,9 @@ impl Interpreter {
 
             let separator = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let separator = if separator.is_undefined() {
-                ",".to_string()
+                JsString::from_str(",")
             } else {
-                match interp.to_string_value(&separator) {
+                match iterator_join_to_string(interp, &separator) {
                     Ok(value) => value,
                     Err(error) => {
                         let _ = iterator_close_with_completion(interp, this, Err(error.clone()));
@@ -1743,14 +1752,14 @@ impl Interpreter {
                 Ok(record) => record,
                 Err(error) => return Completion::Throw(error),
             };
-            let mut result = String::new();
+            let mut result = Vec::new();
             let mut first = true;
 
             loop {
                 let value = match iterator_step_value_getter(interp, &iterator, &next_method) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        return Completion::Normal(JsValue::string(JsString::from_str(&result)));
+                        return Completion::Normal(JsValue::string(JsString::from_vec(result)));
                     }
                     Err(error) => return Completion::Throw(error),
                 };
@@ -1758,12 +1767,14 @@ impl Interpreter {
                 if first {
                     first = false;
                 } else {
-                    result.push_str(&separator);
+                    result.extend(separator.code_units.iter().copied());
                 }
 
                 if !value.is_nullish() {
-                    match interp.to_string_value(&value) {
-                        Ok(value_string) => result.push_str(&value_string),
+                    match iterator_join_to_string(interp, &value) {
+                        Ok(value_string) => {
+                            result.extend(value_string.code_units.iter().copied());
+                        }
                         Err(error) => {
                             let _ = iterator_close_with_completion(
                                 interp,

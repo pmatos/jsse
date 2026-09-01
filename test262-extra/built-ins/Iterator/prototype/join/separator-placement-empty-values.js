@@ -28,3 +28,14 @@ var iterator = {
 
 assert.sameValue(Iterator.prototype.join.call(iterator, separator), '');
 assert.compareArray(effects, ['toString', 'get next']);
+
+var loneSurrogate = '\uD800';
+assert.sameValue([loneSurrogate].values().join(), loneSurrogate);
+assert.sameValue(
+  ['a', 'b'].values().join({
+    toString: function () {
+      return loneSurrogate;
+    },
+  }),
+  'a' + loneSurrogate + 'b'
+);
