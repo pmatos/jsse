@@ -13,10 +13,7 @@ fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> 
         .map(|v| v.to_string())
 }
 
-fn canonical_unicode_subdivision_region(
-    locale: &IcuLocale,
-    key_str: &str,
-) -> Option<String> {
+fn canonical_unicode_subdivision_region(locale: &IcuLocale, key_str: &str) -> Option<String> {
     let subdivision = extract_unicode_keyword(locale, key_str)?;
     let bytes = subdivision.as_bytes();
     let region_len = if bytes.len() >= 2 && bytes[..2].iter().all(u8::is_ascii_alphabetic) {
@@ -31,9 +28,8 @@ fn canonical_unicode_subdivision_region(
         return None;
     }
 
-    let mut region_locale: IcuLocale = format!("und-{}", &subdivision[..region_len])
-        .parse()
-        .ok()?;
+    let mut region_locale: IcuLocale =
+        format!("und-{}", &subdivision[..region_len]).parse().ok()?;
     LocaleCanonicalizer::new_extended().canonicalize(&mut region_locale);
     region_locale.id.region.map(|region| region.to_string())
 }
@@ -779,16 +775,16 @@ impl Interpreter {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             hour_cycle,
-                            region,
+                            tag,
                             ..
                         }) = b.intl_data()
                         {
-                            Some((hour_cycle.clone(), region.clone()))
+                            Some((hour_cycle.clone(), tag.clone()))
                         } else {
                             None
                         }
                     });
-                    let (hc, region) = match snapshot {
+                    let (hc, tag) = match snapshot {
                         Some(t) => t,
                         None => {
                             return Completion::Throw(interp.create_type_error(
@@ -800,11 +796,22 @@ impl Interpreter {
                         vec![JsValue::from_str(&h)]
                     } else {
                         let h12_regions = ["US", "CA", "AU", "NZ", "PH", "IN", "EG", "SA", "CO", "PK", "MY"];
-                        let default = if let Some(ref r) = region {
-                            if h12_regions.contains(&r.as_str()) { "h12" } else { "h23" }
-                        } else {
-                            "h23"
-                        };
+                        let default = tag
+                            .parse::<IcuLocale>()
+                            .ok()
+                            .map(|locale| compute_region_preference(&locale))
+                            .map(|preference| {
+                                let lookup_region = preference
+                                    .region_override
+                                    .as_deref()
+                                    .unwrap_or(&preference.region);
+                                if h12_regions.contains(&lookup_region) {
+                                    "h12"
+                                } else {
+                                    "h23"
+                                }
+                            })
+                            .unwrap_or("h23");
                         vec![JsValue::from_str(default)]
                     };
                     return Completion::Normal(interp.create_array(cycles));
