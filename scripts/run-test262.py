@@ -750,7 +750,9 @@ def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
     )
 
 
-def sweep_scratch_files(roots: list[Path], min_age_s: float) -> tuple[int, int]:
+def sweep_scratch_files(
+    roots: list[Path], min_age_s: float
+) -> tuple[int, int, list[tuple[Path, OSError]]]:
     """Delete scratch files left behind by a run that was killed outright.
 
     SIGKILL runs neither the `finally` in `run_scenario` nor the worker's
@@ -766,12 +768,14 @@ def sweep_scratch_files(roots: list[Path], min_age_s: float) -> tuple[int, int]:
     record a false failure. The caller asserts that no other run is active.
 
     `min_age_s` is defence in depth for a mistaken invocation, not a liveness
-    test. Returns (removed, skipped_too_recent) so the caller can say what it
-    declined to touch rather than silently doing nothing.
+    test. Returns (removed, skipped_too_recent, failures) so the caller can
+    distinguish "nothing to do" from "could not look" or "could not remove" --
+    reporting a count alone would let any of them read as an all-clear.
     """
     cutoff = time.time() - min_age_s
     removed = 0
     skipped = 0
+    failures: list[tuple[Path, OSError]] = []
     for root in roots:
         # `paths` accepts individual files, and a shell glob over a directory
         # expands to them, so a file root has to be considered on its own terms
@@ -791,10 +795,14 @@ def sweep_scratch_files(roots: list[Path], min_age_s: float) -> tuple[int, int]:
                     skipped += 1
                     continue
                 f.unlink()
-            except OSError:
+            except OSError as error:
+                # A read-only checkout or changed directory permissions leaves a
+                # known stale file in place; swallowing that would let the run
+                # report success with the file still there.
+                failures.append((f, error))
                 continue
             removed += 1
-    return removed, skipped
+    return removed, skipped, failures
 
 
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
@@ -880,7 +888,7 @@ def main():
             for r in missing:
                 print(f"Error: cleanup path not found: {r}", file=sys.stderr)
             sys.exit(2)
-        removed, skipped = sweep_scratch_files(
+        removed, skipped, failures = sweep_scratch_files(
             roots, min_age_s=max(args.timeout * 2, 300)
         )
         print(f"Removed {removed} scratch file(s) left by an earlier killed run.")
@@ -889,7 +897,9 @@ def main():
                 f"Left {skipped} in place as too recent to be sure they are dead. "
                 "Re-run once no other invocation is active."
             )
-        sys.exit(0)
+        for path, error in failures:
+            print(f"Error: could not remove {path}: {error}", file=sys.stderr)
+        sys.exit(1 if failures else 0)
 
     engine_name = args.engine
     binary = args.binary
