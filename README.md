@@ -6,7 +6,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 Read more: [jsse - a JavaScript engine built by an agent](https://p.ocmatos.com/blog/jsse-a-javascript-engine-built-by-an-agent.html).
 
-Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution. Current default run: **99,700 / 99,907 (99.79%)**. The 207 failures are all newly added upstream coverage, not regressions: 170 belong to three `Iterator.prototype` proposals that are not implemented yet (`chunks`, `windows`, `join`), and the remaining 37 are tracked engine gaps.
+Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution. Current default run: **PENDING**. PENDING
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
