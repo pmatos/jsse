@@ -752,7 +752,7 @@ impl Interpreter {
                             vec![JsValue::from_str(&co)]
                         }
                     } else {
-                        vec![JsValue::from_str("emoji")]
+                        vec![JsValue::from_str("emoji"), JsValue::from_str("eor")]
                     };
                     return Completion::Normal(interp.create_array(collations));
                 }
