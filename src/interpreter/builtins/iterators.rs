@@ -2454,10 +2454,8 @@ impl Interpreter {
                         (s.0.clone(), s.3)
                     };
                     state_ret.borrow_mut().3 = false;
-                    if alive {
-                        if let Err(e) = iterator_close_getter(interp, &iter) {
-                            return Completion::Throw(e);
-                        }
+                    if alive && let Err(e) = iterator_close_getter(interp, &iter) {
+                        return Completion::Throw(e);
                     }
                     Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
                 },
@@ -2605,10 +2603,8 @@ impl Interpreter {
                         (s.0.clone(), s.3)
                     };
                     state_ret.borrow_mut().3 = false;
-                    if alive {
-                        if let Err(e) = iterator_close_getter(interp, &iter) {
-                            return Completion::Throw(e);
-                        }
+                    if alive && let Err(e) = iterator_close_getter(interp, &iter) {
+                        return Completion::Throw(e);
                     }
                     Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
                 },
