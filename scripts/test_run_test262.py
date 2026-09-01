@@ -1,15 +1,28 @@
+import importlib.util
 import os
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNNER = REPO_ROOT / "scripts" / "run-test262.py"
+
+
+def _load_runner():
+    spec = importlib.util.spec_from_file_location("run_test262", RUNNER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+runner = _load_runner()
 
 
 def frontmatter(*lines: str) -> str:
@@ -164,6 +177,112 @@ class RunTest262ExitStatusTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("would not be collected", result.stderr)
+
+
+class ScratchFileTests(unittest.TestCase):
+    """Scratch files are written next to the test they wrap, inside the
+    read-only test262 checkout, so a run that dies without cleaning up leaves
+    them among the tests."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        # find_tests only walks the corpus subdirectories, so the fixture has
+        # to live in one of them for the collection test to be meaningful.
+        self.test_dir = self.root / "test262" / "test" / "language"
+        self.test_dir.mkdir(parents=True)
+        (self.test_dir / "sample.js").write_text(
+            frontmatter("flags: [raw]"), encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_scratch(self, name: str, age_s: float = 0.0) -> Path:
+        path = self.test_dir / name
+        path.write_text("// leaked scratch file\n", encoding="utf-8")
+        if age_s:
+            stamp = time.time() - age_s
+            os.utime(path, (stamp, stamp))
+        return path
+
+    def test_scratch_names_are_recognised(self):
+        self.assertTrue(runner._is_scratch(Path("tmpa0o8myw6.js")))
+        self.assertTrue(runner._is_scratch(Path("tmp_g3ol4p_.js")))
+
+    def test_real_tests_are_not_mistaken_for_scratch(self):
+        # test262 has real tests whose names begin with "tmp"-like prefixes;
+        # only the exact tempfile shape (tmp + 8 chars + .js) may be swept.
+        for name in (
+            "tmp.js",
+            "tmpshort.js",
+            "tmptoolonganame.js",
+            "tmpABCDEFGH.js",
+            "temporal-tmpa0o8myw6.js",
+            "tmpa0o8myw6.mjs",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(runner._is_scratch(Path(name)))
+
+    def test_scratch_files_are_not_collected_as_tests(self):
+        self.write_scratch("tmpa0o8myw6.js")
+
+        tests = runner.find_tests(self.root / "test262", None)
+
+        self.assertEqual([p.name for p in tests], ["sample.js"])
+
+    def test_sweep_removes_stale_scratch_files(self):
+        stale = self.write_scratch("tmpa0o8myw6.js", age_s=10_000)
+
+        removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+
+        self.assertEqual(removed, 1)
+        self.assertFalse(stale.exists())
+
+    def test_sweep_spares_scratch_files_of_a_concurrent_run(self):
+        live = self.write_scratch("tmpa0o8myw6.js")
+
+        removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+
+        self.assertEqual(removed, 0)
+        self.assertTrue(live.exists())
+
+    def test_sweep_leaves_real_tests_alone(self):
+        sample = self.test_dir / "sample.js"
+        decoy = self.write_scratch("tmpshort.js", age_s=10_000)
+
+        runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+
+        self.assertTrue(sample.exists())
+        self.assertTrue(decoy.exists())
+
+
+class WorkerCleanupTests(unittest.TestCase):
+    def test_sigterm_handler_unlinks_the_in_flight_scratch_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scratch = Path(tmpdir) / "tmpa0o8myw6.js"
+            scratch.write_text("// in flight\n", encoding="utf-8")
+
+            # The handler exits the process, so run it in a child.
+            code = textwrap.dedent(
+                f"""\
+                import os, runpy, signal, sys
+                runner = runpy.run_path({str(RUNNER)!r})
+                runner["_active_scratch_path"] = {str(scratch)!r}
+                # Rebind the module global the handler closes over.
+                handler = runner["_worker_cleanup_handler"]
+                handler.__globals__["_active_scratch_path"] = {str(scratch)!r}
+                handler(signal.SIGTERM, None)
+                """
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", code], capture_output=True, text=True
+            )
+
+            self.assertEqual(result.returncode, 128 + signal.SIGTERM)
+            self.assertFalse(
+                scratch.exists(), "handler should unlink the in-flight scratch file"
+            )
 
 
 if __name__ == "__main__":

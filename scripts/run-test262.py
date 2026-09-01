@@ -41,11 +41,34 @@ def _set_pdeathsig():
         pass
 
 
+# Path of the scratch file this worker is currently running, or None. The
+# termination handler below is the only reader; workers are single-threaded and
+# run one scenario at a time, so a plain global is enough.
+_active_scratch_path = None
+
+
+def _worker_cleanup_handler(signum, frame):
+    """Remove the in-flight scratch file, then exit.
+
+    `run_scenario` unlinks in a `finally`, which covers every path the
+    interpreter itself unwinds. A signal is not one of those: the default
+    SIGTERM action terminates the process outright, so the scratch file next to
+    the test would survive as an untracked `tmp*.js` inside the read-only
+    submodule. Unlink it here before exiting.
+    """
+    if _active_scratch_path is not None:
+        try:
+            os.unlink(_active_scratch_path)
+        except OSError:
+            pass
+    os._exit(128 + signum)
+
+
 def _worker_init():
     """Initializer for pool worker processes."""
     _set_pdeathsig()
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, _worker_cleanup_handler)
+    signal.signal(signal.SIGINT, _worker_cleanup_handler)
 
 
 def _cleanup_handler(signum, frame):
@@ -456,6 +479,8 @@ def run_single_test(
     harness_files = get_harness_files(metadata, test262_dir, is_module, is_async)
     concat_harness = adapter.needs_harness_in_source(is_module)
 
+    global _active_scratch_path
+
     tmp_path = None
     if concat_harness or not is_module:
         try:
@@ -473,6 +498,7 @@ def run_single_test(
         ) as tmp:
             tmp.write(combined)
             tmp_path = tmp.name
+        _active_scratch_path = tmp_path
 
     cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module, flags)
 
@@ -509,6 +535,7 @@ def run_single_test(
                 os.unlink(tmp_path)
             except OSError:
                 pass
+            _active_scratch_path = None
 
     stderr_text = result.stderr.decode("utf-8", errors="replace")
 
@@ -647,6 +674,18 @@ def _is_fixture(p: Path) -> bool:
     return name.endswith("_FIXTURE.js") or name.endswith("_FIXTURE.mjs")
 
 
+# `tempfile` names its files `tmp` + 8 chars drawn from this alphabet. Scratch
+# files are written next to the test they wrap, so a run killed hard enough to
+# skip cleanup leaves them among the tests. Excluding them from collection keeps
+# a leaked file from being counted as a test of its own and inflating the
+# scenario total, independently of whether the sweep below reclaimed it.
+SCRATCH_RE = re.compile(r"^tmp[a-z0-9_]{8}\.js$")
+
+
+def _is_scratch(p: Path) -> bool:
+    return SCRATCH_RE.match(p.name) is not None
+
+
 class TestCollectionError(Exception):
     """Raised when a selected path contains a test the runner would omit."""
 
@@ -680,6 +719,33 @@ def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
     )
 
 
+def sweep_scratch_files(roots: list[Path], min_age_s: float) -> int:
+    """Delete scratch files left behind by a run that was killed outright.
+
+    SIGKILL runs neither the `finally` in `run_scenario` nor the worker's
+    termination handler, so nothing but a later sweep can reclaim those files.
+
+    `min_age_s` keeps a concurrent run's live scratch files out of scope: one is
+    at most a per-test timeout old, so anything older belongs to a dead run.
+    """
+    cutoff = time.time() - min_age_s
+    removed = 0
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in root.rglob("tmp*.js"):
+            if not _is_scratch(f):
+                continue
+            try:
+                if f.stat().st_mtime > cutoff:
+                    continue
+                f.unlink()
+            except OSError:
+                continue
+            removed += 1
+    return removed
+
+
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     if paths:
         selected = [Path(p) for p in paths]
@@ -690,7 +756,9 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
                 tests.append(path)
             elif path.is_dir():
                 tests.extend(
-                    f for f in sorted(path.rglob("*.js")) if not _is_fixture(f)
+                    f
+                    for f in sorted(path.rglob("*.js"))
+                    if not _is_fixture(f) and not _is_scratch(f)
                 )
         return sorted(tests)
 
@@ -701,7 +769,9 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
-            tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
+            tests.extend(
+                f for f in d.rglob("*.js") if not _is_fixture(f) and not _is_scratch(f)
+            )
     return sorted(tests)
 
 
@@ -764,6 +834,12 @@ def main():
         sys.exit(2)
 
     selected_paths = args.paths if args.paths else None
+
+    sweep_roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
+    swept = sweep_scratch_files(sweep_roots, min_age_s=max(args.timeout * 2, 300))
+    if swept:
+        print(f"Removed {swept} scratch file(s) left by an earlier killed run.")
+
     try:
         tests = find_tests(test262, selected_paths)
     except TestCollectionError as error:
