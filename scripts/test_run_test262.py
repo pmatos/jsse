@@ -235,13 +235,12 @@ class ScratchFileTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(runner._is_scratch(Path(name)))
 
-    def test_generic_tempfile_names_are_never_sweepable(self):
-        # A bare `tempfile` name proves nothing about who wrote it, so it must
-        # never be eligible for deletion -- see _is_scratch vs _is_uncollectable.
+    def test_generic_tempfile_names_are_not_claimed(self):
+        # A bare `tempfile` name proves nothing about who wrote it, so it is
+        # neither deleted nor skipped: both would act on a file we cannot claim.
         for name in ("tmpa0o8myw6.js", "tmp_g3ol4p_.js"):
             with self.subTest(name=name):
                 self.assertFalse(runner._is_scratch(Path(name)))
-                self.assertTrue(runner._is_uncollectable_scratch(Path(name)))
 
     def test_scratch_files_are_not_collected_as_tests(self):
         self.write_scratch(f"{PREFIX}a0o8myw6.js")
@@ -250,14 +249,15 @@ class ScratchFileTests(unittest.TestCase):
 
         self.assertEqual([p.name for p in tests], ["sample.js"])
 
-    def test_legacy_scratch_files_are_not_collected_as_tests(self):
-        # Files leaked before the prefix existed must still stay out of the
-        # scenario count, even though the sweep will not delete them.
+    def test_legacy_shaped_files_are_still_collected(self):
+        # A real test may legitimately be named like a bare `tempfile`. Skipping
+        # it would silently shrink the run, corrupting the same scenario total
+        # the scratch filter exists to protect, so only prefixed names are ours.
         self.write_scratch("tmpa0o8myw6.js")
 
         tests = runner.find_tests(self.root / "test262", None)
 
-        self.assertEqual([p.name for p in tests], ["sample.js"])
+        self.assertEqual([p.name for p in tests], ["sample.js", "tmpa0o8myw6.js"])
 
     def test_sweep_removes_stale_scratch_files(self):
         stale = self.write_scratch(f"{PREFIX}a0o8myw6.js", age_s=10_000)
@@ -292,12 +292,12 @@ class ScratchFileTests(unittest.TestCase):
 
         self.assertEqual(tests, [])
 
-    def test_explicitly_named_legacy_scratch_file_is_not_collected(self):
-        scratch = self.write_scratch("tmpa0o8myw6.js")
+    def test_explicitly_named_legacy_shaped_file_is_still_collected(self):
+        legacy = self.write_scratch("tmpa0o8myw6.js")
 
-        tests = runner.find_tests(self.root / "test262", [str(scratch)])
+        tests = runner.find_tests(self.root / "test262", [str(legacy)])
 
-        self.assertEqual(tests, [])
+        self.assertEqual(tests, [legacy])
 
     def test_glob_expanded_selection_drops_only_the_scratch_file(self):
         # `run-test262.py test262/test/language/*.js` reaches find_tests as a

@@ -689,26 +689,18 @@ def _is_fixture(p: Path) -> bool:
 # killed hard enough to skip cleanup leaves them among the tests.
 SCRATCH_RE = re.compile(rf"^{re.escape(SCRATCH_PREFIX)}[a-z0-9_]{{8}}\.js$")
 
-# Runs from before the prefix existed leaked plain `tempfile` names. Collection
-# still skips those, so a leftover is never counted as a test of its own and
-# cannot inflate the scenario total -- but the sweep never deletes one, because
-# the name is not evidence of who wrote it.
-LEGACY_SCRATCH_RE = re.compile(r"^tmp[a-z0-9_]{8}\.js$")
-
 
 def _is_scratch(p: Path) -> bool:
-    """True for a scratch file this runner created, which the sweep may delete."""
-    return SCRATCH_RE.match(p.name) is not None
+    """True for a scratch file this runner created.
 
-
-def _is_uncollectable_scratch(p: Path) -> bool:
-    """True for anything scratch-shaped, pre-prefix leftovers included.
-
-    Collection only ever skips these, and a skip is recoverable where an unlink
-    is not, so matching the generic shape here is safe in a way that matching it
-    in `sweep_scratch_files` would not be.
+    Both the collection filter and the sweep key off this, so nothing is skipped
+    or deleted on the strength of a name we cannot claim. A generic `tempfile`
+    name is deliberately not enough: excluding one silently drops whatever it
+    really was from the run, and the scenario total this guards is the same
+    number a silent omission would corrupt. Leftovers from runs predating the
+    prefix are cleaned up out of band, not guessed at here.
     """
-    return _is_scratch(p) or LEGACY_SCRATCH_RE.match(p.name) is not None
+    return SCRATCH_RE.match(p.name) is not None
 
 
 class TestCollectionError(Exception):
@@ -785,17 +777,13 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
             # directly or swept up by a shell glob, and the startup sweep skips
             # it because a file is not a directory. Filter it here too, or it is
             # counted as a test and inflates the selected run's total.
-            if (
-                path.is_file()
-                and path.suffix == ".js"
-                and not _is_uncollectable_scratch(path)
-            ):
+            if path.is_file() and path.suffix == ".js" and not _is_scratch(path):
                 tests.append(path)
             elif path.is_dir():
                 tests.extend(
                     f
                     for f in sorted(path.rglob("*.js"))
-                    if not _is_fixture(f) and not _is_uncollectable_scratch(f)
+                    if not _is_fixture(f) and not _is_scratch(f)
                 )
         return sorted(tests)
 
@@ -807,9 +795,7 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
         d = test_dir / subdir
         if d.is_dir():
             tests.extend(
-                f
-                for f in d.rglob("*.js")
-                if not _is_fixture(f) and not _is_uncollectable_scratch(f)
+                f for f in d.rglob("*.js") if not _is_fixture(f) and not _is_scratch(f)
             )
     return sorted(tests)
 
