@@ -13,6 +13,31 @@ fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> 
         .map(|v| v.to_string())
 }
 
+fn canonical_unicode_subdivision_region(
+    locale: &IcuLocale,
+    key_str: &str,
+) -> Option<String> {
+    let subdivision = extract_unicode_keyword(locale, key_str)?;
+    let bytes = subdivision.as_bytes();
+    let region_len = if bytes.len() >= 2 && bytes[..2].iter().all(u8::is_ascii_alphabetic) {
+        2
+    } else if bytes.len() >= 3 && bytes[..3].iter().all(u8::is_ascii_digit) {
+        3
+    } else {
+        return None;
+    };
+    let suffix = &bytes[region_len..];
+    if !(1..=4).contains(&suffix.len()) || !suffix.iter().all(u8::is_ascii_alphanumeric) {
+        return None;
+    }
+
+    let mut region_locale: IcuLocale = format!("und-{}", &subdivision[..region_len])
+        .parse()
+        .ok()?;
+    LocaleCanonicalizer::new_extended().canonicalize(&mut region_locale);
+    region_locale.id.region.map(|region| region.to_string())
+}
+
 fn set_unicode_keyword(locale: &mut IcuLocale, key_str: &str, value_str: &str) {
     if let Ok(key) = key_str.parse::<Key>()
         && let Ok(val) = value_str.parse::<Value>()
@@ -1693,5 +1718,30 @@ fn get_timezones_for_region(region: &str) -> Vec<&'static str> {
         "CU" => vec!["America/Havana"],
         "ZZ" => vec!["Etc/Unknown"],
         _ => vec!["Etc/Unknown"],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_unicode_subdivision_returns_its_region() {
+        let cases = [
+            ("en-u-rg-gbzzzz", "rg", Some("GB")),
+            ("en-u-sd-gbeng", "sd", Some("GB")),
+            ("en-u-rg-019zzzz", "rg", Some("019")),
+            ("en", "rg", None),
+            ("en-u-rg-gbabcde", "rg", None),
+        ];
+
+        for (tag, key, expected) in cases {
+            let locale: IcuLocale = tag.parse().expect("test locale must parse");
+            assert_eq!(
+                canonical_unicode_subdivision_region(&locale, key).as_deref(),
+                expected,
+                "{tag}"
+            );
+        }
     }
 }
