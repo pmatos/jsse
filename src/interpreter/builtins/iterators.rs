@@ -1652,6 +1652,17 @@ impl Interpreter {
             }
         });
 
+        // includes(searchElement, [skippedElements])
+        self.define_method(iter_proto_id, "includes", 1, |interp, this, _args| {
+            if !this.is_object() {
+                let err = interp
+                    .create_type_error("Iterator.prototype.includes called on non-object");
+                return Completion::Throw(err);
+            }
+
+            Completion::Normal(JsValue::FALSE)
+        });
+
         // reduce(reducer, [initial])
         self.define_method(iter_proto_id, "reduce", 1, |interp, this, args| {
             let reducer = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
