@@ -541,7 +541,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_identifier)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
+            Expression::Object(props, _) => props.iter().any(|p: &Property| {
                 Self::expr_contains_await_identifier(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_await_identifier(e))
             }),
@@ -668,7 +668,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_expression)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
+            Expression::Object(props, _) => props.iter().any(|p: &Property| {
                 Self::expr_contains_await_expression(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_await_expression(e))
             }),
@@ -762,7 +762,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_yield_expression)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
+            Expression::Object(props, _) => props.iter().any(|p: &Property| {
                 Self::expr_contains_yield_expression(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_yield_expression(e))
             }),
@@ -1286,7 +1286,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             }
             Ok(Pattern::Array(pats))
         }
-        Expression::Object(props) => {
+        Expression::Object(props, trailing_comma_after_spread) => {
             let mut pat_props = Vec::new();
             let mut saw_rest = false;
             for prop in props {
@@ -1325,6 +1325,11 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                         message: "Invalid destructuring target".to_string(),
                     });
                 }
+            }
+            if saw_rest && trailing_comma_after_spread {
+                return Err(ParseError {
+                    message: "Rest element must be last element".to_string(),
+                });
             }
             Ok(Pattern::Object(pat_props))
         }
@@ -1387,7 +1392,7 @@ fn pattern_to_expr(pat: Pattern) -> Expression {
                     },
                 })
                 .collect();
-            Expression::Object(expr_props)
+            Expression::Object(expr_props, false)
         }
         Pattern::Assign(pat, default) => {
             Expression::Assign(AssignOp::Assign, Box::new(pattern_to_expr(*pat)), default)
@@ -1448,6 +1453,46 @@ mod tests {
     fn parse_arrow_function() {
         let prog = parse("var f = (a, b) => a + b;");
         assert!(matches!(&prog.body.as_slice()[0], Statement::Variable(_)));
+    }
+
+    #[test]
+    fn rejects_trailing_comma_after_object_rest_in_assignment_pattern() {
+        for source in [
+            "0, {...rest,} = {};",
+            "({a: {...rest,}} = {});",
+            "([{...rest,}] = []);",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_err());
+        }
+
+        for source in [
+            "0, {...rest} = {};",
+            "0, {a, ...rest} = {};",
+            "var object = {...rest,};",
+            "({a, b,} = {});",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_trailing_comma_after_object_rest_in_reinterpreted_patterns() {
+        for source in [
+            "for ({...rest,} in object) ;",
+            "for ({...rest,} of object) ;",
+            "({...rest,}) => {};",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_err());
+        }
+
+        for source in [
+            "for ({...rest} in object) ;",
+            "for ({...rest} of object) ;",
+            "({...rest}) => {};",
+            "({...rest,});",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_ok());
+        }
     }
 
     #[test]

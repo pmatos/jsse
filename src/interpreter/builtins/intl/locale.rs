@@ -1,6 +1,8 @@
 use super::super::super::*;
+use icu::experimental::displaynames::{DisplayNamesPreferences, RegionDisplayNames};
 use icu::locale::Locale as IcuLocale;
-use icu::locale::extensions::unicode::{Key, Value};
+use icu::locale::extensions::unicode::{Key, SubdivisionId, Value};
+use icu::locale::subtags::Region;
 use icu::locale::{LocaleCanonicalizer, LocaleDirectionality, LocaleExpander};
 
 fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> {
@@ -11,6 +13,60 @@ fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> 
         .keywords
         .get(&key)
         .map(|v| v.to_string())
+}
+
+fn canonical_unicode_subdivision_region(locale: &IcuLocale, key_str: &str) -> Option<String> {
+    let subdivision = extract_unicode_keyword(locale, key_str)?;
+    let region = SubdivisionId::try_from_str(&subdivision).ok()?.region;
+
+    let mut region_locale: IcuLocale = format!("und-{region}").parse().ok()?;
+    LocaleCanonicalizer::new_extended().canonicalize(&mut region_locale);
+    region_locale.id.region.map(|region| region.to_string())
+}
+
+struct RegionPreference {
+    region: String,
+    region_override: Option<String>,
+}
+
+impl RegionPreference {
+    fn lookup_region(&self) -> &str {
+        match self.region_override.as_deref() {
+            Some(region) if region_has_locale_data(region) => region,
+            _ => &self.region,
+        }
+    }
+}
+
+fn region_has_locale_data(region: &str) -> bool {
+    let Ok(region) = region.parse::<Region>() else {
+        return false;
+    };
+    let prefs = DisplayNamesPreferences::from(&icu::locale::locale!("en"));
+    let Ok(formatter) = RegionDisplayNames::try_new(prefs, Default::default()) else {
+        return false;
+    };
+    formatter.of(region).is_some()
+}
+
+fn compute_region_preference(locale: &IcuLocale) -> RegionPreference {
+    let region = locale
+        .id
+        .region
+        .map(|region| region.to_string())
+        .or_else(|| canonical_unicode_subdivision_region(locale, "sd"))
+        .or_else(|| {
+            let mut maximal = locale.clone();
+            LocaleExpander::new_extended().maximize(&mut maximal.id);
+            LocaleCanonicalizer::new_extended().canonicalize(&mut maximal);
+            maximal.id.region.map(|region| region.to_string())
+        })
+        .unwrap_or_else(|| "001".to_string());
+
+    RegionPreference {
+        region,
+        region_override: canonical_unicode_subdivision_region(locale, "rg"),
+    }
 }
 
 fn set_unicode_keyword(locale: &mut IcuLocale, key_str: &str, value_str: &str) {
@@ -707,7 +763,7 @@ impl Interpreter {
                             vec![JsValue::from_str(&co)]
                         }
                     } else {
-                        vec![JsValue::from_str("emoji")]
+                        vec![JsValue::from_str("emoji"), JsValue::from_str("eor")]
                     };
                     return Completion::Normal(interp.create_array(collations));
                 }
@@ -730,16 +786,16 @@ impl Interpreter {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             hour_cycle,
-                            region,
+                            tag,
                             ..
                         }) = b.intl_data()
                         {
-                            Some((hour_cycle.clone(), region.clone()))
+                            Some((hour_cycle.clone(), tag.clone()))
                         } else {
                             None
                         }
                     });
-                    let (hc, region) = match snapshot {
+                    let (hc, tag) = match snapshot {
                         Some(t) => t,
                         None => {
                             return Completion::Throw(interp.create_type_error(
@@ -751,11 +807,15 @@ impl Interpreter {
                         vec![JsValue::from_str(&h)]
                     } else {
                         let h12_regions = ["US", "CA", "AU", "NZ", "PH", "IN", "EG", "SA", "CO", "PK", "MY"];
-                        let default = if let Some(ref r) = region {
-                            if h12_regions.contains(&r.as_str()) { "h12" } else { "h23" }
-                        } else {
-                            "h23"
-                        };
+                        let default = tag.parse::<IcuLocale>().ok().map_or("h23", |locale| {
+                            let preference = compute_region_preference(&locale);
+                            let lookup_region = preference.lookup_region();
+                            if h12_regions.contains(&lookup_region) {
+                                "h12"
+                            } else {
+                                "h23"
+                            }
+                        });
                         vec![JsValue::from_str(default)]
                     };
                     return Completion::Normal(interp.create_array(cycles));
@@ -954,11 +1014,16 @@ impl Interpreter {
                             );
                         }
                     };
+                    let preference = compute_region_preference(&locale);
+                    let lookup_region = preference.lookup_region();
+                    let mut lookup_locale = locale.clone();
+                    lookup_locale.id.region = lookup_region.parse().ok();
 
                     let first_day = if let Some(ref fw) = fw_value {
                         fw_keyword_to_day_number(fw).unwrap_or(7)
                     } else {
-                        let wi = icu::calendar::week::WeekInformation::try_new((&locale).into());
+                        let wi =
+                            icu::calendar::week::WeekInformation::try_new((&lookup_locale).into());
                         if let Ok(week_info) = wi {
                             weekday_to_number(week_info.first_weekday)
                         } else {
@@ -967,7 +1032,7 @@ impl Interpreter {
                     };
 
                     let mut weekend_days: Vec<i32> = Vec::new();
-                    let wi = icu::calendar::week::WeekInformation::try_new((&locale).into());
+                    let wi = icu::calendar::week::WeekInformation::try_new((&lookup_locale).into());
                     if let Ok(week_info) = wi {
                         use icu::calendar::types::Weekday;
                         for wd in [
@@ -1693,5 +1758,52 @@ fn get_timezones_for_region(region: &str) -> Vec<&'static str> {
         "CU" => vec!["America/Havana"],
         "ZZ" => vec!["Etc/Unknown"],
         _ => vec!["Etc/Unknown"],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_unicode_subdivision_returns_its_region() {
+        let cases = [
+            ("en-u-rg-gbzzzz", "rg", Some("GB")),
+            ("en-u-sd-gbeng", "sd", Some("GB")),
+            ("en-u-rg-019zzzz", "rg", Some("019")),
+            ("en", "rg", None),
+            ("en-u-rg-gbabcde", "rg", None),
+        ];
+
+        for (tag, key, expected) in cases {
+            let locale: IcuLocale = tag.parse().expect("test locale must parse");
+            assert_eq!(
+                canonical_unicode_subdivision_region(&locale, key).as_deref(),
+                expected,
+                "{tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn region_preference_uses_the_specified_signal_order() {
+        let cases = [
+            ("en-GB", "GB", None),
+            ("en-u-sd-gbeng", "GB", None),
+            ("th", "TH", None),
+            ("fa-JP-u-sd-inka-rg-afzzzz", "JP", Some("AF")),
+            ("eo", "001", None),
+        ];
+
+        for (tag, expected_region, expected_override) in cases {
+            let locale: IcuLocale = tag.parse().expect("test locale must parse");
+            let preference = compute_region_preference(&locale);
+            assert_eq!(preference.region, expected_region, "{tag}");
+            assert_eq!(
+                preference.region_override.as_deref(),
+                expected_override,
+                "{tag}"
+            );
+        }
     }
 }
