@@ -29,7 +29,7 @@ JSSE is a from-scratch JavaScript engine written in Rust. No JS parser or engine
 - `docs/adr/` — accepted architecture decisions.
 - `spec/` — the ECMAScript spec submodule (tc39/ecma262). **Read-only, NEVER modify.** It decides what the engine must do.
 - `test262/` — the conformance suite submodule (tc39/test262). **Read-only, NEVER modify.**
-- The modules the issue touches: `src/lexer.rs`, `src/parser/`, `src/interpreter/` (`eval.rs`, `exec.rs`, `property.rs`, `gc.rs`, `builtins/`, `bytecode/`).
+- The modules the issue touches. Engine: `src/lexer.rs`, `src/parser/`, `src/interpreter/` (`eval.rs`, `exec.rs`, `property.rs`, `gc.rs`, `builtins/`, `bytecode/`). Non-engine: `scripts/` (test runners, Node-compat shims and library harnesses), `benchmarks/`, `.github/workflows/`.
 
 Authority order when the spec, the tests, and runtimes disagree: (1) ECMAScript
 spec, (2) test262, (3) `node` — available only as a reference engine for
@@ -40,10 +40,10 @@ debugging, never as a justification.
 Write a plan to `{{workspace.path}}/PLAN.md` covering:
 
 1. **Problem restated** in one paragraph.
-2. **Spec basis** — the `spec/` clauses that govern the behavior, cited by number and name. A planned behavior change that cannot be grounded in a spec clause is a planning failure, not an implementation detail to settle later.
-3. **Files to touch** — exact paths under `src/`, plus any `docs/` updates (a new architectural decision belongs in `docs/adr/`, new vocabulary in `CONTEXT.md`).
+2. **Spec basis** — the `spec/` clauses that govern the behavior, cited by number and name. A planned change to JavaScript syntax or semantics that cannot be grounded in a spec clause is a planning failure, not an implementation detail to settle later. If the issue changes no JavaScript syntax or semantics — tooling under `scripts/`, CI under `.github/`, dependency bumps, benchmark harnesses — write `N/A: no JavaScript behavior change` and say in one line why. That hatch is for work the spec does not reach; it is never a shortcut for a language change whose clause you could not find.
+3. **Files to touch** — exact paths. Engine changes live under `src/`; tooling, harnesses, and CI under `scripts/`, `benchmarks/`, and `.github/`. Include any `docs/` updates (a new architectural decision belongs in `docs/adr/`, new vocabulary in `CONTEXT.md`).
 4. **TDD slices** — a numbered list of small red-green-refactor steps. Each slice names the test file/location, the behavior under test, and the production code that will make it pass. Prefer vertical slices over horizontal refactors.
-5. **Test surface** — which `test262/test/...` directories exercise the change and should be run targeted; and which spec-correct behavior is *not* covered by test262 and therefore needs a new test under `test262-extra/` (following the existing test262 file patterns, naming the spec clause under test) or `tests/`.
+5. **Test surface** — which `test262/test/...` directories exercise the change and should be run targeted; and which spec-correct behavior is *not* covered by test262 and therefore needs a new test under `test262-extra/` (following the existing test262 file patterns, naming the spec clause under test) or `tests/`. For work outside the engine, name the gate that actually covers it instead: `scripts/run-node-shim-selftest.sh` and `scripts/run-shim-fixtures.sh` for the Node-compat shims, `scripts/run-library-tests.sh <lib>` for a library harness, `cargo test --release` for everything else.
 6. **Regression risk** — what could move the `test262-pass.txt` baseline, and which shared machinery the change leans on: the tree-walker hot paths (`eval_expr` / `exec_statement`), the property MOP in `property.rs`, GC rooting and `gc_safepoint()`, the exhaustive `ObjectKind` matches, the bytecode fast path, and the Node-compat library harnesses.
 7. **Out of scope** — refactors, formatting changes, and unrelated cleanups that you will deliberately not bundle into this PR.
 
