@@ -11,7 +11,15 @@ against it, apply any fixes it finds, and exit.
 request on branch `{{branch.name}}`.** Let it apply its own fixes to the
 working tree.
 
-If it made changes, commit and push them to `{{branch.name}}`.
+If it made no changes, exit 0 without committing. If it changed any file,
+run the full local quality gate from `impl.md` step 4 — `./scripts/lint.sh`,
+`cargo build --release`, `cargo test --release`, and the full `uv run python
+scripts/run-test262.py -j 32` — and only then commit and push to
+`{{branch.name}}`. The simplifications it applied landed after the
+implementation stage validated, so its test262 result no longer covers this
+branch, and PR CI runs only a smoke set plus a seeded 10% sample before this
+pipeline squash-merges with no human checkpoint. Fix the root cause of any
+failure; do not narrow scope to make it green.
 
 Discover the PR yourself with `gh pr list --head {{branch.name}} --state open`
 if you need the PR number — do not assume one. Stay on branch
@@ -27,7 +35,9 @@ if you need the PR number — do not assume one. Stay on branch
 - Do not modify operational labels in the `sym:*` namespace. Do not
   self-apply `sym:human-needed` — the orchestrator applies that automatically
   when a run ends up blocked.
-- Do not modify `symphonika/` — that is this pipeline's own contract, and editing it mid-run changes the rules you are running under. Do not modify the `spec/` or `test262/` submodules either.
+- Do not modify `symphonika/` — that is this pipeline's own contract, and
+  editing it mid-run changes the rules you are running under. Do not
+  modify the `spec/` or `test262/` submodules either.
 - If `/simplify` genuinely cannot proceed (e.g. no open PR found for this
   branch), post a `gh pr comment` explaining what blocked you and **exit
   non-zero (e.g. `exit 1`)**. A non-zero exit routes the FSM through

@@ -27,7 +27,9 @@ if you need the PR number — do not assume one. Stay on branch
   GitHub MCP connector tools — they elicit operator approval and end the
   run with `terminal_reason="provider requested input"`.
 - Do not modify operational labels in the `sym:*` namespace.
-- Do not modify `symphonika/` — that is this pipeline's own contract, and editing it mid-run changes the rules you are running under. Do not modify the `spec/` or `test262/` submodules either.
+- Do not modify `symphonika/` — that is this pipeline's own contract, and
+  editing it mid-run changes the rules you are running under. Do not
+  modify the `spec/` or `test262/` submodules either.
 - If you genuinely cannot make progress (e.g. the failure requires a
   product decision), post a `gh pr comment` on the PR explaining what
   blocked you and **exit non-zero (e.g. `exit 1`)**. A non-zero exit

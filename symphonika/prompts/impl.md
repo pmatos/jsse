@@ -50,9 +50,10 @@ debugging, never as a justification.
    - `cargo test --release`
    - `uv run python scripts/run-test262.py -j 32` — the **full** suite, unconditionally, for
      every change however narrow (`AGENTS.md`: "After any implementation work, run the full
-     test262 suite"). This is not belt-and-braces: CI on a pull request runs only a fixed
-     smoke set plus a seeded 10% sample, and the full suite runs only in the nightly cron —
-     i.e. after this pipeline has already squash-merged. Your local full run is the only
+     test262 suite"). This is not belt-and-braces: CI on a pull request runs a fixed smoke
+     set, a seeded 10% sample, and all of `test262-extra/` — but the full test262 suite runs
+     only in `nightly-test262-coverage.yml`, whose cron is `0 2 */5 * *`, every five days,
+     i.e. days after this pipeline has already squash-merged. Your local full run is the only
      complete pre-merge regression gate there is. Run a targeted directory first if it
      shortens your debug loop —
      `uv run python scripts/run-test262.py test262/test/built-ins/<Area>/ -j 32` — but it is
