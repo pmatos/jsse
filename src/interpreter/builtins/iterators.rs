@@ -1693,11 +1693,31 @@ impl Interpreter {
                 return Completion::Throw(err);
             }
 
-            if let Err(err) = get_iterator_direct_getter(interp, this) {
-                return Completion::Throw(err);
+            let search_element = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(value) => value,
+                Err(err) => return Completion::Throw(err),
+            };
+            let mut skipped = 0.0;
+            loop {
+                match interp.iterator_step_direct(&iter, &next_method) {
+                    Ok(Some(result)) => {
+                        let value = match interp.iterator_value(&result) {
+                            Ok(value) => value,
+                            Err(err) => return Completion::Throw(err),
+                        };
+                        if skipped < to_skip {
+                            skipped += 1.0;
+                            continue;
+                        }
+                        if same_value_zero(&value, &search_element) {
+                            return Completion::Normal(JsValue::TRUE);
+                        }
+                    }
+                    Ok(None) => return Completion::Normal(JsValue::FALSE),
+                    Err(err) => return Completion::Throw(err),
+                }
             }
-
-            Completion::Normal(JsValue::FALSE)
         });
 
         // reduce(reducer, [initial])
