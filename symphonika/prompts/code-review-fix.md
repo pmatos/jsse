@@ -39,8 +39,13 @@ if you need the PR number — do not assume one. Stay on branch
   editing it mid-run changes the rules you are running under. Do not
   modify the `spec/` or `test262/` submodules either.
 - If `/code-review --fix` genuinely cannot proceed (e.g. no open PR found
-  for this branch), post a `gh pr comment` explaining what blocked you and
-  **exit non-zero (e.g. `exit 1`)**. A non-zero exit routes the FSM through
+  for this branch), post `gh issue comment {{issue.number}}` explaining
+  what blocked you, write the same explanation to
+  `{{workspace.path}}/EVIDENCE.md`, and **exit non-zero (e.g. `exit 1`)**.
+  Comment on the **issue**, not the PR: the blocking case named above is
+  that no PR exists, and `gh pr comment` resolves its target from the
+  branch's PR — it would fail and post nothing, losing the only record of
+  why the run stopped. A non-zero exit routes the FSM through
   `provider_success: false` to the `to: failed` catch-all and terminates
   the run as blocked.
 

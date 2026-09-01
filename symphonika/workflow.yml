@@ -122,6 +122,20 @@ workflow:
     merge:
       action:
         kind: merge_pr
+      # No unconditional `- to: failed` here, unlike every agent state above.
+      # That asymmetry is deliberate. merge_pr is a parking action, and its
+      # hard-failure paths -- a merge the tracker refuses, a transient API
+      # error -- return no observation at all, so the run re-evaluates on the
+      # next tick and a catch-all could never fire on them. Its *deferred*
+      # paths (merge disabled by policy, PR not yet ready under policy) do
+      # evaluate transitions, but with pre-merge signals, and the readiness
+      # check also defers on draft, checks-not-yet-success, review_required,
+      # and unresolved threads -- none of which the four gates below cover. A
+      # catch-all would therefore mark a perfectly healthy merge as blocked on
+      # its first tick while still not catching the hazard it was added for.
+      # Persistent refusal is bounded by the daemon watchdog's max_run_minutes
+      # instead. builtin:merge_when_green and symphonika's own workflow.yml
+      # both omit it for the same reason.
       transitions:
         - to: merged
           when:
