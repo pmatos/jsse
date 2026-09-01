@@ -7,13 +7,13 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## arraybuffer-receiver-guard
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 24/25 (leverage 5, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated — `src/interpreter/builtins/typedarray.rs`
 - **Modules**: `src/interpreter/builtins/typedarray.rs`
 - **Summary**: Collapse the 5 ArrayBuffer getters' inline `enum Probe` borrow-escape prologues + 3 SharedArrayBuffer getters behind snapshot-returning receiver guards (`require_array_buffer` / `require_shared_array_buffer`), mirroring the landed `validate_typed_array` (#543). Guard returns `is_detached` in the snapshot rather than throwing (getters return 0 on detached). DataView getters + borrow-holding methods deferred to `dataview-receiver-guard`.
 - **First seen**: 2026-09-02
-- **PR**: (this run)
+- **PR**: #570
 
 ## validate-typed-array
 
