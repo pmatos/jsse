@@ -48,11 +48,17 @@ debugging, never as a justification.
    - `./scripts/lint.sh` — this is the gate, not a bare `cargo clippy`: it runs `cargo fmt --check` plus clippy twice, once with `--features perf-counters`, which a plain clippy run never compiles.
    - `cargo build --release` — always release. A debug build is far too slow for test262.
    - `cargo test --release`
-   - Targeted test262 for the area you touched, e.g.
-     `uv run python scripts/run-test262.py test262/test/built-ins/<Area>/ -j 32`,
-     then the full suite `uv run python scripts/run-test262.py -j 32` if the change is
-     broad. Use `-j 32`, not `$(nproc)` — the build host is shared and oversubscribing it
-     makes runs flaky. If `uv` is not on `PATH`, it is at `~/.local/bin/uv`.
+   - `uv run python scripts/run-test262.py -j 32` — the **full** suite, unconditionally, for
+     every change however narrow (`AGENTS.md`: "After any implementation work, run the full
+     test262 suite"). This is not belt-and-braces: CI on a pull request runs only a fixed
+     smoke set plus a seeded 10% sample, and the full suite runs only in the nightly cron —
+     i.e. after this pipeline has already squash-merged. Your local full run is the only
+     complete pre-merge regression gate there is. Run a targeted directory first if it
+     shortens your debug loop —
+     `uv run python scripts/run-test262.py test262/test/built-ins/<Area>/ -j 32` — but it is
+     never a substitute for the full run. Use `-j 32`, not `$(nproc)` — the build host is
+     shared and oversubscribing it makes runs flaky. If `uv` is not on `PATH`, it is at
+     `~/.local/bin/uv`.
    - `uv run python scripts/run-test262.py test262-extra/` and
      `uv run python scripts/run-custom-tests.py` when you touched either corpus.
    If any gate fails, fix the root cause. Do not pass `--no-verify` on a real commit, do not
