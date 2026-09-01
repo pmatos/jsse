@@ -1667,29 +1667,32 @@ impl Interpreter {
                 match skipped_elements.as_number() {
                     Some(value) if value.is_infinite() || value.trunc() == value => value,
                     _ => {
-                        let _ = iterator_close_getter(interp, this);
+                        // The error object is created before IteratorClose so that a
+                        // `return()` method replacing the global TypeError binding cannot
+                        // change the prototype of the error we throw.
                         let err = interp.create_type_error(
                             "Iterator.prototype.includes skippedElements must be an integral Number",
                         );
+                        let _ = iterator_close_getter(interp, this);
                         return Completion::Throw(err);
                     }
                 }
             };
 
             if to_skip < 0.0 {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_error(
                     "RangeError",
                     "Iterator.prototype.includes skippedElements must be non-negative",
                 );
+                let _ = iterator_close_getter(interp, this);
                 return Completion::Throw(err);
             }
             if to_skip.is_finite() && to_skip > 9007199254740991.0 {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_error(
                     "RangeError",
                     "Iterator.prototype.includes skippedElements must not exceed 2**53 - 1",
                 );
+                let _ = iterator_close_getter(interp, this);
                 return Completion::Throw(err);
             }
 
