@@ -1711,6 +1711,9 @@ impl Interpreter {
                             continue;
                         }
                         if same_value_zero(&value, &search_element) {
+                            if let Err(err) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(err);
+                            }
                             return Completion::Normal(JsValue::TRUE);
                         }
                     }
