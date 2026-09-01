@@ -188,6 +188,53 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertIn("Removed 0 scratch file(s)", result.stdout)
         self.assertIn("Left 1 in place", result.stdout)
 
+    def test_clean_scratch_works_without_a_built_engine(self):
+        # A pure filesystem sweep must not require the engine to be built; the
+        # "Build it first" error would be misleading for an operation that never
+        # launches an engine.
+        stale = self.write_file(
+            f"test262/test/{PREFIX}a0o8myw6.js", "// leaked by a killed run\n"
+        )
+        old = time.time() - 10_000
+        os.utime(stale, (old, old))
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER),
+                "--binary",
+                str(self.root / "does-not-exist-jsse"),
+                "--test262",
+                "test262",
+                "--clean-scratch",
+                "test262/test",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Build it first", result.stderr)
+        self.assertFalse(stale.exists())
+
+    def test_clean_scratch_accepts_an_explicitly_named_file(self):
+        stale = self.write_file(
+            f"test262/test/{PREFIX}a0o8myw6.js", "// leaked by a killed run\n"
+        )
+        old = time.time() - 10_000
+        os.utime(stale, (old, old))
+
+        result = self.run_runner(
+            self.write_engine(0),
+            "--clean-scratch",
+            paths=(f"test262/test/{PREFIX}a0o8myw6.js",),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(stale.exists(), "naming the file must not be a no-op")
+        self.assertIn("Removed 1 scratch file(s)", result.stdout)
+
     def test_explicit_non_fixture_mjs_is_rejected(self):
         self.write_file("test262-extra/module-test.mjs")
 
@@ -362,6 +409,25 @@ class ScratchFileTests(unittest.TestCase):
         tests = runner.find_tests(self.root / "test262", [str(sample), str(scratch)])
 
         self.assertEqual([p.name for p in tests], ["sample.js"])
+
+    def test_sweep_handles_an_explicitly_named_file_root(self):
+        # `paths` accepts individual files, and a glob expands to them, so
+        # skipping non-directory roots would make naming a leaked file a silent
+        # no-op that still reports success.
+        stale = self.write_scratch(f"{PREFIX}a0o8myw6.js", age_s=10_000)
+
+        removed, skipped = runner.sweep_scratch_files([stale], min_age_s=300)
+
+        self.assertEqual((removed, skipped), (1, 0))
+        self.assertFalse(stale.exists())
+
+    def test_sweep_spares_a_real_test_named_as_a_file_root(self):
+        sample = self.test_dir / "sample.js"
+
+        removed, skipped = runner.sweep_scratch_files([sample], min_age_s=300)
+
+        self.assertEqual((removed, skipped), (0, 0))
+        self.assertTrue(sample.exists())
 
     def test_sweep_leaves_real_tests_alone(self):
         sample = self.test_dir / "sample.js"

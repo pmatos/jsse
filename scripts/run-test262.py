@@ -773,9 +773,17 @@ def sweep_scratch_files(roots: list[Path], min_age_s: float) -> tuple[int, int]:
     removed = 0
     skipped = 0
     for root in roots:
-        if not root.is_dir():
+        # `paths` accepts individual files, and a shell glob over a directory
+        # expands to them, so a file root has to be considered on its own terms
+        # rather than skipped -- otherwise naming a leaked file explicitly is a
+        # silent no-op that still reports success.
+        if root.is_file():
+            candidates = [root]
+        elif root.is_dir():
+            candidates = root.rglob(f"{SCRATCH_PREFIX}*.js")
+        else:
             continue
-        for f in root.rglob(f"{SCRATCH_PREFIX}*.js"):
+        for f in candidates:
             if not _is_scratch(f):
                 continue
             try:
@@ -856,6 +864,22 @@ def main():
 
     args = parse_args()
 
+    if args.clean_scratch:
+        # Before any engine resolution: this only touches the filesystem, so it
+        # must stay usable on a checkout where the binary has not been built.
+        test262 = Path(args.test262)
+        roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
+        removed, skipped = sweep_scratch_files(
+            roots, min_age_s=max(args.timeout * 2, 300)
+        )
+        print(f"Removed {removed} scratch file(s) left by an earlier killed run.")
+        if skipped:
+            print(
+                f"Left {skipped} in place as too recent to be sure they are dead. "
+                "Re-run once no other invocation is active."
+            )
+        sys.exit(0)
+
     engine_name = args.engine
     binary = args.binary
     if binary is None and args.jsse_compat is not None and engine_name == "jsse":
@@ -881,19 +905,6 @@ def main():
         sys.exit(2)
 
     selected_paths = args.paths if args.paths else None
-
-    if args.clean_scratch:
-        roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
-        removed, skipped = sweep_scratch_files(
-            roots, min_age_s=max(args.timeout * 2, 300)
-        )
-        print(f"Removed {removed} scratch file(s) left by an earlier killed run.")
-        if skipped:
-            print(
-                f"Left {skipped} in place as too recent to be sure they are dead. "
-                "Re-run once no other invocation is active."
-            )
-        sys.exit(0)
 
     try:
         tests = find_tests(test262, selected_paths)
