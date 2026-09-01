@@ -193,4 +193,44 @@ graph LR
 
 ## Design
 
-_Written in step 4 (design-it-twice + adjudication); appended after this report was first committed._
+Three interfaces were designed in parallel (design-it-twice), then adjudicated by a fourth agent that authored none of them, against the fixed criteria depth ▸ locality ▸ seam placement ▸ test surface ▸ blast radius.
+
+### Design A — minimal free function per brand (WINNER)
+
+Two free functions mirroring the proven sibling `validate_typed_array`, each returning an owned *dumb* snapshot record with no methods; the getters apply the value rules inline.
+
+```rust
+struct BufferSnapshot { byte_length: usize, is_detached: bool, is_immutable: bool, max_byte_length: Option<usize> }
+
+fn require_array_buffer(interp: &mut Interpreter, this_val: &JsValue) -> Result<BufferSnapshot, Completion>;
+fn require_shared_array_buffer(interp: &mut Interpreter, this_val: &JsValue) -> Result<BufferSnapshot, Completion>;
+```
+
+Each getter becomes a 3–7 line adapter, e.g.:
+
+```rust
+self.define_getter(ab_proto_id, "byteLength", |interp, this_val, _args| {
+    match require_array_buffer(interp, this_val) {
+        Ok(s) => Completion::Normal(JsValue::number(if s.is_detached { 0.0 } else { s.byte_length as f64 })),
+        Err(c) => c,
+    }
+});
+```
+
+**Hides**: the `as_object_id → get_object → cell.borrow()` escape dance, the bidirectional brand check (has ArrayBuffer data **and** not shared / is shared), the snapshot-then-drop-borrow-then-throw ordering, and the `Rc<Cell<bool>>` detached deref. Zero new vocabulary — the snapshot is a plain `Copy` record. The interface is **O(1)**: adding a sixth getter reads existing fields, it does not grow the interface. **Dependency strategy**: no ports/adapters needed — the seam is a same-module free function over the interpreter, exactly like `validate_typed_array`.
+
+### Design B — one unified seam parameterised by brand (rejected)
+
+`enum ArrayBufferKind { Plain, Shared }` + one struct + one `require_array_buffer(interp, this, kind)`. **Rejected on depth and seam placement**: the `is_shared` field is provably dead (needs `#[allow(dead_code)]` to survive the `-D warnings` gate — a real wart), two SAB-irrelevant fields (`is_detached`, `is_immutable`) leak into the Shared contract with the invariant upheld only by construction, and a single function behind a `kind` token is one adapter — a *hypothetical* seam by the "one adapter = hypothetical, two = real" rule — with ambient coupling (nothing type-checks that `Shared` is installed on the shared prototype).
+
+### Design C — behaviour-carrying snapshot (RUNNER-UP DESIGN)
+
+Two guards delegating to `probe_array_buffer(&Interpreter, this, want_shared) -> Option<AbSnapshot>`, plus an `AbSnapshot` whose *methods* encode the spec value rules (`byte_length_value() -> JsValue` returns 0 when detached, `max_byte_length_value()`, `has_max_capacity_value()`, `detached_value()`, `immutable_value()`), plus an optional `buffer_getter(guard, AbSnapshot::method)` combinator so each getter is one line. **Its genuine win — the strongest of the three on _test surface_**: the value-rule methods are pure `&self -> JsValue` with zero interpreter/arena dependency, so the spec-subtle rules (`detached → 0`, `unwrap_or(bytes)`) are unit-testable from struct literals as a truth table, with no setup.
+
+### Adjudication
+
+**Ranking A ≻ C ≻ B.** The first criterion, **depth**, separates them and therefore decides. Depth is behaviour hidden *per unit of interface*, a ratio — not total behaviour hidden. The deep, error-prone mass is the ~150-line borrow-escape `enum Probe` prologue; **A and C both hide it behind two functions and tie there**. To hide the *additional* ~6 lines of value rules, C adds ~7 interface items (5 methods + combinator + probe), three of the five methods being single-expression pass-throughs, and the method set scales **O(getters)** — one method per getter, 1:1. An interface that grows linearly with its own call sites has renamed them, not abstracted them, so C's marginal ratio dilutes it below A's fixed **O(1)** interface. The in-repo sibling corroborates: `validate_typed_array` returns a dumb `TypedArrayInfo` snapshot with no value methods, callers apply value rules inline — a receiver-validation seam in this codebase *is* shaped like A.
+
+C's runner-up standing rests on **test surface** (criterion 4): its pure methods are cheaper to unit-test than A's inline rules. But (a) that is a *cheapness* edge, not a *possibility* edge — A's inline rules live inside the getter, whose interface **is** the property `[[Get]]`, so testing them through `[[Get]]` in-crate is testing *through* the interface, not past it; and (b) criterion 4 is subordinate to the depth separation and cannot overturn it. **Winner: Design A.** The adjudicator noted A must still close C's cheap-test edge from the inside by adding `[[Get]]`-level tests for the two subtle inline rules — folded into the plan below.
+
+**Implementation risks carried into step 5** (from the adjudicator): (1) write `Err(c) => c`, not `return c` (clippy `needless_return`), and land the struct + both guards + enough getters that **every** `BufferSnapshot` field has a live reader in **one** edit, or the `dead_code -D warnings` hook blocks; (2) mirror `validate_typed_array_tests` for both guards including both exact brand-error strings, and pin the one place A *differs* from the sibling — a **detached** ArrayBuffer must still return a snapshot (`is_detached = true`), not throw; (3) add `[[Get]]`-level tests for `detached → 0` in **both** `byteLength` and `maxByteLength`, and `unwrap_or(bytes)` in both `maxByteLength` getters; (4) the SAB guard pins `is_detached = false`, `is_immutable = false`, and `growable` reads `max_byte_length.is_some()` off the same struct with no dead field.
