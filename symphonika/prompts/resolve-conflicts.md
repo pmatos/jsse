@@ -34,7 +34,7 @@ second PR.
 - Use the local `gh` CLI for every GitHub mutation. Do **not** call the
   GitHub MCP connector tools.
 - Do not modify operational labels in the `sym:*` namespace.
-- Do not modify the `symphony/` submodule.
+- Do not modify `symphonika/` — that is this pipeline's own contract, and editing it mid-run changes the rules you are running under. Do not modify the `spec/` or `test262/` submodules either.
 - If conflicts are genuinely unresolvable without a product decision,
   post a `gh pr comment` describing what blocked you and **exit non-zero
   (e.g. `exit 1`)**. A non-zero exit routes the FSM through

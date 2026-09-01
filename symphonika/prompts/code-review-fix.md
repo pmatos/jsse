@@ -27,7 +27,7 @@ if you need the PR number — do not assume one. Stay on branch
 - Do not modify operational labels in the `sym:*` namespace. Do not
   self-apply `sym:human-needed` — the orchestrator applies that automatically
   when a run ends up blocked.
-- Do not modify the `symphony/` submodule.
+- Do not modify `symphonika/` — that is this pipeline's own contract, and editing it mid-run changes the rules you are running under. Do not modify the `spec/` or `test262/` submodules either.
 - If `/code-review --fix` genuinely cannot proceed (e.g. no open PR found
   for this branch), post a `gh pr comment` explaining what blocked you and
   **exit non-zero (e.g. `exit 1`)**. A non-zero exit routes the FSM through
