@@ -23,6 +23,7 @@ def _load_runner():
 
 
 runner = _load_runner()
+PREFIX = runner.SCRATCH_PREFIX
 
 
 def frontmatter(*lines: str) -> str:
@@ -207,24 +208,51 @@ class ScratchFileTests(unittest.TestCase):
         return path
 
     def test_scratch_names_are_recognised(self):
-        self.assertTrue(runner._is_scratch(Path("tmpa0o8myw6.js")))
-        self.assertTrue(runner._is_scratch(Path("tmp_g3ol4p_.js")))
+        self.assertTrue(runner._is_scratch(Path(f"{PREFIX}a0o8myw6.js")))
+        self.assertTrue(runner._is_scratch(Path(f"{PREFIX}_g3ol4p_.js")))
+
+    def test_created_scratch_files_match_the_sweep_pattern(self):
+        # Guards against the prefix and the regex drifting apart: a name the
+        # runner actually produces must be one the sweep recognises.
+        with tempfile.NamedTemporaryFile(
+            prefix=runner.SCRATCH_PREFIX, suffix=".js", dir=self.test_dir
+        ) as tmp:
+            created = Path(tmp.name)
+            self.assertTrue(runner._is_scratch(created))
+            self.assertIn(created, set(self.test_dir.rglob(f"{PREFIX}*.js")))
 
     def test_real_tests_are_not_mistaken_for_scratch(self):
-        # test262 has real tests whose names begin with "tmp"-like prefixes;
-        # only the exact tempfile shape (tmp + 8 chars + .js) may be swept.
+        # Only the exact shape the runner emits (prefix + 8 chars + .js) may be
+        # swept; near misses must survive.
         for name in (
-            "tmp.js",
-            "tmpshort.js",
-            "tmptoolonganame.js",
-            "tmpABCDEFGH.js",
-            "temporal-tmpa0o8myw6.js",
-            "tmpa0o8myw6.mjs",
+            f"{PREFIX}.js",
+            f"{PREFIX}short.js",
+            f"{PREFIX}toolonganame.js",
+            f"{PREFIX}ABCDEFGH.js",
+            f"temporal-{PREFIX}a0o8myw6.js",
+            f"{PREFIX}a0o8myw6.mjs",
         ):
             with self.subTest(name=name):
                 self.assertFalse(runner._is_scratch(Path(name)))
 
+    def test_generic_tempfile_names_are_never_sweepable(self):
+        # A bare `tempfile` name proves nothing about who wrote it, so it must
+        # never be eligible for deletion -- see _is_scratch vs _is_uncollectable.
+        for name in ("tmpa0o8myw6.js", "tmp_g3ol4p_.js"):
+            with self.subTest(name=name):
+                self.assertFalse(runner._is_scratch(Path(name)))
+                self.assertTrue(runner._is_uncollectable_scratch(Path(name)))
+
     def test_scratch_files_are_not_collected_as_tests(self):
+        self.write_scratch(f"{PREFIX}a0o8myw6.js")
+
+        tests = runner.find_tests(self.root / "test262", None)
+
+        self.assertEqual([p.name for p in tests], ["sample.js"])
+
+    def test_legacy_scratch_files_are_not_collected_as_tests(self):
+        # Files leaked before the prefix existed must still stay out of the
+        # scenario count, even though the sweep will not delete them.
         self.write_scratch("tmpa0o8myw6.js")
 
         tests = runner.find_tests(self.root / "test262", None)
@@ -232,15 +260,25 @@ class ScratchFileTests(unittest.TestCase):
         self.assertEqual([p.name for p in tests], ["sample.js"])
 
     def test_sweep_removes_stale_scratch_files(self):
-        stale = self.write_scratch("tmpa0o8myw6.js", age_s=10_000)
+        stale = self.write_scratch(f"{PREFIX}a0o8myw6.js", age_s=10_000)
 
         removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
         self.assertEqual(removed, 1)
         self.assertFalse(stale.exists())
 
+    def test_sweep_spares_stale_generic_tempfile_names(self):
+        # The whole point of the prefix: an unrelated tool's `tempfile`, or a
+        # real test shaped like one, is not ours to unlink.
+        foreign = self.write_scratch("tmpa0o8myw6.js", age_s=10_000)
+
+        removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
+
+        self.assertEqual(removed, 0)
+        self.assertTrue(foreign.exists())
+
     def test_sweep_spares_scratch_files_of_a_concurrent_run(self):
-        live = self.write_scratch("tmpa0o8myw6.js")
+        live = self.write_scratch(f"{PREFIX}a0o8myw6.js")
 
         removed = runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
@@ -249,7 +287,7 @@ class ScratchFileTests(unittest.TestCase):
 
     def test_sweep_leaves_real_tests_alone(self):
         sample = self.test_dir / "sample.js"
-        decoy = self.write_scratch("tmpshort.js", age_s=10_000)
+        decoy = self.write_scratch(f"{PREFIX}short.js", age_s=10_000)
 
         runner.sweep_scratch_files([self.test_dir], min_age_s=300)
 
@@ -260,7 +298,7 @@ class ScratchFileTests(unittest.TestCase):
 class WorkerCleanupTests(unittest.TestCase):
     def test_sigterm_handler_unlinks_the_in_flight_scratch_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            scratch = Path(tmpdir) / "tmpa0o8myw6.js"
+            scratch = Path(tmpdir) / f"{PREFIX}a0o8myw6.js"
             scratch.write_text("// in flight\n", encoding="utf-8")
 
             # The handler exits the process, so run it in a child.

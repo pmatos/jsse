@@ -41,6 +41,15 @@ def _set_pdeathsig():
         pass
 
 
+# Scratch files carry a prefix that names this runner, so the filename alone is
+# evidence that we wrote them. The startup sweep deletes what it matches, and it
+# recurses into whichever directory the caller selected, so a generic `tmp`
+# prefix would let it unlink a `tempfile` belonging to some other tool -- or a
+# real test that happened to be named that way -- inside a tree the project
+# forbids modifying at all (AGENTS.md: never modify `test262/`).
+SCRATCH_PREFIX = "jsse-scratch-"
+
+
 # Path of the scratch file this worker is currently running, or None. The
 # termination handler below is the only reader; workers are single-threaded and
 # run one scenario at a time, so a plain global is enough.
@@ -53,7 +62,7 @@ def _worker_cleanup_handler(signum, frame):
     `run_scenario` unlinks in a `finally`, which covers every path the
     interpreter itself unwinds. A signal is not one of those: the default
     SIGTERM action terminates the process outright, so the scratch file next to
-    the test would survive as an untracked `tmp*.js` inside the read-only
+    the test would survive as an untracked scratch file inside the read-only
     submodule. Unlink it here before exiting.
     """
     if _active_scratch_path is not None:
@@ -490,6 +499,7 @@ def run_single_test(
 
         with tempfile.NamedTemporaryFile(
             mode="w",
+            prefix=SCRATCH_PREFIX,
             suffix=".js",
             delete=False,
             encoding="utf-8",
@@ -674,16 +684,31 @@ def _is_fixture(p: Path) -> bool:
     return name.endswith("_FIXTURE.js") or name.endswith("_FIXTURE.mjs")
 
 
-# `tempfile` names its files `tmp` + 8 chars drawn from this alphabet. Scratch
-# files are written next to the test they wrap, so a run killed hard enough to
-# skip cleanup leaves them among the tests. Excluding them from collection keeps
-# a leaked file from being counted as a test of its own and inflating the
-# scenario total, independently of whether the sweep below reclaimed it.
-SCRATCH_RE = re.compile(r"^tmp[a-z0-9_]{8}\.js$")
+# `tempfile` composes a name as its prefix plus 8 chars drawn from this
+# alphabet. Scratch files are written next to the test they wrap, so a run
+# killed hard enough to skip cleanup leaves them among the tests.
+SCRATCH_RE = re.compile(rf"^{re.escape(SCRATCH_PREFIX)}[a-z0-9_]{{8}}\.js$")
+
+# Runs from before the prefix existed leaked plain `tempfile` names. Collection
+# still skips those, so a leftover is never counted as a test of its own and
+# cannot inflate the scenario total -- but the sweep never deletes one, because
+# the name is not evidence of who wrote it.
+LEGACY_SCRATCH_RE = re.compile(r"^tmp[a-z0-9_]{8}\.js$")
 
 
 def _is_scratch(p: Path) -> bool:
+    """True for a scratch file this runner created, which the sweep may delete."""
     return SCRATCH_RE.match(p.name) is not None
+
+
+def _is_uncollectable_scratch(p: Path) -> bool:
+    """True for anything scratch-shaped, pre-prefix leftovers included.
+
+    Collection only ever skips these, and a skip is recoverable where an unlink
+    is not, so matching the generic shape here is safe in a way that matching it
+    in `sweep_scratch_files` would not be.
+    """
+    return _is_scratch(p) or LEGACY_SCRATCH_RE.match(p.name) is not None
 
 
 class TestCollectionError(Exception):
@@ -725,6 +750,10 @@ def sweep_scratch_files(roots: list[Path], min_age_s: float) -> int:
     SIGKILL runs neither the `finally` in `run_scenario` nor the worker's
     termination handler, so nothing but a later sweep can reclaim those files.
 
+    Only names carrying `SCRATCH_PREFIX` are eligible. `roots` follows whatever
+    the caller selected, so this walks trees we do not own; unlinking there is
+    only defensible for a name that says we wrote it.
+
     `min_age_s` keeps a concurrent run's live scratch files out of scope: one is
     at most a per-test timeout old, so anything older belongs to a dead run.
     """
@@ -733,7 +762,7 @@ def sweep_scratch_files(roots: list[Path], min_age_s: float) -> int:
     for root in roots:
         if not root.is_dir():
             continue
-        for f in root.rglob("tmp*.js"):
+        for f in root.rglob(f"{SCRATCH_PREFIX}*.js"):
             if not _is_scratch(f):
                 continue
             try:
@@ -758,7 +787,7 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
                 tests.extend(
                     f
                     for f in sorted(path.rglob("*.js"))
-                    if not _is_fixture(f) and not _is_scratch(f)
+                    if not _is_fixture(f) and not _is_uncollectable_scratch(f)
                 )
         return sorted(tests)
 
@@ -770,7 +799,9 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
         d = test_dir / subdir
         if d.is_dir():
             tests.extend(
-                f for f in d.rglob("*.js") if not _is_fixture(f) and not _is_scratch(f)
+                f
+                for f in d.rglob("*.js")
+                if not _is_fixture(f) and not _is_uncollectable_scratch(f)
             )
     return sorted(tests)
 
