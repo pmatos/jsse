@@ -646,7 +646,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_has_direct_super)),
-            Expression::Object(props) => props.iter().any(|p| {
+            Expression::Object(props, _) => props.iter().any(|p| {
                 Self::expr_has_direct_super(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_has_direct_super(e))
             }),
