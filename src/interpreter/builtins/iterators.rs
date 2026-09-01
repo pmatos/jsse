@@ -1653,10 +1653,47 @@ impl Interpreter {
         });
 
         // includes(searchElement, [skippedElements])
-        self.define_method(iter_proto_id, "includes", 1, |interp, this, _args| {
+        self.define_method(iter_proto_id, "includes", 1, |interp, this, args| {
             if !this.is_object() {
                 let err = interp
                     .create_type_error("Iterator.prototype.includes called on non-object");
+                return Completion::Throw(err);
+            }
+
+            let skipped_elements = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+            let to_skip = if skipped_elements.is_undefined() {
+                0.0
+            } else {
+                match skipped_elements.as_number() {
+                    Some(value) if value.is_infinite() || value.trunc() == value => value,
+                    _ => {
+                        let _ = iterator_close_getter(interp, this);
+                        let err = interp.create_type_error(
+                            "Iterator.prototype.includes skippedElements must be an integral Number",
+                        );
+                        return Completion::Throw(err);
+                    }
+                }
+            };
+
+            if to_skip < 0.0 {
+                let _ = iterator_close_getter(interp, this);
+                let err = interp.create_error(
+                    "RangeError",
+                    "Iterator.prototype.includes skippedElements must be non-negative",
+                );
+                return Completion::Throw(err);
+            }
+            if to_skip.is_finite() && to_skip > 9007199254740991.0 {
+                let _ = iterator_close_getter(interp, this);
+                let err = interp.create_error(
+                    "RangeError",
+                    "Iterator.prototype.includes skippedElements must not exceed 2**53 - 1",
+                );
+                return Completion::Throw(err);
+            }
+
+            if let Err(err) = get_iterator_direct_getter(interp, this) {
                 return Completion::Throw(err);
             }
 
