@@ -617,6 +617,15 @@ impl Interpreter {
                         interp.create_type_error("Promise.try requires an object"),
                     );
                 }
+                // Validate the receiver up front, matching NewPromiseCapability's own
+                // check, so a non-constructor `this` throws before the callback runs
+                // (and before promise_resolve_with_constructor's same-constructor fast
+                // path could otherwise skip validation entirely).
+                if !interp.is_constructor(this) {
+                    return Completion::Throw(
+                        interp.create_type_error("Promise.try requires a constructor"),
+                    );
+                }
                 let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let call_args: Vec<JsValue> = if args.len() > 1 {
                     args[1..].to_vec()
@@ -626,19 +635,35 @@ impl Interpreter {
                 let result = interp.call_function(&callback, &JsValue::UNDEFINED, &call_args);
                 match result {
                     Completion::Normal(value) => {
-                        match interp.promise_resolve_with_constructor(this, &value) {
+                        // promise_resolve_with_constructor may run a custom
+                        // constructor via NewPromiseCapability; root `value` across
+                        // it since it is otherwise only a Rust local.
+                        let frame = interp.gc_root_frame();
+                        interp.gc_root_value(&value);
+                        let outcome = interp.promise_resolve_with_constructor(this, &value);
+                        interp.gc_unroot_frame(frame);
+                        match outcome {
                             Ok(promise) => Completion::Normal(promise),
                             Err(e) => Completion::Throw(e),
                         }
                     }
                     Completion::Throw(e) => {
+                        // Same reasoning: `e` must stay rooted while
+                        // new_promise_capability runs a custom constructor, and
+                        // while it is passed to reject.
+                        let frame = interp.gc_root_frame();
+                        interp.gc_root_value(&e);
                         let cap = match interp.new_promise_capability(this) {
                             Ok(cap) => cap,
-                            Err(e) => return Completion::Throw(e),
+                            Err(err) => {
+                                interp.gc_unroot_frame(frame);
+                                return Completion::Throw(err);
+                            }
                         };
-                        if let Completion::Throw(e2) =
-                            interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[e])
-                        {
+                        let reject_result =
+                            interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[e]);
+                        interp.gc_unroot_frame(frame);
+                        if let Completion::Throw(e2) = reject_result {
                             return Completion::Throw(e2);
                         }
                         Completion::Normal(cap.promise)
