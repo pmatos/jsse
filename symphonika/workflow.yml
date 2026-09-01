@@ -1,0 +1,157 @@
+workflow:
+  name: jsse_plan_tdd_pr
+  initial: plan
+
+  states:
+    # Inlined from builtin:plan-tdd-pr because `with:` overrides template
+    # inputs, not transitions, and this pipeline needs stricter gates than the
+    # template's on both stages. The template's planning gate is
+    # `provider_success` + `artifact_exists` (symphonika#586) and its
+    # implementing gate is `branch_ahead_of_base` alone; both are reproduced
+    # below with an added per-attempt progress requirement.
+    plan:
+      action:
+        kind: agent
+        provider: claude
+        prompt: prompts/plan.md
+      transitions:
+        # artifact_exists probes the Run Workspace for the plan file itself, so
+        # a planner that commits something other than a plan cannot pass.
+        # branch_advanced_since_attempt_start is false unless this run added a
+        # commit, so a resumed attempt cannot coast on a PLAN.md an earlier
+        # attempt left in the workspace.
+        - to: implement
+          when:
+            provider_success: true
+            artifact_exists: PLAN.md
+            branch_advanced_since_attempt_start: true
+        - to: failed
+
+    implement:
+      action:
+        kind: agent
+        provider: codex
+        prompt: prompts/impl.md
+      transitions:
+        # branch_ahead_of_base alone would be satisfied by the plan commit
+        # already on the branch, so require this run to advance HEAD too.
+        - to: code_review_fix
+          when:
+            provider_success: true
+            branch_ahead_of_base: true
+            branch_advanced_since_attempt_start: true
+        - to: failed
+
+    code_review_fix:
+      action:
+        kind: agent
+        provider: claude
+        prompt: prompts/code-review-fix.md
+      transitions:
+        - to: simplify
+          when:
+            provider_success: true
+        - to: failed
+
+    simplify:
+      action:
+        kind: agent
+        provider: claude
+        prompt: prompts/simplify.md
+      transitions:
+        - to: wait_for_pr
+          when:
+            provider_success: true
+        - to: failed
+
+    wait_for_pr:
+      action:
+        kind: wait
+      transitions:
+        - to: merged
+          when:
+            pr_merged: true
+        - to: failed
+          when:
+            pr_open: false
+        - to: merge
+          when:
+            checks: success
+            mergeable: true
+            unresolved_review_threads: 0
+        - to: resolve_conflicts
+          when:
+            mergeable: false
+        - to: autofix
+          when:
+            checks: failure
+        # Reviewer feedback on an otherwise-green PR. Ordered last so a clean
+        # PR still merges and a broken one still repairs first. Without this
+        # the state parks forever on the common shape -- green checks, one
+        # unresolved thread -- because `merge` needs
+        # unresolved_review_threads: 0 and `autofix` needs failing checks.
+        # The orchestrator-wide review_followup loop no longer dispatches
+        # alongside a parked raw-FSM run (issue #616), so a case this state
+        # does not name is a case nothing handles.
+        - to: autofix
+          when:
+            has_unresolved_reviews: true
+
+    autofix:
+      action:
+        kind: agent
+        provider: claude
+        prompt: prompts/autofix-pr.md
+      transitions:
+        - to: wait_for_pr
+          when:
+            provider_success: true
+        - to: failed
+
+    resolve_conflicts:
+      action:
+        kind: agent
+        provider: claude
+        prompt: prompts/resolve-conflicts.md
+      transitions:
+        - to: wait_for_pr
+          when:
+            provider_success: true
+        - to: failed
+
+    merge:
+      action:
+        kind: merge_pr
+      # No unconditional `- to: failed` here, unlike every agent state above.
+      # That asymmetry is deliberate. merge_pr is a parking action, and its
+      # hard-failure paths -- a merge the tracker refuses, a transient API
+      # error -- return no observation at all, so the run re-evaluates on the
+      # next tick and a catch-all could never fire on them. Its *deferred*
+      # paths (merge disabled by policy, PR not yet ready under policy) do
+      # evaluate transitions, but with pre-merge signals, and the readiness
+      # check also defers on draft, checks-not-yet-success, review_required,
+      # and unresolved threads -- none of which the four gates below cover. A
+      # catch-all would therefore mark a perfectly healthy merge as blocked on
+      # its first tick while still not catching the hazard it was added for.
+      # Persistent refusal is bounded by the daemon watchdog's max_run_minutes
+      # instead. builtin:merge_when_green and symphonika's own workflow.yml
+      # both omit it for the same reason.
+      transitions:
+        - to: merged
+          when:
+            pr_merged: true
+        - to: failed
+          when:
+            pr_open: false
+        - to: resolve_conflicts
+          when:
+            mergeable: false
+        - to: autofix
+          when:
+            checks: failure
+
+    merged:
+      terminal: success
+
+    failed:
+      terminal: blocked
