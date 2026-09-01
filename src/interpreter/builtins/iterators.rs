@@ -2024,7 +2024,16 @@ impl Interpreter {
                         .create_error("RangeError", "take limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
-                // Step 5-6: integerLimit = ToIntegerOrInfinity, check < 0
+                // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
+                if num_limit.is_finite() && num_limit > 9007199254740991.0 {
+                    let _ = iterator_close_getter(interp, this);
+                    let err = interp.create_error(
+                        "RangeError",
+                        "take limit must not exceed 2**53 - 1",
+                    );
+                    return Completion::Throw(err);
+                }
+                // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
                 let integer_limit = if num_limit.is_infinite() {
                     num_limit
                 } else {
@@ -2175,7 +2184,16 @@ impl Interpreter {
                         .create_error("RangeError", "drop limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
-                // Step 5-6: integerLimit = ToIntegerOrInfinity, check < 0
+                // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
+                if num_limit.is_finite() && num_limit > 9007199254740991.0 {
+                    let _ = iterator_close_getter(interp, this);
+                    let err = interp.create_error(
+                        "RangeError",
+                        "drop limit must not exceed 2**53 - 1",
+                    );
+                    return Completion::Throw(err);
+                }
+                // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
                 let integer_limit = if num_limit.is_infinite() {
                     num_limit
                 } else {
