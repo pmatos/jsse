@@ -235,6 +235,40 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertFalse(stale.exists(), "naming the file must not be a no-op")
         self.assertIn("Removed 1 scratch file(s)", result.stdout)
 
+    def test_clean_scratch_rejects_a_nonexistent_path(self):
+        # Silently skipping an unwalkable root would report "Removed 0" and exit
+        # 0, which reads as "this tree is clean" when it was never examined.
+        result = self.run_runner(
+            self.write_engine(0),
+            "--clean-scratch",
+            paths=("test262/test/typo-does-not-exist",),
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cleanup path not found", result.stderr)
+        self.assertIn("typo-does-not-exist", result.stderr)
+        self.assertNotIn("Removed 0 scratch file(s)", result.stdout)
+
+    def test_clean_scratch_rejects_a_missing_test262_checkout(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER),
+                "--binary",
+                str(self.root / "does-not-exist-jsse"),
+                "--test262",
+                "no-such-checkout",
+                "--clean-scratch",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cleanup path not found", result.stderr)
+        self.assertNotIn("Removed 0 scratch file(s)", result.stdout)
+
     def test_explicit_non_fixture_mjs_is_rejected(self):
         self.write_file("test262-extra/module-test.mjs")
 

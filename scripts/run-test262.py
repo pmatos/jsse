@@ -869,6 +869,17 @@ def main():
         # must stay usable on a checkout where the binary has not been built.
         test262 = Path(args.test262)
         roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
+        # `sweep_scratch_files` skips a root it cannot walk, so without this a
+        # mistyped path -- or a missing --test262 checkout -- would report
+        # "Removed 0" and exit 0, reading as confirmation that a tree is clean
+        # when it was never looked at. Moving this command ahead of the engine
+        # setup also moved it ahead of that directory check, so it validates its
+        # own roots.
+        missing = [r for r in roots if not r.exists()]
+        if missing:
+            for r in missing:
+                print(f"Error: cleanup path not found: {r}", file=sys.stderr)
+            sys.exit(2)
         removed, skipped = sweep_scratch_files(
             roots, min_age_s=max(args.timeout * 2, 300)
         )
