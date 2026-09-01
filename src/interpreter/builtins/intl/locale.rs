@@ -1010,11 +1010,19 @@ impl Interpreter {
                             );
                         }
                     };
+                    let preference = compute_region_preference(&locale);
+                    let lookup_region = preference
+                        .region_override
+                        .as_deref()
+                        .unwrap_or(&preference.region);
+                    let mut lookup_locale = locale.clone();
+                    lookup_locale.id.region = lookup_region.parse().ok();
 
                     let first_day = if let Some(ref fw) = fw_value {
                         fw_keyword_to_day_number(fw).unwrap_or(7)
                     } else {
-                        let wi = icu::calendar::week::WeekInformation::try_new((&locale).into());
+                        let wi =
+                            icu::calendar::week::WeekInformation::try_new((&lookup_locale).into());
                         if let Ok(week_info) = wi {
                             weekday_to_number(week_info.first_weekday)
                         } else {
@@ -1023,7 +1031,7 @@ impl Interpreter {
                     };
 
                     let mut weekend_days: Vec<i32> = Vec::new();
-                    let wi = icu::calendar::week::WeekInformation::try_new((&locale).into());
+                    let wi = icu::calendar::week::WeekInformation::try_new((&lookup_locale).into());
                     if let Ok(week_info) = wi {
                         use icu::calendar::types::Weekday;
                         for wd in [
