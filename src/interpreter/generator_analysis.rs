@@ -460,7 +460,7 @@ fn analyze_expression(
             }
         }
 
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             for prop in props {
                 if let PropertyKey::Computed(key_expr) = &prop.key {
                     analyze_expression(key_expr, analysis, ctx, true);
@@ -699,7 +699,7 @@ pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
         | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => false,
         Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_yield),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             matches!(&p.key, PropertyKey::Computed(e) if expr_contains_yield(e))
                 || expr_contains_yield(&p.value)
         }),
@@ -753,7 +753,7 @@ pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
         | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => false,
         Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_suspension),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             matches!(&p.key, PropertyKey::Computed(e) if expr_contains_suspension(e))
                 || expr_contains_suspension(&p.value)
         }),

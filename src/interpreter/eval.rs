@@ -592,7 +592,7 @@ impl Interpreter {
             Expression::New(callee, args, site_id) => self.eval_new(callee, args, env, *site_id),
             Expression::Member(obj, prop, site_id) => self.eval_member(obj, prop, env, *site_id),
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
-            Expression::Object(props) => self.eval_object_literal(props, env),
+            Expression::Object(props, _) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
@@ -3313,7 +3313,7 @@ impl Interpreter {
                     other => other,
                 }
             }
-            Expression::Object(props) if op == AssignOp::Assign => {
+            Expression::Object(props, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -4141,7 +4141,7 @@ impl Interpreter {
                         },
                     })
                     .collect();
-                Expression::Object(obj_props)
+                Expression::Object(obj_props, false)
             }
             Pattern::Assign(inner, default) => Expression::Assign(
                 AssignOp::Assign,
@@ -4181,7 +4181,7 @@ impl Interpreter {
             Expression::Array(elements, _) => {
                 self.destructure_array_assignment(elements, &val, env)
             }
-            Expression::Object(props) => self.destructure_object_assignment(props, &val, env),
+            Expression::Object(props, _) => self.destructure_object_assignment(props, &val, env),
             Expression::Assign(AssignOp::Assign, inner_target, default) => {
                 let v = if val.is_undefined() {
                     match self.eval_expr(default, env) {
