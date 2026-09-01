@@ -535,6 +535,9 @@ pub(crate) struct LoadedModule {
     pub has_tla: bool,
     pub deferred_only: bool, // loaded via load_module_no_eval, not yet fully loaded
     pub program_ast: Option<crate::ast::Program>,
+    /// The module's permanent [[RequestedModules]] graph, retained after its
+    /// executable AST is released following synchronous evaluation.
+    pub requested_modules: Vec<(String, bool)>,
     pub async_evaluation_order: Option<u64>,
     pub pending_async_dependencies: u32,
     pub async_parent_modules: Vec<ModuleKey>,
@@ -1160,6 +1163,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -2321,6 +2325,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: has_tla_entry,
             program_ast: Some(program.clone()),
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -2391,6 +2396,7 @@ impl Interpreter {
                 return Completion::Throw(e);
             }
         }
+        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(program);
 
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6).
         // For deferred imports, load without evaluation.
@@ -3040,6 +3046,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -3114,6 +3121,7 @@ impl Interpreter {
                 return Err(e);
             }
         }
+        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(&program);
 
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
@@ -3267,6 +3275,7 @@ impl Interpreter {
             deferred_only: true,
             has_tla,
             program_ast: Some(program.clone()),
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -3338,6 +3347,7 @@ impl Interpreter {
                 return Err(e);
             }
         }
+        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(&program);
 
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
@@ -3453,6 +3463,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -3879,12 +3890,11 @@ impl Interpreter {
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
         let my_ancestor = module.borrow().dfs_ancestor_index.unwrap_or(0);
         if my_dfs == my_ancestor {
-            let has_async = module.borrow().async_evaluation_order.is_some();
             while let Some(popped) = stack.pop() {
                 if let Some(popped_mod) = self.module_registry_get(&popped) {
-                    popped_mod.borrow_mut().cycle_root = Some(canon.clone());
-                    if !has_async {
-                        let mut pm = popped_mod.borrow_mut();
+                    let mut pm = popped_mod.borrow_mut();
+                    pm.cycle_root = Some(canon.clone());
+                    if pm.async_evaluation_order.is_none() {
                         pm.evaluated = true;
                         pm.is_evaluating = false;
                     }
@@ -3909,20 +3919,25 @@ impl Interpreter {
             .map(|req| (req.specifier, req.is_deferred))
     }
 
+    fn graph_dependency_requests(program: &Program) -> Vec<(String, bool)> {
+        program
+            .module_items
+            .iter()
+            .filter_map(Self::graph_dependency_request)
+            .map(|(specifier, is_deferred)| (specifier.to_string(), is_deferred))
+            .collect()
+    }
+
     fn get_module_dep_paths(&self, canon_path: &ModuleKey) -> Vec<(ModuleKey, bool)> {
         let module = match self.module_registry_get(canon_path) {
             Some(m) => m,
             None => return Vec::new(),
         };
-        let program = match module.borrow().program_ast.clone() {
-            Some(p) => p,
-            None => return Vec::new(),
-        };
+        let requests = module.borrow().requested_modules.clone();
         let mut deps = Vec::new();
-        for item in &program.module_items {
-            if let Some((spec, is_deferred)) = Self::graph_dependency_request(item)
-                && let Ok(resolved) =
-                    self.resolve_module_specifier_pure(spec, canon_path.file_path())
+        for (specifier, is_deferred) in requests {
+            if let Ok(resolved) =
+                self.resolve_module_specifier_pure(&specifier, canon_path.file_path())
             {
                 deps.push((resolved, is_deferred));
             }
@@ -4234,8 +4249,9 @@ impl Interpreter {
             None => return,
         };
 
+        let scc_evaluated = self.is_module_scc_evaluated(&canon);
         let module_ref = module.borrow();
-        if module_ref.evaluated {
+        if (module_ref.is_evaluating && module_ref.cycle_root.is_none()) || scc_evaluated {
             return;
         }
 
@@ -4246,19 +4262,26 @@ impl Interpreter {
             return;
         }
 
-        // Check transitive deps
-        if let Some(ref program) = module_ref.program_ast {
-            let items: Vec<_> = program.module_items.clone();
-            drop(module_ref);
-            for item in &items {
-                if let Some((spec, _)) = Self::graph_dependency_request(item)
-                    && let Ok(resolved) =
-                        self.resolve_module_specifier_pure(spec, canon.file_path())
-                {
-                    self.gather_async_transitive_deps(&resolved, result, seen);
-                }
-            }
+        drop(module_ref);
+        for (resolved, _) in self.get_module_dep_paths(&canon) {
+            self.gather_async_transitive_deps(&resolved, result, seen);
         }
+    }
+
+    fn is_module_scc_evaluated(&self, module_path: &ModuleKey) -> bool {
+        let module = match self.module_registry_get(&module_path.canonicalize()) {
+            Some(module) => module,
+            None => return false,
+        };
+        let module_ref = module.borrow();
+        let cycle_root = match module_ref.cycle_root.as_ref() {
+            Some(cycle_root) => cycle_root.clone(),
+            None => return module_ref.evaluated,
+        };
+        drop(module_ref);
+
+        self.module_registry_get(&cycle_root)
+            .is_some_and(|root| root.borrow().evaluated)
     }
 
     /// Like resolve_module_specifier but doesn't need &mut self
@@ -4303,10 +4326,10 @@ impl Interpreter {
             None => return true,
         };
 
-        let module_ref = module.borrow();
-        if module_ref.evaluated {
+        if self.is_module_scc_evaluated(&canon) {
             return true;
         }
+        let module_ref = module.borrow();
         if module_ref.is_evaluating {
             return false;
         }
@@ -4314,17 +4337,10 @@ impl Interpreter {
             return false;
         }
 
-        if let Some(ref program) = module_ref.program_ast {
-            let items: Vec<_> = program.module_items.clone();
-            drop(module_ref);
-            for item in &items {
-                if let Some((spec, _)) = Self::graph_dependency_request(item)
-                    && let Ok(resolved) =
-                        self.resolve_module_specifier_pure(spec, canon.file_path())
-                    && !self.ready_for_sync_execution(&resolved, seen)
-                {
-                    return false;
-                }
+        drop(module_ref);
+        for (resolved, _) in self.get_module_dep_paths(&canon) {
+            if !self.ready_for_sync_execution(&resolved, seen) {
+                return false;
             }
         }
 
