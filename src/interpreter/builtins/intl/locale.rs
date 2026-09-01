@@ -1,6 +1,8 @@
 use super::super::super::*;
+use icu::experimental::displaynames::{DisplayNamesPreferences, RegionDisplayNames};
 use icu::locale::Locale as IcuLocale;
-use icu::locale::extensions::unicode::{Key, Value};
+use icu::locale::extensions::unicode::{Key, SubdivisionId, Value};
+use icu::locale::subtags::Region;
 use icu::locale::{LocaleCanonicalizer, LocaleDirectionality, LocaleExpander};
 
 fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> {
@@ -15,21 +17,9 @@ fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> 
 
 fn canonical_unicode_subdivision_region(locale: &IcuLocale, key_str: &str) -> Option<String> {
     let subdivision = extract_unicode_keyword(locale, key_str)?;
-    let bytes = subdivision.as_bytes();
-    let region_len = if bytes.len() >= 2 && bytes[..2].iter().all(u8::is_ascii_alphabetic) {
-        2
-    } else if bytes.len() >= 3 && bytes[..3].iter().all(u8::is_ascii_digit) {
-        3
-    } else {
-        return None;
-    };
-    let suffix = &bytes[region_len..];
-    if !(1..=4).contains(&suffix.len()) || !suffix.iter().all(u8::is_ascii_alphanumeric) {
-        return None;
-    }
+    let region = SubdivisionId::try_from_str(&subdivision).ok()?.region;
 
-    let mut region_locale: IcuLocale =
-        format!("und-{}", &subdivision[..region_len]).parse().ok()?;
+    let mut region_locale: IcuLocale = format!("und-{region}").parse().ok()?;
     LocaleCanonicalizer::new_extended().canonicalize(&mut region_locale);
     region_locale.id.region.map(|region| region.to_string())
 }
@@ -37,6 +27,26 @@ fn canonical_unicode_subdivision_region(locale: &IcuLocale, key_str: &str) -> Op
 struct RegionPreference {
     region: String,
     region_override: Option<String>,
+}
+
+impl RegionPreference {
+    fn lookup_region(&self) -> &str {
+        match self.region_override.as_deref() {
+            Some(region) if region_has_locale_data(region) => region,
+            _ => &self.region,
+        }
+    }
+}
+
+fn region_has_locale_data(region: &str) -> bool {
+    let Ok(region) = region.parse::<Region>() else {
+        return false;
+    };
+    let prefs = DisplayNamesPreferences::from(&icu::locale::locale!("en"));
+    let Ok(formatter) = RegionDisplayNames::try_new(prefs, Default::default()) else {
+        return false;
+    };
+    formatter.of(region).is_some()
 }
 
 fn compute_region_preference(locale: &IcuLocale) -> RegionPreference {
@@ -48,6 +58,7 @@ fn compute_region_preference(locale: &IcuLocale) -> RegionPreference {
         .or_else(|| {
             let mut maximal = locale.clone();
             LocaleExpander::new_extended().maximize(&mut maximal.id);
+            LocaleCanonicalizer::new_extended().canonicalize(&mut maximal);
             maximal.id.region.map(|region| region.to_string())
         })
         .unwrap_or_else(|| "001".to_string());
@@ -796,22 +807,15 @@ impl Interpreter {
                         vec![JsValue::from_str(&h)]
                     } else {
                         let h12_regions = ["US", "CA", "AU", "NZ", "PH", "IN", "EG", "SA", "CO", "PK", "MY"];
-                        let default = tag
-                            .parse::<IcuLocale>()
-                            .ok()
-                            .map(|locale| compute_region_preference(&locale))
-                            .map(|preference| {
-                                let lookup_region = preference
-                                    .region_override
-                                    .as_deref()
-                                    .unwrap_or(&preference.region);
-                                if h12_regions.contains(&lookup_region) {
-                                    "h12"
-                                } else {
-                                    "h23"
-                                }
-                            })
-                            .unwrap_or("h23");
+                        let default = tag.parse::<IcuLocale>().ok().map_or("h23", |locale| {
+                            let preference = compute_region_preference(&locale);
+                            let lookup_region = preference.lookup_region();
+                            if h12_regions.contains(&lookup_region) {
+                                "h12"
+                            } else {
+                                "h23"
+                            }
+                        });
                         vec![JsValue::from_str(default)]
                     };
                     return Completion::Normal(interp.create_array(cycles));
@@ -1011,10 +1015,7 @@ impl Interpreter {
                         }
                     };
                     let preference = compute_region_preference(&locale);
-                    let lookup_region = preference
-                        .region_override
-                        .as_deref()
-                        .unwrap_or(&preference.region);
+                    let lookup_region = preference.lookup_region();
                     let mut lookup_locale = locale.clone();
                     lookup_locale.id.region = lookup_region.parse().ok();
 
@@ -1804,8 +1805,5 @@ mod tests {
                 "{tag}"
             );
         }
-
-        let world: icu::locale::subtags::Region = "001".parse().expect("001 is a region");
-        assert_eq!(world.to_string(), "001");
     }
 }
