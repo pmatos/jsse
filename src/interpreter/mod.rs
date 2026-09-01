@@ -4175,7 +4175,7 @@ impl Interpreter {
             Expression::Array(elements, _) => {
                 elements.iter().any(|e| e.as_ref().is_some_and(Self::expr_has_await))
             }
-            Expression::Object(props) => {
+            Expression::Object(props, _) => {
                 props.iter().any(|p| {
                     Self::expr_has_await(&p.value)
                         || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_has_await(e))

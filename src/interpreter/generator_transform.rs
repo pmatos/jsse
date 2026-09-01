@@ -1084,7 +1084,7 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             use crate::ast::{Property, PropertyKey};
             let mut new_props = Vec::new();
             for (i, prop) in props.iter().enumerate() {
@@ -1132,7 +1132,7 @@ fn transform_yielding_expression(
                     method: prop.method,
                 });
             }
-            let combined = Expression::Object(new_props);
+            let combined = Expression::Object(new_props, false);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -2382,7 +2382,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             elems.iter().map(|e| e.as_ref().map(rewrite_expr)).collect(),
             *trailing,
         ),
-        Expression::Object(props) => Expression::Object(
+        Expression::Object(props, _) => Expression::Object(
             props
                 .iter()
                 .map(|p| Property {
@@ -2399,6 +2399,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
                     method: p.method,
                 })
                 .collect(),
+            false,
         ),
         Expression::Unary(op, e) => Expression::Unary(*op, Box::new(rewrite_expr(e))),
         Expression::Binary(op, l, r) => {

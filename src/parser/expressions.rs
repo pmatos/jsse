@@ -82,7 +82,7 @@ impl<'a> Parser<'a> {
         simple_only: bool,
         allow_call: bool,
     ) -> Result<(), ParseError> {
-        if !simple_only && matches!(expr, Expression::Array(..) | Expression::Object(_)) {
+        if !simple_only && matches!(expr, Expression::Array(..) | Expression::Object(..)) {
             if self.last_expr_parenthesized {
                 return Err(self.error("Invalid left-hand side in assignment"));
             }
@@ -146,7 +146,7 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
-            Expression::Object(props) => {
+            Expression::Object(props, trailing_comma_after_spread) => {
                 let mut saw_rest = false;
                 for prop in props {
                     if saw_rest {
@@ -184,6 +184,11 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                if saw_rest && *trailing_comma_after_spread {
+                    return Err(self.error(
+                        "Rest element must be last element in object destructuring pattern",
+                    ));
+                }
                 Ok(())
             }
             _ => Ok(()),
@@ -192,7 +197,7 @@ impl<'a> Parser<'a> {
 
     fn validate_destructuring_target(&self, expr: &Expression) -> Result<(), ParseError> {
         match expr {
-            Expression::Array(..) | Expression::Object(_) => {
+            Expression::Array(..) | Expression::Object(..) => {
                 self.validate_destructuring_pattern(expr)
             }
             Expression::Spread(inner) => self.validate_destructuring_target(inner),
@@ -200,7 +205,7 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) if exprs.len() == 1 => {
                 match &exprs[0] {
                     // Parenthesized Object/Array patterns are not valid destructuring targets
-                    Expression::Object(_) | Expression::Array(..) => {
+                    Expression::Object(..) | Expression::Array(..) => {
                         Err(self.error("Invalid destructuring assignment target"))
                     }
                     other => self.validate_destructuring_target(other),
@@ -1463,7 +1468,7 @@ impl<'a> Parser<'a> {
                         // so validate_destructuring_target can reject them
                         if matches!(
                             &e,
-                            Expression::Object(_)
+                            Expression::Object(..)
                                 | Expression::Array(..)
                                 | Expression::Assign(AssignOp::Assign, ..)
                         ) {
@@ -1553,7 +1558,7 @@ impl<'a> Parser<'a> {
     }
 
     fn has_cover_initialized_name(expr: &Expression) -> bool {
-        if let Expression::Object(props) = expr {
+        if let Expression::Object(props, _) = expr {
             props.iter().any(|p| {
                 p.shorthand
                     && matches!(
@@ -1571,8 +1576,10 @@ impl<'a> Parser<'a> {
         let saved_no_in = self.no_in;
         self.no_in = false;
         let mut props = Vec::new();
+        let mut trailing_comma_after_spread = false;
         while self.current != Token::RightBrace {
-            if self.current == Token::Ellipsis {
+            let is_spread = self.current == Token::Ellipsis;
+            if is_spread {
                 self.advance()?;
                 let expr = self.parse_assignment_expression()?;
                 props.push(Property {
@@ -1588,6 +1595,9 @@ impl<'a> Parser<'a> {
             }
             if self.current == Token::Comma {
                 self.advance()?;
+                if is_spread && self.current == Token::RightBrace {
+                    trailing_comma_after_spread = true;
+                }
             } else if self.current != Token::RightBrace {
                 return Err(self.error("Expected ',' or '}' after property definition"));
             }
@@ -1612,7 +1622,7 @@ impl<'a> Parser<'a> {
         }
         self.last_obj_had_proto_dup = has_proto_dup;
         self.no_in = saved_no_in;
-        Ok(Expression::Object(props))
+        Ok(Expression::Object(props, trailing_comma_after_spread))
     }
 
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {

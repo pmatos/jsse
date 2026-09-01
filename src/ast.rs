@@ -350,7 +350,7 @@ pub(crate) enum Expression {
     This,
     Super,
     Array(Vec<Option<Expression>>, bool),
-    Object(Vec<Property>),
+    Object(Vec<Property>, bool),
     Function(FunctionExpr),
     ArrowFunction(ArrowFunction),
     Class(ClassExpr),
@@ -835,7 +835,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
         Expression::Array(elems, _) => elems
             .iter()
             .any(|e| e.as_ref().is_some_and(expr_uses_arguments)),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             expr_uses_arguments(&p.value)
                 || matches!(&p.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
         }),
@@ -1053,7 +1053,7 @@ pub(crate) fn expr_contains_matching(
         Expression::Array(elems, _) => elems
             .iter()
             .any(|e| e.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             expr_contains_matching(&p.value, pred)
                 || matches!(&p.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
         }),
@@ -1420,7 +1420,7 @@ fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32
                 assign_expr_sites(e, call_id, prop_id);
             }
         }
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             for p in props.iter_mut() {
                 if let PropertyKey::Computed(e) = &mut p.key {
                     assign_expr_sites(e, call_id, prop_id);
@@ -1563,7 +1563,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
                 clear_expr_ic_sites(e);
             }
         }
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             for p in props.iter_mut() {
                 if let PropertyKey::Computed(e) = &mut p.key {
                     clear_expr_ic_sites(e);
