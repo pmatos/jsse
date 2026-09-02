@@ -72,7 +72,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - We should implement new features to ensure new tests pass without regressing on previously passing tests.
 - Each test runs under a time limit (default 120s) and a memory limit (512 MB) to prevent runaway tests from crashing the system. These limits are enforced in `scripts/run-test262.py`.
 - We implement all optional test262 features including intl402 (Intl API) and Temporal. The default test runner covers `language/`, `built-ins/`, `annexB/`, and `intl402/`. Staging tests are tracked separately — run them explicitly with `uv run python scripts/run-test262.py test262/test/staging/`.
-- Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/
+- Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/. This includes regressions for engine-internal heuristics when the failure changes an observable ECMAScript value or throw; exact host-compatibility diagnostics and engine resource-limit or stress checks remain in `tests/`.
   - it should include spec part that is tested and follow the exact same patterns of test262 tests.
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
