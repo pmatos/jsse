@@ -904,12 +904,16 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     # so there is nothing there the .mjs naming guard could ask an author to fix.
     test_dir = test262_dir / "test"
     tests = []
+    unreadable: list[tuple[Path, OSError]] = []
     for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
+            found, sub_unreadable = _walk_matching(d, ".js")
+            unreadable.extend(sub_unreadable)
             tests.extend(
-                f for f in d.rglob("*.js") if not _is_fixture(f) and not _is_scratch(f)
+                f for f in found if not _is_fixture(f) and not _is_scratch(f)
             )
+    _raise_if_unreadable(unreadable)
     return sorted(tests)
 
 
