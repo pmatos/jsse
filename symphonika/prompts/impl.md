@@ -65,7 +65,6 @@ debugging, never as a justification.
    If any gate fails, fix the root cause. Do not pass `--no-verify` on a real commit, do not
    skip clippy, and do not narrow test scope to make it green.
 5. **Do not regress the baseline, and do not rewrite it.** The runner reads `test262-pass.txt` from `origin/main`. Never pass `--update-baseline` on a feature branch — rolling the baseline forward is a `main`-branch operation.
-6. **Keep `README.md`'s test262 figures current.** `CLAUDE.md` rule 5 is unconditional — "After running test262, update `README.md` with pass count and percentage" — so compare the README figure against your full-run output and correct it whenever the two disagree. In practice that means a change of yours that moves the count, or a `test262` submodule bump that moves the denominator; what the rule forbids is leaving a stale number behind.
 
 ## Commit hygiene
 
