@@ -782,6 +782,22 @@ fn this_expression_compiles_and_matches_tree_walker() {
     assert_parity_number(source, 1.0);
 }
 
+#[test]
+fn sloppy_bare_call_this_matches_tree_walker() {
+    let source = "function f(){ return this === undefined ? 1 : 2; } var __r = f();";
+    assert_parity_number(source, 2.0);
+}
+
+#[test]
+fn derived_constructor_this_before_super_still_throws_reference_error() {
+    let source = "class Base {} \
+                  class Derived extends Base { constructor() { return this; } } \
+                  var __r = 0; \
+                  try { new Derived(); } \
+                  catch (e) { __r = e instanceof ReferenceError ? 1 : 2; }";
+    assert_parity_number(source, 1.0);
+}
+
 // NOTE: lexical declarations are not yet compilable, so a body containing one
 // still bails the WHOLE body to the tree-walker.
 
