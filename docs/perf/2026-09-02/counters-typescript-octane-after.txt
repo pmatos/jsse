@@ -1,0 +1,111 @@
+PERF	vm_ops	38065540
+PERF	ast_stmt_execs	54822576
+PERF	ast_expr_evals	192611573
+PERF	ast_work_units	247434149
+PERF	body_dispatch_compiled	2947682
+PERF	body_dispatch_ast	7828714
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	12.91
+PERF	ast_units_in_functions	247433777
+PERF	ast_units_per_ast_body	31.61
+PERF	compile_ok	1352
+PERF	compile_bail	11049
+PERF	calls_from_vm	16060
+PERF	calls_to_native	3495164
+PERF	calls_to_user	10776396
+PERF	gc_minor	116
+PERF	gc_major	11
+PERF	gc_ms	1454
+BAIL	call callee	10464
+BAIL	nested tail call	184
+BAIL	statement:FunctionDeclaration	165
+BAIL	statement:Switch	89
+BAIL	expression:New	52
+BAIL	expression:Array	51
+BAIL	expression:Typeof	12
+BAIL	assign target	8
+BAIL	update target	7
+BAIL	expression:Object	4
+BAIL	expression:Function	3
+BAIL	statement:Continue	3
+BAIL	literal	2
+BAIL	statement:ForIn	2
+BAIL	lexical declaration	1
+BAIL	statement:Throw	1
+BAIL	statement:Try	1
+BODY	<anonymous#3066>	25083387	10.14%	178157	call callee
+BODY	<anonymous#1086>#10973	23876281	9.65%	211240	call callee
+BODY	<anonymous#3006>	18485253	7.47%	1421943	call callee
+BODY	<anonymous#2168>	14690290	5.94%	304695	call callee
+BODY	<anonymous#3052>	13595087	5.49%	1235917	update target
+BODY	<anonymous#3064>	10350929	4.18%	75206	call callee
+BODY	postAssignScopes	9364717	3.78%	141845	call callee
+BODY	<anonymous#2811>	7596780	3.07%	37707	expression:Typeof
+BODY	cleanASTType	7391748	2.99%	147353	expression:New
+BODY	AST	6191520	2.50%	154788	call callee
+BODY	<anonymous#2807>	5718613	2.31%	37713	statement:Switch
+BODY	<anonymous#2547>	4771812	1.93%	250172	call callee
+BODY	<anonymous#2823>	3970932	1.60%	17201	call callee
+BODY	<anonymous#2813>	3633741	1.47%	37713	expression:New
+BODY	<anonymous#2601>	3321073	1.34%	91984	call callee
+BODY	<anonymous#2583>	3144729	1.27%	41864	call callee
+BODY	<anonymous#2599>	2974153	1.20%	13203	expression:Typeof
+BODY	<anonymous#3589>	2919616	1.18%	21977	call callee
+BODY	<anonymous#3058>	2850512	1.15%	178157	call callee
+BODY	walkBinaryExpressionChildren	2147706	0.87%	65082	call callee
+BODY	<anonymous#3629>	2102987	0.85%	22947	call callee
+BODY	<anonymous#1420>	2060930	0.83%	31915	call callee
+BODY	<anonymous#2527>	2052776	0.83%	186616	call callee
+BODY	walkListChildren	1978404	0.80%	28653	call callee
+BODY	<anonymous#3038>	1909564	0.77%	2001	call callee
+BODY	<anonymous#3018>	1832378	0.74%	24358	call callee
+BODY	<anonymous#2827>	1720890	0.70%	5483	update target
+BODY	<anonymous#3231>	1646030	0.67%	27646	call callee
+BODY	Identifier	1579456	0.64%	54464	call callee
+BODY	<anonymous#3501>	1479803	0.60%	36384	call callee
+BODY	<anonymous#3573>	1372627	0.55%	26045	call callee
+BODY	<anonymous#2737>	1301930	0.53%	125401	expression:New
+BODY	<anonymous#3481>	1026363	0.41%	4350	call callee
+BODY	preCollectTypes	1016848	0.41%	10628	call callee
+BODY	<anonymous#3649>	1013787	0.41%	8209	call callee
+BODY	<anonymous#3978>	995111	0.40%	14053	statement:Switch
+BODY	<anonymous#3960>	957208	0.39%	3283	call callee
+BODY	<anonymous#3323>	864039	0.35%	5723	call callee
+BODY	<anonymous#1205>	855693	0.35%	60856	call callee
+BODY	<anonymous#3325>#9764	812185	0.33%	5808	call callee
+OP	LoadName	11654906	30.62%
+OP	GetProp	6940861	18.23%
+OP	Pop	3471063	9.12%
+OP	SetProp	2361072	6.20%
+OP	Return	2138220	5.62%
+OP	JumpIfFalse	1961486	5.15%
+OP	Eq	1443392	3.79%
+OP	LoadConst	1167703	3.07%
+OP	ReturnUndefined	809462	2.13%
+OP	NotEq	733552	1.93%
+OP	ResolveName	703608	1.85%
+OP	StoreResolvedName	703608	1.85%
+OP	GetElement	526214	1.38%
+OP	LoadFalse	502622	1.32%
+OP	BitAnd	428957	1.13%
+OP	LoadNull	323052	0.85%
+OP	Neg	322746	0.85%
+OP	JumpIfTruthyKeep	306132	0.80%
+OP	LoadTrue	289327	0.76%
+OP	Jump	248438	0.65%
+OP	GtEq	205754	0.54%
+OP	Lt	163346	0.43%
+OP	Add	146296	0.38%
+OP	JumpIfFalsyKeep	117250	0.31%
+OP	Sub	92354	0.24%
+OP	Not	75388	0.20%
+OP	SetElement	59299	0.16%
+OP	Shr	51004	0.13%
+OP	LtEq	45626	0.12%
+OP	StrictEq	28872	0.08%
+OP	LoadCalleeName	16060	0.04%
+OP	ReturnCall	8186	0.02%
+OP	Call	7874	0.02%
+OP	UpdateName	7491	0.02%
+OP	Gt	4226	0.01%
+OP	LoadResolvedName	93	0.00%
