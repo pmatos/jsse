@@ -93,12 +93,12 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
   AST variant (`statement:Labeled`), `BODY` per-function tree-walker work units
   spent *exclusive* of nested bodies, plus GC collection counts and time.
-- Generator/async, top-level script, module, and `eval` bodies do not pass
-  through `dispatch_body` and carry no function object, so they are attributed
-  to the synthetic `BODY` rows `<generator/async body>`, `<script body>`,
-  `<module body>`, and `<eval>` rather than by name. Their work is correctly kept
-  off the calling function's exclusive total; resolving the generator/async
-  bucket to individual function names is jsse#540.
+- Generator/async state-machine bodies do not pass through `dispatch_body`, but
+  retain their originating function identity for attribution, so their work is
+  reported under individual function names and kept off the calling function's
+  exclusive total. Top-level script, module, and `eval` bodies have no function
+  identity and remain in the synthetic `BODY` rows `<script body>`,
+  `<module body>`, and `<eval>`.
 - `BODY` rows are keyed by function *identity*, not name. Two functions sharing
   a name render as `name#<object id>`; a unique name stays bare, so only genuine
   ambiguity costs readability.
@@ -111,7 +111,9 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   of the non-`dispatch_body` paths are reported separately as
   `body_non_function_execs`, which counts **executions, not invocations**:
   generators replay, so one generator call with N yields registers roughly 4N
-  state-machine steps there.
+  state-machine steps there. The execution count on each resolved
+  generator/async `BODY` row has the same state-machine-step semantics, not a
+  function-call count; replayed work is real work and is counted each time.
 - `ast_units_per_ast_body` divides **function** work by function invocations —
   its numerator is `ast_units_in_functions`, not the run-wide `ast_work_units`,
   which also covers script/generator/module/eval work.
