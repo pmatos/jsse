@@ -82,7 +82,14 @@ const MAX_PARSE_DEPTH: u32 = 4_000;
 
 impl<'a> Parser<'a> {
     pub(crate) fn new(source: &'a str) -> Result<Self, ParseError> {
-        let mut lexer = Lexer::new(source);
+        Self::new_with_lexer(source, Lexer::new(source))
+    }
+
+    pub(crate) fn new_for_eval(source: &'a str) -> Result<Self, ParseError> {
+        Self::new_with_lexer(source, Lexer::new_for_eval(source))
+    }
+
+    fn new_with_lexer(source: &'a str, mut lexer: Lexer<'a>) -> Result<Self, ParseError> {
         let mut had_lt = false;
         let current = loop {
             let tok = lexer.next_token()?;

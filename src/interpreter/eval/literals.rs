@@ -89,11 +89,7 @@ impl Interpreter {
             Literal::Null => JsValue::NULL,
             Literal::Boolean(b) => JsValue::boolean(*b),
             Literal::Number(n) => JsValue::number(*n),
-            Literal::String(s) => {
-                let code_units =
-                    crate::interpreter::builtins::regexp::pua_code_units_to_surrogates(s);
-                JsValue::string(JsString::from_vec(code_units))
-            }
+            Literal::String(s) => JsValue::string(JsString::from_vec(s.clone())),
             Literal::BigInt(s) => {
                 use num_bigint::BigInt;
                 let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))

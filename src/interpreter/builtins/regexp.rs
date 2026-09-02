@@ -70,7 +70,7 @@ fn surrogate_to_pua(cp: u32) -> char {
     char::from_u32(SURROGATE_PUA_BASE + (cp - SURROGATE_START)).unwrap()
 }
 
-fn pua_to_surrogate(c: char) -> Option<u16> {
+pub(crate) fn pua_to_surrogate(c: char) -> Option<u16> {
     let cp = c as u32;
     if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)).contains(&cp) {
         Some((cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16)
@@ -146,34 +146,6 @@ pub(crate) fn regex_output_to_js_string(s: &str) -> JsString {
         }
     }
     JsString::from_vec(code_units)
-}
-
-/// Convert UTF-16 code units that may contain PUA-encoded surrogates back to
-/// actual surrogate code units. PUA chars U+F0000-U+F07FF encode as UTF-16
-/// pairs [0xDB80..=0xDB81, 0xDC00..=0xDFFF]; these map back to U+D800-U+DFFF.
-pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
-    let mut result = Vec::with_capacity(code_units.len());
-    let mut i = 0;
-    while i < code_units.len() {
-        let cu = code_units[i];
-        if (0xDB80..=0xDB81).contains(&cu)
-            && i + 1 < code_units.len()
-            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
-        {
-            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
-            if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START))
-                .contains(&cp)
-            {
-                let surrogate = (cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16;
-                result.push(surrogate);
-                i += 2;
-                continue;
-            }
-        }
-        result.push(cu);
-        i += 1;
-    }
-    result
 }
 
 /// Encode UTF-16 code units as WTF-8 bytes.
