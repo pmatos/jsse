@@ -90,6 +90,14 @@ fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, false)
 }
 
+fn js_string_to_regex_pattern(code_units: &[u16], flags: &str) -> String {
+    if flags.contains('u') || flags.contains('v') {
+        js_string_to_regex_input(code_units)
+    } else {
+        js_string_to_regex_input_non_unicode(code_units)
+    }
+}
+
 /// Both regex views encode an all-ASCII subject identically to its code units,
 /// which is what lets `RegexInput` map offsets without a boundary table. The
 /// conversion fast path and that offset shortcut must agree on "ASCII", so both
@@ -7657,8 +7665,8 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     {
         let b = obj.borrow();
         let r = b.regexp()?;
-        let source = js_string_to_regex_input(&r.source.code_units);
         let flags = r.flags.to_rust_string();
+        let source = js_string_to_regex_pattern(&r.source.code_units, &flags);
         drop(b);
         Some((source, flags, obj_id))
     } else {
@@ -7803,9 +7811,10 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
         let (source, flags) = if let Some(obj) = interp.get_object_cell(rx_id) {
             let b = obj.borrow();
             let (src, fl) = if let Some(r) = b.regexp() {
+                let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_input(&r.source.code_units),
-                    r.flags.to_rust_string(),
+                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    flags,
                 )
             } else {
                 (String::new(), String::new())
@@ -8046,9 +8055,10 @@ fn regexp_exec_raw(
         if let Some(obj) = interp.get_object_cell(this_id) {
             let b = obj.borrow();
             if let Some(r) = b.regexp() {
+                let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_input(&r.source.code_units),
-                    r.flags.to_rust_string(),
+                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    flags,
                 )
             } else {
                 (source.to_string(), flags.to_string())
@@ -8447,7 +8457,7 @@ impl Interpreter {
                 let pattern_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let flags_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                let (pattern_str, flags_str);
+                let flags_str;
                 let pattern_js: Option<JsString>;
 
                 // 3. If pattern is a RegExp object
@@ -8477,16 +8487,13 @@ impl Interpreter {
                     if let Some(pobj) = interp.get_object_cell(po_id) {
                         let b = pobj.borrow();
                         if let Some(r) = b.regexp() {
-                            pattern_str = js_string_to_regex_input(&r.source.code_units);
                             pattern_js = Some(r.source.clone());
                             flags_str = r.flags.to_rust_string();
                         } else {
-                            pattern_str = "(?:)".to_string();
                             pattern_js = None;
                             flags_str = String::new();
                         }
                     } else {
-                        pattern_str = "(?:)".to_string();
                         pattern_js = None;
                         flags_str = String::new();
                     }
@@ -8500,7 +8507,6 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    pattern_str = js_string_to_regex_input(&p_js.code_units);
                     pattern_js = Some(p_js);
                     flags_str = if flags_arg.is_undefined() {
                         String::new()
@@ -8511,6 +8517,11 @@ impl Interpreter {
                         }
                     };
                 }
+
+                let pattern_str = pattern_js
+                    .as_ref()
+                    .map(|pattern| js_string_to_regex_pattern(&pattern.code_units, &flags_str))
+                    .unwrap_or_else(|| "(?:)".to_string());
 
                 // Validate flags: no invalid chars and no duplicates
                 {
@@ -8628,9 +8639,10 @@ impl Interpreter {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let r = b.regexp().unwrap();
+                        let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_input(&r.source.code_units),
-                            r.flags.to_rust_string(),
+                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            flags,
                         )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
@@ -8943,9 +8955,10 @@ impl Interpreter {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let r = b.regexp().unwrap();
+                        let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_input(&r.source.code_units),
-                            r.flags.to_rust_string(),
+                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            flags,
                         )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
@@ -10348,14 +10361,13 @@ impl Interpreter {
                     Resolved(String),
                     NeedsToString(JsValue),
                 }
-                let (pattern_js, pattern_str, raw_flags) = if has_regexp_matcher
+                let (pattern_js, raw_flags) = if has_regexp_matcher
                     && let Some(pat_id) = pattern_arg.as_object_id()
                 {
                     let src_js = interp
                         .get_object_cell(pat_id)
                         .and_then(|obj| obj.borrow().regexp().map(|r| r.source.clone()))
                         .unwrap_or_else(|| JsString::from_str(""));
-                    let src = js_string_to_regex_input(&src_js.code_units);
                     let flg = if flags_arg.is_undefined() {
                         RawFlags::Resolved(
                             interp
@@ -10366,7 +10378,7 @@ impl Interpreter {
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (src_js, src, flg)
+                    (src_js, flg)
                 } else if is_regexp_obj && let Some(pat_id) = pattern_arg.as_object_id() {
                     let src = match interp.get_object_property(pat_id, "source", &pattern_arg) {
                         Completion::Normal(v) => match interp.to_js_string(&v) {
@@ -10376,7 +10388,6 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => JsString::from_str(""),
                     };
-                    let src_str = js_string_to_regex_input(&src.code_units);
                     let flg = if flags_arg.is_undefined() {
                         let f = match interp.get_object_property(pat_id, "flags", &pattern_arg) {
                             Completion::Normal(v) => v,
@@ -10387,7 +10398,7 @@ impl Interpreter {
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (src, src_str, flg)
+                    (src, flg)
                 } else {
                     let p_js = if pattern_arg.is_undefined() {
                         JsString::from_str("")
@@ -10397,13 +10408,12 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let p_str = js_string_to_regex_input(&p_js.code_units);
                     let flg = if flags_arg.is_undefined() {
                         RawFlags::Resolved(String::new())
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (p_js, p_str, flg)
+                    (p_js, flg)
                 };
 
                 // §22.2.3.1 step 5: RegExpAlloc — get prototype from new target
@@ -10450,6 +10460,8 @@ impl Interpreter {
                         &format!("Invalid regular expression flags '{}'", flags_str),
                     ));
                 }
+
+                let pattern_str = js_string_to_regex_pattern(&pattern_js.code_units, &flags_str);
 
                 // Validate the pattern
                 if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
