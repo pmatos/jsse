@@ -82,3 +82,19 @@ jobs:
 
       - name: Run test262-extra (bytecode VM)
         run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --bytecode --fail-on-failures
+
+  adr-numbers:
+    name: ADR numbers
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject newly ambiguous ADR numbers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-adr-numbers.mjs --base "$BASE_SHA"
