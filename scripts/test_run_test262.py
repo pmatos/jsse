@@ -9,6 +9,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -332,6 +333,69 @@ class RunTest262ExitStatusTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("test262-extra/nested/module-test.mjs", result.stderr)
+
+    def test_uncollected_mjs_reports_unreadable_directory(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262-extra/locked/module-test.mjs")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            with self.assertRaisesRegex(
+                runner.TestCollectionError, "could not scan"
+            ):
+                runner._uncollected_mjs(self.root / "test262-extra")
+        finally:
+            locked.chmod(mode)
+
+    def test_find_tests_selected_directory_reports_unreadable_directory(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262-extra/locked/hidden.js")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            with mock.patch.object(runner, "_uncollected_mjs", return_value=[]):
+                with self.assertRaisesRegex(
+                    runner.TestCollectionError, "could not scan"
+                ):
+                    runner.find_tests(
+                        self.root / "test262", [str(self.root / "test262-extra")]
+                    )
+        finally:
+            locked.chmod(mode)
+
+    def test_find_tests_default_corpus_reports_unreadable_directory(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262/test/language/locked/hidden.js")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            with self.assertRaisesRegex(
+                runner.TestCollectionError, "could not scan"
+            ):
+                runner.find_tests(self.root / "test262", None)
+        finally:
+            locked.chmod(mode)
+
+    def test_run_reports_unreadable_directory_and_exits_nonzero(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262/test/language/locked/hidden.js")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            result = self.run_runner(self.write_engine(0), paths=())
+        finally:
+            locked.chmod(mode)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not scan", result.stderr)
 
     def test_directory_allows_mjs_fixtures(self):
         self.write_file("test262-extra/module-test.js", frontmatter("flags: [module]"))
