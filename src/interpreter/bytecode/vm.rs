@@ -216,9 +216,8 @@ fn run_chunk_inner(
         }
     }
     let mut stack = interp.acquire_vm_operand_stack(chunk.max_stack as usize);
-    let mut refs = interp.acquire_vm_ref_stack(chunk.max_refs as usize);
+    let mut refs: Vec<IdentifierRef> = Vec::with_capacity(chunk.max_refs as usize);
     let result = run_chunk_loop(interp, chunk, env, &mut stack, &mut refs);
-    interp.release_vm_ref_stack(refs);
     interp.release_vm_operand_stack(stack);
     result
 }

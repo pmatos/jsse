@@ -266,7 +266,6 @@ pub(crate) struct Interpreter {
     calling_as_construct: bool,
     function_env_pool: Vec<EnvRef>,
     pub(crate) vm_operand_stack_pool: Vec<Vec<JsValue>>,
-    vm_ref_stack_pool: Vec<Vec<eval::IdentifierRef>>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
@@ -434,7 +433,6 @@ pub(crate) const PROXY_CHAIN_DEPTH_LIMIT: usize = 4_000;
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
 const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 pub(crate) const MAX_POOLED_VM_OPERAND_STACKS: usize = 256;
-pub(crate) const MAX_POOLED_VM_REF_STACKS: usize = 256;
 const MAX_POOLED_VM_STACK_CAPACITY: usize = 256;
 
 /// test262's host specifier for a Module Source. `test262/INTERPRETING.md`
@@ -605,7 +603,6 @@ impl Interpreter {
             calling_as_construct: false,
             function_env_pool: Vec::new(),
             vm_operand_stack_pool: Vec::new(),
-            vm_ref_stack_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
@@ -2013,7 +2010,6 @@ impl Interpreter {
 
     pub(crate) fn acquire_vm_operand_stack(&mut self, needed: usize) -> Vec<JsValue> {
         let mut stack = self.vm_operand_stack_pool.pop().unwrap_or_default();
-        debug_assert!(stack.is_empty());
         stack.reserve(needed);
         stack
     }
@@ -2024,22 +2020,6 @@ impl Interpreter {
             && stack.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
         {
             self.vm_operand_stack_pool.push(stack);
-        }
-    }
-
-    fn acquire_vm_ref_stack(&mut self, needed: usize) -> Vec<eval::IdentifierRef> {
-        let mut stack = self.vm_ref_stack_pool.pop().unwrap_or_default();
-        debug_assert!(stack.is_empty());
-        stack.reserve(needed);
-        stack
-    }
-
-    fn release_vm_ref_stack(&mut self, mut stack: Vec<eval::IdentifierRef>) {
-        stack.clear();
-        if self.vm_ref_stack_pool.len() < MAX_POOLED_VM_REF_STACKS
-            && stack.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
-        {
-            self.vm_ref_stack_pool.push(stack);
         }
     }
 
