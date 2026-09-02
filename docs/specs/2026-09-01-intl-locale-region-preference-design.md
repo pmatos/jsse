@@ -40,8 +40,8 @@ paths. There is no separate availability probe before selecting the override.
 
 The helper is suitable for `getCalendars()`, but that method currently has no
 region-sensitive calendar preference data to query. That independent data gap
-is tracked in #562. Language-and-region-specific hour-cycle preferences are
-also absent from the existing region-only table and are tracked in #563.
+is tracked in #562. `getHourCycles()` now resolves language-and-region-specific
+CLDR time data before falling back to region-only data.
 
 `getCollations()` does not use `RegionPreference`; its root fallback is fixed
 separately to return the spec-required `emoji` and `eor` values.
