@@ -223,11 +223,12 @@ fn run_chunk_inner(
     result
 }
 
+#[inline(always)]
 fn run_chunk_loop(
     interp: &mut Interpreter,
     chunk: &Chunk,
     env: &EnvRef,
-    mut stack: &mut Vec<JsValue>,
+    stack: &mut Vec<JsValue>,
     refs: &mut Vec<IdentifierRef>,
 ) -> Completion {
     let mut completion_value: Option<JsValue> = None;
@@ -243,7 +244,7 @@ fn run_chunk_loop(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let v = chunk.constants[idx as usize].to_value();
-                push_value(interp, &mut stack, v);
+                push_value(interp, stack, v);
             }
             Op::LoadName => {
                 let idx = decode_u16(chunk, pc);
@@ -251,7 +252,7 @@ fn run_chunk_loop(
                 let name = chunk.names[idx as usize].clone();
                 let strict = env.borrow().strict;
                 match interp.resolve_identifier(&name, env, strict) {
-                    Completion::Normal(v) => push_value(interp, &mut stack, v),
+                    Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
             }
@@ -270,8 +271,8 @@ fn run_chunk_loop(
                     Completion::Normal(value) => value,
                     abrupt => return abrupt,
                 };
-                push_value(interp, &mut stack, callee);
-                push_value(interp, &mut stack, this_value);
+                push_value(interp, stack, callee);
+                push_value(interp, stack, this_value);
             }
             Op::ResolveName => {
                 let idx = decode_u16(chunk, pc);
@@ -290,7 +291,7 @@ fn run_chunk_loop(
                     .last()
                     .expect("reference stack underflow on LoadResolvedName");
                 match interp.get_identifier_value_by_ref(name, id_ref, env) {
-                    Completion::Normal(value) => push_value(interp, &mut stack, value),
+                    Completion::Normal(value) => push_value(interp, stack, value),
                     abrupt => return abrupt,
                 }
             }
@@ -322,7 +323,7 @@ fn run_chunk_loop(
                 };
                 let name = &chunk.names[idx as usize];
                 match interp.eval_identifier_update(op, prefix, name, env) {
-                    Completion::Normal(value) => push_value(interp, &mut stack, value),
+                    Completion::Normal(value) => push_value(interp, stack, value),
                     abrupt => return abrupt,
                 }
             }
@@ -330,18 +331,18 @@ fn run_chunk_loop(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = chunk.names[idx as usize].clone();
-                let gc_frame = root_operand_stack(interp, &stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let base = stack.pop().expect("stack underflow on GetProp");
                 let result = member_get(interp, &base, &name);
                 unroot_stack_value(interp, &base);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Completion::Normal(v) => push_value(interp, &mut stack, v),
+                    Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
             }
             Op::GetElement => {
-                let gc_frame = root_operand_stack(interp, &stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let key_val = stack.pop().expect("stack underflow on GetElement key");
                 let base = stack.pop().expect("stack underflow on GetElement base");
                 let result = member_get_computed(interp, &base, &key_val);
@@ -349,7 +350,7 @@ fn run_chunk_loop(
                 unroot_stack_value(interp, &base);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Completion::Normal(v) => push_value(interp, &mut stack, v),
+                    Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
             }
@@ -357,7 +358,7 @@ fn run_chunk_loop(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = chunk.names[idx as usize].clone();
-                let gc_frame = root_operand_stack(interp, &stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let rhs = stack.pop().expect("stack underflow on SetProp rhs");
                 let base = stack.pop().expect("stack underflow on SetProp base");
                 let base_root = base.clone();
@@ -367,12 +368,12 @@ fn run_chunk_loop(
                 unroot_stack_value(interp, &base_root);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Ok(()) => push_value(interp, &mut stack, rhs),
+                    Ok(()) => push_value(interp, stack, rhs),
                     Err(e) => return Completion::Throw(e),
                 }
             }
             Op::SetElement => {
-                let gc_frame = root_operand_stack(interp, &stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let rhs = stack.pop().expect("stack underflow on SetElement rhs");
                 let key_val = stack.pop().expect("stack underflow on SetElement key");
                 let base = stack.pop().expect("stack underflow on SetElement base");
@@ -384,27 +385,27 @@ fn run_chunk_loop(
                 unroot_stack_value(interp, &base_root);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Ok(()) => push_value(interp, &mut stack, rhs),
+                    Ok(()) => push_value(interp, stack, rhs),
                     Err(e) => return Completion::Throw(e),
                 }
             }
             Op::LoadUndefined => {
-                push_value(interp, &mut stack, JsValue::UNDEFINED);
+                push_value(interp, stack, JsValue::UNDEFINED);
             }
             Op::LoadTrue => {
-                push_value(interp, &mut stack, JsValue::TRUE);
+                push_value(interp, stack, JsValue::TRUE);
             }
             Op::LoadFalse => {
-                push_value(interp, &mut stack, JsValue::FALSE);
+                push_value(interp, stack, JsValue::FALSE);
             }
             Op::LoadNull => {
-                push_value(interp, &mut stack, JsValue::NULL);
+                push_value(interp, stack, JsValue::NULL);
             }
             Op::Return => {
                 let v = if stack.is_empty() {
                     JsValue::UNDEFINED
                 } else {
-                    pop_value(interp, &mut stack, "stack underflow on Return")
+                    pop_value(interp, stack, "stack underflow on Return")
                 };
                 return Completion::Return(v);
             }
@@ -425,7 +426,7 @@ fn run_chunk_loop(
                 pc += 2;
                 let site_id = CallSiteId(decode_u32(chunk, pc));
                 pc += 4;
-                let (callee, this_value, args) = take_call_operands(&mut stack, argc);
+                let (callee, this_value, args) = take_call_operands(stack, argc);
                 // Counted here, before the strict tail-call return below: that
                 // path leaves the VM without ever reaching the dispatch site,
                 // so incrementing later would omit every strict tail call from
@@ -515,10 +516,10 @@ fn run_chunk_loop(
                 release_call_operands(interp, &callee, &this_value, &args);
                 match result {
                     Completion::Normal(value) | Completion::Return(value) => {
-                        push_value(interp, &mut stack, value);
+                        push_value(interp, stack, value);
                     }
                     Completion::Empty => {
-                        push_value(interp, &mut stack, JsValue::UNDEFINED);
+                        push_value(interp, stack, JsValue::UNDEFINED);
                     }
                     abrupt => return abrupt,
                 }
@@ -572,7 +573,7 @@ fn run_chunk_loop(
                 unroot_stack_value(interp, &r);
                 unroot_stack_value(interp, &l);
                 match result {
-                    Completion::Normal(v) => push_value(interp, &mut stack, v),
+                    Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
             }
@@ -588,15 +589,15 @@ fn run_chunk_loop(
                 let result = interp.eval_unary(uop, &v);
                 unroot_stack_value(interp, &v);
                 match result {
-                    Completion::Normal(r) => push_value(interp, &mut stack, r),
+                    Completion::Normal(r) => push_value(interp, stack, r),
                     abrupt => return abrupt,
                 }
             }
             Op::Pop => {
-                pop_value(interp, &mut stack, "stack underflow on Pop");
+                pop_value(interp, stack, "stack underflow on Pop");
             }
             Op::SetCompletion => {
-                let value = pop_value(interp, &mut stack, "stack underflow on SetCompletion");
+                let value = pop_value(interp, stack, "stack underflow on SetCompletion");
                 if let Some(previous) = completion_value.replace(value.clone()) {
                     unroot_stack_value(interp, &previous);
                 }
@@ -614,7 +615,7 @@ fn run_chunk_loop(
             Op::JumpIfFalse => {
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
-                let v = pop_value(interp, &mut stack, "stack underflow on JumpIfFalse");
+                let v = pop_value(interp, stack, "stack underflow on JumpIfFalse");
                 if !interp.to_boolean_val(&v) {
                     pc = (pc as i32 + offset) as usize;
                 }
@@ -622,7 +623,7 @@ fn run_chunk_loop(
             Op::JumpIfTrue => {
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
-                let v = pop_value(interp, &mut stack, "stack underflow on JumpIfTrue");
+                let v = pop_value(interp, stack, "stack underflow on JumpIfTrue");
                 if interp.to_boolean_val(&v) {
                     pc = (pc as i32 + offset) as usize;
                 }
