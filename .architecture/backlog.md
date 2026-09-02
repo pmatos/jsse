@@ -7,13 +7,13 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## arraybuffer-receiver-guard
 
-- **Status**: in-flight
+- **Status**: landed
 - **Score**: 24/25 (leverage 5, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated — `src/interpreter/builtins/typedarray.rs`
 - **Modules**: `src/interpreter/builtins/typedarray.rs`
 - **Summary**: Collapse the 5 ArrayBuffer getters' inline `enum Probe` borrow-escape prologues + 3 SharedArrayBuffer getters behind snapshot-returning receiver guards (`require_array_buffer` / `require_shared_array_buffer`), mirroring the landed `validate_typed_array` (#543). Guard returns `is_detached` in the snapshot rather than throwing (getters return 0 on detached). DataView getters + borrow-holding methods deferred to `dataview-receiver-guard`.
 - **First seen**: 2026-09-02
-- **PR**: #570
+- **PR**: #570 (merged 2026-09-02)
 
 ## validate-typed-array
 
@@ -31,7 +31,16 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Score**: 22/25 (leverage 5, locality 4, blast radius 1, heat 3)
 - **Files**: ~2 estimated — `src/interpreter/eval/generator_runtime.rs`, `src/interpreter/types.rs`
 - **Modules**: `src/interpreter/eval/generator_runtime.rs`
-- **Summary**: Collapse ~87 byte-identical inlined "completed state-machine generator" 10-field struct literals into `completed_state_machine_generator` / `…_async_generator` constructors. Runner-up candidate on 2026-09-02; natural next firing. Friction re-verified present.
+- **Summary**: Collapse 87 byte-identical inlined "completed state-machine generator" 10-field struct literals (27 sync + 60 async) into `completed_state_machine_generator` / `…_async_generator` constructors. **Picked by the 2026-09-03 firing** — friction re-verified (87 literals, all byte-identical: a grep for any completed literal carrying a non-default field returns empty). 2 more fixtures in `tests.rs`.
+
+## gc-root-scope-guard
+
+- **Status**: proposed
+- **Score**: 22/25 (leverage 5, locality 4, blast radius 3, heat 5)
+- **Files**: ~9 estimated — `src/interpreter/eval.rs` (primary), `src/interpreter/builtins/mod.rs` (primitives at :1318), + ~7 more (`array.rs` 10/71, `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`)
+- **Modules**: `src/interpreter/eval.rs`
+- **Summary**: Collapse the manual GC-root frame teardown epilogue behind a scope guard. `eval.rs` alone: 22 `gc_root_frame()` setups, 50 `gc_unroot_frame(` teardowns (28 per-early-return epilogue copies); ~149 teardowns / ~50 setups codebase-wide. Two mechanism forks (design-it-twice input): **closure combinator** (in-file precedent `with_tail_position_suppressed` at `eval.rs:410`, no storage change, touches `eval.rs`+`mod.rs`) vs **RAII Drop-guard** (precedent `EvalDepthGuard` at `eval.rs:10`, whose doc warns a raw `self` pointer is unsound — so requires changing `gc_temp_roots` storage and touching `gc.rs`, plus RefCell on the `#[inline(always)]` hot path). Pattern #7 evidence: ~5 frames already use an IIFE workaround (`eval.rs:2633, 2766, 3038, 3443, 3539`) so they do NOT leak today. Seam bypass: `eval.rs:1066` and `:4324` poke `gc_temp_roots.push` directly. **Runner-up candidate by blast-radius tie-break on 2026-09-03** (tied at 22/25 with `complete-state-machine-generator-ctor`; lost on lower blast radius 1 vs 3); natural next firing. Correctness-sensitive control-flow rewrite of the hottest file — a deliberately-scheduled firing, not a one-shot.
+- **First seen**: 2026-09-03
 
 ## completion-into-result
 
