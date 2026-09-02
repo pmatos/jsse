@@ -165,6 +165,18 @@ impl Compiler {
         self.pop_ref();
     }
 
+    fn emit_load_name(&mut self, name_idx: u16) {
+        self.emit(Op::LoadName);
+        self.emit_u16(name_idx);
+        self.push_n(1);
+    }
+
+    fn compile_load_name(&mut self, name: &str) -> Result<(), CompileError> {
+        let idx = self.add_name(name)?;
+        self.emit_load_name(idx);
+        Ok(())
+    }
+
     fn reset_script_completion(&mut self) {
         if self.goal == CompileGoal::Script {
             self.emit(Op::LoadUndefined);
@@ -231,19 +243,11 @@ impl Compiler {
         match expr {
             Expression::Literal(lit) => self.compile_literal(lit),
             Expression::This => {
-                let idx = self.add_name("this")?;
-                self.emit(Op::LoadName);
-                self.emit_u16(idx);
+                self.emit(Op::LoadThis);
                 self.push_n(1);
                 Ok(())
             }
-            Expression::Identifier(name) => {
-                let idx = self.add_name(name)?;
-                self.emit(Op::LoadName);
-                self.emit_u16(idx);
-                self.push_n(1);
-                Ok(())
-            }
+            Expression::Identifier(name) => self.compile_load_name(name),
             Expression::Unary(op, operand) => {
                 self.compile_expr(operand)?;
                 let bop = match op {

@@ -242,6 +242,10 @@ fn run_chunk_inner(
                     abrupt => return abrupt,
                 }
             }
+            Op::LoadThis => match interp.resolve_this_binding(env) {
+                Completion::Normal(v) => push_value(interp, &mut stack, v),
+                abrupt => return abrupt,
+            },
             Op::LoadCalleeName => {
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
