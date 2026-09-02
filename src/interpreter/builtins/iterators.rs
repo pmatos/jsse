@@ -489,25 +489,31 @@ fn iterator_step_value_getter(
         Completion::Throw(e) => return Err(e),
         _ => return Err(interp.create_type_error("Iterator next failed")),
     };
-    let Some(result_id) = result.as_object_id() else {
-        return Err(interp.create_type_error("Iterator result is not an object"));
+    let frame = interp.gc_root_frame();
+    interp.gc_root_value(&result);
+    let outcome = 'step: {
+        let Some(result_id) = result.as_object_id() else {
+            break 'step Err(interp.create_type_error("Iterator result is not an object"));
+        };
+        // Read .done via getter
+        let done = match interp.get_object_property(result_id, "done", &result) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => break 'step Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        if interp.to_boolean_val(&done) {
+            break 'step Ok(None);
+        }
+        // Read .value via getter
+        let value = match interp.get_object_property(result_id, "value", &result) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => break 'step Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        Ok(Some(value))
     };
-    // Read .done via getter
-    let done = match interp.get_object_property(result_id, "done", &result) {
-        Completion::Normal(v) => v,
-        Completion::Throw(e) => return Err(e),
-        _ => JsValue::UNDEFINED,
-    };
-    if interp.to_boolean_val(&done) {
-        return Ok(None);
-    }
-    // Read .value via getter
-    let value = match interp.get_object_property(result_id, "value", &result) {
-        Completion::Normal(v) => v,
-        Completion::Throw(e) => return Err(e),
-        _ => JsValue::UNDEFINED,
-    };
-    Ok(Some(value))
+    interp.gc_unroot_frame(frame);
+    outcome
 }
 
 fn iterator_join_to_string(interp: &mut Interpreter, value: &JsValue) -> Result<JsString, JsValue> {
