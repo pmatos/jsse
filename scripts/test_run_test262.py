@@ -382,6 +382,21 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         finally:
             locked.chmod(mode)
 
+    def test_run_reports_unreadable_directory_and_exits_nonzero(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262/test/language/locked/hidden.js")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            result = self.run_runner(self.write_engine(0), paths=())
+        finally:
+            locked.chmod(mode)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not scan", result.stderr)
+
     def test_directory_allows_mjs_fixtures(self):
         self.write_file("test262-extra/module-test.js", frontmatter("flags: [module]"))
         self.write_file("test262-extra/dep_FIXTURE.mjs")
