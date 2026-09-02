@@ -23,9 +23,11 @@ and — through a second, RegExp-independent path — every string literal evalu
 
 - **22.2.7.2 RegExpBuiltinExec** — captured substrings and `index` come from `S`
   (the retained UTF-16 code units), not from a derived text view.
-- **22.2.6.11 RegExp.prototype `[ %Symbol.replace% ]`** and **22.2.6.9
-  GetSubstitution** — `$&`, `` $` ``/`$'`, `$1`-`$9`, `$<name>` are built from the
-  original `S`'s code units and positions.
+- **22.2.6.11 RegExp.prototype `[ %Symbol.replace% ]`** and **GetSubstitution**
+  (`spec/spec.html`, anchor `sec-getsubstitution` — defined under
+  `String.prototype.replace`, §22.1.3.19.1, and invoked from `[ %Symbol.replace% ]`)
+  — `$&`, `` $` ``/`$'`, `$1`-`$9`, `$<name>` are built from the original `S`'s code
+  units and positions.
 - **22.2.6.14 RegExp.prototype `[ %Symbol.split% ]`** — step "the substring of `S`
   from `p` to `q`" is a code-unit slice of `S`.
 - **22.2.7.3 AdvanceStringIndex** — already implemented directly against
@@ -45,10 +47,14 @@ and — through a second, RegExp-independent path — every string literal evalu
   existing PUA remap is how it survives the `&str`-based parser; that remap must be
   undone precisely at string-literal construction, not applied blindly to every
   literal regardless of origin.
-- **Annex B §B.2.4/B.2.5, Additional Properties of the RegExp.prototype Object**
-  (`spec/spec.html`, `sec-additional-properties-of-the-regexp.prototype-object`) —
-  `lastMatch`, `lastParen`, `$1`-`$9` are captured substrings of the input, same
-  code-unit-fidelity requirement as RegExpBuiltinExec.
+- **Legacy RegExp features** (`lastMatch`, `lastParen`, `$1`-`$9`) — this is a
+  separate stage-3 proposal, **not present in `spec/spec.html`**
+  (`sec-additional-properties-of-the-regexp.prototype-object` there is the
+  *prototype*'s `compile`, not the constructor statics). The existing code cites
+  "B.2.4" by convention (see `src/interpreter/builtins/regexp.rs:8169` and the
+  legacy-accessor setup ~line 10580); this plan follows that same convention rather
+  than inventing a clause number. Same code-unit-fidelity requirement as
+  RegExpBuiltinExec applies regardless of which document defines the property.
 
 No new JavaScript syntax or semantics is introduced; this is entirely an internal
 representation fix to already-specified behavior.
@@ -82,7 +88,22 @@ this plan.
 
 **Red:** `test262-extra/string-literal-supplementary-pua.js` — asserts
 `"\u{F0000}".length === 2` and `.codePointAt(0) === 0xF0000` for both a `\u{F0000}`
-escape and a raw source character; currently jsse reports `length === 1`.
+escape and a raw source character; currently jsse reports `length === 1`. This
+exercises the *plain-parsing* half of the bug (`eval_literal`'s blanket undo). It
+does **not** exercise the `pua_undo` lexer flag added below — `eval('"\\u{F0000}"')`
+would look like a natural second case, but its eval source is 13 plain ASCII chars,
+so `js_string_to_regex_input` (ASCII → identity) never invokes `surrogate_to_pua`,
+and the case collapses to the exact same plain-literal bug. The case that actually
+exercises the flag is `eval('"' + String.fromCharCode(0xD800) + '"')` — a *raw* lone
+surrogate already present in the eval source's code units, which is the only input
+that reaches `surrogate_to_pua` before lexing (`perform_eval`'s
+`js_string_to_regex_input` conversion). Expected: `.length === 1`,
+`.charCodeAt(0) === 0xD800`. Without `pua_undo`, step 5 below (deleting the blanket
+`eval_literal` undo) would turn this into a *regression* — the raw 0xD800 would
+survive `js_string_to_regex_input` as PUA char U+F0000, get lexed back into
+`[0xDB80, 0xDC00]`, and nothing would undo it. Add both cases to the test file: the
+plain-parsing case (proves the fix) and the eval-with-raw-surrogate case (proves the
+flag prevents the regression the fix would otherwise introduce).
 
 **Root cause:** `src/lexer.rs`'s `read_string`/`read_string_escape_into` already build
 correct `Vec<u16>` code units for ordinary parsing (confirmed by reading; no PUA
@@ -109,8 +130,12 @@ run on normally-parsed source.
    Make `pua_to_surrogate` `pub(crate)` in `regexp.rs` for this call.
 3. Add `Parser::new_for_eval(source: &'a str) -> Result<Self, ParseError>`
    (`src/parser/mod.rs`) constructing the lexer via `Lexer::new_for_eval`.
-4. Switch `perform_eval` (`src/interpreter/eval.rs:6203` area) and `$262.evalScript`
-   (`src/interpreter/mod.rs:762`) to call `Parser::new_for_eval`.
+4. Switch `perform_eval` (`src/interpreter/eval.rs:6203` area) to call
+   `Parser::new_for_eval`. Also switch `$262.evalScript`
+   (`src/interpreter/mod.rs:762`) for consistency — it shares the same conversion
+   call — but note it is test262-harness-only; no test262 test observes lone
+   surrogates through `$262.evalScript` itself, so this is a consistency fix, not a
+   red case, and the implementation stage should not invent one.
 5. Delete the `pua_code_units_to_surrogates` call in `eval_literal`'s
    `Literal::String` arm (`src/interpreter/eval/literals.rs:92-96`) — just wrap `s`.
    This also fixes `src/interpreter/bytecode/compiler.rs:474`
@@ -177,7 +202,19 @@ are already in the right unit.
 4. Fix the fast-path `@@replace` loop's `match_length_utf16` bug at line ~9021
    (`regex_output_to_js_string(matched).code_units.len()`, which returns 1 for a
    2-code-unit genuine match): replace with `match_end_utf16 - match_start_utf16`.
-5. `matchAll`'s `%RegExpStringIteratorPrototype%.next` delegates to
+5. Fix `[Symbol.match]`'s global-flag fast path (~lines 8636-8700, the pristine-RegExp
+   loop reached when `flags` contains `g`): `results.push(JsValue::string(
+   regex_output_to_js_string(match_text)))` at line 8691 becomes
+   `regex_input.subject_slice(view, full_match.start, full_match.end)`, and the
+   `match_text.is_empty()` check at line 8693 becomes
+   `full_match.start == full_match.end` (same pattern as the `matched.is_empty()` fix
+   in Slice 5, but this site is a simple substring extraction with no accumulator
+   entanglement, so it belongs here rather than waiting for Slice 5). Add
+   `pua.match(/./g)` (global, non-sticky, no accumulator) to the Slice 3 red test to
+   cover this — it was found only by grepping every `\.text\b` in `regexp.rs` and
+   checking each hit against the slices above; do that grep again after
+   implementing to confirm no other site was missed.
+6. `matchAll`'s `%RegExpStringIteratorPrototype%.next` delegates to
    `regexp_exec_abstract` for the live path (confirmed by reading ~9919-10016) and
    inherits this fix for free; its `Some(mid)`-absent "legacy path" fallback
    (~10018-10113, uses plain `JsString::from_str(&full.text)`, no PUA-awareness at
@@ -270,19 +307,21 @@ instead of `&str`/`String`:
   `s.code_units` straight into the accumulator.
 - Final result: `JsString::from_vec(accumulated_result)` — no
   `regex_output_to_js_string` call at all (lines 9145-9147, 9445-9447 deleted).
-- Once these are gone, delete `regex_output_to_js_string` from `regexp.rs` if
-  `literals.rs:121` (`Literal::RegExp` source decode) is also migrated to a
-  code-unit-based decode by this point — otherwise leave it for that one caller and
-  note it as a small follow-up (regex-literal `.source` for a pattern containing a
-  raw Plane-15 char is not in the issue's acceptance criteria, and has the same
-  latent bug as Slice 1 had for string literals; low value to bundle here since it
-  requires its own AST-level plumbing change to `Literal::RegExp`, analogous to
-  Slice 1's but for pattern text — file as a fast-follow rather than expanding this
-  slice).
+- `regex_output_to_js_string` survives this slice with exactly one remaining caller:
+  `literals.rs:121` (`Literal::RegExp` source decode, for `RegExp.prototype.source`
+  on a regex literal). One caller is not dead code, so **do not delete the function**
+  in this PR — leave it, and file the `Literal::RegExp` migration (regex-literal
+  `.source` for a pattern containing a raw Plane-15 char has the same latent bug
+  Slice 1 fixed for string literals, needing the same kind of AST-level plumbing
+  change) as a fast-follow rather than expanding this slice.
 - `RegexMatch.text: String` (and its `wtf8_slice_to_pua_string` construction at
-  ~line 7667 for the `Wtf8` view) becomes unread once Slices 2-5 land — confirm via
-  `cargo build` (clippy `-D warnings` will flag it) and remove the field and its
-  construction in whichever slice's build first orphans it.
+  ~line 7667 for the `Wtf8` view) becomes genuinely unread once Slices 2-5 land —
+  confirmed by enumerating every `\.text\b` in `regexp.rs` against the slices above
+  (Slice 3 step 5 above closes the one site — the `[Symbol.match]` global fast path
+  at line 8687/8691/8693 — that an earlier pass of this plan missed). Grep
+  `\.text\b` again after implementing Slice 5 to confirm nothing was missed before
+  relying on `cargo build`'s dead-code warning as the safety net; then remove the
+  field and its construction.
 
 ## 5. Test surface
 
