@@ -1779,8 +1779,8 @@ impl Interpreter {
                     .map(|od| od.borrow().callable.is_some())
                     .unwrap_or(false)
             }) {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_type_error("reducer is not a function");
+                let err = close_iterator_for_error(interp, this, err);
                 return Completion::Throw(err);
             }
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
