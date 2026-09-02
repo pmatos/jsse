@@ -9597,11 +9597,10 @@ impl Interpreter {
                     }
 
                     //   iii. Else,
-                    // Push substring from p to q (convert UTF-16 positions to byte offsets)
-                    let p_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, p);
-                    let q_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, q);
-                    let t = &s[p_byte..q_byte];
-                    a.push(JsValue::string(regex_output_to_js_string(t)));
+                    // Push the substring of the original S from p to q.
+                    a.push(JsValue::string(JsString::from_vec(
+                        regex_input.subject.code_units[p..q].to_vec(),
+                    )));
                     length_a += 1;
                     if length_a == lim {
                         return Completion::Normal(interp.create_array(a));
@@ -9654,9 +9653,9 @@ impl Interpreter {
                 }
 
                 // 16. Push remaining substring
-                let p_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, p);
-                let t = &s[p_byte..];
-                a.push(JsValue::string(regex_output_to_js_string(t)));
+                a.push(JsValue::string(JsString::from_vec(
+                    regex_input.subject.code_units[p..].to_vec(),
+                )));
                 Completion::Normal(interp.create_array(a))
             },
         ));
