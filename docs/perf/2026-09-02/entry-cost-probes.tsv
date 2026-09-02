@@ -1,0 +1,14 @@
+# Temporary perf-counters-only Instant probes on current main (1c9becc).
+# `called`, N=1000000 plus a 1000-iteration warm-up; pinned to CPU 0.
+# Values after probe_count are aggregate nanoseconds; divide by probe_count for ns/entry.
+# phase	run	loadavg1	probe_count	empty_timer	cache_lookup	ic_setup	ic_cleanup	var_prologue	stack_alloc
+before	1	9.75	2002002	70059892	75284145	117270932	81968123	210616979	107332810
+before	2	11.37	2002002	53977279	58471514	98830615	57218854	180729383	81952209
+before	3	11.37	2002002	40611895	42471271	58949686	42672031	102732931	48702420
+
+# One same-process comparison: compiled leaf versus an observably identical
+# leaf made compiler-ineligible by an unreachable `throw` after its return.
+# Both callers run compiled. The instrumentation itself times compiled entries,
+# so this row is diagnostic only, not a pristine wall-time result.
+# phase	loadavg1	compiled_ms	ast_ms	compiled_entries	ast_entries	vm_ops	calls_from_vm
+compiled-vs-ast	11.37	1719	1358	2002004	2002000	74074056	4004000
