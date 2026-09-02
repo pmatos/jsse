@@ -123,6 +123,43 @@ impl Interpreter {
         self.get_object_property_with_proxy_depth(obj_id, key, this_val, 0)
     }
 
+    /// Returns the result of a computed numeric-index read when the receiver's
+    /// object kind makes it safe to bypass `ToPropertyKey` and the property MOP.
+    pub(super) fn numeric_index_fast_get(&self, obj_val: &JsValue, index: f64) -> Option<JsValue> {
+        let obj_id = obj_val.as_object_id()?;
+        let obj_rc = self.get_object_cell(obj_id)?;
+        let obj_borrow = obj_rc.borrow();
+
+        if let Some(ta) = obj_borrow.typed_array_info() {
+            use crate::interpreter::types::{is_valid_integer_index, typed_array_get_index};
+
+            if is_valid_integer_index(ta, index) {
+                return Some(typed_array_get_index(ta, index as usize));
+            }
+            // Any canonical numeric index on a typed array that is out of
+            // range returns undefined without walking the prototype chain.
+            // Raw -0 must fall through: ToPropertyKey(-0) produces "0", so it
+            // addresses element zero rather than the canonical string "-0".
+            let trunc = index.trunc();
+            if index == trunc && !index.is_nan() && !index.is_sign_negative() {
+                return Some(JsValue::UNDEFINED);
+            }
+        }
+
+        if let Some(elems) = obj_borrow.array_elements() {
+            let trunc = index.trunc();
+            if index == trunc && index >= 0.0 && (index as usize) < elems.len() {
+                let idx = index as usize;
+                let key_str = (idx as u32).to_string();
+                if !obj_borrow.properties.contains_key(&key_str) && !elems[idx].is_undefined() {
+                    return Some(elems[idx].clone());
+                }
+            }
+        }
+
+        None
+    }
+
     fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
