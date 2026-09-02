@@ -69,6 +69,58 @@ fn compute_region_preference(locale: &IcuLocale) -> RegionPreference {
     }
 }
 
+// CLDR common/supplemental/supplementalData.xml, calendarPreferenceData.
+// CLDR's `gregorian` calendar identifier is canonicalized to the BCP 47
+// `gregory` type exposed by ECMA-402.
+fn calendar_preference_for_region(region: &str) -> Vec<&'static str> {
+    match region {
+        "AE" | "BH" | "KW" | "QA" => vec![
+            "gregory",
+            "islamic-umalqura",
+            "islamic",
+            "islamic-civil",
+            "islamic-tbla",
+        ],
+        "AF" | "IR" => vec![
+            "persian",
+            "gregory",
+            "islamic",
+            "islamic-civil",
+            "islamic-tbla",
+        ],
+        "AL" | "AZ" | "MV" | "TJ" | "TM" | "TR" | "UZ" | "XK" => {
+            vec!["gregory", "islamic-civil", "islamic-tbla"]
+        }
+        "BD" | "DJ" | "DZ" | "EH" | "ER" | "ID" | "IQ" | "JO" | "KM" | "LB" | "LY" | "MA"
+        | "MR" | "MY" | "NE" | "OM" | "PK" | "PS" | "SD" | "SY" | "TD" | "TN" | "YE" => {
+            vec!["gregory", "islamic", "islamic-civil", "islamic-tbla"]
+        }
+        "CN" | "CX" | "HK" | "MO" | "SG" => vec!["gregory", "chinese"],
+        "EG" => vec![
+            "gregory",
+            "coptic",
+            "islamic",
+            "islamic-civil",
+            "islamic-tbla",
+        ],
+        "ET" => vec!["gregory", "ethiopic"],
+        "IL" => vec![
+            "gregory",
+            "hebrew",
+            "islamic",
+            "islamic-civil",
+            "islamic-tbla",
+        ],
+        "IN" => vec!["gregory", "indian"],
+        "JP" => vec!["gregory", "japanese"],
+        "KR" => vec!["gregory", "dangi"],
+        "SA" => vec!["gregory", "islamic-umalqura", "islamic", "islamic-rgsa"],
+        "TH" => vec!["buddhist", "gregory"],
+        "TW" => vec!["gregory", "roc", "chinese"],
+        _ => vec!["gregory"],
+    }
+}
+
 fn set_unicode_keyword(locale: &mut IcuLocale, key_str: &str, value_str: &str) {
     if let Ok(key) = key_str.parse::<Key>()
         && let Ok(val) = value_str.parse::<Value>()
@@ -705,25 +757,37 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let Some(o) = this.as_object_id() {
-                    let cal_opt = interp.get_object_cell(o).and_then(|cell| {
+                    let snapshot = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { calendar, .. }) = b.intl_data() {
-                            Some(calendar.clone())
+                        if let Some(IntlData::Locale { calendar, tag, .. }) = b.intl_data() {
+                            Some((calendar.clone(), tag.clone()))
                         } else {
                             None
                         }
                     });
-                    let cal =
-                        match cal_opt {
-                            Some(t) => t,
-                            None => return Completion::Throw(interp.create_type_error(
+                    let (cal, tag) = match snapshot {
+                        Some(t) => t,
+                        None => {
+                            return Completion::Throw(interp.create_type_error(
                                 "Intl.Locale.prototype.getCalendars requires an Intl.Locale object",
-                            )),
-                        };
+                            ));
+                        }
+                    };
                     let calendars = if let Some(ca) = cal {
                         vec![JsValue::from_str(&ca)]
                     } else {
-                        vec![JsValue::from_str("gregory")]
+                        tag.parse::<IcuLocale>()
+                            .ok()
+                            .map_or_else(
+                                || vec!["gregory"],
+                                |locale| {
+                                    let preference = compute_region_preference(&locale);
+                                    calendar_preference_for_region(preference.lookup_region())
+                                },
+                            )
+                            .into_iter()
+                            .map(JsValue::from_str)
+                            .collect()
                     };
                     return Completion::Normal(interp.create_array(calendars));
                 }
@@ -1804,6 +1868,34 @@ mod tests {
                 expected_override,
                 "{tag}"
             );
+        }
+    }
+
+    #[test]
+    fn calendar_preferences_follow_cldr_region_order() {
+        let cases = [
+            ("TH", vec!["buddhist", "gregory"]),
+            (
+                "EG",
+                vec![
+                    "gregory",
+                    "coptic",
+                    "islamic",
+                    "islamic-civil",
+                    "islamic-tbla",
+                ],
+            ),
+            (
+                "SA",
+                vec!["gregory", "islamic-umalqura", "islamic", "islamic-rgsa"],
+            ),
+            ("XK", vec!["gregory", "islamic-civil", "islamic-tbla"]),
+            ("US", vec!["gregory"]),
+            ("001", vec!["gregory"]),
+        ];
+
+        for (region, expected) in cases {
+            assert_eq!(calendar_preference_for_region(region), expected, "{region}");
         }
     }
 }
