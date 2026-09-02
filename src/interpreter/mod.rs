@@ -3597,7 +3597,7 @@ impl Interpreter {
             self.perf.body_non_function += 1;
             let name = self.perf.name_module_body.clone();
             self.perf
-                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID);
+                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
         }
         let mut err = None;
         for item in &program.module_items {

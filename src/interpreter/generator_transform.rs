@@ -11,6 +11,8 @@ pub(crate) struct GeneratorStateMachine {
     pub params: Vec<Pattern>,
     pub num_yields: usize,
     pub temp_vars: Vec<String>,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) perf_key: Option<crate::interpreter::perf_counters::BodyKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -411,6 +413,8 @@ fn transform_generator_inner_opts(
         params: params.to_vec(),
         num_yields: analysis.yield_points.len(),
         temp_vars: ctx.temp_vars,
+        #[cfg(feature = "perf-counters")]
+        perf_key: None,
     }
 }
 
@@ -431,6 +435,8 @@ fn create_simple_machine(
         params: params.to_vec(),
         num_yields: 0,
         temp_vars: vec![],
+        #[cfg(feature = "perf-counters")]
+        perf_key: None,
     }
 }
 

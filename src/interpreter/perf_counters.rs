@@ -26,9 +26,9 @@ const OP_SLOTS: usize = 64;
 /// is actually ambiguous, so unique names stay readable.
 pub(crate) type BodyKey = (Rc<str>, u64);
 
-/// Identity for the synthetic bodies that have no function object at all
-/// (`<generator/async body>`, `<script body>`, `<module body>`, `<eval>`).
-/// Object ids are allocated upward from 0, so this can never collide.
+/// Identity for synthetic bodies that have no function object at all
+/// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
+/// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
 const _: () = assert!((Op::ReturnCompletion as usize) < OP_SLOTS);
 
@@ -77,11 +77,12 @@ pub(crate) struct PerfCounters {
     /// Which construct each named body bailed on, so an eligibility expansion
     /// can be aimed at the bodies that actually hold the work.
     pub(crate) bail_by_name: FxHashMap<BodyKey, &'static str>,
-    /// (key, ast units at entry, units consumed by nested bodies).
-    ast_body_stack: Vec<(BodyKey, u64, u64)>,
-    /// Interned labels for the two body paths that carry no function object,
-    /// so framing them costs an `Rc` clone rather than an allocation per entry
-    /// (generator replay re-executes bodies, so this path is hot).
+    /// (key, is function invocation, ast units at entry, units consumed by
+    /// nested bodies).
+    ast_body_stack: Vec<(BodyKey, bool, u64, u64)>,
+    /// Interned fallback label for state-machine bodies without a function
+    /// object, plus labels for the other synthetic body paths. Framing them
+    /// costs an `Rc` clone rather than an allocation per entry.
     pub(crate) name_non_function_body: Rc<str>,
     pub(crate) name_script_body: Rc<str>,
     pub(crate) name_module_body: Rc<str>,
@@ -133,9 +134,13 @@ impl PerfCounters {
         self.ast_stmts + self.ast_exprs
     }
 
-    pub(crate) fn enter_ast_body(&mut self, name: Rc<str>, id: u64) {
+    /// Starts attributing AST work to a Body. `is_function_invocation` is
+    /// independent of whether the Body has a real function identity: named
+    /// generator/async state-machine steps are executions, not invocations.
+    pub(crate) fn enter_ast_body(&mut self, name: Rc<str>, id: u64, is_function_invocation: bool) {
         let at_entry = self.ast_units();
-        self.ast_body_stack.push(((name, id), at_entry, 0));
+        self.ast_body_stack
+            .push(((name, id), is_function_invocation, at_entry, 0));
     }
 
     /// Pops the innermost body, credits it the units it spent outside any
@@ -143,19 +148,20 @@ impl PerfCounters {
     /// so no unit is counted twice.
     pub(crate) fn leave_ast_body(&mut self) {
         let now = self.ast_units();
-        let Some((key, at_entry, children)) = self.ast_body_stack.pop() else {
+        let Some((key, is_function_invocation, at_entry, children)) = self.ast_body_stack.pop()
+        else {
             return;
         };
         let inclusive = now.saturating_sub(at_entry);
         let exclusive = inclusive.saturating_sub(children);
-        if key.1 != SYNTHETIC_BODY_ID {
+        if is_function_invocation {
             self.ast_units_in_functions += exclusive;
         }
         let entry = self.ast_body_units.entry(key).or_insert((0, 0));
         entry.0 += exclusive;
         entry.1 += 1;
         if let Some(parent) = self.ast_body_stack.last_mut() {
-            parent.2 += inclusive;
+            parent.3 += inclusive;
         }
     }
 
@@ -282,7 +288,7 @@ mod tests {
     #[test]
     fn exclusive_attribution_credits_a_leaf_body() {
         let mut p = PerfCounters::default();
-        p.enter_ast_body(name("leaf"), 1);
+        p.enter_ast_body(name("leaf"), 1, true);
         p.ast_exprs += 7;
         p.leave_ast_body();
         assert_eq!(p.ast_body_units[&key("leaf", 1)], (7, 1));
@@ -294,9 +300,9 @@ mod tests {
     #[test]
     fn exclusive_attribution_does_not_credit_a_caller_with_callee_work() {
         let mut p = PerfCounters::default();
-        p.enter_ast_body(name("caller"), 1);
+        p.enter_ast_body(name("caller"), 1, true);
         p.ast_stmts += 2;
-        p.enter_ast_body(name("callee"), 1);
+        p.enter_ast_body(name("callee"), 1, true);
         p.ast_exprs += 100;
         p.leave_ast_body();
         p.ast_stmts += 3;
@@ -310,7 +316,7 @@ mod tests {
     fn exclusive_attribution_accumulates_across_invocations() {
         let mut p = PerfCounters::default();
         for _ in 0..3 {
-            p.enter_ast_body(name("hot"), 1);
+            p.enter_ast_body(name("hot"), 1, true);
             p.ast_exprs += 4;
             p.leave_ast_body();
         }
@@ -323,7 +329,7 @@ mod tests {
     fn unbalanced_leave_is_ignored() {
         let mut p = PerfCounters::default();
         p.leave_ast_body();
-        p.enter_ast_body(name("body"), 1);
+        p.enter_ast_body(name("body"), 1, true);
         p.ast_exprs += 1;
         p.leave_ast_body();
         assert_eq!(p.ast_body_units[&key("body", 1)], (1, 1));
@@ -347,7 +353,7 @@ mod tests {
     fn report_disambiguates_only_ambiguous_names() {
         let mut p = PerfCounters::default();
         for (n, id, units) in [("same", 10u64, 700u64), ("same", 11, 20), ("solo", 12, 5)] {
-            p.enter_ast_body(name(n), id);
+            p.enter_ast_body(name(n), id, true);
             p.ast_exprs += units;
             p.leave_ast_body();
         }
@@ -368,7 +374,7 @@ mod tests {
         let mut p = PerfCounters::default();
         p.record_bail("statement:Try", name("same"), 10);
         for id in [10u64, 11] {
-            p.enter_ast_body(name("same"), id);
+            p.enter_ast_body(name("same"), id, true);
             p.ast_exprs += 1;
             p.leave_ast_body();
         }
@@ -389,7 +395,7 @@ mod tests {
         p.body_compiled = 1;
         p.body_ast = 1;
         p.record_bail("statement:Labeled", name("sortMinDown"), 1);
-        p.enter_ast_body(name("sortMinDown"), 1);
+        p.enter_ast_body(name("sortMinDown"), 1, true);
         p.ast_exprs += 9;
         p.leave_ast_body();
         let out = p.report();
@@ -425,7 +431,7 @@ mod tests {
     #[test]
     fn report_marks_a_compiled_bodys_absent_bail_reason() {
         let mut p = PerfCounters::default();
-        p.enter_ast_body(name("plain"), 1);
+        p.enter_ast_body(name("plain"), 1, true);
         p.ast_stmts += 1;
         p.leave_ast_body();
         assert!(p.report().contains("BODY\tplain\t1\t100.00%\t1\t-\n"));

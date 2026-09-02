@@ -19,12 +19,40 @@ impl Interpreter {
         self.exec_body_inner(body, env)
     }
 
-    /// Generator/async state machines, the script-body fallback, and `eval`
-    /// reach statement execution without passing through `dispatch_body`, so
-    /// without a frame of their own their work units are credited to whichever
-    /// ordinary body happens to be on the attribution stack — silently
-    /// inflating that caller's exclusive total (#537 review). These bodies
-    /// carry no function object, so each population gets a synthetic label.
+    /// Execute one generator/async state-machine Body while attributing its
+    /// tree-walker work to the function that created the machine. These are
+    /// replay/resume steps rather than `dispatch_body` invocations, so they
+    /// remain outside the function-invocation counters.
+    pub(crate) fn exec_state_machine_body(
+        &mut self,
+        body: &Body,
+        env: &EnvRef,
+        _state_machine: &crate::interpreter::generator_transform::GeneratorStateMachine,
+    ) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let (name, id) = _state_machine.perf_key.clone().unwrap_or_else(|| {
+                (
+                    self.perf.name_non_function_body.clone(),
+                    crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                )
+            });
+            self.perf.enter_ast_body(name, id, false);
+            let result = self.exec_body_inner(body, env);
+            self.perf.leave_ast_body();
+            result
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        self.exec_body_inner(body, env)
+    }
+
+    /// Unlabelled Body execution, the script-body fallback, and `eval` reach
+    /// statement execution without passing through `dispatch_body`. Without a
+    /// frame of their own, their work units are credited to whichever ordinary
+    /// body happens to be on the attribution stack — silently inflating that
+    /// caller's exclusive total (#537 review). These bodies carry no function
+    /// object, so each population gets a synthetic label.
     ///
     /// The execution count deliberately does NOT go to `body_ast`: this fires
     /// once per state-machine step, not once per invocation, and `body_ast` is
@@ -40,8 +68,11 @@ impl Interpreter {
         label: std::rc::Rc<str>,
     ) -> Completion {
         self.perf.body_non_function += 1;
-        self.perf
-            .enter_ast_body(label, crate::interpreter::perf_counters::SYNTHETIC_BODY_ID);
+        self.perf.enter_ast_body(
+            label,
+            crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+            false,
+        );
         let result = self.exec_body_inner(body, env);
         self.perf.leave_ast_body();
         result
@@ -134,8 +165,11 @@ impl Interpreter {
         {
             self.perf.body_non_function += 1;
             let name = self.perf.name_eval_body.clone();
-            self.perf
-                .enter_ast_body(name, crate::interpreter::perf_counters::SYNTHETIC_BODY_ID);
+            self.perf.enter_ast_body(
+                name,
+                crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                false,
+            );
         }
         let prev = self.enter_ic_body(body);
         let mut last = Completion::Empty;

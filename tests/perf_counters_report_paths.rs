@@ -145,11 +145,22 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
             .and_then(|n| n.parse().ok())
     };
 
-    let generator = row("<generator/async body>")
-        .unwrap_or_else(|| panic!("no generator BODY row; stderr:\n{stderr}"));
+    let perf = |key: &str| -> u64 {
+        stderr
+            .lines()
+            .find(|l| l.starts_with(&format!("PERF\t{key}\t")))
+            .and_then(|l| l.split('\t').nth(2))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no PERF {key} row; stderr:\n{stderr}"))
+    };
+
+    let generator =
+        row("gen").unwrap_or_else(|| panic!("no named generator BODY row; stderr:\n{stderr}"));
     let eval_body =
         row("<eval>").unwrap_or_else(|| panic!("no <eval> BODY row; stderr:\n{stderr}"));
     let caller = row("caller").unwrap_or_else(|| panic!("no caller BODY row; stderr:\n{stderr}"));
+    let eval_caller =
+        row("evalCaller").unwrap_or_else(|| panic!("no evalCaller BODY row; stderr:\n{stderr}"));
 
     assert!(
         generator > 1000,
@@ -159,6 +170,51 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
     assert!(
         caller < 100,
         "caller must not absorb the generator's work, got {caller}"
+    );
+    assert_eq!(
+        perf("ast_units_in_functions"),
+        caller + eval_caller,
+        "generator state-machine steps must stay out of the function-invocation metric"
+    );
+}
+
+#[test]
+fn named_async_function_gets_its_own_body_row() {
+    let dir = scratch("async-attribution");
+    fs::write(
+        dir.join("main.js"),
+        "async function asyncWork(n) { var s = 0; for (var i = 0; i < n; i++) { s += i; } return s; }\n\
+         async function asyncCaller() { return await asyncWork(2000); }\n\
+         asyncCaller();\n",
+    )
+    .expect("write main");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["main.js"])
+        .output()
+        .expect("run jsse");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let row = |name: &str| -> Option<u64> {
+        stderr
+            .lines()
+            .find(|l| l.starts_with(&format!("BODY\t{name}\t")))
+            .and_then(|l| l.split('\t').nth(2))
+            .and_then(|n| n.parse().ok())
+    };
+
+    let async_work = row("asyncWork")
+        .unwrap_or_else(|| panic!("no named async function BODY row; stderr:\n{stderr}"));
+    let async_caller = row("asyncCaller")
+        .unwrap_or_else(|| panic!("no named async caller BODY row; stderr:\n{stderr}"));
+
+    assert!(
+        async_work > 1000,
+        "the async function's loop must be credited to it, got {async_work}"
+    );
+    assert!(
+        async_caller < 100,
+        "the async caller must not absorb the callee's work, got {async_caller}"
     );
 }
 
