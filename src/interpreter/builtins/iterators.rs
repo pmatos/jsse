@@ -1663,13 +1663,19 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut counter = 0.0;
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
                     Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => break Completion::Throw(e),
                         };
                         match interp.call_function(
                             &predicate,
@@ -1678,23 +1684,25 @@ impl Interpreter {
                         ) {
                             Completion::Normal(v) if interp.to_boolean_val(&v) => {
                                 if let Err(e) = iterator_close_getter(interp, &iter) {
-                                    return Completion::Throw(e);
+                                    break Completion::Throw(e);
                                 }
-                                return Completion::Normal(value);
+                                break Completion::Normal(value);
                             }
                             Completion::Throw(e) => {
                                 let _ =
                                     iterator_close_with_completion(interp, &iter, Err(e.clone()));
-                                return Completion::Throw(e);
+                                break Completion::Throw(e);
                             }
                             _ => {}
                         }
                         counter += 1.0;
                     }
-                    Ok(None) => return Completion::Normal(JsValue::UNDEFINED),
-                    Err(e) => return Completion::Throw(e),
+                    Ok(None) => break Completion::Normal(JsValue::UNDEFINED),
+                    Err(e) => break Completion::Throw(e),
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // includes(searchElement, [skippedElements])
