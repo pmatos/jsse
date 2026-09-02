@@ -121,6 +121,50 @@ fn calendar_preference_for_region(region: &str) -> Vec<&'static str> {
     }
 }
 
+// CLDR supplemental time data. Locale IDs use BCP 47's hyphen separator here
+// so they can be looked up directly using the locale stored by Intl.Locale.
+// https://github.com/unicode-org/cldr/blob/main/common/supplemental/supplementalData.xml
+const HOUR_CYCLE_PREFERENCES: &[(&str, &[&str])] = &[
+    (
+        "h23",
+        &[
+            "AX", "BQ", "CP", "CZ", "DK", "FI", "ID", "IS", "ML", "NE", "RU", "SE", "SJ", "SK",
+            "001", "BI", "BY", "FO", "GL", "HU", "MG", "MT", "MU", "MV", "NO", "PL", "TH", "TJ",
+            "TM", "VN", "ZW", "AC", "AI", "BW", "BZ", "CC", "CK", "CX", "DG", "FK", "GB", "GG",
+            "GI", "GS", "IE", "IM", "IO", "JE", "LT", "MK", "MN", "MS", "NF", "NG", "NR", "NU",
+            "PN", "SH", "SX", "TA", "ZA", "en-IL", "CF", "CM", "LU", "NP", "PF", "SC", "SM", "SN",
+            "TF", "VA", "ca-ES", "fr-CA", "gl-ES", "it-CH", "it-IT", "AR", "CL", "EA", "IC", "KG",
+            "KM", "LK", "MA", "PY", "UY", "af-ZA", "es-BR", "es-ES", "es-GQ", "JP", "AF", "LA",
+            "AD", "AM", "AO", "AT", "AW", "BE", "BF", "BJ", "BL", "BR", "CG", "CI", "CV", "CW",
+            "DE", "EE", "FR", "GA", "GF", "GN", "GP", "GW", "HR", "HT", "IL", "IT", "KZ", "MC",
+            "MD", "MF", "MQ", "MZ", "NC", "NL", "PM", "PT", "RE", "RO", "SI", "SR", "ST", "TG",
+            "TR", "WF", "YT", "ZM", "ku-SY", "AZ", "BA", "BG", "CH", "GE", "LI", "ME", "RS", "UA",
+            "UZ", "XK", "ES", "GQ", "CN", "LV", "TL", "zu-ZA", "CD", "IR", "KE", "MM", "RW", "TZ",
+            "UG",
+        ],
+    ),
+    (
+        "h12",
+        &[
+            "AS", "BT", "DJ", "ER", "GH", "IN", "LS", "PG", "PW", "SO", "TO", "VU", "WS", "CY",
+            "GR", "AL", "TD", "419", "BO", "CO", "CR", "CU", "DO", "EC", "GT", "HN", "KP", "KR",
+            "MX", "NI", "NA", "PA", "PE", "PR", "SV", "VE", "AG", "AU", "BB", "BM", "BS", "CA",
+            "DM", "FJ", "FM", "GD", "GM", "GU", "GY", "JM", "KI", "KN", "KY", "LC", "LR", "MH",
+            "MP", "MW", "NZ", "SB", "SG", "SL", "SS", "SZ", "TC", "TT", "UM", "US", "VC", "VG",
+            "VI", "en-001", "en-HK", "en-MY", "BD", "PK", "AE", "BH", "DZ", "EG", "EH", "HK", "IQ",
+            "JO", "KW", "LB", "LY", "MO", "MR", "OM", "PH", "PS", "QA", "SA", "SD", "SY", "TN",
+            "YE", "ar-001", "BN", "MY", "hi-IN", "kn-IN", "ml-IN", "te-IN", "KH", "ta-IN", "TW",
+            "ET", "gu-IN", "mr-IN", "pa-IN",
+        ],
+    ),
+];
+
+fn hour_cycle_for_key(key: &str) -> Option<&'static str> {
+    HOUR_CYCLE_PREFERENCES
+        .iter()
+        .find_map(|(cycle, keys)| keys.contains(&key).then_some(*cycle))
+}
+
 fn set_unicode_keyword(locale: &mut IcuLocale, key_str: &str, value_str: &str) {
     if let Ok(key) = key_str.parse::<Key>()
         && let Ok(val) = value_str.parse::<Value>()
@@ -870,15 +914,20 @@ impl Interpreter {
                     let cycles = if let Some(h) = hc {
                         vec![JsValue::from_str(&h)]
                     } else {
-                        let h12_regions = ["US", "CA", "AU", "NZ", "PH", "IN", "EG", "SA", "CO", "PK", "MY"];
                         let default = tag.parse::<IcuLocale>().ok().map_or("h23", |locale| {
                             let preference = compute_region_preference(&locale);
-                            let lookup_region = preference.lookup_region();
-                            if h12_regions.contains(&lookup_region) {
-                                "h12"
-                            } else {
-                                "h23"
-                            }
+                            let language = locale.id.language.to_string();
+                            preference
+                                .region_override
+                                .iter()
+                                .map(String::as_str)
+                                .chain(std::iter::once(preference.region.as_str()))
+                                .find_map(|region| {
+                                    let locale_key = format!("{language}-{region}");
+                                    hour_cycle_for_key(&locale_key)
+                                        .or_else(|| hour_cycle_for_key(region))
+                                })
+                                .unwrap_or("h23")
                         });
                         vec![JsValue::from_str(default)]
                     };
@@ -1828,6 +1877,24 @@ fn get_timezones_for_region(region: &str) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hour_cycle_data_distinguishes_language_region_from_region() {
+        let cases = [
+            ("GB", Some("h23")),
+            ("US", Some("h12")),
+            ("CA", Some("h12")),
+            ("fr-CA", Some("h23")),
+            ("en-CA", None),
+            ("001", Some("h23")),
+            ("en-001", Some("h12")),
+            ("zz", None),
+        ];
+
+        for (key, expected) in cases {
+            assert_eq!(hour_cycle_for_key(key), expected, "{key}");
+        }
+    }
 
     #[test]
     fn canonical_unicode_subdivision_returns_its_region() {
