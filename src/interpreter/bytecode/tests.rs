@@ -448,6 +448,24 @@ fn compile_body_return_number_literal() {
 }
 
 #[test]
+fn sequential_chunks_reuse_operand_stack_storage() {
+    let body = vec![Statement::Return(Some(Expression::Literal(
+        Literal::Number(42.0),
+    )))];
+    let chunk = compile_body(&body).expect("compile");
+    let mut interp = Interpreter::new();
+    let env = interp.realm().global_env.clone();
+
+    for invocation in 1..=2 {
+        match run_chunk(&mut interp, &chunk, &env, JsValue::UNDEFINED) {
+            Completion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+            other => panic!("invocation {invocation} returned {other:?}"),
+        }
+        assert_eq!(interp.vm_operand_stack_pool.len(), 1);
+    }
+}
+
+#[test]
 fn compile_body_empty_returns_undefined() {
     let chunk = compile_body(&[]).expect("compile");
     match run(chunk) {

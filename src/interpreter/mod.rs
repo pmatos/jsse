@@ -265,6 +265,7 @@ pub(crate) struct Interpreter {
     constructing_derived: bool,
     calling_as_construct: bool,
     function_env_pool: Vec<EnvRef>,
+    pub(crate) vm_operand_stack_pool: Vec<Vec<JsValue>>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
@@ -431,6 +432,8 @@ pub(crate) const PROXY_CHAIN_DEPTH_LIMIT: usize = 4_000;
 
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
 const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
+pub(crate) const MAX_POOLED_VM_OPERAND_STACKS: usize = 256;
+const MAX_POOLED_VM_STACK_CAPACITY: usize = 256;
 
 /// test262's host specifier for a Module Source. `test262/INTERPRETING.md`
 /// requires implementers to "resolve the specifier `<module source>` to a module
@@ -599,6 +602,7 @@ impl Interpreter {
             constructing_derived: false,
             calling_as_construct: false,
             function_env_pool: Vec::new(),
+            vm_operand_stack_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
@@ -2002,6 +2006,21 @@ impl Interpreter {
         }
         env.borrow_mut().reset_function_scope(None, 0);
         self.function_env_pool.push(env);
+    }
+
+    pub(crate) fn acquire_vm_operand_stack(&mut self, needed: usize) -> Vec<JsValue> {
+        let mut stack = self.vm_operand_stack_pool.pop().unwrap_or_default();
+        stack.reserve(needed);
+        stack
+    }
+
+    pub(crate) fn release_vm_operand_stack(&mut self, mut stack: Vec<JsValue>) {
+        stack.clear();
+        if self.vm_operand_stack_pool.len() < MAX_POOLED_VM_OPERAND_STACKS
+            && stack.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
+        {
+            self.vm_operand_stack_pool.push(stack);
+        }
     }
 
     pub(crate) fn materialize_call_frame_arguments(&mut self, frame_index: usize) -> JsValue {

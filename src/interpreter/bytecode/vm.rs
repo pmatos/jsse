@@ -215,8 +215,20 @@ fn run_chunk_inner(
             }
         }
     }
-    let mut stack: Vec<JsValue> = Vec::with_capacity(chunk.max_stack as usize);
+    let mut stack = interp.acquire_vm_operand_stack(chunk.max_stack as usize);
     let mut refs: Vec<IdentifierRef> = Vec::with_capacity(chunk.max_refs as usize);
+    let result = run_chunk_loop(interp, chunk, env, &mut stack, &mut refs);
+    interp.release_vm_operand_stack(stack);
+    result
+}
+
+fn run_chunk_loop(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    env: &EnvRef,
+    mut stack: &mut Vec<JsValue>,
+    refs: &mut Vec<IdentifierRef>,
+) -> Completion {
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
     loop {
