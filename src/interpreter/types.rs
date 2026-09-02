@@ -1419,6 +1419,143 @@ pub(crate) enum IteratorState {
     },
 }
 
+impl IteratorState {
+    /// The completed (fully drained) terminal state of a **sync** state-machine
+    /// generator. Every resumption field is fixed at its completed default —
+    /// `execution_state = Completed`, `_sent_value = UNDEFINED`, an empty
+    /// `try_stack`, and every `pending_*`/`delegated_iterator` set to `None` —
+    /// so a caller supplies only the three fields a finished generator still
+    /// owns. Replaces the byte-identical 10-field literal previously inlined at
+    /// every completion site.
+    pub(crate) fn completed_state_machine_generator(
+        state_machine: Rc<GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+    ) -> IteratorState {
+        IteratorState::StateMachineGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            execution_state: StateMachineExecutionState::Completed,
+            _sent_value: JsValue::UNDEFINED,
+            try_stack: Vec::new(),
+            pending_binding: None,
+            delegated_iterator: None,
+            pending_exception: None,
+            pending_return: None,
+        }
+    }
+
+    /// The completed terminal state of an **async** state-machine generator;
+    /// identical field defaults to [`Self::completed_state_machine_generator`],
+    /// distinguished only by the variant tag.
+    pub(crate) fn completed_state_machine_async_generator(
+        state_machine: Rc<GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+    ) -> IteratorState {
+        IteratorState::StateMachineAsyncGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            execution_state: StateMachineExecutionState::Completed,
+            _sent_value: JsValue::UNDEFINED,
+            try_stack: Vec::new(),
+            pending_binding: None,
+            delegated_iterator: None,
+            pending_exception: None,
+            pending_return: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod completed_state_machine_generator_tests {
+    use super::*;
+
+    fn empty_state_machine() -> Rc<GeneratorStateMachine> {
+        Rc::new(GeneratorStateMachine {
+            states: Vec::new(),
+            local_vars: Vec::new(),
+            params: Vec::new(),
+            num_yields: 0,
+            temp_vars: Vec::new(),
+            #[cfg(feature = "perf-counters")]
+            perf_key: None,
+        })
+    }
+
+    #[test]
+    fn completed_sync_generator_clears_every_pending_field() {
+        let state = IteratorState::completed_state_machine_generator(
+            empty_state_machine(),
+            Environment::new(None),
+            true,
+        );
+        match state {
+            IteratorState::StateMachineGenerator {
+                is_strict,
+                execution_state,
+                _sent_value,
+                try_stack,
+                pending_binding,
+                delegated_iterator,
+                pending_exception,
+                pending_return,
+                ..
+            } => {
+                assert!(is_strict);
+                assert!(matches!(
+                    execution_state,
+                    StateMachineExecutionState::Completed
+                ));
+                assert!(_sent_value.is_undefined());
+                assert!(try_stack.is_empty());
+                assert!(pending_binding.is_none());
+                assert!(delegated_iterator.is_none());
+                assert!(pending_exception.is_none());
+                assert!(pending_return.is_none());
+            }
+            _ => panic!("expected a StateMachineGenerator"),
+        }
+    }
+
+    #[test]
+    fn completed_async_generator_clears_every_pending_field() {
+        let state = IteratorState::completed_state_machine_async_generator(
+            empty_state_machine(),
+            Environment::new(None),
+            false,
+        );
+        match state {
+            IteratorState::StateMachineAsyncGenerator {
+                is_strict,
+                execution_state,
+                _sent_value,
+                try_stack,
+                pending_binding,
+                delegated_iterator,
+                pending_exception,
+                pending_return,
+                ..
+            } => {
+                assert!(!is_strict);
+                assert!(matches!(
+                    execution_state,
+                    StateMachineExecutionState::Completed
+                ));
+                assert!(_sent_value.is_undefined());
+                assert!(try_stack.is_empty());
+                assert!(pending_binding.is_none());
+                assert!(delegated_iterator.is_none());
+                assert!(pending_exception.is_none());
+                assert!(pending_return.is_none());
+            }
+            _ => panic!("expected a StateMachineAsyncGenerator"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum TypedArrayKind {
     Int8,
