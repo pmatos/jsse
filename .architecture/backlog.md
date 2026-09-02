@@ -27,11 +27,13 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## complete-state-machine-generator-ctor
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 5, locality 4, blast radius 1, heat 3)
 - **Files**: ~2 estimated — `src/interpreter/eval/generator_runtime.rs`, `src/interpreter/types.rs`
 - **Modules**: `src/interpreter/eval/generator_runtime.rs`
-- **Summary**: Collapse 87 byte-identical inlined "completed state-machine generator" 10-field struct literals (27 sync + 60 async) into `completed_state_machine_generator` / `…_async_generator` constructors. **Picked by the 2026-09-03 firing** — friction re-verified (87 literals, all byte-identical: a grep for any completed literal carrying a non-default field returns empty). 2 more fixtures in `tests.rs`.
+- **Summary**: Collapse **97** byte-identical inlined "completed state-machine generator" 10-field struct literals (**31 sync + 66 async**) into `completed_state_machine_generator` / `…_async_generator` constructors. **Picked and implemented by the 2026-09-03 firing**. Count corrected 87→97: the prior single-line grep missed 10 literals that wrap `execution_state:` onto its own line; a brace-matching parser and a whitespace-tolerant regex agree at 97, all verified to carry exactly the canonical 10-field completed shape. The 2 `tests.rs` hits are `matches!` patterns, left untouched. Landed net −576 lines, gate green (621 unit / 3168 test262 generator scenarios, 0 regressions / 13 custom).
+- **First seen**: 2026-09-01
+- **PR**: #592
 
 ## gc-root-scope-guard
 
