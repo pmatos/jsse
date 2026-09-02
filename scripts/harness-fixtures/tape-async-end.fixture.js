@@ -2,7 +2,7 @@
 // harness is inert on Node, so run-harness-selftest.sh validates this fixture
 // on JSSE alone.
 //
-// Expected summary: PASS: 7  FAIL: 1  TOTAL: 8
+// Expected summary: PASS: 8  FAIL: 1  TOTAL: 9
 
 var tape = globalThis.__tape;
 
@@ -36,6 +36,11 @@ tape("deferred end completes without a plan", function (t) {
 tape("plan declared after its assertion completes", function (t) {
   t.ok(true, "assertion before plan");
   t.plan(1);
+});
+
+tape("planned skip fulfills the plan", function (t) {
+  t.plan(1);
+  t.skip("planned skip");
 });
 
 tape("subtest-only parent auto-ends", function (t) {
