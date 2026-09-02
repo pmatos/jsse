@@ -510,6 +510,15 @@ fn iterator_step_value_getter(
     Ok(Some(value))
 }
 
+fn iterator_join_to_string(interp: &mut Interpreter, value: &JsValue) -> Result<JsString, JsValue> {
+    let primitive = if value.is_object() {
+        interp.to_primitive(value, "string")?
+    } else {
+        value.clone()
+    };
+    interp.to_js_string(&primitive)
+}
+
 // IteratorClose per spec, taking a completion and returning updated completion.
 // If completion is Err (throw), the original error is preserved even if .return() throws.
 fn iterator_close_with_completion(
@@ -1714,6 +1723,67 @@ impl Interpreter {
                     }
                     Ok(None) => return Completion::Normal(accumulator),
                     Err(e) => return Completion::Throw(e),
+                }
+            }
+        });
+
+        // join(separator)
+        self.define_method(iter_proto_id, "join", 1, |interp, this, args| {
+            if !this.is_object() {
+                return Completion::Throw(
+                    interp.create_type_error("Iterator.prototype.join called on non-object"),
+                );
+            }
+
+            let separator = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let separator = if separator.is_undefined() {
+                JsString::from_str(",")
+            } else {
+                match iterator_join_to_string(interp, &separator) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = iterator_close_with_completion(interp, this, Err(error.clone()));
+                        return Completion::Throw(error);
+                    }
+                }
+            };
+
+            let (iterator, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(record) => record,
+                Err(error) => return Completion::Throw(error),
+            };
+            let mut result = Vec::new();
+            let mut first = true;
+
+            loop {
+                let value = match iterator_step_value_getter(interp, &iterator, &next_method) {
+                    Ok(Some(value)) => value,
+                    Ok(None) => {
+                        return Completion::Normal(JsValue::string(JsString::from_vec(result)));
+                    }
+                    Err(error) => return Completion::Throw(error),
+                };
+
+                if first {
+                    first = false;
+                } else {
+                    result.extend(separator.code_units.iter().copied());
+                }
+
+                if !value.is_nullish() {
+                    match iterator_join_to_string(interp, &value) {
+                        Ok(value_string) => {
+                            result.extend(value_string.code_units.iter().copied());
+                        }
+                        Err(error) => {
+                            let _ = iterator_close_with_completion(
+                                interp,
+                                &iterator,
+                                Err(error.clone()),
+                            );
+                            return Completion::Throw(error);
+                        }
+                    }
                 }
             }
         });

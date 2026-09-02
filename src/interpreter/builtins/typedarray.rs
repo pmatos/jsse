@@ -38,186 +38,55 @@ impl Interpreter {
             .class_name = "ArrayBuffer".to_string();
         self.realm_mut().arraybuffer_prototype = Some(ab_proto_id);
 
-        // byteLength getter
+        // byteLength getter — 0 when detached, else the byte length.
         self.define_getter(ab_proto_id, "byteLength", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Detached,
-                Bytes(usize),
-            }
-            let probe = if let Some(o) = this_val.as_object_id() {
-                interp
-                    .get_object_cell(o)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if let Some(buf_data) = r.arraybuffer_data() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()) {
-                                Probe::Detached
-                            } else {
-                                Probe::Bytes(buffer_len(buf_data))
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::Shared | Probe::NotAB => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Detached => Completion::Normal(JsValue::number(0.0)),
-                Probe::Bytes(n) => Completion::Normal(JsValue::number(n as f64)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::number(if s.is_detached {
+                    0.0
+                } else {
+                    s.byte_length as f64
+                })),
+                Err(c) => c,
             }
         });
 
         // detached getter
         self.define_getter(ab_proto_id, "detached", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Detached(bool),
-            }
-            let probe = if let Some(o) = this_val.as_object_id() {
-                interp
-                    .get_object_cell(o)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else {
-                                let det =
-                                    r.arraybuffer_detached().as_ref().is_some_and(|d| d.get());
-                                Probe::Detached(det)
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Detached(b) => Completion::Normal(JsValue::boolean(b)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.is_detached)),
+                Err(c) => c,
             }
         });
 
-        // resizable getter
+        // resizable getter — whether a maximum byte length was set.
         self.define_getter(ab_proto_id, "resizable", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Resizable(bool),
-            }
-            let probe = if let Some(o) = this_val.as_object_id() {
-                interp
-                    .get_object_cell(o)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else {
-                                Probe::Resizable(r.arraybuffer_max_byte_length().is_some())
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Resizable(b) => Completion::Normal(JsValue::boolean(b)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.max_byte_length.is_some())),
+                Err(c) => c,
             }
         });
 
         // immutable getter
         self.define_getter(ab_proto_id, "immutable", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Immutable(bool),
-            }
-            let probe = if let Some(o) = this_val.as_object_id() {
-                interp
-                    .get_object_cell(o)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else {
-                                Probe::Immutable(r.arraybuffer_is_immutable())
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Immutable(b) => Completion::Normal(JsValue::boolean(b)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.is_immutable)),
+                Err(c) => c,
             }
         });
 
-        // maxByteLength getter
+        // maxByteLength getter — 0 when detached, else the max capacity,
+        // defaulting to the current length for a non-resizable buffer.
         self.define_getter(ab_proto_id, "maxByteLength", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Detached,
-                Max(usize),
-            }
-            let probe = if let Some(o) = this_val.as_object_id() {
-                interp
-                    .get_object_cell(o)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()) {
-                                Probe::Detached
-                            } else {
-                                let max = r
-                                    .arraybuffer_max_byte_length()
-                                    .unwrap_or_else(|| buffer_len(r.arraybuffer_data().unwrap()));
-                                Probe::Max(max)
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => {
+                    let max = if s.is_detached {
+                        0
+                    } else {
+                        s.max_byte_length.unwrap_or(s.byte_length)
+                    };
+                    Completion::Normal(JsValue::number(max as f64))
                 }
-                Probe::Detached => Completion::Normal(JsValue::number(0.0)),
-                Probe::Max(n) => Completion::Normal(JsValue::number(n as f64)),
+                Err(c) => c,
             }
         });
 
@@ -1090,50 +959,28 @@ impl Interpreter {
 
         // byteLength getter
         self.define_getter(sab_proto_id, "byteLength", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object_cell(o)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_is_shared()
-                    && let Some(buf) = obj_ref.arraybuffer_data()
-                {
-                    return Completion::Normal(JsValue::number(buffer_len(buf) as f64));
-                }
+            match require_shared_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::number(s.byte_length as f64)),
+                Err(c) => c,
             }
-            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
         });
 
-        // maxByteLength getter
+        // maxByteLength getter — max capacity, defaulting to the current length.
         self.define_getter(sab_proto_id, "maxByteLength", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object_cell(o)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_is_shared()
-                    && let Some(buf) = obj_ref.arraybuffer_data()
-                {
-                    let max = obj_ref
-                        .arraybuffer_max_byte_length()
-                        .unwrap_or_else(|| buffer_len(buf));
-                    return Completion::Normal(JsValue::number(max as f64));
-                }
+            match require_shared_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::number(
+                    s.max_byte_length.unwrap_or(s.byte_length) as f64,
+                )),
+                Err(c) => c,
             }
-            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
         });
 
-        // growable getter
+        // growable getter — whether a maximum byte length was set.
         self.define_getter(sab_proto_id, "growable", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object(o)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_is_shared() {
-                    return Completion::Normal(JsValue::boolean(
-                        obj_ref.arraybuffer_max_byte_length().is_some(),
-                    ));
-                }
+            match require_shared_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.max_byte_length.is_some())),
+                Err(c) => c,
             }
-            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
         });
 
         // grow(newLength)
@@ -5718,6 +5565,93 @@ fn strict_eq(x: &JsValue, y: &JsValue) -> bool {
 /// "not a TypedArray" for a non-TypedArray receiver, otherwise runs the
 /// detached / out-of-bounds check and returns a clone of its `TypedArrayInfo`.
 /// The kind-gated `validate_uint8array` below is the same shape for one kind.
+/// Owned, borrow-free snapshot of an (Shared)ArrayBuffer's observable state,
+/// captured under a single `cell.borrow()` so the brand-check prologue can drop
+/// the borrow before `create_type_error` (which needs `&mut Interpreter`) runs.
+/// A dumb record: every getter reads one or two fields straight off it. For a
+/// SharedArrayBuffer, `is_detached`/`is_immutable` are always `false` (a SAB
+/// never detaches and is never immutable).
+struct BufferSnapshot {
+    byte_length: usize,
+    is_detached: bool,
+    is_immutable: bool,
+    max_byte_length: Option<usize>,
+}
+
+/// Brand-check `this_val` as an `ArrayBuffer` (has buffer data **and** is not
+/// shared) and snapshot the fields its getters read. Rejects a
+/// SharedArrayBuffer and any non-buffer with a `"not an ArrayBuffer"`
+/// TypeError. **Never throws on a detached buffer** — detachment is reported
+/// through `is_detached`, because `byteLength`/`maxByteLength` return `0` (not a
+/// throw) on a detached buffer and `detached` returns the flag itself. Mirrors
+/// the sibling `validate_typed_array`.
+fn require_array_buffer(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<BufferSnapshot, Completion> {
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
+    {
+        let snapshot = {
+            let r = obj.borrow();
+            if let Some(buf) = r.arraybuffer_data()
+                && !r.arraybuffer_is_shared()
+            {
+                Some(BufferSnapshot {
+                    byte_length: buffer_len(buf),
+                    is_detached: r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()),
+                    is_immutable: r.arraybuffer_is_immutable(),
+                    max_byte_length: r.arraybuffer_max_byte_length(),
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(snapshot) = snapshot {
+            return Ok(snapshot);
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not an ArrayBuffer"),
+    ))
+}
+
+/// Brand-check `this_val` as a `SharedArrayBuffer` (has buffer data **and** is
+/// shared) and snapshot the fields its getters read. Rejects a plain
+/// ArrayBuffer and any non-buffer with a `"not a SharedArrayBuffer"` TypeError.
+/// A SAB never detaches and is never immutable, so those snapshot fields are
+/// pinned to `false`.
+fn require_shared_array_buffer(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<BufferSnapshot, Completion> {
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
+    {
+        let snapshot = {
+            let r = obj.borrow();
+            if let Some(buf) = r.arraybuffer_data()
+                && r.arraybuffer_is_shared()
+            {
+                Some(BufferSnapshot {
+                    byte_length: buffer_len(buf),
+                    is_detached: false,
+                    is_immutable: false,
+                    max_byte_length: r.arraybuffer_max_byte_length(),
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(snapshot) = snapshot {
+            return Ok(snapshot);
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not a SharedArrayBuffer"),
+    ))
+}
+
 fn validate_typed_array(
     interp: &mut Interpreter,
     this_val: &JsValue,
@@ -6499,5 +6433,154 @@ mod validate_typed_array_tests {
             err.contains("typed array is detached"),
             "unexpected error: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod require_array_buffer_tests {
+    //! Pins the `require_array_buffer` / `require_shared_array_buffer` seams —
+    //! the receiver-validation prologue shared by the (Shared)ArrayBuffer
+    //! prototype getters. A live receiver of the right brand yields a
+    //! `BufferSnapshot`; a detached ArrayBuffer still yields a snapshot with
+    //! `is_detached = true` (getters return `0`, they never throw on detached);
+    //! the wrong brand or a non-buffer throws the same TypeError the open-coded
+    //! prologues threw. The final block also drives the getters through
+    //! `[[Get]]` to pin the value rules (`detached → 0`, `unwrap_or(bytes)`).
+    use super::{require_array_buffer, require_shared_array_buffer};
+    use crate::interpreter::{Completion, Interpreter};
+    use crate::parser::Parser;
+    use crate::types::JsValue;
+
+    fn interp_with(source: &str) -> Interpreter {
+        let mut parser = Parser::new(source).expect("parser init");
+        let program = parser.parse_program().expect("parse program");
+        let mut interp = Interpreter::new();
+        let result = interp.run(&program);
+        assert!(
+            matches!(result, Completion::Normal(_) | Completion::Empty),
+            "unexpected completion: {result:?}"
+        );
+        interp
+    }
+
+    fn global(interp: &Interpreter, name: &str) -> JsValue {
+        interp
+            .get_global_var_ref(name)
+            .unwrap_or_else(|| panic!("expected global {name}"))
+    }
+
+    fn throw_message(
+        interp: &Interpreter,
+        result: Result<super::BufferSnapshot, Completion>,
+    ) -> String {
+        match result {
+            Ok(_) => panic!("expected the receiver to be rejected"),
+            Err(Completion::Throw(e)) => interp.format_value(&e),
+            Err(other) => panic!("expected Throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_a_live_array_buffer() {
+        let mut interp = interp_with("var ab = new ArrayBuffer(8);");
+        let ab = global(&interp, "ab");
+        let snap = require_array_buffer(&mut interp, &ab).expect("valid ArrayBuffer");
+        assert_eq!(snap.byte_length, 8);
+        assert!(!snap.is_detached);
+        assert!(!snap.is_immutable);
+        assert_eq!(snap.max_byte_length, None);
+    }
+
+    #[test]
+    fn accepts_a_resizable_array_buffer() {
+        let mut interp = interp_with("var ab = new ArrayBuffer(8, { maxByteLength: 16 });");
+        let ab = global(&interp, "ab");
+        let snap = require_array_buffer(&mut interp, &ab).expect("valid resizable ArrayBuffer");
+        assert_eq!(snap.byte_length, 8);
+        assert_eq!(snap.max_byte_length, Some(16));
+    }
+
+    #[test]
+    fn detached_array_buffer_returns_a_snapshot_not_a_throw() {
+        // `transfer()` detaches the source buffer through the same MOP the spec
+        // uses; the getters must still validate (returning `is_detached`), never
+        // throw.
+        let mut interp = interp_with("var ab = new ArrayBuffer(8); ab.transfer();");
+        let ab = global(&interp, "ab");
+        let snap = require_array_buffer(&mut interp, &ab).expect("detached AB still validates");
+        assert!(snap.is_detached);
+    }
+
+    #[test]
+    fn require_array_buffer_rejects_a_shared_array_buffer() {
+        let mut interp = interp_with("var sab = new SharedArrayBuffer(8);");
+        let sab = global(&interp, "sab");
+        let result = require_array_buffer(&mut interp, &sab);
+        let err = throw_message(&interp, result);
+        assert!(
+            err.contains("not an ArrayBuffer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn require_array_buffer_rejects_a_plain_object() {
+        let mut interp = interp_with("var o = {};");
+        let o = global(&interp, "o");
+        let result = require_array_buffer(&mut interp, &o);
+        let err = throw_message(&interp, result);
+        assert!(
+            err.contains("not an ArrayBuffer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn require_shared_array_buffer_accepts_a_shared_array_buffer() {
+        let mut interp = interp_with("var sab = new SharedArrayBuffer(8);");
+        let sab = global(&interp, "sab");
+        let snap = require_shared_array_buffer(&mut interp, &sab).expect("valid SharedArrayBuffer");
+        assert_eq!(snap.byte_length, 8);
+        assert!(!snap.is_detached);
+    }
+
+    #[test]
+    fn require_shared_array_buffer_rejects_a_plain_array_buffer() {
+        let mut interp = interp_with("var ab = new ArrayBuffer(8);");
+        let ab = global(&interp, "ab");
+        let result = require_shared_array_buffer(&mut interp, &ab);
+        let err = throw_message(&interp, result);
+        assert!(
+            err.contains("not a SharedArrayBuffer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn getter_value_rules_through_get() {
+        // Resizable buffer: byteLength = current, maxByteLength = the max,
+        // resizable = true. Detached buffer: byteLength and maxByteLength both
+        // 0, detached = true — the `detached → 0` rule the getters encode.
+        let interp = interp_with(
+            "var rab = new ArrayBuffer(8, { maxByteLength: 16 });\n\
+             var r_bl = rab.byteLength;\n\
+             var r_mbl = rab.maxByteLength;\n\
+             var r_rz = rab.resizable;\n\
+             var dab = new ArrayBuffer(8); dab.transfer();\n\
+             var d_bl = dab.byteLength;\n\
+             var d_mbl = dab.maxByteLength;\n\
+             var d_det = dab.detached;",
+        );
+        let num = |interp: &Interpreter, name: &str| {
+            global(interp, name)
+                .as_number()
+                .unwrap_or_else(|| panic!("{name} not a number"))
+        };
+        assert_eq!(num(&interp, "r_bl"), 8.0);
+        assert_eq!(num(&interp, "r_mbl"), 16.0);
+        assert!(interp.to_boolean_val(&global(&interp, "r_rz")));
+        assert_eq!(num(&interp, "d_bl"), 0.0);
+        assert_eq!(num(&interp, "d_mbl"), 0.0);
+        assert!(interp.to_boolean_val(&global(&interp, "d_det")));
     }
 }
