@@ -77,6 +77,12 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
 
+## Long-Running Builds & Tests
+- Never rebuild the binary while a test262 / full-suite run is in flight; snapshot the binary to a temp path first or wait for completion.
+- Never use `pkill -9 <pattern>` — patterns have matched Claude's own shell. Kill by recorded PID only, and clean up temp files explicitly.
+- Clear stale compile caches before declaring a repro 'still failing'.
+- Long compiles exceed the default 2-minute Bash timeout: pass an explicit longer timeout up front.
+
 ## Execution Counters (performance investigations)
 - Off by default and absent from the shipped binary. Build with
   `cargo build --release --features perf-counters`; every run **that executes
