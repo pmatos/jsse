@@ -1717,13 +1717,25 @@ impl Interpreter {
                 Ok(value) => value,
                 Err(err) => return Completion::Throw(err),
             };
+            // A `next` accessor may hand back a freshly created function that no
+            // heap object owns, so the cached `next_method` (and the iterator
+            // itself) must stay rooted for the whole loop: user code reached from
+            // `next()` or a `value` getter can trigger a major GC mid-iteration.
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut skipped = 0.0;
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
                     Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
+                        // `result` is likewise only held here while its own
+                        // `value` getter runs.
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
                             Ok(value) => value,
-                            Err(err) => return Completion::Throw(err),
+                            Err(err) => break Completion::Throw(err),
                         };
                         if skipped < to_skip {
                             skipped += 1.0;
@@ -1731,15 +1743,17 @@ impl Interpreter {
                         }
                         if same_value_zero(&value, &search_element) {
                             if let Err(err) = iterator_close_getter(interp, &iter) {
-                                return Completion::Throw(err);
+                                break Completion::Throw(err);
                             }
-                            return Completion::Normal(JsValue::TRUE);
+                            break Completion::Normal(JsValue::TRUE);
                         }
                     }
-                    Ok(None) => return Completion::Normal(JsValue::FALSE),
-                    Err(err) => return Completion::Throw(err),
+                    Ok(None) => break Completion::Normal(JsValue::FALSE),
+                    Err(err) => break Completion::Throw(err),
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // reduce(reducer, [initial])
