@@ -1459,6 +1459,8 @@
         teardowns: [],
         assertions: 0,
         plan: null,
+        ended: false,
+        _completeResolve: null,
       };
     }
 
@@ -1534,11 +1536,26 @@
       return false;
     }
 
+    function complete(test) {
+      if (test.ended) return;
+      test.ended = true;
+      if (test._completeResolve) {
+        var resolve = test._completeResolve;
+        test._completeResolve = null;
+        resolve();
+      }
+    }
+
+    function completePlan(test) {
+      if (test.plan !== null && test.assertions === test.plan) complete(test);
+    }
+
     function makeAssert(test) {
       function assert(ok, message, actual, expected, extra) {
         var skipReason = extra && extra.skip;
         test.assertions++;
         report(ok || !!skipReason, message, actual, expected, skipReason);
+        completePlan(test);
       }
 
       var t = {
@@ -1547,9 +1564,11 @@
         },
         plan: function (count) {
           test.plan = count;
+          completePlan(test);
         },
         end: function (error) {
           if (error) t.error(error);
+          complete(test);
         },
         teardown: function (fn) {
           if (typeof fn === "function") test.teardowns.push(fn);
@@ -1570,6 +1589,7 @@
         skip: function (message) {
           test.assertions++;
           report(true, message || "skip", undefined, undefined, true);
+          completePlan(test);
         },
         ok: function (value, message) {
           assert(!!value, message || "should be truthy", value, true);
@@ -1717,9 +1737,33 @@
       var t = makeAssert(test);
       try {
         var result = typeof test.cb === "function" ? test.cb(t) : undefined;
-        if (result && typeof result.then === "function") await result;
+        if (result && typeof result.then === "function") {
+          await result;
+          complete(test);
+        }
       } catch (e) {
         t.fail(e && e.stack ? e.stack : String(e));
+        complete(test);
+      }
+
+      if (!test.ended) {
+        var guardId = -1;
+        await new Promise(function (resolve) {
+          test._completeResolve = resolve;
+          // Use the runner queue so suites that replace setTimeout cannot
+          // strand callback-style tests. This mirrors the QUnit async guard.
+          guardId = schedule(function () {
+            if (test._completeResolve) {
+              test._completeResolve = null;
+              test.ended = true;
+              t.fail(
+                "async test timed out after " + ASYNC_TIMEOUT_MS + "ms"
+              );
+              resolve();
+            }
+          }, ASYNC_TIMEOUT_MS);
+        });
+        unschedule(guardId);
       }
 
       for (var i = 0; i < test.children.length; i++) {
