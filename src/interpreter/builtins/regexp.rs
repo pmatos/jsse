@@ -94,8 +94,87 @@ fn js_string_to_regex_pattern(code_units: &[u16], flags: &str) -> String {
     if flags.contains('u') || flags.contains('v') {
         js_string_to_regex_input(code_units)
     } else {
-        js_string_to_regex_input_non_unicode(code_units)
+        js_string_to_regex_pattern_non_unicode(code_units)
     }
+}
+
+/// Encode non-Unicode pattern atoms as individual UTF-16 code units while
+/// retaining surrogate pairs inside GroupName syntax. Group names and named
+/// backreferences use RegExpIdentifierName's Unicode interpretation even when
+/// the pattern itself is not in Unicode mode.
+fn js_string_to_regex_pattern_non_unicode(code_units: &[u16]) -> String {
+    if code_units_are_ascii(code_units) {
+        return js_string_to_regex_input_non_unicode(code_units);
+    }
+
+    let mut unicode_name_unit = vec![false; code_units.len()];
+    let mut i = 0;
+    let mut in_class = false;
+    while i < code_units.len() {
+        match code_units[i] {
+            0x005C => {
+                if !in_class
+                    && code_units.get(i + 1) == Some(&(b'k' as u16))
+                    && code_units.get(i + 2) == Some(&(b'<' as u16))
+                {
+                    let mut end = i + 3;
+                    while end < code_units.len() && code_units[end] != b'>' as u16 {
+                        unicode_name_unit[end] = true;
+                        end += 1;
+                    }
+                    i = end.saturating_add(1);
+                } else {
+                    // Skip the escaped code unit so it cannot start syntax.
+                    i = (i + 2).min(code_units.len());
+                }
+            }
+            0x005B if !in_class => {
+                in_class = true;
+                i += 1;
+            }
+            0x005D if in_class => {
+                in_class = false;
+                i += 1;
+            }
+            0x0028
+                if !in_class
+                    && code_units.get(i + 1) == Some(&(b'?' as u16))
+                    && code_units.get(i + 2) == Some(&(b'<' as u16))
+                    && !matches!(code_units.get(i + 3), Some(&0x003D) | Some(&0x0021)) =>
+            {
+                let mut end = i + 3;
+                while end < code_units.len() && code_units[end] != b'>' as u16 {
+                    unicode_name_unit[end] = true;
+                    end += 1;
+                }
+                i = end.saturating_add(1);
+            }
+            _ => i += 1,
+        }
+    }
+
+    let mut result = String::with_capacity(code_units.len());
+    i = 0;
+    while i < code_units.len() {
+        let cu = code_units[i];
+        if unicode_name_unit[i]
+            && (0xD800..=0xDBFF).contains(&cu)
+            && i + 1 < code_units.len()
+            && unicode_name_unit[i + 1]
+            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
+        {
+            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
+            result.push(char::from_u32(cp).expect("surrogate pair must form a Unicode scalar"));
+            i += 2;
+        } else if (0xD800..=0xDFFF).contains(&cu) {
+            result.push(surrogate_to_pua(cu as u32));
+            i += 1;
+        } else {
+            result.push(char::from_u32(cu as u32).expect("non-surrogate UTF-16 unit is a scalar"));
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Both regex views encode an all-ASCII subject identically to its code units,
