@@ -164,6 +164,28 @@ impl Interpreter {
         false
     }
 
+    /// `ResolveThisBinding` (`sec-resolvethisbinding`): walk the lexical
+    /// environment chain for a `this` binding, skipping object Environment
+    /// Records (`with`) entirely — unlike ordinary identifier resolution,
+    /// which the bytecode `LoadName` op uses and which does consult
+    /// with-objects. Shared by the tree-walker's `Expression::This` arm and
+    /// the bytecode `Op::LoadThis` handler so both observe identical
+    /// semantics, including the derived-constructor TDZ throw.
+    pub(super) fn resolve_this_binding(&mut self, env: &EnvRef) -> Completion {
+        match env.borrow().get("this") {
+            Some(v) => Completion::Normal(v),
+            None => {
+                if Self::this_is_in_tdz(env) {
+                    Completion::Throw(self.create_reference_error(
+                        "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                    ))
+                } else {
+                    Completion::Normal(JsValue::UNDEFINED)
+                }
+            }
+        }
+    }
+
     /// Initialize the `this` binding in a derived constructor's environment.
     /// Walks up to find the function scope's `this` binding and marks it initialized.
     fn initialize_this_binding(env: &EnvRef, value: JsValue) {
@@ -444,21 +466,7 @@ impl Interpreter {
                 self.resolve_identifier(name, env, strict)
             }
 
-            Expression::This => {
-                match env.borrow().get("this") {
-                    Some(v) => Completion::Normal(v),
-                    None => {
-                        // Check if this is TDZ (derived constructor before super())
-                        if Self::this_is_in_tdz(env) {
-                            Completion::Throw(self.create_reference_error(
-                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                            ))
-                        } else {
-                            Completion::Normal(JsValue::UNDEFINED)
-                        }
-                    }
-                }
-            }
+            Expression::This => self.resolve_this_binding(env),
             Expression::Super => {
                 Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED))
             }
