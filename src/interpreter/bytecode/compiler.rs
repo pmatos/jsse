@@ -230,6 +230,13 @@ impl Compiler {
     fn compile_expr(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
             Expression::Literal(lit) => self.compile_literal(lit),
+            Expression::This => {
+                let idx = self.add_name("this")?;
+                self.emit(Op::LoadName);
+                self.emit_u16(idx);
+                self.push_n(1);
+                Ok(())
+            }
             Expression::Identifier(name) => {
                 let idx = self.add_name(name)?;
                 self.emit(Op::LoadName);

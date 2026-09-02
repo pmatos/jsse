@@ -775,6 +775,13 @@ fn assert_parity_number(source: &str, expected: f64) {
     assert_eq!(bc_v.as_number(), Some(expected), "{source}: bytecode value");
 }
 
+#[test]
+fn this_expression_compiles_and_matches_tree_walker() {
+    let source = "function f(){ 'use strict'; return this === undefined ? 1 : 2; } \
+                  var __r = f();";
+    assert_parity_number(source, 1.0);
+}
+
 // NOTE: lexical declarations are not yet compilable, so a body containing one
 // still bails the WHOLE body to the tree-walker.
 
