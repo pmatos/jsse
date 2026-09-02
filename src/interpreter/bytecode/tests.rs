@@ -466,6 +466,52 @@ fn sequential_chunks_reuse_operand_stack_storage() {
 }
 
 #[test]
+fn nested_chunks_release_independent_reference_stacks() {
+    use crate::parser::Parser;
+
+    let source = "\
+        function inner(value) { return value + 1; } \
+        function outer(value) { return inner(value); } \
+        var __r = outer(41);";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+
+    assert!(matches!(
+        interp.run(&program),
+        Completion::Normal(_) | Completion::Empty
+    ));
+    assert_eq!(
+        interp.get_global_var_ref("__r").and_then(|v| v.as_number()),
+        Some(42.0)
+    );
+    assert!(interp.bytecode_chunks_executed >= 2);
+    assert_eq!(interp.vm_ref_stack_pool.len(), 2);
+}
+
+#[test]
+fn releasing_reference_stack_drops_environment_handles_before_pooling() {
+    use crate::interpreter::eval::IdentifierRef;
+    use crate::interpreter::types::Environment;
+    use std::rc::Rc;
+
+    let mut interp = Interpreter::new();
+    let env = Environment::new_function_scope(None);
+    let mut refs = interp.acquire_vm_ref_stack(1);
+    refs.push(IdentifierRef::SpecificEnv(env.clone()));
+    assert_eq!(Rc::strong_count(&env), 2);
+
+    interp.release_vm_ref_stack(refs);
+
+    assert_eq!(Rc::strong_count(&env), 1);
+    assert_eq!(interp.vm_ref_stack_pool.len(), 1);
+    assert!(interp.vm_ref_stack_pool[0].is_empty());
+    interp.recycle_function_environment(env);
+    assert_eq!(interp.function_env_pool.len(), 1);
+}
+
+#[test]
 fn compile_body_empty_returns_undefined() {
     let chunk = compile_body(&[]).expect("compile");
     match run(chunk) {
