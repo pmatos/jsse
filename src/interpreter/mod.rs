@@ -3622,6 +3622,21 @@ impl Interpreter {
                 }
             }
         }
+        let completion = match &err {
+            Some(e) => Completion::Throw(e.clone()),
+            None => Completion::Normal(JsValue::UNDEFINED),
+        };
+        match self.dispose_resources(&module_env, completion) {
+            Completion::Throw(e) => {
+                module.borrow_mut().error = Some(e.clone());
+                err = Some(e);
+            }
+            Completion::Exit(code) => {
+                self.pending_exit = Some(code);
+                err = None;
+            }
+            _ => {}
+        }
         module.borrow_mut().program_ast = None;
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
