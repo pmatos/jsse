@@ -4,6 +4,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 **Goal: 100% test262 pass rate.**
 
+**Current result: 99,895 / 99,907 test262 scenarios passing (99.99%).**
+
 Read more: [jsse - a JavaScript engine built by an agent](https://p.ocmatos.com/blog/jsse-a-javascript-engine-built-by-an-agent.html).
 
 Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution. Run `uv run python scripts/run-test262.py` for the current pass rate.
