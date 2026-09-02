@@ -331,7 +331,13 @@ fn run_chunk_inner(
                 let gc_frame = root_operand_stack(interp, &stack);
                 let key_val = stack.pop().expect("stack underflow on GetElement key");
                 let base = stack.pop().expect("stack underflow on GetElement base");
-                let result = member_get_computed(interp, &base, &key_val);
+                let result = if let Some(index) = key_val.as_number()
+                    && let Some(value) = interp.numeric_index_fast_get(&base, index)
+                {
+                    Completion::Normal(value)
+                } else {
+                    member_get_computed(interp, &base, &key_val)
+                };
                 unroot_stack_value(interp, &key_val);
                 unroot_stack_value(interp, &base);
                 interp.gc_unroot_frame(gc_frame);
