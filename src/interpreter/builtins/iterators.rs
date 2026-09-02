@@ -1678,11 +1678,14 @@ impl Interpreter {
                     _ => {
                         // The error object is created before IteratorClose so that a
                         // `return()` method replacing the global TypeError binding cannot
-                        // change the prototype of the error we throw.
+                        // change the prototype of the error we throw. It must be rooted
+                        // across the close, which runs arbitrary JS and can trigger GC.
                         let err = interp.create_type_error(
                             "Iterator.prototype.includes skippedElements must be an integral Number",
                         );
+                        interp.gc_root_value(&err);
                         let _ = iterator_close_getter(interp, this);
+                        interp.gc_unroot_value(&err);
                         return Completion::Throw(err);
                     }
                 }
@@ -1693,7 +1696,9 @@ impl Interpreter {
                     "RangeError",
                     "Iterator.prototype.includes skippedElements must be non-negative",
                 );
+                interp.gc_root_value(&err);
                 let _ = iterator_close_getter(interp, this);
+                interp.gc_unroot_value(&err);
                 return Completion::Throw(err);
             }
             if to_skip.is_finite() && to_skip > 9007199254740991.0 {
@@ -1701,7 +1706,9 @@ impl Interpreter {
                     "RangeError",
                     "Iterator.prototype.includes skippedElements must not exceed 2**53 - 1",
                 );
+                interp.gc_root_value(&err);
                 let _ = iterator_close_getter(interp, this);
+                interp.gc_unroot_value(&err);
                 return Completion::Throw(err);
             }
 

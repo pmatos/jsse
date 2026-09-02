@@ -46,6 +46,12 @@ function callWithClobberingReturn(globalName, skippedElements) {
       } else {
         TypeError = Fake;
       }
+      // The error already exists at this point and is only held by the
+      // implementation. Force a collection so that an unrooted error object
+      // would be reclaimed here, surfacing as a stale/blank thrown value.
+      if (typeof $262 !== 'undefined' && $262.gc) {
+        $262.gc();
+      }
       return {};
     },
   };
@@ -65,6 +71,8 @@ function callWithClobberingReturn(globalName, skippedElements) {
   return { threw: threw, thrown: thrown, closed: closed, Fake: Fake };
 }
 
+// Every case below runs a collection inside return(), so these also assert the
+// error is rooted across IteratorClose and not reclaimed mid-flight.
 var negative = callWithClobberingReturn('RangeError', -1);
 assert.sameValue(negative.threw, true, 'negative skippedElements must throw');
 assert.sameValue(negative.closed, true, 'negative skippedElements must close the iterator');
@@ -95,4 +103,25 @@ assert.sameValue(
   Object.getPrototypeOf(nonIntegral.thrown),
   OriginalTypeError.prototype,
   'non-integral skippedElements: error must be created before IteratorClose'
+);
+
+assert.sameValue(
+  negative.thrown.name,
+  'RangeError',
+  'negative skippedElements: error must survive a collection during IteratorClose'
+);
+assert.sameValue(
+  typeof negative.thrown.message,
+  'string',
+  'negative skippedElements: error message must survive a collection'
+);
+assert.sameValue(
+  tooLarge.thrown.name,
+  'RangeError',
+  'too-large skippedElements: error must survive a collection during IteratorClose'
+);
+assert.sameValue(
+  nonIntegral.thrown.name,
+  'TypeError',
+  'non-integral skippedElements: error must survive a collection during IteratorClose'
 );
