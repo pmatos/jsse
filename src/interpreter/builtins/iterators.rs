@@ -1817,53 +1817,67 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            let mut accumulator;
-            let mut counter;
-            if args.len() >= 2 {
-                accumulator = args[1].clone();
-                counter = 0.0;
-            } else {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        accumulator = match interp.iterator_value(&result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        counter = 1.0;
-                    }
-                    Ok(None) => {
-                        let err = interp
-                            .create_type_error("Reduce of empty iterator with no initial value");
-                        return Completion::Throw(err);
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.call_function(
-                            &reducer,
-                            &JsValue::UNDEFINED,
-                            &[accumulator.clone(), value, JsValue::number(counter)],
-                        ) {
-                            Completion::Normal(v) => accumulator = v,
-                            Completion::Throw(e) => {
-                                let _ = iterator_close_getter(interp, &iter);
-                                return Completion::Throw(e);
-                            }
-                            _ => {}
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
+            let outcome = 'reduce: {
+                let mut accumulator;
+                let mut counter;
+                if args.len() >= 2 {
+                    accumulator = args[1].clone();
+                    counter = 0.0;
+                } else {
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            interp.gc_root_value(&result);
+                            let value = interp.iterator_value(&result);
+                            interp.gc_unroot_value(&result);
+                            accumulator = match value {
+                                Ok(v) => v,
+                                Err(e) => break 'reduce Completion::Throw(e),
+                            };
+                            counter = 1.0;
                         }
-                        counter += 1.0;
+                        Ok(None) => {
+                            let err = interp.create_type_error(
+                                "Reduce of empty iterator with no initial value",
+                            );
+                            break 'reduce Completion::Throw(err);
+                        }
+                        Err(e) => break 'reduce Completion::Throw(e),
                     }
-                    Ok(None) => return Completion::Normal(accumulator),
-                    Err(e) => return Completion::Throw(e),
                 }
-            }
+                loop {
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            interp.gc_root_value(&result);
+                            let value = interp.iterator_value(&result);
+                            interp.gc_unroot_value(&result);
+                            let value = match value {
+                                Ok(v) => v,
+                                Err(e) => break 'reduce Completion::Throw(e),
+                            };
+                            match interp.call_function(
+                                &reducer,
+                                &JsValue::UNDEFINED,
+                                &[accumulator.clone(), value, JsValue::number(counter)],
+                            ) {
+                                Completion::Normal(v) => accumulator = v,
+                                Completion::Throw(e) => {
+                                    let _ = iterator_close_getter(interp, &iter);
+                                    break 'reduce Completion::Throw(e);
+                                }
+                                _ => {}
+                            }
+                            counter += 1.0;
+                        }
+                        Ok(None) => break 'reduce Completion::Normal(accumulator),
+                        Err(e) => break 'reduce Completion::Throw(e),
+                    }
+                }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // join(separator)
