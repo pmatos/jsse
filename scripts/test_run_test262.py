@@ -333,6 +333,21 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("test262-extra/nested/module-test.mjs", result.stderr)
 
+    def test_uncollected_mjs_reports_unreadable_directory(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262-extra/locked/module-test.mjs")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            with self.assertRaisesRegex(
+                runner.TestCollectionError, "could not scan"
+            ):
+                runner._uncollected_mjs(self.root / "test262-extra")
+        finally:
+            locked.chmod(mode)
+
     def test_directory_allows_mjs_fixtures(self):
         self.write_file("test262-extra/module-test.js", frontmatter("flags: [module]"))
         self.write_file("test262-extra/dep_FIXTURE.mjs")

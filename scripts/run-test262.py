@@ -731,8 +731,39 @@ class TestCollectionError(Exception):
     """Raised when a selected path contains a test the runner would omit."""
 
 
+def _walk_matching(
+    directory: Path, suffix: str
+) -> tuple[list[Path], list[tuple[Path, OSError]]]:
+    """Collect matching files while reporting directories that could not be read."""
+    found: list[Path] = []
+    unreadable: list[tuple[Path, OSError]] = []
+    for dirpath, _dirnames, filenames in os.walk(
+        directory, onerror=lambda error: unreadable.append((Path(error.filename), error))
+    ):
+        found.extend(
+            Path(dirpath) / name for name in filenames if name.endswith(suffix)
+        )
+    return found, unreadable
+
+
+def _raise_if_unreadable(unreadable: list[tuple[Path, OSError]]) -> None:
+    if not unreadable:
+        return
+    formatted = "\n  ".join(f"{path}: {error}" for path, error in unreadable)
+    noun = "directory" if len(unreadable) == 1 else "directories"
+    raise TestCollectionError(
+        f"could not scan the following {noun} while collecting tests:\n  {formatted}"
+    )
+
+
 def _uncollected_mjs(path: Path) -> list[Path]:
-    candidates = [path] if path.is_file() else path.rglob("*.mjs")
+    if path.is_file():
+        candidates = [path]
+    elif path.is_dir():
+        candidates, unreadable = _walk_matching(path, ".mjs")
+        _raise_if_unreadable(unreadable)
+    else:
+        candidates = []
     return [f for f in candidates if f.suffix == ".mjs" and not _is_fixture(f)]
 
 
