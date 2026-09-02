@@ -29,6 +29,11 @@ fn decode_u32(chunk: &Chunk, pc: usize) -> u32 {
 /// the stack while a *later* opcode's own getter/proxy-trap/`ToPropertyKey`
 /// coercion runs and reaches a nested `gc_safepoint()` — rooting only this
 /// opcode's own operands would miss that older, still-pending value.
+///
+/// `GetElement`'s numeric-index fast path deliberately skips this temporary
+/// frame: it only borrows existing typed-array/array storage and cannot run
+/// user code or reach a nested safepoint. Its operands remain independently
+/// rooted in `gc_bytecode_roots` until `pop_value` consumes them.
 fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
     let frame = interp.gc_root_frame();
     for v in stack {
@@ -328,22 +333,32 @@ fn run_chunk_inner(
                 }
             }
             Op::GetElement => {
-                let gc_frame = root_operand_stack(interp, &stack);
-                let key_val = stack.pop().expect("stack underflow on GetElement key");
-                let base = stack.pop().expect("stack underflow on GetElement base");
-                let result = if let Some(index) = key_val.as_number()
-                    && let Some(value) = interp.numeric_index_fast_get(&base, index)
-                {
-                    Completion::Normal(value)
+                let key_val = stack.last().expect("stack underflow on GetElement key");
+                let base_index = stack
+                    .len()
+                    .checked_sub(2)
+                    .expect("stack underflow on GetElement base");
+                let base = &stack[base_index];
+                let fast_value = key_val
+                    .as_number()
+                    .and_then(|index| interp.numeric_index_fast_get(base, index));
+
+                if let Some(value) = fast_value {
+                    pop_value(interp, &mut stack, "stack underflow on GetElement key");
+                    pop_value(interp, &mut stack, "stack underflow on GetElement base");
+                    push_value(interp, &mut stack, value);
                 } else {
-                    member_get_computed(interp, &base, &key_val)
-                };
-                unroot_stack_value(interp, &key_val);
-                unroot_stack_value(interp, &base);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Completion::Normal(v) => push_value(interp, &mut stack, v),
-                    abrupt => return abrupt,
+                    let gc_frame = root_operand_stack(interp, &stack);
+                    let key_val = stack.pop().expect("stack underflow on GetElement key");
+                    let base = stack.pop().expect("stack underflow on GetElement base");
+                    let result = member_get_computed(interp, &base, &key_val);
+                    unroot_stack_value(interp, &key_val);
+                    unroot_stack_value(interp, &base);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, &mut stack, v),
+                        abrupt => return abrupt,
+                    }
                 }
             }
             Op::SetProp => {
