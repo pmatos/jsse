@@ -616,6 +616,15 @@ impl RegexInput {
             RegexView::NonUnicode => self.non_unicode_byte_offset_to_utf16(offset),
         }
     }
+
+    /// Materialize a match span from the original UTF-16 subject. Matcher text
+    /// cannot be decoded safely because the lone-surrogate sentinel range also
+    /// contains genuine Unicode scalars.
+    fn subject_slice(&self, view: RegexView, byte_start: usize, byte_end: usize) -> JsString {
+        let start = self.byte_offset_to_utf16(view, byte_start);
+        let end = self.byte_offset_to_utf16(view, byte_end);
+        JsString::from_vec(self.subject.code_units[start..end].to_vec())
+    }
 }
 
 fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
@@ -5131,12 +5140,12 @@ enum CompiledRegex {
 #[derive(Default)]
 pub(crate) struct RegexpLegacyState {
     pub(crate) input: JsString,
-    pub(crate) last_match: String,
-    pub(crate) last_paren: String,
+    pub(crate) last_match: JsString,
+    pub(crate) last_paren: JsString,
     context_input: JsString,
     left_context_end: usize,
     right_context_start: usize,
-    pub(crate) parens: [String; 9],
+    pub(crate) parens: [JsString; 9],
     pub(crate) constructor_id: Option<u64>,
     pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
     input_cache: Option<Rc<RegexInput>>,
@@ -8144,26 +8153,35 @@ fn regexp_exec_raw(
         interp.regexp_legacy.context_input = regex_input.subject.clone();
         interp.regexp_legacy.left_context_end = match_start_utf16;
         interp.regexp_legacy.right_context_start = match_end_utf16;
-        interp.regexp_legacy.last_match = full_match.text.clone();
-        let mut last_paren = String::new();
+        interp.regexp_legacy.last_match =
+            regex_input.subject_slice(view, full_match.start, full_match.end);
+        let mut last_paren = JsString::default();
         for idx in (1..caps.len()).rev() {
             if let Some(m) = caps.get(idx) {
-                last_paren = m.text.clone();
+                last_paren = regex_input.subject_slice(view, m.start, m.end);
                 break;
             }
         }
         interp.regexp_legacy.last_paren = last_paren;
         for p in 0..9 {
-            interp.regexp_legacy.parens[p] =
-                caps.get(p + 1).map(|m| m.text.clone()).unwrap_or_default();
+            interp.regexp_legacy.parens[p] = caps
+                .get(p + 1)
+                .map(|m| regex_input.subject_slice(view, m.start, m.end))
+                .unwrap_or_default();
         }
     }
 
     let mut elements: Vec<JsValue> = Vec::new();
-    elements.push(JsValue::string(regex_output_to_js_string(&full_match.text)));
+    elements.push(JsValue::string(regex_input.subject_slice(
+        view,
+        full_match.start,
+        full_match.end,
+    )));
     for i in 1..caps.len() {
         match caps.get(i) {
-            Some(m) => elements.push(JsValue::string(regex_output_to_js_string(&m.text))),
+            Some(m) => elements.push(JsValue::string(
+                regex_input.subject_slice(view, m.start, m.end),
+            )),
             None => elements.push(JsValue::UNDEFINED),
         }
     }
@@ -8182,7 +8200,7 @@ fn regexp_exec_raw(
             .prototype_id = None;
         for (name, m) in resolved {
             let val = match m {
-                Some(m) => JsValue::string(regex_output_to_js_string(&m.text)),
+                Some(m) => JsValue::string(regex_input.subject_slice(view, m.start, m.end)),
                 None => JsValue::UNDEFINED,
             };
             interp
@@ -8656,13 +8674,16 @@ impl Interpreter {
                         if sticky && full_match.start != last_index_byte {
                             break;
                         }
-                        let match_text = &full_match.text;
                         let match_end_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.end);
 
-                        results.push(JsValue::string(regex_output_to_js_string(match_text)));
+                        results.push(JsValue::string(regex_input.subject_slice(
+                            view,
+                            full_match.start,
+                            full_match.end,
+                        )));
 
-                        if match_text.is_empty() {
+                        if full_match.start == full_match.end {
                             let match_start_utf16 =
                                 regex_input.byte_offset_to_utf16(view, full_match.start);
                             // AdvanceStringIndex per spec operates on the original S, not the
@@ -8989,8 +9010,7 @@ impl Interpreter {
                             regex_input.byte_offset_to_utf16(view, full_match.start);
                         let match_end_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.end);
-                        let match_length_utf16 =
-                            regex_output_to_js_string(matched).code_units.len();
+                        let match_length_utf16 = match_end_utf16 - match_start_utf16;
                         let position_utf16 = match_start_utf16;
                         let position = regex_input
                             .utf16_to_byte_offset(RegexView::NonUnicode, position_utf16)
@@ -10567,8 +10587,9 @@ impl Interpreter {
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            let val = interp.regexp_legacy.parens[(idx - 1) as usize].clone();
-                            Completion::Normal(JsValue::string(JsString::from_str(&val)))
+                            Completion::Normal(JsValue::string(
+                                interp.regexp_legacy.parens[(idx - 1) as usize].clone(),
+                            ))
                         },
                     ));
                 obj.borrow_mut().insert_property(
@@ -10637,22 +10658,21 @@ impl Interpreter {
             // lastMatch / $& — get-only
             for prop_name in &["lastMatch", "$&"] {
                 let pn = prop_name.to_string();
-                let getter =
-                    self.create_function(JsFunction::native(
-                        format!("get {}", pn),
-                        0,
-                        move |interp, this_val, _args| {
-                            match this_val.as_object_id() {
-                                Some(id) if id == ctor_id => {}
-                                _ => return Completion::Throw(interp.create_type_error(
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    move |interp, this_val, _args| {
+                        match this_val.as_object_id() {
+                            Some(id) if id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
-                                )),
+                                ));
                             }
-                            Completion::Normal(JsValue::string(JsString::from_str(
-                                &interp.regexp_legacy.last_match,
-                            )))
-                        },
-                    ));
+                        }
+                        Completion::Normal(JsValue::string(interp.regexp_legacy.last_match.clone()))
+                    },
+                ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -10669,22 +10689,21 @@ impl Interpreter {
             // lastParen / $+ — get-only
             for prop_name in &["lastParen", "$+"] {
                 let pn = prop_name.to_string();
-                let getter =
-                    self.create_function(JsFunction::native(
-                        format!("get {}", pn),
-                        0,
-                        move |interp, this_val, _args| {
-                            match this_val.as_object_id() {
-                                Some(id) if id == ctor_id => {}
-                                _ => return Completion::Throw(interp.create_type_error(
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    move |interp, this_val, _args| {
+                        match this_val.as_object_id() {
+                            Some(id) if id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
-                                )),
+                                ));
                             }
-                            Completion::Normal(JsValue::string(JsString::from_str(
-                                &interp.regexp_legacy.last_paren,
-                            )))
-                        },
-                    ));
+                        }
+                        Completion::Normal(JsValue::string(interp.regexp_legacy.last_paren.clone()))
+                    },
+                ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
