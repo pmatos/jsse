@@ -512,6 +512,50 @@ fn releasing_reference_stack_drops_environment_handles_before_pooling() {
 }
 
 #[test]
+fn pooled_stacks_recover_after_recursive_range_error() {
+    use crate::interpreter::{
+        CALL_DEPTH_HARD_LIMIT, MAX_POOLED_VM_OPERAND_STACKS, MAX_POOLED_VM_REF_STACKS,
+    };
+    use crate::parser::Parser;
+
+    let source = "
+        function recurse(n) { return 1 + recurse(n + 1); }
+        function afterRecovery() { return 42; }
+        var caught = false;
+        try {
+            recurse(0);
+        } catch (error) {
+            caught = error instanceof RangeError;
+        }
+        var __r = caught ? afterRecovery() : -1;
+    ";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let initial_depth = CALL_DEPTH_HARD_LIMIT - MAX_POOLED_VM_OPERAND_STACKS - 8;
+    interp.call_depth = initial_depth;
+    interp.overflow_armed = false;
+
+    assert!(matches!(
+        interp.run(&program),
+        Completion::Normal(_) | Completion::Empty
+    ));
+    assert_eq!(
+        interp.get_global_var_ref("__r").and_then(|v| v.as_number()),
+        Some(42.0)
+    );
+    assert!(
+        interp.bytecode_chunks_executed > MAX_POOLED_VM_OPERAND_STACKS,
+        "recursion must exceed the pool cap"
+    );
+    assert!(interp.vm_operand_stack_pool.len() <= MAX_POOLED_VM_OPERAND_STACKS);
+    assert!(interp.vm_ref_stack_pool.len() <= MAX_POOLED_VM_REF_STACKS);
+    assert!(interp.gc_bytecode_roots.is_empty());
+    assert_eq!(interp.call_depth, initial_depth);
+}
+
+#[test]
 fn compile_body_empty_returns_undefined() {
     let chunk = compile_body(&[]).expect("compile");
     match run(chunk) {
