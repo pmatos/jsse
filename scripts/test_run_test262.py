@@ -9,6 +9,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -345,6 +346,24 @@ class RunTest262ExitStatusTests(unittest.TestCase):
                 runner.TestCollectionError, "could not scan"
             ):
                 runner._uncollected_mjs(self.root / "test262-extra")
+        finally:
+            locked.chmod(mode)
+
+    def test_find_tests_selected_directory_reports_unreadable_directory(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        hidden = self.write_file("test262-extra/locked/hidden.js")
+        locked = hidden.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o000)
+        try:
+            with mock.patch.object(runner, "_uncollected_mjs", return_value=[]):
+                with self.assertRaisesRegex(
+                    runner.TestCollectionError, "could not scan"
+                ):
+                    runner.find_tests(
+                        self.root / "test262", [str(self.root / "test262-extra")]
+                    )
         finally:
             locked.chmod(mode)
 

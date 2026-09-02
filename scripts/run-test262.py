@@ -891,9 +891,11 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
             if path.is_file() and path.suffix == ".js" and not _is_scratch(path):
                 tests.append(path)
             elif path.is_dir():
+                found, unreadable = _walk_matching(path, ".js")
+                _raise_if_unreadable(unreadable)
                 tests.extend(
                     f
-                    for f in sorted(path.rglob("*.js"))
+                    for f in found
                     if not _is_fixture(f) and not _is_scratch(f)
                 )
         return sorted(tests)
