@@ -4160,6 +4160,52 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(23));
         assert_eq!(global_string(&interp, "after"), "no");
     }
+
+    #[test]
+    fn host_exit_from_promise_try_callback_skips_custom_constructor() {
+        // Promise.try's catch-all match arm used to run new_promise_capability
+        // (which can invoke a custom receiver constructor) before checking
+        // whether the callback's completion was a `__host_exit` (issue #242).
+        // The exit must propagate immediately, so the constructor never runs
+        // and execution after the Promise.try call site never resumes.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            class C extends Promise {
+              constructor(executor) {
+                super(executor);
+                globalThis.log += "ctor;";
+              }
+            }
+            Promise.try.call(C, () => { globalThis.log += "cb;"; __host_exit(7); });
+            globalThis.log += "after;";
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "log"), "cb;");
+        assert!(matches!(c, Completion::Exit(7)));
+    }
+
+    #[test]
+    fn host_exit_from_promise_try_custom_reject_propagates() {
+        // Promise.try's Throw arm calls `cap.reject`, which a custom receiver
+        // constructor can bind to arbitrary user code. A `__host_exit` there
+        // (issue #242) must propagate rather than being discarded once the
+        // reject call returns.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            function C(executor) {
+              executor(() => {}, () => { globalThis.log += "reject;"; __host_exit(3); });
+            }
+            Promise.try.call(C, () => { throw new Error("boom"); });
+            globalThis.log += "after;";
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "log"), "reject;");
+        assert!(matches!(c, Completion::Exit(3)));
+    }
 }
 
 // Spec-derived property-descriptor invariants for the builtin methods installed
