@@ -2007,123 +2007,134 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = constructor.as_object_id().unwrap_or_default();
-        let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::UNDEFINED,
-        };
-        if !self.is_callable(&promise_resolve) {
-            let err = self.create_type_error("Promise resolve is not a function");
-            return self.if_abrupt_reject_promise(err, &cap);
-        }
-
-        let iterator = match self.get_iterator(iterable) {
-            Ok(iter) => iter,
-            Err(e) => return self.if_abrupt_reject_promise(e, &cap),
-        };
-
-        // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
-        // for why they must not hang off the capability function.
-        let value_anchor = JsValue::object(self.create_object_id());
-        let remaining = Rc::new(Cell::new(1));
-        let errors: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut index = 0usize;
-
-        loop {
-            // IteratorStep — no IteratorClose on error (done = true)
-            let next = match self.iterator_step(&iterator) {
-                Ok(Some(result)) => result,
-                Ok(None) => {
-                    let r = remaining.get() - 1;
-                    remaining.set(r);
-                    if r == 0 {
-                        let errs = errors.borrow().clone();
-                        let err = self.create_aggregate_error(errs, "All promises were rejected");
-                        return self.if_abrupt_reject_promise(err, &cap);
-                    }
-                    return Completion::Normal(cap.promise);
-                }
-                Err(e) => {
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-            };
-
-            // IteratorValue — no IteratorClose on error (done = true)
-            let next_value = match self.iterator_value(&next) {
-                Ok(v) => v,
-                Err(e) => {
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-            };
-
-            errors.borrow_mut().push(JsValue::UNDEFINED);
-            remaining.set(remaining.get() + 1);
-
-            let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&cap.promise);
+        self.gc_root_value(&cap.resolve);
+        self.gc_root_value(&cap.reject);
+        let result = (|| {
+            let ctor_id = constructor.as_object_id().unwrap_or_default();
+            let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
                 Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.iterator_close(&iterator, e.clone());
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
                 _ => JsValue::UNDEFINED,
             };
-
-            let i = index;
-            let remaining = remaining.clone();
-            let errors = errors.clone();
-            let reject_fn_clone = cap.reject.clone();
-            let anchor = value_anchor.clone();
-            let already_called = Rc::new(Cell::new(false));
-
-            let ac = already_called.clone();
-            let on_rejected = self.create_function(JsFunction::native(
-                "".to_string(),
-                1,
-                move |interp, _this, args| {
-                    if ac.get() {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                    ac.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    interp.pin_native_root(&anchor, &val);
-                    errors.borrow_mut()[i] = val;
-                    let r = remaining.get() - 1;
-                    remaining.set(r);
-                    if r == 0 {
-                        let errs = errors.borrow().clone();
-                        let err = interp.create_aggregate_error(errs, "All promises were rejected");
-                        if let Completion::Throw(e) =
-                            interp.call_function(&reject_fn_clone, &JsValue::UNDEFINED, &[err])
-                        {
-                            return Completion::Throw(e);
-                        }
-                    }
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
-            ));
-
-            self.pin_native_root(&on_rejected, &cap.reject);
-            self.pin_native_root(&on_rejected, &value_anchor);
-
-            let p_id = p.as_object_id().unwrap_or_default();
-            let then_fn = match self.get_object_property(p_id, "then", &p) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.iterator_close(&iterator, e.clone());
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-                _ => JsValue::UNDEFINED,
-            };
-            if let Completion::Throw(e) =
-                self.call_function(&then_fn, &p, &[cap.resolve.clone(), on_rejected])
-            {
-                self.iterator_close(&iterator, e.clone());
-                return self.if_abrupt_reject_promise(e, &cap);
+            if !self.is_callable(&promise_resolve) {
+                let err = self.create_type_error("Promise resolve is not a function");
+                return self.if_abrupt_reject_promise(err, &cap);
             }
 
-            index += 1;
-        }
+            let iterator = match self.get_iterator(iterable) {
+                Ok(iter) => iter,
+                Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+            };
+
+            // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
+            // for why they must not hang off the capability function.
+            let value_anchor = JsValue::object(self.create_object_id());
+            self.gc_root_value(&value_anchor);
+            let remaining = Rc::new(Cell::new(1));
+            let errors: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+            let mut index = 0usize;
+
+            loop {
+                // IteratorStep — no IteratorClose on error (done = true)
+                let next = match self.iterator_step(&iterator) {
+                    Ok(Some(result)) => result,
+                    Ok(None) => {
+                        let r = remaining.get() - 1;
+                        remaining.set(r);
+                        if r == 0 {
+                            let errs = errors.borrow().clone();
+                            let err =
+                                self.create_aggregate_error(errs, "All promises were rejected");
+                            return self.if_abrupt_reject_promise(err, &cap);
+                        }
+                        return Completion::Normal(cap.promise);
+                    }
+                    Err(e) => {
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                };
+
+                // IteratorValue — no IteratorClose on error (done = true)
+                let next_value = match self.iterator_value(&next) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                };
+
+                errors.borrow_mut().push(JsValue::UNDEFINED);
+                remaining.set(remaining.get() + 1);
+
+                let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                    _ => JsValue::UNDEFINED,
+                };
+
+                let i = index;
+                let remaining = remaining.clone();
+                let errors = errors.clone();
+                let reject_fn_clone = cap.reject.clone();
+                let anchor = value_anchor.clone();
+                let already_called = Rc::new(Cell::new(false));
+
+                let ac = already_called.clone();
+                let on_rejected = self.create_function(JsFunction::native(
+                    "".to_string(),
+                    1,
+                    move |interp, _this, args| {
+                        if ac.get() {
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                        ac.set(true);
+                        let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                        interp.pin_native_root(&anchor, &val);
+                        errors.borrow_mut()[i] = val;
+                        let r = remaining.get() - 1;
+                        remaining.set(r);
+                        if r == 0 {
+                            let errs = errors.borrow().clone();
+                            let err =
+                                interp.create_aggregate_error(errs, "All promises were rejected");
+                            if let Completion::Throw(e) =
+                                interp.call_function(&reject_fn_clone, &JsValue::UNDEFINED, &[err])
+                            {
+                                return Completion::Throw(e);
+                            }
+                        }
+                        Completion::Normal(JsValue::UNDEFINED)
+                    },
+                ));
+
+                self.pin_native_root(&on_rejected, &cap.reject);
+                self.pin_native_root(&on_rejected, &value_anchor);
+
+                let p_id = p.as_object_id().unwrap_or_default();
+                let then_fn = match self.get_object_property(p_id, "then", &p) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                    _ => JsValue::UNDEFINED,
+                };
+                if let Completion::Throw(e) =
+                    self.call_function(&then_fn, &p, &[cap.resolve.clone(), on_rejected])
+                {
+                    self.iterator_close(&iterator, e.clone());
+                    return self.if_abrupt_reject_promise(e, &cap);
+                }
+
+                index += 1;
+            }
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     fn create_aggregate_error(&mut self, errors: Vec<JsValue>, message: &str) -> JsValue {
