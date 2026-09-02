@@ -1388,179 +1388,188 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = constructor.as_object_id().unwrap_or_default();
-        let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::UNDEFINED,
-        };
-        if !self.is_callable(&promise_resolve) {
-            let err = self.create_type_error("Promise resolve is not a function");
-            return self.if_abrupt_reject_promise(err, &cap);
-        }
-
-        let iterator = match self.get_iterator(iterable) {
-            Ok(iter) => iter,
-            Err(e) => return self.if_abrupt_reject_promise(e, &cap),
-        };
-
-        // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
-        // for why they must not hang off the capability function.
-        let value_anchor = JsValue::object(self.create_object_id());
-        let remaining = Rc::new(Cell::new(1));
-        let results: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut index = 0usize;
-
-        loop {
-            // IteratorStep — no IteratorClose on error (done = true)
-            let next = match self.iterator_step(&iterator) {
-                Ok(Some(result)) => result,
-                Ok(None) => {
-                    let r = remaining.get() - 1;
-                    remaining.set(r);
-                    if r == 0 {
-                        let values = results.borrow().clone();
-                        let arr = self.create_array(values);
-                        if let Completion::Throw(e) =
-                            self.call_function(&cap.resolve, &JsValue::UNDEFINED, &[arr])
-                        {
-                            return self.if_abrupt_reject_promise(e, &cap);
-                        }
-                    }
-                    return Completion::Normal(cap.promise);
-                }
-                Err(e) => {
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-            };
-
-            // IteratorValue — no IteratorClose on error (done = true)
-            let next_value = match self.iterator_value(&next) {
-                Ok(v) => v,
-                Err(e) => {
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-            };
-
-            results.borrow_mut().push(JsValue::UNDEFINED);
-            remaining.set(remaining.get() + 1);
-
-            let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&cap.promise);
+        self.gc_root_value(&cap.resolve);
+        self.gc_root_value(&cap.reject);
+        let result = (|| {
+            let ctor_id = constructor.as_object_id().unwrap_or_default();
+            let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
                 Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.iterator_close(&iterator, e.clone());
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
                 _ => JsValue::UNDEFINED,
             };
-
-            let i = index;
-            let remaining_f = remaining.clone();
-            let results_f = results.clone();
-            let resolve_fn_f = cap.resolve.clone();
-            let remaining_r = remaining.clone();
-            let results_r = results.clone();
-            let resolve_fn_r = cap.resolve.clone();
-            let anchor_f = value_anchor.clone();
-            let anchor_r = value_anchor.clone();
-            let already_called = Rc::new(Cell::new(false));
-
-            let ac_f = already_called.clone();
-            let on_fulfilled = self.create_function(JsFunction::native(
-                "".to_string(),
-                1,
-                move |interp, _this, args| {
-                    if ac_f.get() {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                    ac_f.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let obj_id = interp.create_object_id();
-                    {
-                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        o.insert_value(
-                            "status".to_string(),
-                            JsValue::string(JsString::from_str("fulfilled")),
-                        );
-                        o.insert_value("value".to_string(), val);
-                    }
-                    let record = JsValue::object(obj_id);
-                    interp.pin_native_root(&anchor_f, &record);
-                    results_f.borrow_mut()[i] = record;
-                    let r = remaining_f.get() - 1;
-                    remaining_f.set(r);
-                    if r == 0 {
-                        let values = results_f.borrow().clone();
-                        let arr = interp.create_array(values);
-                        if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn_f, &JsValue::UNDEFINED, &[arr])
-                        {
-                            return Completion::Throw(e);
-                        }
-                    }
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
-            ));
-            let ac_r = already_called.clone();
-            let on_rejected = self.create_function(JsFunction::native(
-                "".to_string(),
-                1,
-                move |interp, _this, args| {
-                    if ac_r.get() {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                    ac_r.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let obj_id = interp.create_object_id();
-                    {
-                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        o.insert_value(
-                            "status".to_string(),
-                            JsValue::string(JsString::from_str("rejected")),
-                        );
-                        o.insert_value("reason".to_string(), val);
-                    }
-                    let record = JsValue::object(obj_id);
-                    interp.pin_native_root(&anchor_r, &record);
-                    results_r.borrow_mut()[i] = record;
-                    let r = remaining_r.get() - 1;
-                    remaining_r.set(r);
-                    if r == 0 {
-                        let values = results_r.borrow().clone();
-                        let arr = interp.create_array(values);
-                        if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn_r, &JsValue::UNDEFINED, &[arr])
-                        {
-                            return Completion::Throw(e);
-                        }
-                    }
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
-            ));
-
-            self.pin_native_root(&on_fulfilled, &cap.resolve);
-            self.pin_native_root(&on_rejected, &cap.resolve);
-            self.pin_native_root(&on_fulfilled, &value_anchor);
-            self.pin_native_root(&on_rejected, &value_anchor);
-
-            let p_id = p.as_object_id().unwrap_or_default();
-            let then_fn = match self.get_object_property(p_id, "then", &p) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.iterator_close(&iterator, e.clone());
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-                _ => JsValue::UNDEFINED,
-            };
-            if let Completion::Throw(e) =
-                self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected])
-            {
-                self.iterator_close(&iterator, e.clone());
-                return self.if_abrupt_reject_promise(e, &cap);
+            if !self.is_callable(&promise_resolve) {
+                let err = self.create_type_error("Promise resolve is not a function");
+                return self.if_abrupt_reject_promise(err, &cap);
             }
 
-            index += 1;
-        }
+            let iterator = match self.get_iterator(iterable) {
+                Ok(iter) => iter,
+                Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+            };
+
+            // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
+            // for why they must not hang off the capability function.
+            let value_anchor = JsValue::object(self.create_object_id());
+            self.gc_root_value(&value_anchor);
+            let remaining = Rc::new(Cell::new(1));
+            let results: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+            let mut index = 0usize;
+
+            loop {
+                // IteratorStep — no IteratorClose on error (done = true)
+                let next = match self.iterator_step(&iterator) {
+                    Ok(Some(result)) => result,
+                    Ok(None) => {
+                        let r = remaining.get() - 1;
+                        remaining.set(r);
+                        if r == 0 {
+                            let values = results.borrow().clone();
+                            let arr = self.create_array(values);
+                            if let Completion::Throw(e) =
+                                self.call_function(&cap.resolve, &JsValue::UNDEFINED, &[arr])
+                            {
+                                return self.if_abrupt_reject_promise(e, &cap);
+                            }
+                        }
+                        return Completion::Normal(cap.promise);
+                    }
+                    Err(e) => {
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                };
+
+                // IteratorValue — no IteratorClose on error (done = true)
+                let next_value = match self.iterator_value(&next) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                };
+
+                results.borrow_mut().push(JsValue::UNDEFINED);
+                remaining.set(remaining.get() + 1);
+
+                let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                    _ => JsValue::UNDEFINED,
+                };
+
+                let i = index;
+                let remaining_f = remaining.clone();
+                let results_f = results.clone();
+                let resolve_fn_f = cap.resolve.clone();
+                let remaining_r = remaining.clone();
+                let results_r = results.clone();
+                let resolve_fn_r = cap.resolve.clone();
+                let anchor_f = value_anchor.clone();
+                let anchor_r = value_anchor.clone();
+                let already_called = Rc::new(Cell::new(false));
+
+                let ac_f = already_called.clone();
+                let on_fulfilled = self.create_function(JsFunction::native(
+                    "".to_string(),
+                    1,
+                    move |interp, _this, args| {
+                        if ac_f.get() {
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                        ac_f.set(true);
+                        let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                        let obj_id = interp.create_object_id();
+                        {
+                            let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
+                            o.insert_value(
+                                "status".to_string(),
+                                JsValue::string(JsString::from_str("fulfilled")),
+                            );
+                            o.insert_value("value".to_string(), val);
+                        }
+                        let record = JsValue::object(obj_id);
+                        interp.pin_native_root(&anchor_f, &record);
+                        results_f.borrow_mut()[i] = record;
+                        let r = remaining_f.get() - 1;
+                        remaining_f.set(r);
+                        if r == 0 {
+                            let values = results_f.borrow().clone();
+                            let arr = interp.create_array(values);
+                            if let Completion::Throw(e) =
+                                interp.call_function(&resolve_fn_f, &JsValue::UNDEFINED, &[arr])
+                            {
+                                return Completion::Throw(e);
+                            }
+                        }
+                        Completion::Normal(JsValue::UNDEFINED)
+                    },
+                ));
+                let ac_r = already_called.clone();
+                let on_rejected = self.create_function(JsFunction::native(
+                    "".to_string(),
+                    1,
+                    move |interp, _this, args| {
+                        if ac_r.get() {
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                        ac_r.set(true);
+                        let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                        let obj_id = interp.create_object_id();
+                        {
+                            let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
+                            o.insert_value(
+                                "status".to_string(),
+                                JsValue::string(JsString::from_str("rejected")),
+                            );
+                            o.insert_value("reason".to_string(), val);
+                        }
+                        let record = JsValue::object(obj_id);
+                        interp.pin_native_root(&anchor_r, &record);
+                        results_r.borrow_mut()[i] = record;
+                        let r = remaining_r.get() - 1;
+                        remaining_r.set(r);
+                        if r == 0 {
+                            let values = results_r.borrow().clone();
+                            let arr = interp.create_array(values);
+                            if let Completion::Throw(e) =
+                                interp.call_function(&resolve_fn_r, &JsValue::UNDEFINED, &[arr])
+                            {
+                                return Completion::Throw(e);
+                            }
+                        }
+                        Completion::Normal(JsValue::UNDEFINED)
+                    },
+                ));
+
+                self.pin_native_root(&on_fulfilled, &cap.resolve);
+                self.pin_native_root(&on_rejected, &cap.resolve);
+                self.pin_native_root(&on_fulfilled, &value_anchor);
+                self.pin_native_root(&on_rejected, &value_anchor);
+
+                let p_id = p.as_object_id().unwrap_or_default();
+                let then_fn = match self.get_object_property(p_id, "then", &p) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                    _ => JsValue::UNDEFINED,
+                };
+                if let Completion::Throw(e) =
+                    self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected])
+                {
+                    self.iterator_close(&iterator, e.clone());
+                    return self.if_abrupt_reject_promise(e, &cap);
+                }
+
+                index += 1;
+            }
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     /// Promise.allKeyed (await-dictionary Stage-3 proposal).
