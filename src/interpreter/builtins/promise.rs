@@ -1940,65 +1940,73 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = constructor.as_object_id().unwrap_or_default();
-        let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::UNDEFINED,
-        };
-        if !self.is_callable(&promise_resolve) {
-            let err = self.create_type_error("Promise resolve is not a function");
-            return self.if_abrupt_reject_promise(err, &cap);
-        }
-
-        let iterator = match self.get_iterator(iterable) {
-            Ok(iter) => iter,
-            Err(e) => return self.if_abrupt_reject_promise(e, &cap),
-        };
-
-        loop {
-            // IteratorStep — no IteratorClose on error (done = true)
-            let next = match self.iterator_step(&iterator) {
-                Ok(Some(result)) => result,
-                Ok(None) => return Completion::Normal(cap.promise),
-                Err(e) => {
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-            };
-
-            // IteratorValue — no IteratorClose on error (done = true)
-            let next_value = match self.iterator_value(&next) {
-                Ok(v) => v,
-                Err(e) => {
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-            };
-
-            let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&cap.promise);
+        self.gc_root_value(&cap.resolve);
+        self.gc_root_value(&cap.reject);
+        let result = (|| {
+            let ctor_id = constructor.as_object_id().unwrap_or_default();
+            let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
                 Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.iterator_close(&iterator, e.clone());
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
                 _ => JsValue::UNDEFINED,
             };
-
-            let p_id = p.as_object_id().unwrap_or_default();
-            let then_fn = match self.get_object_property(p_id, "then", &p) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.iterator_close(&iterator, e.clone());
-                    return self.if_abrupt_reject_promise(e, &cap);
-                }
-                _ => JsValue::UNDEFINED,
-            };
-            if let Completion::Throw(e) =
-                self.call_function(&then_fn, &p, &[cap.resolve.clone(), cap.reject.clone()])
-            {
-                self.iterator_close(&iterator, e.clone());
-                return self.if_abrupt_reject_promise(e, &cap);
+            if !self.is_callable(&promise_resolve) {
+                let err = self.create_type_error("Promise resolve is not a function");
+                return self.if_abrupt_reject_promise(err, &cap);
             }
-        }
+
+            let iterator = match self.get_iterator(iterable) {
+                Ok(iter) => iter,
+                Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+            };
+
+            loop {
+                // IteratorStep — no IteratorClose on error (done = true)
+                let next = match self.iterator_step(&iterator) {
+                    Ok(Some(result)) => result,
+                    Ok(None) => return Completion::Normal(cap.promise),
+                    Err(e) => {
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                };
+
+                // IteratorValue — no IteratorClose on error (done = true)
+                let next_value = match self.iterator_value(&next) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                };
+
+                let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                    _ => JsValue::UNDEFINED,
+                };
+
+                let p_id = p.as_object_id().unwrap_or_default();
+                let then_fn = match self.get_object_property(p_id, "then", &p) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return self.if_abrupt_reject_promise(e, &cap);
+                    }
+                    _ => JsValue::UNDEFINED,
+                };
+                if let Completion::Throw(e) =
+                    self.call_function(&then_fn, &p, &[cap.resolve.clone(), cap.reject.clone()])
+                {
+                    self.iterator_close(&iterator, e.clone());
+                    return self.if_abrupt_reject_promise(e, &cap);
+                }
+            }
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     fn promise_any(&mut self, constructor: &JsValue, iterable: &JsValue) -> Completion {
