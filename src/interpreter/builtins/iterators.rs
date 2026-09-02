@@ -1905,16 +1905,19 @@ impl Interpreter {
                 Ok(record) => record,
                 Err(error) => return Completion::Throw(error),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iterator);
+            interp.gc_root_value(&next_method);
             let mut result = Vec::new();
             let mut first = true;
 
-            loop {
+            let outcome = loop {
                 let value = match iterator_step_value_getter(interp, &iterator, &next_method) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        return Completion::Normal(JsValue::string(JsString::from_vec(result)));
+                        break Completion::Normal(JsValue::string(JsString::from_vec(result)));
                     }
-                    Err(error) => return Completion::Throw(error),
+                    Err(error) => break Completion::Throw(error),
                 };
 
                 if first {
@@ -1934,11 +1937,13 @@ impl Interpreter {
                                 &iterator,
                                 Err(error.clone()),
                             );
-                            return Completion::Throw(error);
+                            break Completion::Throw(error);
                         }
                     }
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // Lazy helpers: map, filter, take, drop, flatMap
