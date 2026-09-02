@@ -1746,6 +1746,12 @@
         complete(test);
       }
 
+      // Tape auto-ends a no-plan parent once its synchronously registered
+      // subtests are ready to run. The children themselves are drained below.
+      if (!test.ended && test.plan === null && test.children.length > 0) {
+        complete(test);
+      }
+
       if (!test.ended) {
         var guardId = -1;
         await new Promise(function (resolve) {
