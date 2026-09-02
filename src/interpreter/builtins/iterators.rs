@@ -2198,18 +2198,18 @@ impl Interpreter {
                 };
                 // Step 4: If numLimit is NaN, throw RangeError
                 if num_limit.is_nan() {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp
                         .create_error("RangeError", "take limit must be a non-negative number");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
                 if num_limit.is_finite() && num_limit > 9007199254740991.0 {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_error(
                         "RangeError",
                         "take limit must not exceed 2**53 - 1",
                     );
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
@@ -2219,9 +2219,9 @@ impl Interpreter {
                     num_limit.trunc()
                 };
                 if integer_limit < 0.0 {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp
                         .create_error("RangeError", "take limit must be a non-negative number");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 7: GetIteratorDirect
