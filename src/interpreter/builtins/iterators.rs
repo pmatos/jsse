@@ -1661,6 +1661,101 @@ impl Interpreter {
             }
         });
 
+        // includes(searchElement, [skippedElements])
+        self.define_method(iter_proto_id, "includes", 1, |interp, this, args| {
+            if !this.is_object() {
+                let err = interp
+                    .create_type_error("Iterator.prototype.includes called on non-object");
+                return Completion::Throw(err);
+            }
+
+            let skipped_elements = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+            let to_skip = if skipped_elements.is_undefined() {
+                0.0
+            } else {
+                match skipped_elements.as_number() {
+                    Some(value) if value.is_infinite() || value.trunc() == value => value,
+                    _ => {
+                        // The error object is created before IteratorClose so that a
+                        // `return()` method replacing the global TypeError binding cannot
+                        // change the prototype of the error we throw. It must be rooted
+                        // across the close, which runs arbitrary JS and can trigger GC.
+                        let err = interp.create_type_error(
+                            "Iterator.prototype.includes skippedElements must be an integral Number",
+                        );
+                        interp.gc_root_value(&err);
+                        let _ = iterator_close_getter(interp, this);
+                        interp.gc_unroot_value(&err);
+                        return Completion::Throw(err);
+                    }
+                }
+            };
+
+            if to_skip < 0.0 {
+                let err = interp.create_error(
+                    "RangeError",
+                    "Iterator.prototype.includes skippedElements must be non-negative",
+                );
+                interp.gc_root_value(&err);
+                let _ = iterator_close_getter(interp, this);
+                interp.gc_unroot_value(&err);
+                return Completion::Throw(err);
+            }
+            if to_skip.is_finite() && to_skip > 9007199254740991.0 {
+                let err = interp.create_error(
+                    "RangeError",
+                    "Iterator.prototype.includes skippedElements must not exceed 2**53 - 1",
+                );
+                interp.gc_root_value(&err);
+                let _ = iterator_close_getter(interp, this);
+                interp.gc_unroot_value(&err);
+                return Completion::Throw(err);
+            }
+
+            let search_element = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(value) => value,
+                Err(err) => return Completion::Throw(err),
+            };
+            // A `next` accessor may hand back a freshly created function that no
+            // heap object owns, so the cached `next_method` (and the iterator
+            // itself) must stay rooted for the whole loop: user code reached from
+            // `next()` or a `value` getter can trigger a major GC mid-iteration.
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
+            let mut skipped = 0.0;
+            let outcome = loop {
+                match interp.iterator_step_direct(&iter, &next_method) {
+                    Ok(Some(result)) => {
+                        // `result` is likewise only held here while its own
+                        // `value` getter runs.
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
+                            Ok(value) => value,
+                            Err(err) => break Completion::Throw(err),
+                        };
+                        if skipped < to_skip {
+                            skipped += 1.0;
+                            continue;
+                        }
+                        if same_value_zero(&value, &search_element) {
+                            if let Err(err) = iterator_close_getter(interp, &iter) {
+                                break Completion::Throw(err);
+                            }
+                            break Completion::Normal(JsValue::TRUE);
+                        }
+                    }
+                    Ok(None) => break Completion::Normal(JsValue::FALSE),
+                    Err(err) => break Completion::Throw(err),
+                }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
+        });
+
         // reduce(reducer, [initial])
         self.define_method(iter_proto_id, "reduce", 1, |interp, this, args| {
             let reducer = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
