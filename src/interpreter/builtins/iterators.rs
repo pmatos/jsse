@@ -1447,25 +1447,35 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut values = Vec::new();
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => match interp.iterator_value(&result) {
-                        Ok(v) => values.push(v),
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
+                    Ok(Some(result)) => {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        match value {
+                            Ok(v) => values.push(v),
+                            Err(e) => {
+                                let _ = iterator_close_getter(interp, &iter);
+                                break Completion::Throw(e);
+                            }
                         }
-                    },
-                    Ok(None) => break,
+                    }
+                    Ok(None) => {
+                        break Completion::Normal(interp.create_array(values));
+                    }
                     Err(e) => {
                         let _ = iterator_close_getter(interp, &iter);
-                        return Completion::Throw(e);
+                        break Completion::Throw(e);
                     }
                 }
-            }
-            let arr = interp.create_array(values);
-            Completion::Normal(arr)
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // forEach(fn)
