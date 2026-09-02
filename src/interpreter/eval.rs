@@ -2023,7 +2023,7 @@ impl Interpreter {
         {
             self.perf.body_ast += 1;
             let (name, seq) = self.perf_body_name(func_obj_id);
-            self.perf.enter_ast_body(name, seq);
+            self.perf.enter_ast_body(name, seq, true);
         }
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
@@ -5561,6 +5561,7 @@ impl Interpreter {
 
                         if is_async && !is_generator {
                             let result = self.call_async_function(
+                                o.id,
                                 &params,
                                 &body,
                                 closure.clone(),
@@ -5695,8 +5696,14 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_async_generator;
-                            let state_machine =
-                                Rc::new(transform_async_generator(body.as_slice(), &params));
+                            let state_machine = transform_async_generator(body.as_slice(), &params);
+                            #[cfg(feature = "perf-counters")]
+                            let state_machine = {
+                                let mut state_machine = state_machine;
+                                state_machine.perf_key = Some(self.perf_body_name(o.id));
+                                state_machine
+                            };
+                            let state_machine = Rc::new(state_machine);
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -5880,8 +5887,14 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine =
-                                Rc::new(transform_generator(body.as_slice(), &params));
+                            let state_machine = transform_generator(body.as_slice(), &params);
+                            #[cfg(feature = "perf-counters")]
+                            let state_machine = {
+                                let mut state_machine = state_machine;
+                                state_machine.perf_key = Some(self.perf_body_name(o.id));
+                                state_machine
+                            };
+                            let state_machine = Rc::new(state_machine);
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -8152,6 +8165,7 @@ impl Interpreter {
 
     fn call_async_function(
         &mut self,
+        _func_obj_id: u64,
         params: &[Pattern],
         body: &Body,
         closure: EnvRef,
@@ -8274,12 +8288,17 @@ impl Interpreter {
         func_env.borrow_mut().strict = is_strict;
         self.in_tail_position = false;
 
-        let sm = Rc::new(
-            crate::interpreter::generator_transform::transform_async_function(
-                body.as_slice(),
-                params,
-            ),
+        let sm = crate::interpreter::generator_transform::transform_async_function(
+            body.as_slice(),
+            params,
         );
+        #[cfg(feature = "perf-counters")]
+        let sm = {
+            let mut sm = sm;
+            sm.perf_key = Some(self.perf_body_name(_func_obj_id));
+            sm
+        };
+        let sm = Rc::new(sm);
 
         for tv in &sm.temp_vars {
             func_env.borrow_mut().declare(tv, BindingKind::Var);
@@ -8784,7 +8803,11 @@ impl Interpreter {
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
+            let mut stmt_result = self.exec_state_machine_body(
+                &state_machine.states[current_id].body,
+                &term_env,
+                &state_machine,
+            );
             self.in_state_machine = saved_in_state_machine;
             // `__host_exit` in the async body (issue #242) propagates out as
             // `Completion::Exit` instead of settling the result promise; the

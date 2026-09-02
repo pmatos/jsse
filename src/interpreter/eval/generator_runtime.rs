@@ -767,7 +767,11 @@ impl Interpreter {
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
+            let mut stmt_result = self.exec_state_machine_body(
+                &state_machine.states[current_id].body,
+                &term_env,
+                &state_machine,
+            );
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -4624,7 +4628,11 @@ impl Interpreter {
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
+            let mut stmt_result = self.exec_state_machine_body(
+                &state_machine.states[current_id].body,
+                &term_env,
+                &state_machine,
+            );
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
