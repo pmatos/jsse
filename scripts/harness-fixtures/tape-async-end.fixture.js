@@ -2,7 +2,7 @@
 // harness is inert on Node, so run-harness-selftest.sh validates this fixture
 // on JSSE alone.
 //
-// Expected summary: PASS: 2  FAIL: 0  TOTAL: 2
+// Expected summary: PASS: 6  FAIL: 1  TOTAL: 7
 
 var tape = globalThis.__tape;
 
@@ -17,4 +17,31 @@ tape("waits for deferred plan fulfillment", function (t) {
 tape("runs the synchronous sibling afterward", function (t) {
   t.ok(true, "synchronous assertion");
   t.end();
+});
+
+tape("plan fulfillment completes without end", function (t) {
+  t.plan(1);
+  setTimeout(function () {
+    t.ok(true, "deferred planned assertion");
+  }, 0);
+});
+
+tape("deferred end completes without a plan", function (t) {
+  setTimeout(function () {
+    t.ok(true, "deferred unplanned assertion");
+    t.end();
+  }, 0);
+});
+
+tape("plan declared after its assertion completes", function (t) {
+  t.ok(true, "assertion before plan");
+  t.plan(1);
+});
+
+tape("returned promise auto-ends", async function (t) {
+  t.ok(true, "promise assertion");
+});
+
+tape("synchronous throw auto-ends", function () {
+  throw new Error("intentional fixture failure");
 });
