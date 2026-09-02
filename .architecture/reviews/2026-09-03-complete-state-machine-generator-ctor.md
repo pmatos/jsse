@@ -163,4 +163,42 @@ The fresh scan surfaced one new candidate, `gc-root-scope-guard`, that **ties at
 
 ## Design
 
-_Written in step 4 (below), after this report was first committed._
+Three interfaces were designed in parallel (design-it-twice), then adjudicated by a fourth agent that authored none of them, against the fixed criteria depth ▸ locality ▸ seam placement ▸ test surface ▸ blast radius.
+
+> **Count correction.** Designing against the real sites revealed the true completed-literal count is **97** (31 sync + 66 async), not the 87 the backlog carried. The `87` was a single-line grep undercount — 10 completed literals wrap `execution_state:` onto its own line, so the single-line pattern missed them. A brace-matching parser and the whitespace-tolerant regex agree at 97. All 97 are verified to carry exactly the canonical 10-field completed shape. The higher count only strengthens the leverage; the score is unchanged.
+
+### Design A — minimal surface (two dumb constructors returning `IteratorState`) · WINNER
+
+Two `pub(crate)` associated functions on `IteratorState`, each fixing the 7 completed-default fields and taking the 3 varying fields by value, returning `IteratorState`. Callers keep their own `ObjectKind::Iterator(...)` wrapper and `borrow_mut().kind = …` assignment — exactly the shape of the in-repo sibling seam `validate_typed_array` (a dumb snapshot returned, caller applies the rest).
+
+```rust
+impl IteratorState {
+    pub(crate) fn completed_state_machine_generator(
+        state_machine: Rc<GeneratorStateMachine>, func_env: EnvRef, is_strict: bool,
+    ) -> IteratorState { /* StateMachineGenerator { …3 varying…, Completed, 6 cleared } */ }
+
+    pub(crate) fn completed_state_machine_async_generator(
+        state_machine: Rc<GeneratorStateMachine>, func_env: EnvRef, is_strict: bool,
+    ) -> IteratorState { /* StateMachineAsyncGenerator { … } */ }
+}
+```
+
+A call site collapses from a 14-line literal to `IteratorState::completed_state_machine_generator(state_machine, func_env, is_strict)`. **Hides**: the 7 fixed fields, the "completed = these 7 values" invariant, and the variant-tag choice (encoded in the fn name). **Interface is O(1)** — a new completed site reads existing fns, the interface does not grow. **Dependency strategy**: none crosses a seam; the fns are pure (`3 scalars in, 1 value out`), no `&Interpreter`/arena, so they are unit-testable directly in `types.rs`. **Blast radius**: 2 files (`types.rs` + `generator_runtime.rs`), 97 mechanical 1-for-1 edits, no published interface.
+
+### Design B — common-caller optimised (two-layer: `ObjectKind` constructors + mutation wrappers) · RUNNER-UP DESIGN
+
+Layer 1: two pure fns returning the fully-wrapped `ObjectKind` (hiding the `ObjectKind::Iterator(...)` wrapper too). Layer 2: two free fns in `generator_runtime.rs` (`set_completed_state_machine_generator(&obj, sm, env, strict)`) that also perform the `obj.borrow_mut().kind = …` write, collapsing each site to a single line. Its genuine edge: the GC write-barrier choice (`borrow_mut` vs `borrow_mut_untracked`) is decided once instead of trusted at 97 sites — a locality win.
+
+### Design C — maximum flexibility (one general 11-arg constructor for all 174 literals) · rejected
+
+A general `state_machine_generator(is_async, sm, env, strict, execution_state, sent_value, try_stack, …)` covering all 174 state-machine-generator literals (needs `#[allow(clippy::too_many_arguments)]`), with `completed_sync`/`completed_async` wrappers. **Rejected**: its depth ratio only materialises if all ~174 literals migrate — which reaches match arms, busts the scored 2-file/blast-radius-1 estimate, and trips the mis-score bail. Migrate only the completed sites and the 11-arg ctor has a single caller — textbook shallow — and the shipped artifact collapses to Design A. The `is_async` discriminant is a hypothetical seam (the sync/async drivers share no dispatch point; the refactor that would make it real, `unify-generator-async-drivers`, is dropped at blast-radius 5).
+
+### Adjudication
+
+**Ranking A ≻ B ≻ C. Winner: Design A.** The first criterion, **depth** (behaviour hidden *per unit of interface* — a ratio penalising interface growth), separates A from B and therefore decides. A hides the 7 fixed fields + invariant + variant choice behind **2** items; B doubles the interface to **4** items (the shape is written at both layers, Layer 2 near-pass-throughs over Layer 1) to buy sub-proportional added depth (a one-variant wrapper + a single-token barrier choice). A is the deeper module, and it mirrors the in-repo sibling precedent exactly. Because depth separates them on criterion 1, B's real merit — consolidating the write-barrier — is a criterion-2 (locality) argument that is never reached; and it is moreover a *hypothetical* seam here: `generator_runtime.rs` has 205 tracked `borrow_mut(` and **0** `borrow_mut_untracked`, so the barrier B consolidates does not actually vary at these sites. C is last: shallow unless a 174-site migration that busts the estimate and bails.
+
+**Implementation risks carried into step 5** (from the adjudicator and the minimal-surface designer): (1) the two fns are `pub(crate)` with no non-test caller until the sites migrate — a `#[cfg(test)]` caller does **not** satisfy the bin-target `dead_code -D warnings` gate, so land the constructors + all 97 call-site edits together and accept the intermediate hook exit-2s, final state clean; (2) the `GeneratorStateMachine` test fixture needs a `#[cfg(feature = "perf-counters")] perf_key: None` arm; (3) the 2 `tests.rs` hits at `:3755`/`:3811` are `matches!` **patterns**, not constructions — do not migrate them; (4) `_sent_value` is a real field (leading underscore) — a completed generator fixes it to `UNDEFINED`.
+
+## As landed
+
+_Written in step 6, after implementation._
