@@ -53,6 +53,7 @@ pub(crate) enum Op {
     ReturnCall = 49,
     SetCompletion = 50,
     ReturnCompletion = 51,
+    LoadThis = 52,
 }
 
 impl Op {
@@ -110,6 +111,7 @@ impl Op {
             49 => Some(Op::ReturnCall),
             50 => Some(Op::SetCompletion),
             51 => Some(Op::ReturnCompletion),
+            52 => Some(Op::LoadThis),
             _ => None,
         }
     }

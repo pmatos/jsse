@@ -341,6 +341,17 @@ fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result
     }
 }
 
+fn close_iterator_for_error(
+    interp: &mut Interpreter,
+    iterator: &JsValue,
+    error: JsValue,
+) -> JsValue {
+    interp.gc_root_value(&error);
+    let _ = iterator_close_getter(interp, iterator);
+    interp.gc_unroot_value(&error);
+    error
+}
+
 // GetIteratorFlattenable(obj, primitiveHandling) per spec
 // primitiveHandling is either "reject-primitives" or "iterate-strings"
 fn get_iterator_flattenable(
@@ -489,25 +500,31 @@ fn iterator_step_value_getter(
         Completion::Throw(e) => return Err(e),
         _ => return Err(interp.create_type_error("Iterator next failed")),
     };
-    let Some(result_id) = result.as_object_id() else {
-        return Err(interp.create_type_error("Iterator result is not an object"));
+    let frame = interp.gc_root_frame();
+    interp.gc_root_value(&result);
+    let outcome = 'step: {
+        let Some(result_id) = result.as_object_id() else {
+            break 'step Err(interp.create_type_error("Iterator result is not an object"));
+        };
+        // Read .done via getter
+        let done = match interp.get_object_property(result_id, "done", &result) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => break 'step Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        if interp.to_boolean_val(&done) {
+            break 'step Ok(None);
+        }
+        // Read .value via getter
+        let value = match interp.get_object_property(result_id, "value", &result) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => break 'step Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        Ok(Some(value))
     };
-    // Read .done via getter
-    let done = match interp.get_object_property(result_id, "done", &result) {
-        Completion::Normal(v) => v,
-        Completion::Throw(e) => return Err(e),
-        _ => JsValue::UNDEFINED,
-    };
-    if interp.to_boolean_val(&done) {
-        return Ok(None);
-    }
-    // Read .value via getter
-    let value = match interp.get_object_property(result_id, "value", &result) {
-        Completion::Normal(v) => v,
-        Completion::Throw(e) => return Err(e),
-        _ => JsValue::UNDEFINED,
-    };
-    Ok(Some(value))
+    interp.gc_unroot_frame(frame);
+    outcome
 }
 
 fn iterator_join_to_string(interp: &mut Interpreter, value: &JsValue) -> Result<JsString, JsValue> {
@@ -1431,6 +1448,9 @@ impl Interpreter {
     /// Pin every value an iterator-helper closure captured. A thin adapter over
     /// `pin_native_root` so `gc_native_roots` has a single mutator; each helper
     /// object is fresh here, so appending matches the previous assignment.
+    /// Captures that are reassigned after construction must instead live in a
+    /// traced container rooted here and be mutated in place. Repeatedly pinning
+    /// replacements would retain every superseded value until the helper dies.
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
         for root in &roots {
             self.pin_native_root(helper, root);
@@ -1444,25 +1464,35 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut values = Vec::new();
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => match interp.iterator_value(&result) {
-                        Ok(v) => values.push(v),
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
+                    Ok(Some(result)) => {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        match value {
+                            Ok(v) => values.push(v),
+                            Err(e) => {
+                                let _ = iterator_close_getter(interp, &iter);
+                                break Completion::Throw(e);
+                            }
                         }
-                    },
-                    Ok(None) => break,
+                    }
+                    Ok(None) => {
+                        break Completion::Normal(interp.create_array(values));
+                    }
                     Err(e) => {
                         let _ = iterator_close_getter(interp, &iter);
-                        return Completion::Throw(e);
+                        break Completion::Throw(e);
                     }
                 }
-            }
-            let arr = interp.create_array(values);
-            Completion::Normal(arr)
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // forEach(fn)
@@ -1474,21 +1504,27 @@ impl Interpreter {
                     .map(|od| od.borrow().callable.is_some())
                     .unwrap_or(false)
             }) {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_type_error("callback is not a function");
+                let err = close_iterator_for_error(interp, this, err);
                 return Completion::Throw(err);
             }
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut counter = 0.0;
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
                     Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => break Completion::Throw(e),
                         };
                         if let Completion::Throw(e) = interp.call_function(
                             &callback,
@@ -1496,15 +1532,16 @@ impl Interpreter {
                             &[value, JsValue::number(counter)],
                         ) {
                             let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
+                            break Completion::Throw(e);
                         }
                         counter += 1.0;
                     }
-                    Ok(None) => break,
-                    Err(e) => return Completion::Throw(e),
+                    Ok(None) => break Completion::Normal(JsValue::UNDEFINED),
+                    Err(e) => break Completion::Throw(e),
                 }
-            }
-            Completion::Normal(JsValue::UNDEFINED)
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // some(predicate)
@@ -1516,21 +1553,27 @@ impl Interpreter {
                     .map(|od| od.borrow().callable.is_some())
                     .unwrap_or(false)
             }) {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_type_error("predicate is not a function");
+                let err = close_iterator_for_error(interp, this, err);
                 return Completion::Throw(err);
             }
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut counter = 0.0;
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
                     Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => break Completion::Throw(e),
                         };
                         match interp.call_function(
                             &predicate,
@@ -1540,23 +1583,25 @@ impl Interpreter {
                             Completion::Normal(v) if interp.to_boolean_val(&v) => {
                                 // Propagate IteratorClose errors
                                 if let Err(e) = iterator_close_getter(interp, &iter) {
-                                    return Completion::Throw(e);
+                                    break Completion::Throw(e);
                                 }
-                                return Completion::Normal(JsValue::TRUE);
+                                break Completion::Normal(JsValue::TRUE);
                             }
                             Completion::Throw(e) => {
                                 let _ =
                                     iterator_close_with_completion(interp, &iter, Err(e.clone()));
-                                return Completion::Throw(e);
+                                break Completion::Throw(e);
                             }
                             _ => {}
                         }
                         counter += 1.0;
                     }
-                    Ok(None) => return Completion::Normal(JsValue::FALSE),
-                    Err(e) => return Completion::Throw(e),
+                    Ok(None) => break Completion::Normal(JsValue::FALSE),
+                    Err(e) => break Completion::Throw(e),
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // every(predicate)
@@ -1568,21 +1613,27 @@ impl Interpreter {
                     .map(|od| od.borrow().callable.is_some())
                     .unwrap_or(false)
             }) {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_type_error("predicate is not a function");
+                let err = close_iterator_for_error(interp, this, err);
                 return Completion::Throw(err);
             }
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut counter = 0.0;
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
                     Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => break Completion::Throw(e),
                         };
                         match interp.call_function(
                             &predicate,
@@ -1591,23 +1642,25 @@ impl Interpreter {
                         ) {
                             Completion::Normal(v) if !interp.to_boolean_val(&v) => {
                                 if let Err(e) = iterator_close_getter(interp, &iter) {
-                                    return Completion::Throw(e);
+                                    break Completion::Throw(e);
                                 }
-                                return Completion::Normal(JsValue::FALSE);
+                                break Completion::Normal(JsValue::FALSE);
                             }
                             Completion::Throw(e) => {
                                 let _ =
                                     iterator_close_with_completion(interp, &iter, Err(e.clone()));
-                                return Completion::Throw(e);
+                                break Completion::Throw(e);
                             }
                             _ => {}
                         }
                         counter += 1.0;
                     }
-                    Ok(None) => return Completion::Normal(JsValue::TRUE),
-                    Err(e) => return Completion::Throw(e),
+                    Ok(None) => break Completion::Normal(JsValue::TRUE),
+                    Err(e) => break Completion::Throw(e),
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // find(predicate)
@@ -1619,21 +1672,27 @@ impl Interpreter {
                     .map(|od| od.borrow().callable.is_some())
                     .unwrap_or(false)
             }) {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_type_error("predicate is not a function");
+                let err = close_iterator_for_error(interp, this, err);
                 return Completion::Throw(err);
             }
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
             let mut counter = 0.0;
-            loop {
+            let outcome = loop {
                 match interp.iterator_step_direct(&iter, &next_method) {
                     Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
+                        interp.gc_root_value(&result);
+                        let value = interp.iterator_value(&result);
+                        interp.gc_unroot_value(&result);
+                        let value = match value {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => break Completion::Throw(e),
                         };
                         match interp.call_function(
                             &predicate,
@@ -1642,23 +1701,25 @@ impl Interpreter {
                         ) {
                             Completion::Normal(v) if interp.to_boolean_val(&v) => {
                                 if let Err(e) = iterator_close_getter(interp, &iter) {
-                                    return Completion::Throw(e);
+                                    break Completion::Throw(e);
                                 }
-                                return Completion::Normal(value);
+                                break Completion::Normal(value);
                             }
                             Completion::Throw(e) => {
                                 let _ =
                                     iterator_close_with_completion(interp, &iter, Err(e.clone()));
-                                return Completion::Throw(e);
+                                break Completion::Throw(e);
                             }
                             _ => {}
                         }
                         counter += 1.0;
                     }
-                    Ok(None) => return Completion::Normal(JsValue::UNDEFINED),
-                    Err(e) => return Completion::Throw(e),
+                    Ok(None) => break Completion::Normal(JsValue::UNDEFINED),
+                    Err(e) => break Completion::Throw(e),
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // includes(searchElement, [skippedElements])
@@ -1765,61 +1826,75 @@ impl Interpreter {
                     .map(|od| od.borrow().callable.is_some())
                     .unwrap_or(false)
             }) {
-                let _ = iterator_close_getter(interp, this);
                 let err = interp.create_type_error("reducer is not a function");
+                let err = close_iterator_for_error(interp, this, err);
                 return Completion::Throw(err);
             }
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            let mut accumulator;
-            let mut counter;
-            if args.len() >= 2 {
-                accumulator = args[1].clone();
-                counter = 0.0;
-            } else {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        accumulator = match interp.iterator_value(&result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        counter = 1.0;
-                    }
-                    Ok(None) => {
-                        let err = interp
-                            .create_type_error("Reduce of empty iterator with no initial value");
-                        return Completion::Throw(err);
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        let value = match interp.iterator_value(&result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.call_function(
-                            &reducer,
-                            &JsValue::UNDEFINED,
-                            &[accumulator.clone(), value, JsValue::number(counter)],
-                        ) {
-                            Completion::Normal(v) => accumulator = v,
-                            Completion::Throw(e) => {
-                                let _ = iterator_close_getter(interp, &iter);
-                                return Completion::Throw(e);
-                            }
-                            _ => {}
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iter);
+            interp.gc_root_value(&next_method);
+            let outcome = 'reduce: {
+                let mut accumulator;
+                let mut counter;
+                if args.len() >= 2 {
+                    accumulator = args[1].clone();
+                    counter = 0.0;
+                } else {
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            interp.gc_root_value(&result);
+                            let value = interp.iterator_value(&result);
+                            interp.gc_unroot_value(&result);
+                            accumulator = match value {
+                                Ok(v) => v,
+                                Err(e) => break 'reduce Completion::Throw(e),
+                            };
+                            counter = 1.0;
                         }
-                        counter += 1.0;
+                        Ok(None) => {
+                            let err = interp.create_type_error(
+                                "Reduce of empty iterator with no initial value",
+                            );
+                            break 'reduce Completion::Throw(err);
+                        }
+                        Err(e) => break 'reduce Completion::Throw(e),
                     }
-                    Ok(None) => return Completion::Normal(accumulator),
-                    Err(e) => return Completion::Throw(e),
                 }
-            }
+                loop {
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            interp.gc_root_value(&result);
+                            let value = interp.iterator_value(&result);
+                            interp.gc_unroot_value(&result);
+                            let value = match value {
+                                Ok(v) => v,
+                                Err(e) => break 'reduce Completion::Throw(e),
+                            };
+                            match interp.call_function(
+                                &reducer,
+                                &JsValue::UNDEFINED,
+                                &[accumulator.clone(), value, JsValue::number(counter)],
+                            ) {
+                                Completion::Normal(v) => accumulator = v,
+                                Completion::Throw(e) => {
+                                    let _ = iterator_close_getter(interp, &iter);
+                                    break 'reduce Completion::Throw(e);
+                                }
+                                _ => {}
+                            }
+                            counter += 1.0;
+                        }
+                        Ok(None) => break 'reduce Completion::Normal(accumulator),
+                        Err(e) => break 'reduce Completion::Throw(e),
+                    }
+                }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // join(separator)
@@ -1847,16 +1922,19 @@ impl Interpreter {
                 Ok(record) => record,
                 Err(error) => return Completion::Throw(error),
             };
+            let frame = interp.gc_root_frame();
+            interp.gc_root_value(&iterator);
+            interp.gc_root_value(&next_method);
             let mut result = Vec::new();
             let mut first = true;
 
-            loop {
+            let outcome = loop {
                 let value = match iterator_step_value_getter(interp, &iterator, &next_method) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        return Completion::Normal(JsValue::string(JsString::from_vec(result)));
+                        break Completion::Normal(JsValue::string(JsString::from_vec(result)));
                     }
-                    Err(error) => return Completion::Throw(error),
+                    Err(error) => break Completion::Throw(error),
                 };
 
                 if first {
@@ -1876,11 +1954,13 @@ impl Interpreter {
                                 &iterator,
                                 Err(error.clone()),
                             );
-                            return Completion::Throw(error);
+                            break Completion::Throw(error);
                         }
                     }
                 }
-            }
+            };
+            interp.gc_unroot_frame(frame);
+            outcome
         });
 
         // Lazy helpers: map, filter, take, drop, flatMap
@@ -1906,8 +1986,8 @@ impl Interpreter {
                         .map(|od| od.borrow().callable.is_some())
                         .unwrap_or(false)
                 }) {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
@@ -2037,8 +2117,8 @@ impl Interpreter {
                         .map(|od| od.borrow().callable.is_some())
                         .unwrap_or(false)
                 }) {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
@@ -2184,18 +2264,18 @@ impl Interpreter {
                 };
                 // Step 4: If numLimit is NaN, throw RangeError
                 if num_limit.is_nan() {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp
                         .create_error("RangeError", "take limit must be a non-negative number");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
                 if num_limit.is_finite() && num_limit > 9007199254740991.0 {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_error(
                         "RangeError",
                         "take limit must not exceed 2**53 - 1",
                     );
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
@@ -2205,9 +2285,9 @@ impl Interpreter {
                     num_limit.trunc()
                 };
                 if integer_limit < 0.0 {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp
                         .create_error("RangeError", "take limit must be a non-negative number");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 7: GetIteratorDirect
@@ -2344,18 +2424,18 @@ impl Interpreter {
                 };
                 // Step 4: If numLimit is NaN, throw RangeError
                 if num_limit.is_nan() {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp
                         .create_error("RangeError", "drop limit must be a non-negative number");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
                 if num_limit.is_finite() && num_limit > 9007199254740991.0 {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_error(
                         "RangeError",
                         "drop limit must not exceed 2**53 - 1",
                     );
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
@@ -2365,9 +2445,9 @@ impl Interpreter {
                     num_limit.trunc()
                 };
                 if integer_limit < 0.0 {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp
                         .create_error("RangeError", "drop limit must be a non-negative number");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 // Step 7: GetIteratorDirect
@@ -2800,8 +2880,8 @@ impl Interpreter {
                         .map(|od| od.borrow().callable.is_some())
                         .unwrap_or(false)
                 }) {
-                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
+                    let err = close_iterator_for_error(interp, this, err);
                     return Completion::Throw(err);
                 }
                 let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
@@ -2809,7 +2889,11 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                // state: (outer_iter, outer_next, mapper, counter, inner_iter, inner_next, alive, running)
+                let inner_roots = interp.create_array(vec![
+                    JsValue::UNDEFINED,
+                    JsValue::UNDEFINED,
+                ]);
+                // state: (outer_iter, outer_next, mapper, counter, rooted inner pair, alive, running)
                 #[allow(clippy::type_complexity)]
                 let state: Rc<
                     RefCell<(
@@ -2817,8 +2901,7 @@ impl Interpreter {
                         JsValue,
                         JsValue,
                         f64,
-                        Option<JsValue>,
-                        Option<JsValue>,
+                        JsValue,
                         bool,
                         bool,
                     )>,
@@ -2827,8 +2910,7 @@ impl Interpreter {
                     next_method,
                     mapper,
                     0.0,
-                    None,
-                    None,
+                    inner_roots,
                     true,
                     false,
                 )));
@@ -2838,8 +2920,8 @@ impl Interpreter {
                     "next".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let alive = state_next.borrow().6;
-                        let running = state_next.borrow().7;
+                        let alive = state_next.borrow().5;
+                        let running = state_next.borrow().6;
                         if !alive {
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
@@ -2849,7 +2931,7 @@ impl Interpreter {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_next.borrow_mut().7 = true;
+                        state_next.borrow_mut().6 = true;
                         let result = (|| {
                             loop {
                                 let (
@@ -2857,8 +2939,7 @@ impl Interpreter {
                                     outer_next,
                                     mapper,
                                     counter,
-                                    inner_iter,
-                                    inner_next,
+                                    inner_roots,
                                     _alive,
                                     _running,
                                 ) = {
@@ -2869,9 +2950,29 @@ impl Interpreter {
                                         s.2.clone(),
                                         s.3,
                                         s.4.clone(),
-                                        s.5.clone(),
+                                        s.5,
                                         s.6,
-                                        s.7,
+                                    )
+                                };
+
+                                let (inner_iter, inner_next) = {
+                                    let roots_id = inner_roots
+                                        .as_object_id()
+                                        .expect("flatMap inner roots must be an Array object");
+                                    let roots_cell = interp.get_object_cell_expect(roots_id);
+                                    let roots = roots_cell.borrow();
+                                    let elements = roots
+                                        .array_elements()
+                                        .expect("flatMap inner roots must have Array elements");
+                                    (
+                                        elements
+                                            .first()
+                                            .filter(|value| !value.is_undefined())
+                                            .cloned(),
+                                        elements
+                                            .get(1)
+                                            .filter(|value| !value.is_undefined())
+                                            .cloned(),
                                     )
                                 };
 
@@ -2882,7 +2983,7 @@ impl Interpreter {
                                             let value = match interp.iterator_value(&result) {
                                                 Ok(v) => v,
                                                 Err(e) => {
-                                                    state_next.borrow_mut().6 = false;
+                                                    state_next.borrow_mut().5 = false;
                                                     let _ = iterator_close_getter(interp, &outer_iter);
                                                     return Completion::Throw(e);
                                                 }
@@ -2892,12 +2993,20 @@ impl Interpreter {
                                             );
                                         }
                                         Ok(None) => {
-                                            state_next.borrow_mut().4 = None;
-                                            state_next.borrow_mut().5 = None;
+                                            let roots_id = inner_roots
+                                                .as_object_id()
+                                                .expect("flatMap inner roots must be an Array object");
+                                            let roots_cell = interp.get_object_cell_expect(roots_id);
+                                            let mut roots = roots_cell.borrow_mut();
+                                            let elements = roots
+                                                .array_elements_mut()
+                                                .expect("flatMap inner roots must have Array elements");
+                                            elements[0] = JsValue::UNDEFINED;
+                                            elements[1] = JsValue::UNDEFINED;
                                             continue;
                                         }
                                         Err(e) => {
-                                            state_next.borrow_mut().6 = false;
+                                            state_next.borrow_mut().5 = false;
                                             let _ = iterator_close_getter(interp, &outer_iter);
                                             return Completion::Throw(e);
                                         }
@@ -2921,24 +3030,33 @@ impl Interpreter {
                                             Completion::Normal(mapped_val) => {
                                                 match get_iterator_flattenable(interp, &mapped_val, true) {
                                                     Ok((new_inner, inner_next_method)) => {
-                                                        state_next.borrow_mut().4 = Some(new_inner);
-                                                        state_next.borrow_mut().5 = Some(inner_next_method);
+                                                        let roots_id = inner_roots
+                                                            .as_object_id()
+                                                            .expect("flatMap inner roots must be an Array object");
+                                                        let roots_cell =
+                                                            interp.get_object_cell_expect(roots_id);
+                                                        let mut roots = roots_cell.borrow_mut();
+                                                        let elements = roots
+                                                            .array_elements_mut()
+                                                            .expect("flatMap inner roots must have Array elements");
+                                                        elements[0] = new_inner;
+                                                        elements[1] = inner_next_method;
                                                         continue;
                                                     }
                                                     Err(e) => {
-                                                        state_next.borrow_mut().6 = false;
+                                                        state_next.borrow_mut().5 = false;
                                                         let _ = iterator_close_getter(interp, &outer_iter);
                                                         return Completion::Throw(e);
                                                     }
                                                 }
                                             }
                                             Completion::Throw(e) => {
-                                                state_next.borrow_mut().6 = false;
+                                                state_next.borrow_mut().5 = false;
                                                 let _ = iterator_close_getter(interp, &outer_iter);
                                                 return Completion::Throw(e);
                                             }
                                             _ => {
-                                                state_next.borrow_mut().6 = false;
+                                                state_next.borrow_mut().5 = false;
                                                 return Completion::Normal(
                                                     interp.create_iter_result_object(
                                                         JsValue::UNDEFINED,
@@ -2949,20 +3067,20 @@ impl Interpreter {
                                         }
                                     }
                                     Ok(None) => {
-                                        state_next.borrow_mut().6 = false;
+                                        state_next.borrow_mut().5 = false;
                                         return Completion::Normal(
                                             interp
                                                 .create_iter_result_object(JsValue::UNDEFINED, true),
                                         );
                                     }
                                     Err(e) => {
-                                        state_next.borrow_mut().6 = false;
+                                        state_next.borrow_mut().5 = false;
                                         return Completion::Throw(e);
                                     }
                                 }
                             }
                         })();
-                        state_next.borrow_mut().7 = false;
+                        state_next.borrow_mut().6 = false;
                         result
                     },
                 ));
@@ -2972,18 +3090,29 @@ impl Interpreter {
                     "return".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let (outer_iter, inner_iter, alive, running) = {
+                        let (outer_iter, inner_roots, alive, running) = {
                             let s = state_ret.borrow();
-                            (s.0.clone(), s.4.clone(), s.6, s.7)
+                            (s.0.clone(), s.4.clone(), s.5, s.6)
+                        };
+                        let inner_iter = {
+                            let roots_id = inner_roots
+                                .as_object_id()
+                                .expect("flatMap inner roots must be an Array object");
+                            let roots_cell = interp.get_object_cell_expect(roots_id);
+                            let roots = roots_cell.borrow();
+                            roots
+                                .array_elements()
+                                .expect("flatMap inner roots must have Array elements")
+                                .first()
+                                .filter(|value| !value.is_undefined())
+                                .cloned()
                         };
                         if running {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_ret.borrow_mut().7 = true;
-                        state_ret.borrow_mut().6 = false;
-                        state_ret.borrow_mut().4 = None;
-                        state_ret.borrow_mut().5 = None;
+                        state_ret.borrow_mut().6 = true;
+                        state_ret.borrow_mut().5 = false;
                         let result = if alive {
                             if let Some(ref ii) = inner_iter {
                                 let _ = iterator_close_getter(interp, ii);
@@ -3000,7 +3129,17 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
-                        state_ret.borrow_mut().7 = false;
+                        let roots_id = inner_roots
+                            .as_object_id()
+                            .expect("flatMap inner roots must be an Array object");
+                        let roots_cell = interp.get_object_cell_expect(roots_id);
+                        let mut roots = roots_cell.borrow_mut();
+                        let elements = roots
+                            .array_elements_mut()
+                            .expect("flatMap inner roots must have Array elements");
+                        elements[0] = JsValue::UNDEFINED;
+                        elements[1] = JsValue::UNDEFINED;
+                        state_ret.borrow_mut().6 = false;
                         result
                     },
                 ));
@@ -3008,10 +3147,10 @@ impl Interpreter {
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 {
                     let b = state.borrow();
-                    let mut roots = vec![b.0.clone(), b.1.clone(), b.2.clone()];
-                    if let Some(ref v) = b.4 { roots.push(v.clone()); }
-                    if let Some(ref v) = b.5 { roots.push(v.clone()); }
-                    interp.set_helper_gc_roots(&helper, roots);
+                    interp.set_helper_gc_roots(
+                        &helper,
+                        vec![b.0.clone(), b.1.clone(), b.2.clone(), b.4.clone()],
+                    );
                 }
                 Completion::Normal(helper)
             },

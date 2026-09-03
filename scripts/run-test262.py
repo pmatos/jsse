@@ -731,8 +731,39 @@ class TestCollectionError(Exception):
     """Raised when a selected path contains a test the runner would omit."""
 
 
+def _walk_matching(
+    directory: Path, suffix: str
+) -> tuple[list[Path], list[tuple[Path, OSError]]]:
+    """Collect matching files while reporting directories that could not be read."""
+    found: list[Path] = []
+    unreadable: list[tuple[Path, OSError]] = []
+    for dirpath, _dirnames, filenames in os.walk(
+        directory, onerror=lambda error: unreadable.append((Path(error.filename), error))
+    ):
+        found.extend(
+            Path(dirpath) / name for name in filenames if name.endswith(suffix)
+        )
+    return found, unreadable
+
+
+def _raise_if_unreadable(unreadable: list[tuple[Path, OSError]]) -> None:
+    if not unreadable:
+        return
+    formatted = "\n  ".join(f"{path}: {error}" for path, error in unreadable)
+    noun = "directory" if len(unreadable) == 1 else "directories"
+    raise TestCollectionError(
+        f"could not scan the following {noun} while collecting tests:\n  {formatted}"
+    )
+
+
 def _uncollected_mjs(path: Path) -> list[Path]:
-    candidates = [path] if path.is_file() else path.rglob("*.mjs")
+    if path.is_file():
+        candidates = [path]
+    elif path.is_dir():
+        candidates, unreadable = _walk_matching(path, ".mjs")
+        _raise_if_unreadable(unreadable)
+    else:
+        candidates = []
     return [f for f in candidates if f.suffix == ".mjs" and not _is_fixture(f)]
 
 
@@ -860,9 +891,11 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
             if path.is_file() and path.suffix == ".js" and not _is_scratch(path):
                 tests.append(path)
             elif path.is_dir():
+                found, unreadable = _walk_matching(path, ".js")
+                _raise_if_unreadable(unreadable)
                 tests.extend(
                     f
-                    for f in sorted(path.rglob("*.js"))
+                    for f in found
                     if not _is_fixture(f) and not _is_scratch(f)
                 )
         return sorted(tests)
@@ -871,12 +904,16 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     # so there is nothing there the .mjs naming guard could ask an author to fix.
     test_dir = test262_dir / "test"
     tests = []
+    unreadable: list[tuple[Path, OSError]] = []
     for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
+            found, sub_unreadable = _walk_matching(d, ".js")
+            unreadable.extend(sub_unreadable)
             tests.extend(
-                f for f in d.rglob("*.js") if not _is_fixture(f) and not _is_scratch(f)
+                f for f in found if not _is_fixture(f) and not _is_scratch(f)
             )
+    _raise_if_unreadable(unreadable)
     return sorted(tests)
 
 

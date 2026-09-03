@@ -164,6 +164,28 @@ impl Interpreter {
         false
     }
 
+    /// `ResolveThisBinding` (`sec-resolvethisbinding`): walk the lexical
+    /// environment chain for a `this` binding, skipping object Environment
+    /// Records (`with`) entirely — unlike ordinary identifier resolution,
+    /// which the bytecode `LoadName` op uses and which does consult
+    /// with-objects. Shared by the tree-walker's `Expression::This` arm and
+    /// the bytecode `Op::LoadThis` handler so both observe identical
+    /// semantics, including the derived-constructor TDZ throw.
+    pub(super) fn resolve_this_binding(&mut self, env: &EnvRef) -> Completion {
+        match env.borrow().get("this") {
+            Some(v) => Completion::Normal(v),
+            None => {
+                if Self::this_is_in_tdz(env) {
+                    Completion::Throw(self.create_reference_error(
+                        "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                    ))
+                } else {
+                    Completion::Normal(JsValue::UNDEFINED)
+                }
+            }
+        }
+    }
+
     /// Initialize the `this` binding in a derived constructor's environment.
     /// Walks up to find the function scope's `this` binding and marks it initialized.
     fn initialize_this_binding(env: &EnvRef, value: JsValue) {
@@ -444,21 +466,7 @@ impl Interpreter {
                 self.resolve_identifier(name, env, strict)
             }
 
-            Expression::This => {
-                match env.borrow().get("this") {
-                    Some(v) => Completion::Normal(v),
-                    None => {
-                        // Check if this is TDZ (derived constructor before super())
-                        if Self::this_is_in_tdz(env) {
-                            Completion::Throw(self.create_reference_error(
-                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                            ))
-                        } else {
-                            Completion::Normal(JsValue::UNDEFINED)
-                        }
-                    }
-                }
-            }
+            Expression::This => self.resolve_this_binding(env),
             Expression::Super => {
                 Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED))
             }
@@ -2023,7 +2031,7 @@ impl Interpreter {
         {
             self.perf.body_ast += 1;
             let (name, seq) = self.perf_body_name(func_obj_id);
-            self.perf.enter_ast_body(name, seq);
+            self.perf.enter_ast_body(name, seq, true);
         }
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
@@ -5561,6 +5569,7 @@ impl Interpreter {
 
                         if is_async && !is_generator {
                             let result = self.call_async_function(
+                                o.id,
                                 &params,
                                 &body,
                                 closure.clone(),
@@ -5695,8 +5704,14 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_async_generator;
-                            let state_machine =
-                                Rc::new(transform_async_generator(body.as_slice(), &params));
+                            let state_machine = transform_async_generator(body.as_slice(), &params);
+                            #[cfg(feature = "perf-counters")]
+                            let state_machine = {
+                                let mut state_machine = state_machine;
+                                state_machine.perf_key = Some(self.perf_body_name(o.id));
+                                state_machine
+                            };
+                            let state_machine = Rc::new(state_machine);
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -5880,8 +5895,14 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine =
-                                Rc::new(transform_generator(body.as_slice(), &params));
+                            let state_machine = transform_generator(body.as_slice(), &params);
+                            #[cfg(feature = "perf-counters")]
+                            let state_machine = {
+                                let mut state_machine = state_machine;
+                                state_machine.perf_key = Some(self.perf_body_name(o.id));
+                                state_machine
+                            };
+                            let state_machine = Rc::new(state_machine);
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -8152,6 +8173,7 @@ impl Interpreter {
 
     fn call_async_function(
         &mut self,
+        _func_obj_id: u64,
         params: &[Pattern],
         body: &Body,
         closure: EnvRef,
@@ -8274,12 +8296,17 @@ impl Interpreter {
         func_env.borrow_mut().strict = is_strict;
         self.in_tail_position = false;
 
-        let sm = Rc::new(
-            crate::interpreter::generator_transform::transform_async_function(
-                body.as_slice(),
-                params,
-            ),
+        let sm = crate::interpreter::generator_transform::transform_async_function(
+            body.as_slice(),
+            params,
         );
+        #[cfg(feature = "perf-counters")]
+        let sm = {
+            let mut sm = sm;
+            sm.perf_key = Some(self.perf_body_name(_func_obj_id));
+            sm
+        };
+        let sm = Rc::new(sm);
 
         for tv in &sm.temp_vars {
             func_env.borrow_mut().declare(tv, BindingKind::Var);
@@ -8784,7 +8811,11 @@ impl Interpreter {
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &term_env);
+            let mut stmt_result = self.exec_state_machine_body(
+                &state_machine.states[current_id].body,
+                &term_env,
+                &state_machine,
+            );
             self.in_state_machine = saved_in_state_machine;
             // `__host_exit` in the async body (issue #242) propagates out as
             // `Completion::Exit` instead of settling the result promise; the

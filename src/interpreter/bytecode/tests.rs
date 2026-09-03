@@ -1028,6 +1028,45 @@ fn load_undefined_then_return_completes_with_undefined() {
     }
 }
 
+// ----- this expression lowering -----
+
+#[test]
+fn this_expression_compiles_and_matches_tree_walker() {
+    let source = "function f(){ 'use strict'; return this === undefined ? 1 : 2; } \
+                  var __r = f();";
+    assert_parity_number(source, 1.0);
+}
+
+#[test]
+fn sloppy_bare_call_this_matches_tree_walker() {
+    let source = "function f(){ return this === undefined ? 1 : 2; } var __r = f();";
+    assert_parity_number(source, 2.0);
+}
+
+#[test]
+fn derived_constructor_this_before_super_still_throws_reference_error() {
+    let source = "class Base {} \
+                  class Derived extends Base { constructor() { return this; } } \
+                  var __r = 0; \
+                  try { new Derived(); } \
+                  catch (e) { __r = e instanceof ReferenceError ? 1 : 2; }";
+    assert_parity_number(source, 1.0);
+}
+
+#[test]
+fn this_expression_skips_with_object_shadow() {
+    // The `with` statement itself bails the enclosing body to the tree-walker,
+    // but the nested arrow's own body is still bytecode-eligible and closes
+    // over the with-environment. `this` must resolve via ResolveThisBinding
+    // (skip object Environment Records), never via ordinary identifier
+    // resolution against the with-object's `this` property.
+    let source = "function outer() { var f; \
+                  with ({ this: 999 }) { f = () => (this === 999 ? 1 : 0); } \
+                  return f(); } \
+                  var __r = outer();";
+    assert_parity_number(source, 0.0);
+}
+
 // ----- var declarations, updates, compound assignment, and loops -----
 
 #[test]
