@@ -101,4 +101,44 @@ This firing scopes the pick to introducing the seam in `mod.rs` and migrating `a
 
 ## Design
 
-_Written in step 4, after this report was first committed._
+Design-it-twice: three sub-agents each designed a *radically different* interface for the GC temp-root scope seam; a fourth, non-authoring sub-agent adjudicated against Depth → Locality → Seam placement → Test surface → Blast radius, scoped to this firing's `array.rs` migration.
+
+### Design A (winner) — minimal closure combinator `with_gc_root_scope`
+
+```rust
+#[inline]
+pub(crate) fn with_gc_root_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+    let frame = self.gc_root_frame();
+    let result = body(self);
+    self.gc_unroot_frame(frame);
+    result
+}
+```
+
+Callers root inside the body via the passed `&mut Self` and use plain `return`; the combinator captures the frame, runs the body, and truncates on the way out. **Hides** the pairing invariant — the `usize` marker, the obligation to thread `gc_unroot_frame` onto every exit — behind lexical scope. **Seam**: exactly the whole-body, root-up-front pattern, which recurs across 7+ `array.rs` functions (well past "two adapters = a real seam") and matches two in-repo precedents, `with_tail_position_suppressed` (`eval.rs:410`) and the `iterate_to_vec` IIFE (`iterators.rs:5185`). **Dependency strategy**: self-contained `pub(crate)` method on `Interpreter`, composed over the retained `gc_root_frame`/`gc_unroot_frame` primitives — no new state, no seam crossed. Zero storage change, zero hot-path cost. Body param must be named `interp` (shadowing) or the outer receiver's borrow trips E0499.
+
+### Design B (rejected) — RAII Drop-guard `GcRootScope`
+
+`let _scope = interp.gc_root_scope();`, truncating on `Drop`. Forces `gc_temp_roots: Vec<u64>` → `Rc<RefCell<Vec<u64>>>` (a `Cell` cannot truncate a non-`Copy` `Vec`; a raw pointer into the field is the unsoundness `EvalDepthGuard`'s doc warns of), which touches `gc.rs`, ~15 functions across six files, adds a `RefCell` borrow-check + a pointer-hop on the GC hot path, and introduces read-then-mutate `borrow()`/`borrow_mut()` panic traps at ~14 sites. Handles arbitrary partial/interleaved scopes — but the author concedes the closure combinator gets the common whole-body case (concat, the headline) for free, and the RefCell tax exists to serve variation that lives in the *out-of-scope* files. Largest blast radius by an order of magnitude; storage change alone edits files this firing excludes.
+
+### Design C (runner-up design) — value-taking scope `with_gc_rooted(&[&JsValue], body)`
+
+```rust
+pub(crate) fn with_gc_rooted<T>(&mut self, roots: &[&JsValue], body: impl FnOnce(&mut Self) -> T) -> T {
+    let frame = self.gc_root_frame();
+    for r in roots { self.gc_root_value(r); }
+    let out = body(self);
+    self.gc_unroot_frame(frame);
+    out
+}
+```
+
+Folds up-front rooting into scope entry; body still gets `&mut Self` for mid-body rooting. No storage change, no hot-path cost — a capability superset of A. **Why it lost**: seam placement and depth. Its distinguishing feature — the `&[&JsValue]` slice — seals a variation (≥2 up-front roots) that has **zero real adapters** in `array.rs`: 7 of 10 sites pass a dead 1-element slice, and the slice borrows the value across the whole call, forcing a `.clone()` wart at every by-move return. The slice earns its keep only from the out-of-scope `iterators.rs` callers (2 up-front roots + mid-body). Its own author concedes: "for array.rs alone the tighter design is the bare scope guard (= Design A)." A places its seam precisely on the 7× real variation, with a narrower interface and no call-site wart.
+
+### Verdict and forward-compatibility
+
+**Winner: Design A.** First or tied-first on every criterion, strictly ahead on Depth, Seam, and Blast radius. The one thing A structurally cannot express is *independent truncation of an inner frame while an outer frame stays live across repeated early exits* — which occurs at exactly **one** `array.rs` site, `Array.from`'s nested `gc_frame`/`gc_frame_next` (3111/3146), where the raw primitive is *correct* (single normal exit, no repetition), not a compromise. So A covers 9 of 10 sites; the residual keeps the primitive.
+
+When `gc-root-scope-guard-eval` later migrates `eval.rs`/`iterators.rs`, A remains the common-case layer: `eval/literals.rs` frames and `iterate_to_vec` are clean A conversions (the latter already hand-rolls A's shape); any genuinely interleaved-with-repeated-exits residual keeps the primitive. That firing should add a narrow RAII guard **only if** a real ≥2-adapter interleaved case surfaces — decided where the variation is observed, not pre-committed here. It must not widen A's signature or swap the field to `Rc<RefCell<…>>` now.
+
+**Behaviour note carried into implementation**: the combinator silently fixes 3 latent over-rooting exits in `concat` (`array.rs:1455/1456/1467` — plain `return` after the frame opens, with no unroot). This is a GC-liveness change (temp roots held slightly longer than necessary until an ancestor frame truncates), not a JS-semantic one. A test on `concat`'s `Symbol.isConcatSpreadable`-getter-throws path asserting `gc_root_frame()` returns to baseline pins it — and doubles as the through-the-interface test surface (Test-surface criterion), since the pre-existing frame tests reach *past* the seam into `gc_temp_roots` directly.
