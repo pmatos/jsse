@@ -3622,27 +3622,66 @@ impl Interpreter {
                 .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
         }
         let mut err = None;
+        // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
+        // structurally from `exec_statement`/`exec_export_declaration`, the
+        // same way `Throw` does — it must stop this loop immediately (a
+        // later module item must not run) and must reach `dispose_resources`
+        // below as `Exit`, not be discarded and reconstructed as `Normal`,
+        // so the disposer short-circuit there actually fires (#554 review).
+        let mut exit_code: Option<i32> = None;
         for item in &program.module_items {
             match item {
                 ModuleItem::Statement(stmt) => {
                     let result = self.exec_statement(stmt, &module_env);
-                    if let Completion::Throw(e) = result {
-                        module.borrow_mut().error = Some(e.clone());
-                        err = Some(e);
-                        break;
+                    match result {
+                        Completion::Throw(e) => {
+                            module.borrow_mut().error = Some(e.clone());
+                            err = Some(e);
+                            break;
+                        }
+                        Completion::Exit(code) => {
+                            exit_code = Some(code);
+                            break;
+                        }
+                        _ => {}
                     }
                 }
                 ModuleItem::ImportDeclaration(_) => {}
                 ModuleItem::ExportDeclaration(export) => {
                     let result = self.exec_export_declaration(export, &module_env);
-                    if let Completion::Throw(e) = result {
-                        module.borrow_mut().error = Some(e.clone());
-                        err = Some(e);
-                        break;
+                    match result {
+                        Completion::Throw(e) => {
+                            module.borrow_mut().error = Some(e.clone());
+                            err = Some(e);
+                            break;
+                        }
+                        Completion::Exit(code) => {
+                            exit_code = Some(code);
+                            break;
+                        }
+                        _ => {}
                     }
                     self.collect_exports(export, &module_env, &module);
                 }
             }
+        }
+        let completion = match exit_code {
+            Some(code) => Completion::Exit(code),
+            None => match &err {
+                Some(e) => Completion::Throw(e.clone()),
+                None => Completion::Normal(JsValue::UNDEFINED),
+            },
+        };
+        match self.dispose_resources(&module_env, completion) {
+            Completion::Throw(e) => {
+                module.borrow_mut().error = Some(e.clone());
+                err = Some(e);
+            }
+            Completion::Exit(code) => {
+                self.pending_exit = Some(code);
+                err = None;
+            }
+            _ => {}
         }
         module.borrow_mut().program_ast = None;
         #[cfg(feature = "perf-counters")]
