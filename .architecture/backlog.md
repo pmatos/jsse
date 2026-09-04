@@ -7,7 +7,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## gc-root-scope-guard
 
-- **Status**: proposed
+- **Status**: in-flight
+- **PR**: #595
 - **Score**: 22/25 (leverage 5, locality 4, blast radius 3, heat 5)
 - **Files (full candidate)**: ~9–12 — `src/interpreter/eval.rs` (primary), `src/interpreter/builtins/array.rs`, `src/interpreter/mod.rs` (seam home), + `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`, `eval/literals.rs`, `bytecode/vm.rs`
 - **Files (this firing's scope)**: ~2 estimated — `src/interpreter/mod.rs` (new `with_gc_root_scope` seam) + `src/interpreter/builtins/array.rs`
@@ -15,6 +16,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Summary**: Collapse the manual GC-root frame teardown epilogue behind a scope-guard combinator `with_gc_root_scope(|i| …)`, mirroring the in-file precedents `with_tail_position_suppressed` (`eval.rs:410`) and the `iterate_to_vec` IIFE (`iterators.rs:5185`). Codebase-wide: ~156 `gc_unroot_frame` teardowns against ~55 `gc_root_frame` setups — the gap is per-early-return epilogue copies. **This firing scopes to `array.rs`**, the single worst concentration (10 `Completion`-returning functions, 71 teardowns / 10 setups = ~61 redundant epilogue copies; `concat` alone repeats the teardown 10×). The remaining sites — `eval.rs` foremost — are deferred to `gc-root-scope-guard-eval` because `eval.rs` carries the `#[inline(always)]` `eval_expr` hot path, two seam bypasses that poke `gc_temp_roots.push` directly (`eval.rs:1066`, `:4324`), and 5 sites that already work around the epilogue with an IIFE — correctness-sensitive, a deliberately-scheduled firing. Mirrors the `arraybuffer-receiver-guard` → `dataview-receiver-guard` split.
 - **First seen**: 2026-09-03
 - **Picked**: 2026-09-04 firing (was recorded 2026-09-03 as runner-up to `complete-state-machine-generator-ctor`; #592 landing made it the natural next pick).
+- **Delivered (PR #595)**: `with_gc_root_scope` combinator added in `mod.rs`; 8 whole-body `array.rs` natives migrated (concat, slice, map, filter, splice, flat, flatMap, Array.from array-like path). array.rs teardowns 71→9 (the 9 are Array.from's nested iterator frames, kept on the raw primitive). Net −17 lines (array.rs shows ~867 changed, mostly rustfmt reindent from the closure wrap). Also fixed 3 latent over-rooting exits in concat. Gate green: 622 unit / test262 built-ins/Array 6117/6117 (0 regressions) / 13 custom / clippy+fmt clean. Chose the closure combinator over an RAII guard (see PR's Proposed ADR); `eval.rs` + remaining files deferred to `gc-root-scope-guard-eval`.
 
 ## gc-root-scope-guard-eval
 
