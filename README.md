@@ -109,6 +109,28 @@ uv run python scripts/run-test262.py --engine boa --binary /path/to/boa
 
 Per-test timing data is written to `/tmp/timing-{engine}.json` after each run.
 
+## Fuzzing
+
+Two `cargo-fuzz` targets live under `fuzz/`: `parse_roundtrip` (the parser
+must never panic on arbitrary bytes) and `differential` (jsse vs `node` on
+the same source, surfacing divergences no fixed corpus would). See
+`docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md` for the design
+and `.claude/skills/fuzzing/SKILL.md` for the full run/triage workflow.
+
+```bash
+cargo install cargo-fuzz --locked
+cargo +nightly fuzz run parse_roundtrip -- -max_total_time=60
+cargo build --release   # differential needs the release binary
+cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
+```
+
+CI runs a corpus-replay smoke check (`-runs=0`, deterministic) on every PR;
+new-mutation fuzzing for both targets runs nightly via
+`.github/workflows/fuzz.yml`'s `fuzz-deep` job and never gates a PR — see the
+ADR for why. A finding from either target is a lead, not a fix to make in the
+PR that touches the fuzz tooling itself: file it as its own issue and fix it
+against `spec/`/test262, never by matching `node`'s observed behavior.
+
 ## Running JetStream 3
 
 ```bash

@@ -35,3 +35,7 @@ _Avoid_: cache table, IC map.
 **Seam**:
 A place where one module's interface ends and another's begins. In JSSE, the seams between the AST, the inline-cache system, and the interpreter are intentionally narrow: the AST carries site identifiers, the runtime carries slot values, and the interpreter maps one to the other.
 _Avoid_: boundary, layer.
+
+**Divergence Tier**:
+How the `differential` fuzz target (`fuzz/fuzz_targets/differential.rs`) classifies a jsse-vs-node run. Tier 1: jsse crashed (signal or the interpreter-panic exit code) while node didn't — an engine bug by definition. Tier 2: exactly one side rejects the source as a syntax error — a real coverage gap. Tier 3: both sides threw (possibly a different error class) or both timed out — expected noise (usually an unimplemented feature), recorded but not a fuzzer finding. See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`.
+_Avoid_: divergence class, mismatch level.
