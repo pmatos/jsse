@@ -51,7 +51,8 @@ pub(crate) struct JsString {
 }
 
 impl JsString {
-    pub(crate) fn from_str(s: &str) -> Self {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
         Self {
             code_units: Arc::new(s.encode_utf16().collect()),
         }
@@ -501,7 +502,8 @@ impl NanBoxedValue {
     }
 
     /// Sugar for `JsValue::string(JsString::from_str(s))`.
-    pub(crate) fn from_str(s: &str) -> Self {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
         Self::string(JsString::from_str(s))
     }
 

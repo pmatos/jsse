@@ -279,7 +279,7 @@ pub(crate) struct Interpreter {
     pub(crate) in_state_machine: bool,
     pub(crate) next_function_is_method: bool,
     pub(crate) is_agent_thread: bool,
-    pub(crate) can_block: bool,
+    pub can_block: bool,
     pub(crate) agent_reports: std::sync::Arc<(
         std::sync::Mutex<std::collections::VecDeque<String>>,
         std::sync::Condvar,
@@ -313,7 +313,7 @@ pub(crate) struct Interpreter {
     /// Counter for the call_function_inner fast-dispatch path (skips
     /// proxy/wrapped/class-ctor checks). Issue #71 Phase-3 follow-up.
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
-    pub(crate) bytecode_enabled: bool,
+    pub bytecode_enabled: bool,
     pub(crate) bytecode_chunks_executed: usize,
     #[cfg(feature = "perf-counters")]
     pub(crate) perf: perf_counters::PerfCounters,
@@ -338,7 +338,7 @@ pub(crate) struct Interpreter {
     /// drain (microtask jobs), an inline `await` drain, an iterator `return()`,
     /// or module top-level await — and is read by `main`/`run` to set the
     /// process exit status. Always `None` when `node_host_enabled` is false.
-    pub(crate) pending_exit: Option<i32>,
+    pub pending_exit: Option<i32>,
     /// True while a timer callback is running. Timer callbacks are tasks and
     /// must not re-enter one another, so a nested interpreter run started from
     /// inside one neither fires timers nor stays alive waiting for them.
@@ -545,6 +545,12 @@ pub(crate) struct LoadedModule {
     pub top_level_capability: Option<(JsValue, JsValue, JsValue)>,
     pub dfs_index: Option<u32>,
     pub dfs_ancestor_index: Option<u32>,
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Interpreter {

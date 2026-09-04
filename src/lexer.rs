@@ -138,7 +138,8 @@ pub(crate) enum Keyword {
 }
 
 impl Keyword {
-    pub(crate) fn from_str(s: &str) -> Option<Keyword> {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Keyword> {
         match s {
             "async" => Some(Keyword::Async),
             "await" => Some(Keyword::Await),

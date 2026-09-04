@@ -72,6 +72,7 @@ impl SharedBufferInner {
         }
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
     }
@@ -164,6 +165,7 @@ pub(crate) enum BufferData {
 }
 
 impl BufferData {
+    #[allow(clippy::len_without_is_empty)]
     pub(crate) fn len(&self) -> usize {
         match self {
             BufferData::Owned(v) => v.len(),
@@ -171,7 +173,7 @@ impl BufferData {
         }
     }
 
-    pub(crate) fn resize(&mut self, new_len: usize, value: u8) {
+    pub fn resize(&mut self, new_len: usize, value: u8) {
         match self {
             BufferData::Owned(v) => v.resize(new_len, value),
             BufferData::Shared(s) => s.resize(new_len, value),
@@ -3878,6 +3880,12 @@ impl PromiseData {
             reject_reactions: Vec::new(),
             is_handled: false,
         }
+    }
+}
+
+impl Default for PromiseData {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
