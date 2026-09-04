@@ -1,7 +1,8 @@
 #![no_main]
 
 use jsse_fuzz::{
-    Verdict, classify, jsse_release_binary, repo_root, run_engine_subprocess, run_node_subprocess,
+    Verdict, classify, jsse_release_binary, node_available, repo_root, run_engine_subprocess,
+    run_node_subprocess,
 };
 use libfuzzer_sys::fuzz_target;
 use std::path::Path;
@@ -46,8 +47,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
+    static NODE_AVAILABLE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(node_available);
+
     let jsse_bin = jsse_release_binary();
-    if !Path::new(&jsse_bin).exists() {
+    if !Path::new(&jsse_bin).exists() || !*NODE_AVAILABLE {
         return;
     }
 

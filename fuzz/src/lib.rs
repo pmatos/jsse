@@ -141,6 +141,19 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
+/// Whether `node` is runnable on `PATH`, so the fuzz target can skip early
+/// (not panic) instead of every iteration's `node` spawn failing with
+/// `NotFound` and silently classifying as a `TimedOut`/`Recorded` no-op.
+pub fn node_available() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// jsse crashed (signal or the interpreter-panic exit code 101) while

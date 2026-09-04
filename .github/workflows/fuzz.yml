@@ -1,0 +1,106 @@
+# cargo-fuzz targets for the parser (parse_roundtrip) and jsse-vs-node
+# divergences (differential). See docs/adr/0003-fuzz-lib-target-and-subprocess-differential.md
+# and .claude/skills/fuzzing/SKILL.md for the design and triage workflow.
+#
+# fuzz-smoke (pull_request gate) only replays the committed seed corpus
+# (`-runs=0`, deterministic) — it does not run new-mutation fuzzing. A real
+# parser panic (issue #597) surfaced within 20s of local new-mutation fuzzing
+# during this workflow's own development, which would make a mutation pass
+# an intermittently-red PR gate for a bug this PR isn't fixing. New-mutation
+# fuzzing (which can find fresh, unrelated bugs at any time) only runs in
+# fuzz-deep, which is nightly/workflow_dispatch and never blocks a PR.
+
+name: Fuzz
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Daily deep-fuzz (fuzz-deep only; fuzz-smoke is pull_request-only).
+    - cron: "0 3 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            .
+            fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build parse_roundtrip fuzz target
+        run: cargo +nightly fuzz build parse_roundtrip --sanitizer none
+
+      - name: Replay seed corpus (deterministic, no new mutation)
+        run: cargo +nightly fuzz run parse_roundtrip --sanitizer none -- -runs=0 fuzz/corpus/parse_roundtrip
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  fuzz-deep:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            .
+            fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build release jsse (differential target's other engine)
+        run: cargo build --release
+
+      - name: Fuzz parse_roundtrip (new mutations, 5 min budget)
+        run: cargo +nightly fuzz run parse_roundtrip --sanitizer none -- -max_total_time=300 fuzz/corpus/parse_roundtrip
+
+      - name: Fuzz differential (new mutations, 5 min budget)
+        run: cargo +nightly fuzz run differential --sanitizer none -- -max_total_time=300 -timeout=30 fuzz/corpus/differential
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-deep-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
