@@ -11,7 +11,9 @@ info: |
   pair 0xDB80 0xDC00, not the single code unit 0xD800.
 
   PerformEval parses the original String value, so a raw lone surrogate in
-  eval source must remain the same lone surrogate after parsing.
+  eval source must remain the same lone surrogate after parsing, whether it
+  appears as a bare source character or immediately after an identity
+  escape (\<lone surrogate>).
 ---*/
 
 function assertPlane15(value, label) {
@@ -40,5 +42,13 @@ if (evaluated.length !== 1 || evaluated.charCodeAt(0) !== 0xD800) {
   throw new Test262Error(
     "eval raw lone surrogate: expected [0xD800], got length " +
     evaluated.length + " and first code unit " + evaluated.charCodeAt(0)
+  );
+}
+
+var identityEscaped = eval("'\\" + lone + "'");
+if (identityEscaped.length !== 1 || identityEscaped.charCodeAt(0) !== 0xD800) {
+  throw new Test262Error(
+    "eval identity-escaped lone surrogate: expected [0xD800], got length " +
+    identityEscaped.length + " and first code unit " + identityEscaped.charCodeAt(0)
   );
 }

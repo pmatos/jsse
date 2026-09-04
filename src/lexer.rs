@@ -521,9 +521,15 @@ impl<'a> Lexer<'a> {
                 Ok(())
             }
             Some(ch) => {
-                let mut buf = [0u16; 2];
-                for cu in ch.encode_utf16(&mut buf).iter() {
-                    out.push(*cu);
+                if self.pua_undo
+                    && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
+                {
+                    out.push(surrogate);
+                } else {
+                    let mut buf = [0u16; 2];
+                    for cu in ch.encode_utf16(&mut buf).iter() {
+                        out.push(*cu);
+                    }
                 }
                 Ok(())
             }
