@@ -1334,6 +1334,28 @@ impl Interpreter {
         self.gc_temp_roots.truncate(frame);
     }
 
+    /// Run `body` inside a fresh GC temp-root scope: capture the current
+    /// temp-root depth, run the body, then bulk-unroot everything the body
+    /// pushed. The truncate happens on every exit path of `body` — the tail,
+    /// each early `return`, and each `?` — so a caller roots values *inside*
+    /// the body via the passed `&mut Self` and returns normally, without
+    /// threading a `gc_unroot_frame` onto every branch by hand.
+    ///
+    /// Mirrors `with_tail_position_suppressed` (save state, run, restore); the
+    /// body's returned value is *not* rooted after the scope closes (identical
+    /// to the hand-written `gc_unroot_frame(frame); return v;` tail), so a
+    /// caller that needs the result to survive a later GC re-roots it outside.
+    /// Not restored on a Rust panic (neither was the manual idiom); JS errors
+    /// travel as `Completion::Throw` values returned normally, so every
+    /// JS-level exit truncates.
+    #[inline]
+    pub(crate) fn with_gc_root_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let frame = self.gc_root_frame();
+        let result = body(self);
+        self.gc_unroot_frame(frame);
+        result
+    }
+
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
         if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)

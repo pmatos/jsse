@@ -1441,111 +1441,93 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            let mut n: usize = 0;
-            let items: Vec<JsValue> = std::iter::once(o).chain(args.iter().cloned()).collect();
-            for item in &items {
-                // IsConcatSpreadable (§23.1.3.1.1)
-                let spreadable = if let Some(item_id) = item.as_object_id() {
-                    let sym_key = interp.get_symbol_key("isConcatSpreadable");
-                    let spreadable_val = if let Some(key) = &sym_key {
-                        match interp.get_object_property(item_id, key, item) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            other => return other,
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    };
-                    if !(spreadable_val).is_undefined() {
-                        interp.to_boolean_val(&spreadable_val)
-                    } else {
-                        // 4. Return ? IsArray(O)
-                        match is_array_check(interp, item_id) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                } else {
-                    false
-                };
-                if spreadable {
-                    let len = match length_of_array_like(interp, item) {
-                        Ok(v) => v,
-                        Err(c) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return c;
-                        }
-                    };
-                    if (n as u64) + (len as u64) > 9007199254740991 {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(
-                            interp.create_type_error("Array length exceeds the allowed maximum"),
-                        );
-                    }
-                    for k in 0..len {
-                        let pk = k.to_string();
-                        let exists = match obj_has_throw(interp, item, &pk) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                let mut n: usize = 0;
+                let items: Vec<JsValue> = std::iter::once(o).chain(args.iter().cloned()).collect();
+                for item in &items {
+                    // IsConcatSpreadable (§23.1.3.1.1)
+                    let spreadable = if let Some(item_id) = item.as_object_id() {
+                        let sym_key = interp.get_symbol_key("isConcatSpreadable");
+                        let spreadable_val = if let Some(key) = &sym_key {
+                            match interp.get_object_property(item_id, key, item) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
                             }
+                        } else {
+                            JsValue::UNDEFINED
                         };
-                        if exists {
-                            let val = if let Some(item_id) = item.as_object_id() {
-                                match interp.get_object_property(item_id, &pk, item) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => {
-                                        interp.gc_unroot_frame(gc_frame);
-                                        return Completion::Throw(e);
-                                    }
-                                    other => {
-                                        interp.gc_unroot_frame(gc_frame);
-                                        return other;
-                                    }
-                                }
-                            } else {
-                                match obj_get(interp, item, &pk) {
-                                    Ok(v) => v,
-                                    Err(c) => {
-                                        interp.gc_unroot_frame(gc_frame);
-                                        return c;
-                                    }
-                                }
-                            };
-                            if let Err(e) =
-                                create_data_property_or_throw(interp, &a, &n.to_string(), val)
-                            {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
+                        if !(spreadable_val).is_undefined() {
+                            interp.to_boolean_val(&spreadable_val)
+                        } else {
+                            // 4. Return ? IsArray(O)
+                            match is_array_check(interp, item_id) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
                             }
+                        }
+                    } else {
+                        false
+                    };
+                    if spreadable {
+                        let len = match length_of_array_like(interp, item) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        if (n as u64) + (len as u64) > 9007199254740991 {
+                            return Completion::Throw(
+                                interp
+                                    .create_type_error("Array length exceeds the allowed maximum"),
+                            );
+                        }
+                        for k in 0..len {
+                            let pk = k.to_string();
+                            let exists = match obj_has_throw(interp, item, &pk) {
+                                Ok(b) => b,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if exists {
+                                let val = if let Some(item_id) = item.as_object_id() {
+                                    match interp.get_object_property(item_id, &pk, item) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        other => return other,
+                                    }
+                                } else {
+                                    match obj_get(interp, item, &pk) {
+                                        Ok(v) => v,
+                                        Err(c) => return c,
+                                    }
+                                };
+                                if let Err(e) =
+                                    create_data_property_or_throw(interp, &a, &n.to_string(), val)
+                                {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            n += 1;
+                        }
+                    } else {
+                        if n as u64 >= 9007199254740991 {
+                            return Completion::Throw(
+                                interp
+                                    .create_type_error("Array length exceeds the allowed maximum"),
+                            );
+                        }
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
+                        {
+                            return Completion::Throw(e);
                         }
                         n += 1;
                     }
-                } else {
-                    if n as u64 >= 9007199254740991 {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(
-                            interp.create_type_error("Array length exceeds the allowed maximum"),
-                        );
-                    }
-                    if let Err(e) =
-                        create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
-                    {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    n += 1;
                 }
-            }
-            if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::number(n as f64)) {
-                interp.gc_unroot_frame(gc_frame);
-                return Completion::Throw(e);
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::number(n as f64)) {
+                    return Completion::Throw(e);
+                }
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.slice
@@ -1571,41 +1553,33 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            let mut n: usize = 0;
-            for i in k..fin {
-                let pk = i.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let val = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                let mut n: usize = 0;
+                for i in k..fin {
+                    let pk = i.to_string();
+                    match obj_has_throw(interp, &o, &pk) {
+                        Ok(true) => {
+                            let val = match obj_get(interp, &o, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            if let Err(e) =
+                                create_data_property_or_throw(interp, &a, &n.to_string(), val)
+                            {
+                                return Completion::Throw(e);
                             }
-                        };
-                        if let Err(e) =
-                            create_data_property_or_throw(interp, &a, &n.to_string(), val)
-                        {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
                         }
+                        Err(e) => return Completion::Throw(e),
+                        _ => {}
                     }
-                    Err(e) => {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    _ => {}
+                    n += 1;
                 }
-                n += 1;
-            }
-            if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::number(n as f64)) {
-                interp.gc_unroot_frame(gc_frame);
-                return Completion::Throw(e);
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::number(n as f64)) {
+                    return Completion::Throw(e);
+                }
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.reverse
@@ -1756,45 +1730,37 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            for k in 0..len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
-                        };
-                        match interp.call_function(
-                            &callback,
-                            &this_arg,
-                            &[kvalue, JsValue::number(k as f64), o.clone()],
-                        ) {
-                            Completion::Normal(v) => {
-                                if let Err(e) = create_data_property_or_throw(interp, &a, &pk, v) {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return Completion::Throw(e);
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                for k in 0..len {
+                    let pk = k.to_string();
+                    match obj_has_throw(interp, &o, &pk) {
+                        Ok(true) => {
+                            let kvalue = match obj_get(interp, &o, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            match interp.call_function(
+                                &callback,
+                                &this_arg,
+                                &[kvalue, JsValue::number(k as f64), o.clone()],
+                            ) {
+                                Completion::Normal(v) => {
+                                    if let Err(e) =
+                                        create_data_property_or_throw(interp, &a, &pk, v)
+                                    {
+                                        return Completion::Throw(e);
+                                    }
                                 }
-                            }
-                            other => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return other;
+                                other => return other,
                             }
                         }
+                        Err(e) => return Completion::Throw(e),
+                        _ => {}
                     }
-                    Err(e) => {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    _ => {}
                 }
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.filter
@@ -1817,54 +1783,44 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            let mut to: usize = 0;
-            for k in 0..len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
-                        };
-                        match interp.call_function(
-                            &callback,
-                            &this_arg,
-                            &[kvalue.clone(), JsValue::number(k as f64), o.clone()],
-                        ) {
-                            Completion::Normal(v) => {
-                                if interp.to_boolean_val(&v) {
-                                    if let Err(e) = create_data_property_or_throw(
-                                        interp,
-                                        &a,
-                                        &to.to_string(),
-                                        kvalue,
-                                    ) {
-                                        interp.gc_unroot_frame(gc_frame);
-                                        return Completion::Throw(e);
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                let mut to: usize = 0;
+                for k in 0..len {
+                    let pk = k.to_string();
+                    match obj_has_throw(interp, &o, &pk) {
+                        Ok(true) => {
+                            let kvalue = match obj_get(interp, &o, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            match interp.call_function(
+                                &callback,
+                                &this_arg,
+                                &[kvalue.clone(), JsValue::number(k as f64), o.clone()],
+                            ) {
+                                Completion::Normal(v) => {
+                                    if interp.to_boolean_val(&v) {
+                                        if let Err(e) = create_data_property_or_throw(
+                                            interp,
+                                            &a,
+                                            &to.to_string(),
+                                            kvalue,
+                                        ) {
+                                            return Completion::Throw(e);
+                                        }
+                                        to += 1;
                                     }
-                                    to += 1;
                                 }
-                            }
-                            other => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return other;
+                                other => return other,
                             }
                         }
+                        Err(e) => return Completion::Throw(e),
+                        _ => {}
                     }
-                    Err(e) => {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    _ => {}
                 }
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.reduce
@@ -2289,121 +2245,96 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            for i in 0..actual_delete_count {
-                let from = (actual_start + i).to_string();
-                match obj_has_throw(interp, &o, &from) {
-                    Ok(true) => {
-                        let val = match obj_get(interp, &o, &from) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                for i in 0..actual_delete_count {
+                    let from = (actual_start + i).to_string();
+                    match obj_has_throw(interp, &o, &from) {
+                        Ok(true) => {
+                            let val = match obj_get(interp, &o, &from) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            if let Err(e) =
+                                create_data_property_or_throw(interp, &a, &i.to_string(), val)
+                            {
+                                return Completion::Throw(e);
                             }
-                        };
-                        if let Err(e) =
-                            create_data_property_or_throw(interp, &a, &i.to_string(), val)
-                        {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
                         }
-                    }
-                    Err(e) => {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    _ => {}
-                }
-            }
-            // Step 12: Perform ? Set(A, "length", actualDeleteCount, true).
-            if let Err(e) = obj_set_throw(
-                interp,
-                &a,
-                "length",
-                JsValue::number(actual_delete_count as f64),
-            ) {
-                interp.gc_unroot_frame(gc_frame);
-                return Completion::Throw(e);
-            }
-            let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
-            if insert_count < actual_delete_count {
-                for k in actual_start..((len as usize) - actual_delete_count) {
-                    let from = (k + actual_delete_count).to_string();
-                    let to = (k + insert_count).to_string();
-                    let from_present = match obj_has_throw(interp, &o, &from) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                    };
-                    if from_present {
-                        let val = match obj_get(interp, &o, &from) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
-                        };
-                        if let Err(e) = obj_set_throw(interp, &o, &to, val) {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                    } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
+                        Err(e) => return Completion::Throw(e),
+                        _ => {}
                     }
                 }
-                for k in ((len as usize - actual_delete_count + insert_count)..(len as usize)).rev()
-                {
-                    if let Err(e) = obj_delete_throw(interp, &o, &k.to_string()) {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                }
-            } else if insert_count > actual_delete_count {
-                for k in (actual_start..((len as usize) - actual_delete_count)).rev() {
-                    let from = (k + actual_delete_count).to_string();
-                    let to = (k + insert_count).to_string();
-                    let from_present = match obj_has_throw(interp, &o, &from) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                    };
-                    if from_present {
-                        let val = match obj_get(interp, &o, &from) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
-                        };
-                        if let Err(e) = obj_set_throw(interp, &o, &to, val) {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                    } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                }
-            }
-            for (j, item) in items.into_iter().enumerate() {
-                if let Err(e) = obj_set_throw(interp, &o, &(actual_start + j).to_string(), item) {
-                    interp.gc_unroot_frame(gc_frame);
+                // Step 12: Perform ? Set(A, "length", actualDeleteCount, true).
+                if let Err(e) = obj_set_throw(
+                    interp,
+                    &a,
+                    "length",
+                    JsValue::number(actual_delete_count as f64),
+                ) {
                     return Completion::Throw(e);
                 }
-            }
-            let new_len = (len as usize) - actual_delete_count + insert_count;
-            if let Err(e) = set_length_throw(interp, &o, new_len) {
-                interp.gc_unroot_frame(gc_frame);
-                return Completion::Throw(e);
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
+                if insert_count < actual_delete_count {
+                    for k in actual_start..((len as usize) - actual_delete_count) {
+                        let from = (k + actual_delete_count).to_string();
+                        let to = (k + insert_count).to_string();
+                        let from_present = match obj_has_throw(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if from_present {
+                            let val = match obj_get(interp, &o, &from) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                return Completion::Throw(e);
+                            }
+                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            return Completion::Throw(e);
+                        }
+                    }
+                    for k in
+                        ((len as usize - actual_delete_count + insert_count)..(len as usize)).rev()
+                    {
+                        if let Err(e) = obj_delete_throw(interp, &o, &k.to_string()) {
+                            return Completion::Throw(e);
+                        }
+                    }
+                } else if insert_count > actual_delete_count {
+                    for k in (actual_start..((len as usize) - actual_delete_count)).rev() {
+                        let from = (k + actual_delete_count).to_string();
+                        let to = (k + insert_count).to_string();
+                        let from_present = match obj_has_throw(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if from_present {
+                            let val = match obj_get(interp, &o, &from) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                return Completion::Throw(e);
+                            }
+                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            return Completion::Throw(e);
+                        }
+                    }
+                }
+                for (j, item) in items.into_iter().enumerate() {
+                    if let Err(e) = obj_set_throw(interp, &o, &(actual_start + j).to_string(), item)
+                    {
+                        return Completion::Throw(e);
+                    }
+                }
+                let new_len = (len as usize) - actual_delete_count + insert_count;
+                if let Err(e) = set_length_throw(interp, &o, new_len) {
+                    return Completion::Throw(e);
+                }
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.toSpliced
@@ -2730,57 +2661,64 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            fn flatten_into(
-                interp: &mut Interpreter,
-                target: &JsValue,
-                target_index: &mut usize,
-                source: &JsValue,
-                source_len: usize,
-                depth: i64,
-            ) -> Result<(), Completion> {
-                for k in 0..source_len {
-                    let pk = k.to_string();
-                    let exists = obj_has_throw(interp, source, &pk).map_err(Completion::Throw)?;
-                    if exists {
-                        let elem = match obj_get(interp, source, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return Err(c),
-                        };
-                        let should_flatten = if depth > 0 {
-                            if let Some(elem_id) = elem.as_object_id() {
-                                is_array_check(interp, elem_id).map_err(Completion::Throw)?
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                fn flatten_into(
+                    interp: &mut Interpreter,
+                    target: &JsValue,
+                    target_index: &mut usize,
+                    source: &JsValue,
+                    source_len: usize,
+                    depth: i64,
+                ) -> Result<(), Completion> {
+                    for k in 0..source_len {
+                        let pk = k.to_string();
+                        let exists =
+                            obj_has_throw(interp, source, &pk).map_err(Completion::Throw)?;
+                        if exists {
+                            let elem = match obj_get(interp, source, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return Err(c),
+                            };
+                            let should_flatten = if depth > 0 {
+                                if let Some(elem_id) = elem.as_object_id() {
+                                    is_array_check(interp, elem_id).map_err(Completion::Throw)?
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
+                            };
+                            if should_flatten {
+                                let elem_len = length_of_array_like(interp, &elem)?;
+                                flatten_into(
+                                    interp,
+                                    target,
+                                    target_index,
+                                    &elem,
+                                    elem_len,
+                                    depth - 1,
+                                )?;
+                            } else {
+                                create_data_property_or_throw(
+                                    interp,
+                                    target,
+                                    &target_index.to_string(),
+                                    elem,
+                                )
+                                .map_err(Completion::Throw)?;
+                                *target_index += 1;
                             }
-                        } else {
-                            false
-                        };
-                        if should_flatten {
-                            let elem_len = length_of_array_like(interp, &elem)?;
-                            flatten_into(interp, target, target_index, &elem, elem_len, depth - 1)?;
-                        } else {
-                            create_data_property_or_throw(
-                                interp,
-                                target,
-                                &target_index.to_string(),
-                                elem,
-                            )
-                            .map_err(Completion::Throw)?;
-                            *target_index += 1;
                         }
                     }
+                    Ok(())
                 }
-                Ok(())
-            }
-            let mut target_index = 0usize;
-            if let Err(c) = flatten_into(interp, &a, &mut target_index, &o, len, depth) {
-                interp.gc_unroot_frame(gc_frame);
-                return c;
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                let mut target_index = 0usize;
+                if let Err(c) = flatten_into(interp, &a, &mut target_index, &o, len, depth) {
+                    return c;
+                }
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.flatMap
@@ -2805,103 +2743,80 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let gc_frame = interp.gc_root_frame();
-            interp.gc_root_value(&a);
-            let mut target_index = 0usize;
-            for k in 0..len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
-                        };
-                        let mapped = interp.call_function(
-                            &callback,
-                            &this_arg,
-                            &[kvalue, JsValue::number(k as f64), o.clone()],
-                        );
-                        match mapped {
-                            Completion::Normal(v) => {
-                                let elem_is_array = if let Some(elem_id) = v.as_object_id() {
-                                    match is_array_check(interp, elem_id) {
-                                        Ok(b) => b,
-                                        Err(e) => {
-                                            interp.gc_unroot_frame(gc_frame);
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&a);
+                let mut target_index = 0usize;
+                for k in 0..len {
+                    let pk = k.to_string();
+                    match obj_has_throw(interp, &o, &pk) {
+                        Ok(true) => {
+                            let kvalue = match obj_get(interp, &o, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            let mapped = interp.call_function(
+                                &callback,
+                                &this_arg,
+                                &[kvalue, JsValue::number(k as f64), o.clone()],
+                            );
+                            match mapped {
+                                Completion::Normal(v) => {
+                                    let elem_is_array = if let Some(elem_id) = v.as_object_id() {
+                                        match is_array_check(interp, elem_id) {
+                                            Ok(b) => b,
+                                            Err(e) => return Completion::Throw(e),
+                                        }
+                                    } else {
+                                        false
+                                    };
+                                    if elem_is_array {
+                                        let mlen = match length_of_array_like(interp, &v) {
+                                            Ok(l) => l,
+                                            Err(c) => return c,
+                                        };
+                                        for j in 0..mlen {
+                                            let jpk = j.to_string();
+                                            match obj_has_throw(interp, &v, &jpk) {
+                                                Ok(true) => {
+                                                    let jval = match obj_get(interp, &v, &jpk) {
+                                                        Ok(v) => v,
+                                                        Err(c) => return c,
+                                                    };
+                                                    if let Err(e) = create_data_property_or_throw(
+                                                        interp,
+                                                        &a,
+                                                        &target_index.to_string(),
+                                                        jval,
+                                                    ) {
+                                                        return Completion::Throw(e);
+                                                    }
+                                                    target_index += 1;
+                                                }
+                                                Err(e) => return Completion::Throw(e),
+                                                _ => {}
+                                            }
+                                        }
+                                    } else {
+                                        if let Err(e) = create_data_property_or_throw(
+                                            interp,
+                                            &a,
+                                            &target_index.to_string(),
+                                            v,
+                                        ) {
                                             return Completion::Throw(e);
                                         }
+                                        target_index += 1;
                                     }
-                                } else {
-                                    false
-                                };
-                                if elem_is_array {
-                                    let mlen = match length_of_array_like(interp, &v) {
-                                        Ok(l) => l,
-                                        Err(c) => {
-                                            interp.gc_unroot_frame(gc_frame);
-                                            return c;
-                                        }
-                                    };
-                                    for j in 0..mlen {
-                                        let jpk = j.to_string();
-                                        match obj_has_throw(interp, &v, &jpk) {
-                                            Ok(true) => {
-                                                let jval = match obj_get(interp, &v, &jpk) {
-                                                    Ok(v) => v,
-                                                    Err(c) => {
-                                                        interp.gc_unroot_frame(gc_frame);
-                                                        return c;
-                                                    }
-                                                };
-                                                if let Err(e) = create_data_property_or_throw(
-                                                    interp,
-                                                    &a,
-                                                    &target_index.to_string(),
-                                                    jval,
-                                                ) {
-                                                    interp.gc_unroot_frame(gc_frame);
-                                                    return Completion::Throw(e);
-                                                }
-                                                target_index += 1;
-                                            }
-                                            Err(e) => {
-                                                interp.gc_unroot_frame(gc_frame);
-                                                return Completion::Throw(e);
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                } else {
-                                    if let Err(e) = create_data_property_or_throw(
-                                        interp,
-                                        &a,
-                                        &target_index.to_string(),
-                                        v,
-                                    ) {
-                                        interp.gc_unroot_frame(gc_frame);
-                                        return Completion::Throw(e);
-                                    }
-                                    target_index += 1;
                                 }
-                            }
-                            other => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return other;
+                                other => return other,
                             }
                         }
+                        Err(e) => return Completion::Throw(e),
+                        _ => {}
                     }
-                    Err(e) => {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    _ => {}
                 }
-            }
-            interp.gc_unroot_frame(gc_frame);
-            Completion::Normal(a)
+                Completion::Normal(a)
+            })
         });
 
         // Array.prototype.copyWithin
@@ -3180,73 +3095,59 @@ impl Interpreter {
                     }
                 } else {
                     // Array-like path
-                    let gc_frame = interp.gc_root_frame();
-                    let array_like = match to_object_val(interp, &source) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    interp.gc_root_value(&array_like);
-                    let len = match length_of_array_like(interp, &array_like) {
-                        Ok(v) => v,
-                        Err(c) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return c;
-                        }
-                    };
-
-                    let a = if interp.is_constructor(&c) {
-                        match interp.construct(&c, &[JsValue::number(len as f64)]) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                            other => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return other;
-                            }
-                        }
-                    } else {
-                        interp.create_array(Vec::new())
-                    };
-                    interp.gc_root_value(&a);
-
-                    for k in 0..len {
-                        let kvalue = match obj_get(interp, &array_like, &k.to_string()) {
+                    interp.with_gc_root_scope(|interp| {
+                        let array_like = match to_object_val(interp, &source) {
                             Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
+                            Err(c) => return c,
                         };
-                        let mapped_value = if mapping {
-                            match interp.call_function(
-                                map_fn.as_ref().unwrap(),
-                                &this_arg,
-                                &[kvalue, JsValue::number(k as f64)],
-                            ) {
+                        interp.gc_root_value(&array_like);
+                        let len = match length_of_array_like(interp, &array_like) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+
+                        let a = if interp.is_constructor(&c) {
+                            match interp.construct(&c, &[JsValue::number(len as f64)]) {
                                 Completion::Normal(v) => v,
-                                other => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return other;
-                                }
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
                             }
                         } else {
-                            kvalue
+                            interp.create_array(Vec::new())
                         };
-                        if let Err(e) =
-                            create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
-                        {
-                            interp.gc_unroot_frame(gc_frame);
+                        interp.gc_root_value(&a);
+
+                        for k in 0..len {
+                            let kvalue = match obj_get(interp, &array_like, &k.to_string()) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            let mapped_value = if mapping {
+                                match interp.call_function(
+                                    map_fn.as_ref().unwrap(),
+                                    &this_arg,
+                                    &[kvalue, JsValue::number(k as f64)],
+                                ) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                kvalue
+                            };
+                            if let Err(e) = create_data_property_or_throw(
+                                interp,
+                                &a,
+                                &k.to_string(),
+                                mapped_value,
+                            ) {
+                                return Completion::Throw(e);
+                            }
+                        }
+                        if let Err(e) = set_length_throw(interp, &a, len) {
                             return Completion::Throw(e);
                         }
-                    }
-                    if let Err(e) = set_length_throw(interp, &a, len) {
-                        interp.gc_unroot_frame(gc_frame);
-                        return Completion::Throw(e);
-                    }
-                    interp.gc_unroot_frame(gc_frame);
-                    Completion::Normal(a)
+                        Completion::Normal(a)
+                    })
                 }
             },
         ));
