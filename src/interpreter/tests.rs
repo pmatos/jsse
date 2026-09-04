@@ -3726,6 +3726,50 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_dependency_stops_sibling_import_and_parent_body() {
+        // #596: inner_module_evaluation's DFS must stop advancing once a
+        // dependency's body has latched pending_exit — otherwise a later
+        // sibling import and the parent module's own trailing statements
+        // still run, risking a second __host_exit overwriting the first
+        // exit code (breaking first-exit-wins).
+        let dir = temp_case_dir("module-host-exit-sibling-parent");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            import "./child.mjs";
+            import "./sibling.mjs";
+            globalThis.parentRan = "yes";
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "child.mjs",
+            r#"
+            globalThis.childRan = "yes";
+            __host_exit(3);
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "sibling.mjs",
+            r#"
+            globalThis.siblingRan = "yes";
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "childRan"), "yes");
+        assert!(interp.get_global_var_ref("siblingRan").is_none());
+        assert!(interp.get_global_var_ref("parentRan").is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn host_exit_from_async_loop_disposer_skips_iterator_close() {
         // Async functions with a suspension point use the transformed for-of
         // path. If iteration disposal exits, IteratorClose must not invoke the
