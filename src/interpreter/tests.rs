@@ -3635,6 +3635,61 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_from_module_top_level_using_skips_disposer_and_records_code() {
+        // #554 review (PR #583, P1): a top-level `__host_exit` in a module
+        // must stop the module body immediately and skip Symbol.dispose,
+        // matching Node's process.exit — not fall through to a later
+        // statement, and not run disposers after synthesizing a `Normal`
+        // completion from the (empty) error state.
+        let dir = temp_case_dir("module-host-exit-using");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            globalThis.disposed = "no";
+            globalThis.after = "no";
+            using r = { [Symbol.dispose]() { globalThis.disposed = "yes"; } };
+            __host_exit(7);
+            globalThis.after = "yes";
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "disposed"), "no");
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn host_exit_from_module_export_initializer_stops_body() {
+        // The `ExportDeclaration` arm of the module-item loop needs the same
+        // `Completion::Exit` handling as the `Statement` arm: an exit from an
+        // export's initializer expression must stop the module body too.
+        let dir = temp_case_dir("module-host-exit-export");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            globalThis.after = "no";
+            export const x = __host_exit(5);
+            globalThis.after = "yes";
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn host_exit_from_async_reaction_stops_drain() {
         // The drain-loop backstop: a throw raised inside a Promise reaction is
         // swallowed into a rejection, so only the loop's `pending_exit` check
