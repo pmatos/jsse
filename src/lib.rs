@@ -46,6 +46,22 @@ where
     }
 }
 
+/// Parses `data` and discards the result, panicking only if the parser
+/// itself panics/aborts. Backs the `parse_roundtrip` fuzz target
+/// (`fuzz/fuzz_targets/parse_roundtrip.rs`): a parse *error* is a normal
+/// outcome for arbitrary bytes, not a finding, so the `Result` is discarded
+/// entirely inside `run_on_engine_stack`'s closure — `ast::Program` isn't
+/// `Send` (it's `Rc`-based), so it could not cross the thread boundary
+/// anyway.
+pub fn fuzz_parse_bytes(data: &[u8]) {
+    let Ok(src) = std::str::from_utf8(data) else {
+        return;
+    };
+    run_on_engine_stack(move || {
+        let _ = parser::Parser::new(src).and_then(|mut p| p.parse_program());
+    });
+}
+
 #[cfg(test)]
 mod lib_tests {
     use super::*;
@@ -71,5 +87,25 @@ mod lib_tests {
             is_err,
             "deeply nested input should hit MAX_PARSE_DEPTH, not abort"
         );
+    }
+
+    #[test]
+    fn fuzz_parse_bytes_empty_input() {
+        fuzz_parse_bytes(b"");
+    }
+
+    #[test]
+    fn fuzz_parse_bytes_invalid_utf8() {
+        fuzz_parse_bytes(&[0xff, 0xfe, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn fuzz_parse_bytes_valid_program() {
+        fuzz_parse_bytes(b"function f(x) { return x + 1; } f(41);");
+    }
+
+    #[test]
+    fn fuzz_parse_bytes_deep_nesting() {
+        fuzz_parse_bytes("[".repeat(5000).as_bytes());
     }
 }

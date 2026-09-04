@@ -1,0 +1,21 @@
+[package]
+name = "jsse-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.jsse]
+path = ".."
+
+[[bin]]
+name = "parse_roundtrip"
+path = "fuzz_targets/parse_roundtrip.rs"
+test = false
+doc = false
+bench = false
