@@ -3,11 +3,16 @@
 ## Outcome
 
 Do not pool the bytecode operand and reference `Vec`s on the current engine.
-The two allocations are real, but they account for only about **4–19 ns per
-compiled Body entry** on this host, not the fitted **230–505 ns** from the
-2026-08-26 op-mix sweep. Two whole-`Vec` pool implementations recovered no
-measurable `called`-loop entry penalty and did not move Mandreel beyond noise;
-the simpler non-inlined version instead regressed its Mandreel median.
+The two allocations are real, but they are small. A `perf-counters`-instrumented
+probe bounds them at about **4–19 ns per compiled Body entry** (Entry-path
+probes below — that probe deviates from this repo's own instrumented-timing
+rule, see the caveat there), and a pristine, non-instrumented op-mix pairing
+independently bounds the *entire* compiled-entry penalty at roughly **8–25
+ns/entry** (Op-mix result below). Both are far below the fitted **230–505
+ns** from the 2026-08-26 op-mix sweep. Two whole-`Vec` pool implementations
+recovered no measurable `called`-loop entry penalty and did not move Mandreel
+beyond noise; the simpler non-inlined version instead regressed its Mandreel
+median.
 
 The production and test changes used to evaluate the pool were therefore
 reverted. This directory retains the negative result and raw data so a future
@@ -34,8 +39,14 @@ entry. Values are the three-repeat range and median in nanoseconds per entry.
 
 These are directional upper bounds: the spans are smaller than the timer cost
 itself (20–35 ns/entry), host load was 9.75–11.37, and the timer overhead is
-subtracted rather than eliminated. The aggregate raw nanoseconds are in
-`entry-cost-probes.tsv`.
+subtracted rather than eliminated. Both this table and the compiled-vs-AST
+diagnostic below were timed on a `perf-counters`-instrumented build, which
+contradicts this repo's own perf-counters guidance ("never time an
+instrumented build; take counts from the feature build and wall times from
+the default build") — treat both as corroborating context only, not as the
+primary estimate. The Op-mix result section's pristine `default − bytecode`
+pairing is the rule-compliant measurement and should be preferred where the
+two disagree. The aggregate raw nanoseconds are in `entry-cost-probes.tsv`.
 
 A second diagnostic made one leaf compilable and an observably identical leaf
 ineligible using an unreachable `throw` after its `return`. With both callers
