@@ -232,6 +232,110 @@ fn end_to_end_computed_read_on_typed_array_takes_bytecode_path() {
     assert_eq!(v.as_number(), Some(3.0));
 }
 
+fn assert_computed_read_undefined_parity(source: &str) {
+    let (ast_v, ast_count) = eval_with_mode(source, false);
+    let (bc_v, bc_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0, "{source}: AST mode must not run chunks");
+    assert!(bc_count >= 1, "{source}: bytecode path must run a chunk");
+    assert!(ast_v.is_undefined(), "{source}: AST value was {ast_v:?}");
+    assert!(bc_v.is_undefined(), "{source}: bytecode value was {bc_v:?}");
+}
+
+fn assert_computed_read_string_parity(source: &str, expected: &str) {
+    let (ast_v, ast_count) = eval_with_mode(source, false);
+    let (bc_v, bc_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0, "{source}: AST mode must not run chunks");
+    assert!(bc_count >= 1, "{source}: bytecode path must run a chunk");
+    for (mode, value) in [("AST", ast_v), ("bytecode", bc_v)] {
+        assert_eq!(
+            value.as_string().map(|s| s.to_string()).as_deref(),
+            Some(expected),
+            "{source}: {mode} value was {value:?}"
+        );
+    }
+}
+
+#[test]
+fn end_to_end_computed_read_typed_array_out_of_bounds_matches_tree_walker() {
+    assert_computed_read_undefined_parity(
+        "var __r = (function(ta, i) { return ta[i]; })(new Int32Array([1]), 1);",
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_typed_array_negative_index_matches_tree_walker() {
+    assert_computed_read_undefined_parity(
+        "var __r = (function(ta, i) { return ta[i]; })(new Int32Array([1]), -1);",
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_typed_array_fractional_index_matches_tree_walker() {
+    assert_computed_read_undefined_parity(
+        "var __r = (function(ta, i) { return ta[i]; })(new Int32Array([1]), 0.5);",
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_typed_array_minus_zero_index_matches_tree_walker() {
+    assert_parity_number(
+        "var __r = (function(ta, i) { return ta[i]; })(new Int32Array([11]), -0);",
+        11.0,
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_typed_array_detached_buffer_matches_tree_walker() {
+    assert_computed_read_undefined_parity(
+        "var ta = new Int32Array([1]); ta.buffer.transfer(); \
+         var __r = (function(ta, i) { return ta[i]; })(ta, 0);",
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_typed_array_through_proxy_matches_tree_walker() {
+    assert_computed_read_string_parity(
+        "var proxy = new Proxy(new Int32Array([1]), { \
+             get: function() { return 'trapped'; } \
+         }); \
+         var __r = (function(ta, i) { return ta[i]; })(proxy, 0);",
+        "trapped",
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_array_out_of_bounds_matches_tree_walker() {
+    assert_computed_read_undefined_parity("var __r = (function(a, i) { return a[i]; })([1], 1);");
+}
+
+#[test]
+fn end_to_end_computed_read_array_negative_index_matches_tree_walker() {
+    assert_computed_read_undefined_parity("var __r = (function(a, i) { return a[i]; })([1], -1);");
+}
+
+#[test]
+fn end_to_end_computed_read_array_fractional_index_matches_tree_walker() {
+    assert_computed_read_undefined_parity("var __r = (function(a, i) { return a[i]; })([1], 0.5);");
+}
+
+#[test]
+fn end_to_end_computed_read_array_minus_zero_index_matches_tree_walker() {
+    assert_parity_number(
+        "var __r = (function(a, i) { return a[i]; })([11], -0);",
+        11.0,
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_array_shadowed_index_matches_tree_walker() {
+    assert_parity_number(
+        "var a = [10, 20]; \
+         Object.defineProperty(a, '1', { get: function() { return 99; } }); \
+         var __r = (function(a, i) { return a[i]; })(a, 1);",
+        99.0,
+    );
+}
+
 #[test]
 fn end_to_end_dot_write_takes_bytecode_path() {
     let source = "var __r = (function(o){ o.x = 9; return o.x; })({});";
