@@ -4329,3 +4329,53 @@ mod builtin_method_descriptors {
         );
     }
 }
+
+/// Pins the `with_gc_root_scope` seam: whatever the body pushes onto the
+/// temp-root stack is bulk-unrooted on *every* exit path — normal return and
+/// early return alike — while roots taken before the scope are left untouched.
+/// This is the interface the `array.rs` epilogue migration relies on, exercised
+/// through the seam rather than by reaching into `gc_temp_roots` directly.
+#[test]
+fn with_gc_root_scope_truncates_on_every_exit() {
+    let mut interp = Interpreter::new();
+
+    // A value rooted before the scope must survive it.
+    interp.gc_root_value(&JsValue::object(9_001));
+    let baseline = interp.gc_root_frame();
+
+    // Normal completion: temps rooted inside are released; the body value returns.
+    let returned = interp.with_gc_root_scope(|i| {
+        i.gc_root_value(&JsValue::object(9_002));
+        i.gc_root_value(&JsValue::object(9_003));
+        assert_eq!(
+            i.gc_root_frame(),
+            baseline + 2,
+            "temps rooted inside the scope"
+        );
+        42u32
+    });
+    assert_eq!(returned, 42);
+    assert_eq!(
+        interp.gc_root_frame(),
+        baseline,
+        "scope truncated back to baseline on normal return",
+    );
+
+    // Early return from the body: the scope must still truncate.
+    let outcome: Result<(), ()> = interp.with_gc_root_scope(|i| {
+        i.gc_root_value(&JsValue::object(9_004));
+        if i.gc_root_frame() == baseline + 1 {
+            return Err(());
+        }
+        Ok(())
+    });
+    assert_eq!(outcome, Err(()));
+    assert_eq!(
+        interp.gc_root_frame(),
+        baseline,
+        "scope truncated back to baseline on early return",
+    );
+
+    // The pre-scope root is untouched.
+    assert!(interp.gc_temp_roots.contains(&9_001));
+}

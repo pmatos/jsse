@@ -39,3 +39,13 @@ _Avoid_: module path, registry path
 **Seam**:
 A place where one module's interface ends and another's begins. In JSSE, the seams between the AST, the inline-cache system, and the interpreter are intentionally narrow: the AST carries site identifiers, the runtime carries slot values, and the interpreter maps one to the other.
 _Avoid_: boundary, layer.
+
+## Memory
+
+**Temp-Root Frame**:
+A saved depth marker into the interpreter's `gc_temp_roots` stack — the set of `JsValue`s pinned as GC roots only for the duration of one native operation, so a GC safepoint reached while they exist solely as Rust locals cannot collect them. `gc_root_frame` captures the current depth; `gc_unroot_frame` bulk-truncates back to it. A native that roots temporaries opens a frame, roots values into it, and truncates on exit.
+_Avoid_: root scope marker, gc stack pointer.
+
+**GC Root Scope**:
+The lexical scoping of a Temp-Root Frame behind the `with_gc_root_scope(|interp| …)` combinator: it captures the frame, runs the body, and truncates on every exit path (tail, early `return`, `?`) so the teardown cannot be forgotten on a branch. Prefer it to a hand-paired `gc_root_frame`/`gc_unroot_frame` for a whole-body, single-frame native; reach for the raw primitive only when frames nest or interleave across early exits.
+_Avoid_: root guard, unroot epilogue.
