@@ -3770,6 +3770,51 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_top_level_await_dependency_stops_sibling_and_parent() {
+        // #596: same invariant as
+        // host_exit_in_dependency_stops_sibling_import_and_parent_body, but
+        // the exiting dependency has a top-level `await` (routes through
+        // execute_async_module instead of execute_module_body_sync) and
+        // calls __host_exit synchronously before that await.
+        let dir = temp_case_dir("module-host-exit-tla-sibling-parent");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            import "./child.mjs";
+            import "./sibling.mjs";
+            globalThis.parentRan = "yes";
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "child.mjs",
+            r#"
+            globalThis.childRan = "yes";
+            __host_exit(4);
+            await Promise.resolve();
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "sibling.mjs",
+            r#"
+            globalThis.siblingRan = "yes";
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "childRan"), "yes");
+        assert!(interp.get_global_var_ref("siblingRan").is_none());
+        assert!(interp.get_global_var_ref("parentRan").is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn host_exit_from_async_loop_disposer_skips_iterator_close() {
         // Async functions with a suspension point use the transformed for-of
         // path. If iteration disposal exits, IteratorClose must not invoke the
