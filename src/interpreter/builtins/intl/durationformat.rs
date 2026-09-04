@@ -499,16 +499,15 @@ fn format_duration(data: &DurationFormatData, dur: &DurationRecord) -> String {
         };
 
         if effective_value != 0.0 || display != "auto" || display_required {
-            let sign_display_str;
-            if display_negative_sign {
+            let sign_display_str = if display_negative_sign {
                 display_negative_sign = false;
                 if value == 0.0 && value_str.is_none() && has_negative {
                     value = -0.0_f64;
                 }
-                sign_display_str = "auto";
+                "auto"
             } else {
-                sign_display_str = "never";
-            }
+                "never"
+            };
 
             let formatted = format_one_unit(
                 value,
@@ -1022,16 +1021,15 @@ fn format_to_parts_duration(
         };
 
         if effective_value != 0.0 || display != "auto" || display_required {
-            let sign_display_str;
-            if display_negative_sign {
+            let sign_display_str = if display_negative_sign {
                 display_negative_sign = false;
                 if value == 0.0 && value_str.is_none() && has_negative {
                     value = -0.0_f64;
                 }
-                sign_display_str = "auto";
+                "auto"
             } else {
-                sign_display_str = "never";
-            }
+                "never"
+            };
 
             // Get individual parts from NumberFormat
             let nf_parts = format_one_unit_parts(
