@@ -1,5 +1,23 @@
 # Plan: issue #596 — Module DFS keeps evaluating sibling/parent modules after a child's `__host_exit`
 
+## 0. Status (workspace reused across pipeline runs)
+
+All three TDD slices below are already implemented on this branch, verified commit-by-commit
+against §3 to match exactly:
+
+- Slice 1 (sibling + parent bail in `inner_module_evaluation`) → `9707f4b`
+- Slice 2 (async/TLA body-execution branch coverage) → `1e7ae31`
+- Slice 3 (`evaluate_async_transitive_deps` bail + `ImportDefer` sink conversion) → `2dd7896`
+
+Line-number references in §3 were taken before these commits landed and are now off by a few
+lines; use the commit diffs (`git show 9707f4b 2dd7896`) as the authoritative location, not the
+numbers below. The branch has never been pushed and no PR exists yet (confirmed via
+`gh pr list --head <branch> --state all` → `[]`; see `EVIDENCE.md` and the issue comment at
+2026-09-04T11:41:39Z) — a prior "simplify" pipeline stage ran against this workspace expecting an
+open PR and correctly reported that blocker. The next stage should verify
+(`cargo test --release host_exit`, `./scripts/lint.sh`), skip re-implementing §3/§4, `git rm
+PLAN.md`, push the branch, and open the PR.
+
 ## 1. Problem restated
 
 `__host_exit` (jsse's Node-`process.exit`-compatible host hook, opt-in via `enable_node_host()`)
