@@ -80,18 +80,26 @@ because `called` adds two compiled leaf entries per iteration. The median of
 the per-run deltas is **542 ms [393–656] on current main and 638 ms
 [383–824] with the pool**. Pairing across builds by run number — weaker,
 since the builds ran sequentially, see `loadavg1` — the pool's delta is the
-larger one in 4 of 7 runs, median +100 ms. The ranges overlap almost
-entirely, so the sweep cannot resolve a difference in either direction; what
-it does rule out is any recovery across two million entries, and the
-direction, if any, is adverse. The absolute candidate medians moved together
-with `arith`, which is host/code layout noise rather than an entry-specific
-win. All individual runs are in `opmix-timings.tsv`.
+larger one in 4 of 7 runs, median +100 ms, but that sign is a coin flip at
+n=7. The ranges overlap almost entirely, so the sweep cannot resolve a
+difference in either direction — the allocation probes predict only 8–37 ms
+of saving across two million entries (Entry-path probes above), well below
+this run-to-run scatter. What it does exclude is a recovery near the
+230–505 ns/entry fitted in August (460–1,010 ms): the pool's best per-run
+delta, 383 ms, is still only ~160 ms under main's 542 ms median. The absolute
+candidate medians moved together with `arith`, which is host/code layout
+noise rather than an entry-specific win. All individual runs are in
+`opmix-timings.tsv`.
 
 An earlier pristine-current-main sweep (seven repeats, also retained) already
 showed a much smaller call-specific penalty than the August EPYC data: the
 median of the per-run `default − bytecode` deltas is 239 ms [-458–337] for
-`arith` and 223 ms [-1,716–287] for `called`, a gap of roughly 8 ns per
-compiled entry rather than ~350 ns. Its wide ranges prevent a precise
+`arith` and 223 ms [-1,716–287] for `called`. The paired per-run gap between
+those two deltas — not the difference of the two medians above, which would
+repeat the same pairing error this section corrects — has a median of 50 ms
+[-1–1,258], or roughly 25 ns per compiled entry rather than ~350 ns; excluding
+the two runs with an elevated `loadavg1` on their bytecode side (`run 1`,
+`run 7`) narrows it to 15 ms (~8 ns). Its wide ranges prevent a precise
 replacement estimate, but agree with the allocation probes about the order of
 magnitude.
 
