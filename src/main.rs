@@ -1,12 +1,4 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::type_complexity)]
-mod ast;
-pub(crate) mod emoji_strings;
-mod interpreter;
-mod lexer;
-mod parser;
-mod types;
-pub(crate) mod unicode_tables;
+use jsse::{interpreter, parser};
 
 use clap::Parser;
 use std::io::{self, BufRead, Write};

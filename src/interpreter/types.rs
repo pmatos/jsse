@@ -56,6 +56,10 @@ impl SharedBufferInner {
         self.len.load(Ordering::SeqCst)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn byte_slice(words: &[u64], len: usize) -> &[u8] {
         let bytes =
             unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 8) };
@@ -149,6 +153,10 @@ impl BufferData {
             BufferData::Owned(v) => v.len(),
             BufferData::Shared(s) => s.len(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn resize(&mut self, new_len: usize, value: u8) {
@@ -798,7 +806,7 @@ impl Environment {
         env.clone()
     }
 
-    pub fn declare(&mut self, name: &str, kind: BindingKind) {
+    pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
             name.to_string(),
             Binding {
@@ -866,7 +874,7 @@ impl Environment {
             .is_some_and(|m| m.contains_key(name))
     }
 
-    pub fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
+    pub(crate) fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
             name.to_string(),
             Binding {
@@ -3683,6 +3691,12 @@ impl PromiseData {
             reject_reactions: Vec::new(),
             is_handled: false,
         }
+    }
+}
+
+impl Default for PromiseData {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
