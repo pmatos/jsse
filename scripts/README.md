@@ -192,9 +192,10 @@ the Node oracle enforces it and the suite passes it there, so enforcing on jsse
 could only add jsse-specific failures the oracle lacks and diverge the count.
 QUnit uses default autostart after synchronous registration (and `QUnit.load()`
 re-checks it), while nested modules inherit outer hooks with QUnit's module and
-per-test ordering. Async QUnit tests (`assert.async`) and callback-style TAP
-tests/hooks (`function (done) { ... }`) are bounded by a 10 s timeout so a
-completion callback that never fires becomes a failure instead of stalling the
+per-test ordering. Async QUnit tests (`assert.async`), callback-style TAP
+tests/hooks (`function (done) { ... }`), and callback-style tape tests waiting
+for `t.end()` or plan fulfillment are bounded by a 10 s timeout. A completion
+signal that never arrives therefore becomes a failure instead of stalling the
 run.
 
 QUnit suites whose tests and hooks are entirely synchronous may set
@@ -228,9 +229,10 @@ qs provides the Node-cross-checked end-to-end proof.
 
 Tape-based suites alias `require('tape')` to `node-tape-module.js`. On JSSE the
 module selects the in-process adapter; on Node it selects bundled real tape.
-The adapter counts individual assertions (including skipped subtests) and
-supports nested tests, plans, teardown/interception, and tape's common
-equality/throw/match assertions.
+The adapter counts individual assertions (including skipped subtests), awaits
+callback-style completion through `t.end()` or plan fulfillment, and supports
+nested tests, teardown/interception, and tape's common equality/throw/match
+assertions.
 
 Dependencies that import Node's `buffer` module instead of reading the global
 can similarly alias it to `node-buffer-module.js`. The selector exports the
