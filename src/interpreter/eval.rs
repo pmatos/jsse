@@ -1281,6 +1281,9 @@ impl Interpreter {
                         let resolved_canon = resolved.canonicalize();
                         self.evaluate_async_transitive_deps(&resolved_canon);
                         self.drain_microtasks();
+                        if let Some(code) = self.pending_exit {
+                            return Completion::Exit(code);
+                        }
                         let ns = self.create_deferred_module_namespace(&module);
                         self.create_resolved_promise(ns)
                     }

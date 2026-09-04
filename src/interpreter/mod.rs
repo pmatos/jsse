@@ -4303,6 +4303,9 @@ impl Interpreter {
             {
                 let mut stack = vec![];
                 let _ = self.inner_module_evaluation(&path, &mut stack, 0);
+                if self.pending_exit.is_some() {
+                    return;
+                }
             }
         }
     }

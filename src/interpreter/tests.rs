@@ -3815,6 +3815,59 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_deferred_transitive_dep_stops_sibling_transitive_dep_and_caller() {
+        // #596: import.defer()'s eager evaluation of a deferred import's async
+        // transitive deps (evaluate_async_transitive_deps) is a second DFS
+        // driver with the same bug — one transitive dep's __host_exit must
+        // stop both the next transitive dep in line and the calling module's
+        // own trailing statements.
+        let dir = temp_case_dir("module-host-exit-deferred-transitive");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            import.defer("./a.mjs");
+            globalThis.mainAfter = "yes";
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "a.mjs",
+            r#"
+            import "./b.mjs";
+            import "./c.mjs";
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "b.mjs",
+            r#"
+            globalThis.bRan = "yes";
+            __host_exit(11);
+            await Promise.resolve();
+            "#,
+        );
+        write_case_file(
+            &dir,
+            "c.mjs",
+            r#"
+            globalThis.cRan = "yes";
+            await Promise.resolve();
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(11));
+        assert_eq!(global_string(&interp, "bRan"), "yes");
+        assert!(interp.get_global_var_ref("cRan").is_none());
+        assert!(interp.get_global_var_ref("mainAfter").is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn host_exit_from_async_loop_disposer_skips_iterator_close() {
         // Async functions with a suspension point use the transformed for-of
         // path. If iteration disposal exits, IteratorClose must not invoke the
