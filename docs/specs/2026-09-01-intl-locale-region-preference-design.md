@@ -27,14 +27,16 @@ stored ICU locale tag. No new `IntlData` slots are needed.
   canonicalizes that region through ICU4X.
 - `compute_region_preference` implements the region-subtag, `sd`, likely
   subtags, and `001` cascade and also returns the independent `rg` override.
-- `getHourCycles()` uses the override when present, otherwise the resolved
-  region, before consulting its existing hour-cycle data.
+- `RegionPreference::lookup_region()` probes the override with
+  `region_has_locale_data` (a CLDR region-display-name lookup) and keeps it
+  only when that probe succeeds; otherwise it falls back to the resolved
+  region. This keeps a valid override — including one absent from a
+  call site's own literal data table — through to that table's world
+  fallback, rather than abandoning it for the locale's ordinary region.
+- `getHourCycles()` and `getCalendars()` both resolve through
+  `lookup_region()` before consulting their own hour-cycle or calendar data.
 - `getWeekInfo()` places that lookup region onto a cloned ICU locale before
   both week-data queries, keeping `firstDay` and `weekend` consistent.
-
-The existing data providers return a world fallback for syntactically valid
-regions, so a valid `rg` value always has usable lookup data in these two
-paths. There is no separate availability probe before selecting the override.
 
 ## Scope
 

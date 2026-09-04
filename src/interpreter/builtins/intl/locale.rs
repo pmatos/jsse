@@ -917,16 +917,10 @@ impl Interpreter {
                         let default = tag.parse::<IcuLocale>().ok().map_or("h23", |locale| {
                             let preference = compute_region_preference(&locale);
                             let language = locale.id.language.to_string();
-                            preference
-                                .region_override
-                                .iter()
-                                .map(String::as_str)
-                                .chain(std::iter::once(preference.region.as_str()))
-                                .find_map(|region| {
-                                    let locale_key = format!("{language}-{region}");
-                                    hour_cycle_for_key(&locale_key)
-                                        .or_else(|| hour_cycle_for_key(region))
-                                })
+                            let region = preference.lookup_region();
+                            let locale_key = format!("{language}-{region}");
+                            hour_cycle_for_key(&locale_key)
+                                .or_else(|| hour_cycle_for_key(region))
                                 .unwrap_or("h23")
                         });
                         vec![JsValue::from_str(default)]
