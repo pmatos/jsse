@@ -81,7 +81,13 @@ into three tiers (also documented in `CONTEXT.md`):
 - **Tier 1** (`panic!`, a libFuzzer finding): jsse crashed — killed by a
   signal, or exited with the interpreter-panic code 101 — while node did
   not crash the same way. An engine bug by definition, independent of
-  what node does.
+  what node does. One exception, checked explicitly: a signal whose
+  stderr starts with Rust's allocator-failure message ("memory allocation
+  of N bytes failed") is jsse hitting its 512 MiB `RLIMIT_AS` on a
+  large-but-legitimate allocation that node's 4 GiB cap has headroom for
+  — a resource-limit asymmetry between the two harness configurations,
+  not an engine bug, so it's `Recorded` instead. A real stack overflow
+  prints a different message before its own `SIGABRT` and still counts.
 - **Tier 2** (`panic!`): a parse accept/reject mismatch — one side treats
   the source as a `SyntaxError` and the other parses it successfully.
   Surfaces real syntax coverage gaps.

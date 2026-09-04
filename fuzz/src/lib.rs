@@ -172,15 +172,30 @@ pub enum Verdict {
 
 const INTERPRETER_PANIC_EXIT_CODE: i32 = 101;
 
+/// Rust's allocator-failure abort ("memory allocation of N bytes failed")
+/// prints this exact prefix before raising SIGABRT. jsse runs under a 512
+/// MiB `RLIMIT_AS` (`JSSE_AS_LIMIT`) while node runs under 4 GiB
+/// (`NODE_AS_LIMIT`), so a large-but-legitimate allocation (e.g. repeated
+/// string doubling) can abort jsse under that cap while node, with 8x the
+/// headroom, completes normally — a resource-limit asymmetry between the
+/// two harness configurations, not an engine bug. A real stack overflow
+/// prints a different message ("has overflowed its stack") before its own
+/// SIGABRT and is not matched here, so it still counts as Tier 1.
+const OOM_ABORT_MESSAGE: &str = "memory allocation of";
+
+fn is_oom_abort(stderr: &str) -> bool {
+    stderr.contains(OOM_ABORT_MESSAGE)
+}
+
 fn is_jsse_crash(outcome: &EngineOutcome) -> bool {
-    matches!(outcome, EngineOutcome::Signaled { .. })
-        || matches!(
-            outcome,
-            EngineOutcome::Exited {
-                code: INTERPRETER_PANIC_EXIT_CODE,
-                ..
-            }
-        )
+    match outcome {
+        EngineOutcome::Signaled { stderr, .. } => !is_oom_abort(stderr),
+        EngineOutcome::Exited {
+            code: INTERPRETER_PANIC_EXIT_CODE,
+            ..
+        } => true,
+        EngineOutcome::Exited { .. } | EngineOutcome::TimedOut => false,
+    }
 }
 
 fn is_node_crash(outcome: &EngineOutcome) -> bool {
@@ -239,6 +254,13 @@ mod tests {
         }
     }
 
+    fn signaled_with_stderr(signal: i32, stderr: &str) -> EngineOutcome {
+        EngineOutcome::Signaled {
+            signal,
+            stderr: stderr.to_string(),
+        }
+    }
+
     #[test]
     fn both_succeed_is_recorded() {
         assert_eq!(classify(&exited(0), &exited(0)), Verdict::Recorded);
@@ -271,6 +293,22 @@ mod tests {
         let jsse = signaled(11); // SIGSEGV
         let node = exited(0);
         assert!(matches!(classify(&jsse, &node), Verdict::Tier1(_)));
+    }
+
+    #[test]
+    fn jsse_oom_abort_under_rlimit_is_recorded() {
+        let jsse = signaled_with_stderr(
+            6, // SIGABRT
+            "memory allocation of 536870912 bytes failed",
+        );
+        let node = exited(0);
+        assert_eq!(
+            classify(&jsse, &node),
+            Verdict::Recorded,
+            "jsse's tighter RLIMIT_AS aborting on a large-but-legitimate \
+             allocation node had headroom for is a resource asymmetry, \
+             not an engine crash"
+        );
     }
 
     #[test]
