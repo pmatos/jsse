@@ -75,19 +75,25 @@ stability threshold, so medians are diagnostic.
 | `called` | 1,252 [1,202–1,562] | 1,334 [1,173–1,644] |
 | `mixed` | 1,979 [1,861–2,421] | 2,097 [1,844–2,547] |
 
-The useful within-binary comparison is `called − arith`, because `called`
-adds two compiled leaf entries per iteration. It is **530 ms on current main
-and 529 ms with the pool**: no measurable recovery across two million entries.
-The absolute candidate medians moved together with `arith`, which is host/code
-layout noise rather than an entry-specific win. All individual runs are in
-`opmix-timings.tsv`.
+The useful within-binary comparison is `called − arith` computed per run,
+because `called` adds two compiled leaf entries per iteration. The median of
+the per-run deltas is **542 ms [393–656] on current main and 638 ms
+[383–824] with the pool**. Pairing across builds by run number — weaker,
+since the builds ran sequentially, see `loadavg1` — the pool's delta is the
+larger one in 4 of 7 runs, median +100 ms. The ranges overlap almost
+entirely, so the sweep cannot resolve a difference in either direction; what
+it does rule out is any recovery across two million entries, and the
+direction, if any, is adverse. The absolute candidate medians moved together
+with `arith`, which is host/code layout noise rather than an entry-specific
+win. All individual runs are in `opmix-timings.tsv`.
 
 An earlier pristine-current-main sweep (seven repeats, also retained) already
-showed a much smaller call-specific penalty than the August EPYC data: median
-absolute savings were 263 ms for `arith` and 219 ms for `called`, a gap of
-roughly 22 ns per compiled entry rather than ~350 ns. Its wide ranges prevent a
-precise replacement estimate, but agree with the allocation probes about the
-order of magnitude.
+showed a much smaller call-specific penalty than the August EPYC data: the
+median of the per-run `default − bytecode` deltas is 239 ms [-458–337] for
+`arith` and 223 ms [-1,716–287] for `called`, a gap of roughly 8 ns per
+compiled entry rather than ~350 ns. Its wide ranges prevent a precise
+replacement estimate, but agree with the allocation probes about the order of
+magnitude.
 
 ## Mandreel result
 
