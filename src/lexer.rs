@@ -266,10 +266,19 @@ pub(crate) struct Lexer<'a> {
     pub last_string_has_escape: bool,
     pub last_string_has_legacy_octal: bool,
     had_line_terminator: bool,
+    pua_undo: bool,
 }
 
 impl<'a> Lexer<'a> {
     pub(crate) fn new(source: &'a str) -> Self {
+        Self::new_with_pua_undo(source, false)
+    }
+
+    pub(crate) fn new_for_eval(source: &'a str) -> Self {
+        Self::new_with_pua_undo(source, true)
+    }
+
+    fn new_with_pua_undo(source: &'a str, pua_undo: bool) -> Self {
         let mut chars = source.chars();
         let current = chars.next();
         Self {
@@ -285,6 +294,7 @@ impl<'a> Lexer<'a> {
             last_string_has_escape: false,
             last_string_has_legacy_octal: false,
             had_line_terminator: true,
+            pua_undo,
         }
     }
 
@@ -412,9 +422,15 @@ impl<'a> Lexer<'a> {
                     self.read_string_escape_into(&mut code_units, &mut has_legacy_octal)?;
                 }
                 Some(ch) => {
-                    let mut buf = [0u16; 2];
-                    for cu in ch.encode_utf16(&mut buf).iter() {
-                        code_units.push(*cu);
+                    if self.pua_undo
+                        && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
+                    {
+                        code_units.push(surrogate);
+                    } else {
+                        let mut buf = [0u16; 2];
+                        for cu in ch.encode_utf16(&mut buf).iter() {
+                            code_units.push(*cu);
+                        }
                     }
                 }
             }
@@ -505,9 +521,15 @@ impl<'a> Lexer<'a> {
                 Ok(())
             }
             Some(ch) => {
-                let mut buf = [0u16; 2];
-                for cu in ch.encode_utf16(&mut buf).iter() {
-                    out.push(*cu);
+                if self.pua_undo
+                    && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
+                {
+                    out.push(surrogate);
+                } else {
+                    let mut buf = [0u16; 2];
+                    for cu in ch.encode_utf16(&mut buf).iter() {
+                        out.push(*cu);
+                    }
                 }
                 Ok(())
             }

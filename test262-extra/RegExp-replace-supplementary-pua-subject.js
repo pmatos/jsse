@@ -145,3 +145,46 @@ assertSameUnits(RegExp.leftContext, emoji, "astral unicode leftContext");
 assertSameUnits(RegExp.leftContext, emoji, "astral non-unicode leftContext");
 assertSameUnits(emoji.replace(/x/g, "y"), emoji, "astral replace unchanged");
 assertSameUnits(lone.replace(/x/g, "y"), lone, "lone surrogate replace unchanged");
+
+// Matching and replacement text must also stay in UTF-16 code-unit space.
+// These exercise the pristine global fast path, the generic string path, and
+// the functional replacement path.
+assertSameUnits(
+  pua.replace(/\u{F0000}/gu, "z"),
+  "z",
+  "replace genuine Plane 15 scalar"
+);
+assertSameUnits(pua.replace(/(.)/gu, "$&"), pua, "$& matched text");
+assertSameUnits(pua.replace(/(.)/gu, "$1"), pua, "$1 capture text");
+assertSameUnits(
+  pua.replace(/(?<plane>.)/gu, "$<plane>"),
+  pua,
+  "$<name> capture text"
+);
+assertSameUnits(
+  padded.replace(/\u{F0000}/u, "[$`]"),
+  "a[a]b",
+  "$` context around Plane 15 match"
+);
+assertSameUnits(
+  padded.replace(/\u{F0000}/gu, "[$']"),
+  "a[b]b",
+  "$' context around Plane 15 match"
+);
+
+var callbackMatch = null;
+var callbackCapture = null;
+var callbackResult = pua.replace(/(.)/u, function (match, capture) {
+  callbackMatch = match;
+  callbackCapture = capture;
+  return capture;
+});
+assertSameUnits(callbackMatch, pua, "functional replacer match argument");
+assertSameUnits(callbackCapture, pua, "functional replacer capture argument");
+assertSameUnits(callbackResult, pua, "functional replacer result");
+
+// Literal replacement strings are arbitrary JS strings too; they must not be
+// routed through the matcher sentinel representation.
+assertSameUnits("a".replace(/a/, pua), pua, "Plane 15 replacement template");
+assertSameUnits("a".replace(/a/, lone), lone, "lone surrogate replacement template");
+assertSameUnits("a".replace(/a/, emoji), emoji, "astral replacement template");

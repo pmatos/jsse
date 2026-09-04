@@ -6225,7 +6225,7 @@ impl Interpreter {
         } else {
             to_js_string(&arg)
         };
-        let mut p = match parser::Parser::new(&code) {
+        let mut p = match parser::Parser::new_for_eval(&code) {
             Ok(p) => p,
             Err(_) => {
                 return Completion::Throw(self.create_error("SyntaxError", "Invalid eval source"));

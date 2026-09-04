@@ -70,7 +70,7 @@ fn surrogate_to_pua(cp: u32) -> char {
     char::from_u32(SURROGATE_PUA_BASE + (cp - SURROGATE_START)).unwrap()
 }
 
-fn pua_to_surrogate(c: char) -> Option<u16> {
+pub(crate) fn pua_to_surrogate(c: char) -> Option<u16> {
     let cp = c as u32;
     if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)).contains(&cp) {
         Some((cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16)
@@ -88,6 +88,93 @@ pub(crate) fn js_string_to_regex_input(code_units: &[u16]) -> String {
 
 fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, false)
+}
+
+fn js_string_to_regex_pattern(code_units: &[u16], flags: &str) -> String {
+    if flags.contains('u') || flags.contains('v') {
+        js_string_to_regex_input(code_units)
+    } else {
+        js_string_to_regex_pattern_non_unicode(code_units)
+    }
+}
+
+/// Encode non-Unicode pattern atoms as individual UTF-16 code units while
+/// retaining surrogate pairs inside GroupName syntax. Group names and named
+/// backreferences use RegExpIdentifierName's Unicode interpretation even when
+/// the pattern itself is not in Unicode mode.
+fn js_string_to_regex_pattern_non_unicode(code_units: &[u16]) -> String {
+    if code_units_are_ascii(code_units) {
+        return js_string_to_regex_input_non_unicode(code_units);
+    }
+
+    let mut unicode_name_unit = vec![false; code_units.len()];
+    let mut i = 0;
+    let mut in_class = false;
+    while i < code_units.len() {
+        match code_units[i] {
+            0x005C => {
+                if !in_class
+                    && code_units.get(i + 1) == Some(&(b'k' as u16))
+                    && code_units.get(i + 2) == Some(&(b'<' as u16))
+                {
+                    let mut end = i + 3;
+                    while end < code_units.len() && code_units[end] != b'>' as u16 {
+                        unicode_name_unit[end] = true;
+                        end += 1;
+                    }
+                    i = end.saturating_add(1);
+                } else {
+                    // Skip the escaped code unit so it cannot start syntax.
+                    i = (i + 2).min(code_units.len());
+                }
+            }
+            0x005B if !in_class => {
+                in_class = true;
+                i += 1;
+            }
+            0x005D if in_class => {
+                in_class = false;
+                i += 1;
+            }
+            0x0028
+                if !in_class
+                    && code_units.get(i + 1) == Some(&(b'?' as u16))
+                    && code_units.get(i + 2) == Some(&(b'<' as u16))
+                    && !matches!(code_units.get(i + 3), Some(&0x003D) | Some(&0x0021)) =>
+            {
+                let mut end = i + 3;
+                while end < code_units.len() && code_units[end] != b'>' as u16 {
+                    unicode_name_unit[end] = true;
+                    end += 1;
+                }
+                i = end.saturating_add(1);
+            }
+            _ => i += 1,
+        }
+    }
+
+    let mut result = String::with_capacity(code_units.len());
+    i = 0;
+    while i < code_units.len() {
+        let cu = code_units[i];
+        if unicode_name_unit[i]
+            && (0xD800..=0xDBFF).contains(&cu)
+            && i + 1 < code_units.len()
+            && unicode_name_unit[i + 1]
+            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
+        {
+            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
+            result.push(char::from_u32(cp).expect("surrogate pair must form a Unicode scalar"));
+            i += 2;
+        } else if (0xD800..=0xDFFF).contains(&cu) {
+            result.push(surrogate_to_pua(cu as u32));
+            i += 1;
+        } else {
+            result.push(char::from_u32(cu as u32).expect("non-surrogate UTF-16 unit is a scalar"));
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Both regex views encode an all-ASCII subject identically to its code units,
@@ -146,34 +233,6 @@ pub(crate) fn regex_output_to_js_string(s: &str) -> JsString {
         }
     }
     JsString::from_vec(code_units)
-}
-
-/// Convert UTF-16 code units that may contain PUA-encoded surrogates back to
-/// actual surrogate code units. PUA chars U+F0000-U+F07FF encode as UTF-16
-/// pairs [0xDB80..=0xDB81, 0xDC00..=0xDFFF]; these map back to U+D800-U+DFFF.
-pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
-    let mut result = Vec::with_capacity(code_units.len());
-    let mut i = 0;
-    while i < code_units.len() {
-        let cu = code_units[i];
-        if (0xDB80..=0xDB81).contains(&cu)
-            && i + 1 < code_units.len()
-            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
-        {
-            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
-            if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START))
-                .contains(&cp)
-            {
-                let surrogate = (cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16;
-                result.push(surrogate);
-                i += 2;
-                continue;
-            }
-        }
-        result.push(cu);
-        i += 1;
-    }
-    result
 }
 
 /// Encode UTF-16 code units as WTF-8 bytes.
@@ -267,58 +326,6 @@ fn utf16_to_wtf8_byte_offset(bytes: &[u8], target_utf16: usize) -> usize {
         }
     }
     i
-}
-
-/// Convert a WTF-8 byte slice to a PUA-encoded string.
-/// WTF-8 surrogates (ED [A0-BF] xx) become PUA chars; everything else stays as UTF-8.
-fn wtf8_slice_to_pua_string(bytes: &[u8]) -> String {
-    let mut result = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b < 0x80 {
-            result.push(b as char);
-            i += 1;
-        } else if b < 0xC0 {
-            i += 1;
-        } else if b < 0xE0 {
-            if i + 1 < bytes.len() {
-                let cp = ((b as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
-                if let Some(c) = char::from_u32(cp) {
-                    result.push(c);
-                }
-            }
-            i += 2;
-        } else if b == 0xED && i + 2 < bytes.len() && bytes[i + 1] >= 0xA0 {
-            let cp = ((b as u32 & 0x0F) << 12)
-                | ((bytes[i + 1] as u32 & 0x3F) << 6)
-                | (bytes[i + 2] as u32 & 0x3F);
-            result.push(surrogate_to_pua(cp));
-            i += 3;
-        } else if b < 0xF0 {
-            if i + 2 < bytes.len() {
-                let cp = ((b as u32 & 0x0F) << 12)
-                    | ((bytes[i + 1] as u32 & 0x3F) << 6)
-                    | (bytes[i + 2] as u32 & 0x3F);
-                if let Some(c) = char::from_u32(cp) {
-                    result.push(c);
-                }
-            }
-            i += 3;
-        } else {
-            if i + 3 < bytes.len() {
-                let cp = ((b as u32 & 0x07) << 18)
-                    | ((bytes[i + 1] as u32 & 0x3F) << 12)
-                    | ((bytes[i + 2] as u32 & 0x3F) << 6)
-                    | (bytes[i + 3] as u32 & 0x3F);
-                if let Some(c) = char::from_u32(cp) {
-                    result.push(c);
-                }
-            }
-            i += 4;
-        }
-    }
-    result
 }
 
 fn is_cs_property(content: &str) -> bool {
@@ -643,6 +650,15 @@ impl RegexInput {
             RegexView::Unicode => self.unicode_byte_offset_to_utf16(offset),
             RegexView::NonUnicode => self.non_unicode_byte_offset_to_utf16(offset),
         }
+    }
+
+    /// Materialize a match span from the original UTF-16 subject. Matcher text
+    /// cannot be decoded safely because the lone-surrogate sentinel range also
+    /// contains genuine Unicode scalars.
+    fn subject_slice(&self, view: RegexView, byte_start: usize, byte_end: usize) -> JsString {
+        let start = self.byte_offset_to_utf16(view, byte_start);
+        let end = self.byte_offset_to_utf16(view, byte_end);
+        JsString::from_vec(self.subject.code_units[start..end].to_vec())
     }
 }
 
@@ -5159,12 +5175,12 @@ enum CompiledRegex {
 #[derive(Default)]
 pub(crate) struct RegexpLegacyState {
     pub(crate) input: JsString,
-    pub(crate) last_match: String,
-    pub(crate) last_paren: String,
+    pub(crate) last_match: JsString,
+    pub(crate) last_paren: JsString,
     context_input: JsString,
     left_context_end: usize,
     right_context_start: usize,
-    pub(crate) parens: [String; 9],
+    pub(crate) parens: [JsString; 9],
     pub(crate) constructor_id: Option<u64>,
     pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
     input_cache: Option<Rc<RegexInput>>,
@@ -5208,7 +5224,6 @@ fn build_regex_cached(
 struct RegexMatch {
     start: usize,
     end: usize,
-    text: String,
 }
 
 struct RegexCaptures {
@@ -7531,7 +7546,6 @@ macro_rules! build_captures {
             groups.push($caps.get(i).map(|m| RegexMatch {
                 start: m.start(),
                 end: m.end(),
-                text: m.as_str().to_string(),
             }));
         }
         Some(RegexCaptures { groups, names })
@@ -7621,11 +7635,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
 
             let mut groups: Vec<Option<RegexMatch>> = Vec::new();
             for cap in &result {
-                groups.push(cap.map(|(start, end)| RegexMatch {
-                    start,
-                    end,
-                    text: text[start..end].to_string(),
-                }));
+                groups.push(cap.map(|(start, end)| RegexMatch { start, end }));
             }
 
             // Ensure we have at least total_groups + 1 entries
@@ -7664,7 +7674,6 @@ fn bytes_regex_captures_at(
         groups.push(caps.get(i).map(|m| RegexMatch {
             start: m.start(),
             end: m.end(),
-            text: wtf8_slice_to_pua_string(&input[m.start()..m.end()]),
         }));
     }
     Some(RegexCaptures { groups, names })
@@ -7676,8 +7685,8 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     {
         let b = obj.borrow();
         let r = b.regexp()?;
-        let source = js_string_to_regex_input(&r.source.code_units);
         let flags = r.flags.to_rust_string();
+        let source = js_string_to_regex_pattern(&r.source.code_units, &flags);
         drop(b);
         Some((source, flags, obj_id))
     } else {
@@ -7822,9 +7831,10 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
         let (source, flags) = if let Some(obj) = interp.get_object_cell(rx_id) {
             let b = obj.borrow();
             let (src, fl) = if let Some(r) = b.regexp() {
+                let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_input(&r.source.code_units),
-                    r.flags.to_rust_string(),
+                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    flags,
                 )
             } else {
                 (String::new(), String::new())
@@ -7865,61 +7875,49 @@ fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usiz
 
 fn get_substitution(
     interp: &mut Interpreter,
-    matched: &str,
-    s: &str,
+    matched: &[u16],
+    s: &[u16],
     position: usize,
     tail_pos: usize,
     captures: &[JsValue],
     named_captures: &JsValue,
-    replacement: &str,
-) -> Result<String, JsValue> {
+    replacement: &[u16],
+) -> Result<Vec<u16>, JsValue> {
+    let position = position.min(s.len());
     let tail_pos = tail_pos.min(s.len());
-    let mut result = String::new();
-    let rchars: Vec<char> = replacement.chars().collect();
-    let len = rchars.len();
+    let mut result = Vec::new();
+    let len = replacement.len();
     let mut i = 0;
     let m = captures.len();
     while i < len {
-        if rchars[i] == '$' && i + 1 < len {
-            match rchars[i + 1] {
-                '$' => {
-                    result.push('$');
+        if replacement[i] == b'$' as u16 && i + 1 < len {
+            match replacement[i + 1] {
+                c if c == b'$' as u16 => {
+                    result.push(b'$' as u16);
                     i += 2;
                 }
-                '&' => {
-                    result.push_str(matched);
+                c if c == b'&' as u16 => {
+                    result.extend_from_slice(matched);
                     i += 2;
                 }
-                '`' => {
-                    if let Some(prefix) = s.get(..position) {
-                        result.push_str(prefix);
-                    }
+                c if c == b'`' as u16 => {
+                    result.extend_from_slice(&s[..position]);
                     i += 2;
                 }
-                '\'' => {
-                    if let Some(suffix) = s.get(tail_pos..) {
-                        result.push_str(suffix);
-                    }
+                c if c == b'\'' as u16 => {
+                    result.extend_from_slice(&s[tail_pos..]);
                     i += 2;
                 }
-                c if c.is_ascii_digit() => {
-                    let d1 = (c as u32 - '0' as u32) as usize;
-                    if i + 2 < len && rchars[i + 2].is_ascii_digit() {
-                        let d2 = (rchars[i + 2] as u32 - '0' as u32) as usize;
+                c if (b'0' as u16..=b'9' as u16).contains(&c) => {
+                    let d1 = (c - b'0' as u16) as usize;
+                    if i + 2 < len && (b'0' as u16..=b'9' as u16).contains(&replacement[i + 2]) {
+                        let d2 = (replacement[i + 2] - b'0' as u16) as usize;
                         let nn = d1 * 10 + d2;
                         if nn >= 1 && nn <= m {
                             let cap = &captures[nn - 1];
                             if !cap.is_undefined() {
-                                // Preserve lone surrogates: `result` is PUA-mapped
-                                // regex-output space and is finalized via
-                                // regex_output_to_js_string, so route captures
-                                // through the same UTF-16-preserving mapping rather
-                                // than the lossy to_string_value (which yields
-                                // U+FFFD for unpaired surrogates).
                                 let cap_js = interp.to_js_string(cap)?;
-                                result.push_str(&js_string_to_regex_input_non_unicode(
-                                    &cap_js.code_units,
-                                ));
+                                result.extend_from_slice(&cap_js.code_units);
                             }
                             i += 3;
                             continue;
@@ -7929,34 +7927,31 @@ fn get_substitution(
                         let cap = &captures[d1 - 1];
                         if !cap.is_undefined() {
                             let cap_js = interp.to_js_string(cap)?;
-                            result.push_str(&js_string_to_regex_input_non_unicode(
-                                &cap_js.code_units,
-                            ));
+                            result.extend_from_slice(&cap_js.code_units);
                         }
                     } else {
-                        result.push('$');
+                        result.push(b'$' as u16);
                         result.push(c);
                     }
                     i += 2;
                 }
-                '<' => {
+                c if c == b'<' as u16 => {
                     if named_captures.is_undefined() {
-                        result.push('$');
-                        result.push('<');
+                        result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                         i += 2;
                     } else {
                         let start = i + 2;
-                        let rest: String = rchars[start..].iter().collect();
-                        if let Some(end_pos) = rest.find('>') {
-                            let group_name: String = rchars
-                                [start..start + rest[..end_pos].chars().count()]
-                                .iter()
-                                .collect();
+                        if let Some(relative_end) = replacement[start..]
+                            .iter()
+                            .position(|&cu| cu == b'>' as u16)
+                        {
+                            let end = start + relative_end;
+                            let group_name = JsString::from_vec(replacement[start..end].to_vec())
+                                .to_rust_string();
                             let nc_obj = match named_captures.as_object_id() {
                                 Some(id) => id,
                                 None => {
-                                    result.push('$');
-                                    result.push('<');
+                                    result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                                     i += 2;
                                     continue;
                                 }
@@ -7972,25 +7967,22 @@ fn get_substitution(
                             };
                             if !capture.is_undefined() {
                                 let cap_js = interp.to_js_string(&capture)?;
-                                result.push_str(&js_string_to_regex_input_non_unicode(
-                                    &cap_js.code_units,
-                                ));
+                                result.extend_from_slice(&cap_js.code_units);
                             }
-                            i = start + rest[..end_pos].chars().count() + 1;
+                            i = end + 1;
                         } else {
-                            result.push('$');
-                            result.push('<');
+                            result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                             i += 2;
                         }
                     }
                 }
                 _ => {
-                    result.push('$');
+                    result.push(b'$' as u16);
                     i += 1;
                 }
             }
         } else {
-            result.push(rchars[i]);
+            result.push(replacement[i]);
             i += 1;
         }
     }
@@ -8065,9 +8057,10 @@ fn regexp_exec_raw(
         if let Some(obj) = interp.get_object_cell(this_id) {
             let b = obj.borrow();
             if let Some(r) = b.regexp() {
+                let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_input(&r.source.code_units),
-                    r.flags.to_rust_string(),
+                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    flags,
                 )
             } else {
                 (source.to_string(), flags.to_string())
@@ -8172,26 +8165,35 @@ fn regexp_exec_raw(
         interp.regexp_legacy.context_input = regex_input.subject.clone();
         interp.regexp_legacy.left_context_end = match_start_utf16;
         interp.regexp_legacy.right_context_start = match_end_utf16;
-        interp.regexp_legacy.last_match = full_match.text.clone();
-        let mut last_paren = String::new();
+        interp.regexp_legacy.last_match =
+            regex_input.subject_slice(view, full_match.start, full_match.end);
+        let mut last_paren = JsString::default();
         for idx in (1..caps.len()).rev() {
             if let Some(m) = caps.get(idx) {
-                last_paren = m.text.clone();
+                last_paren = regex_input.subject_slice(view, m.start, m.end);
                 break;
             }
         }
         interp.regexp_legacy.last_paren = last_paren;
         for p in 0..9 {
-            interp.regexp_legacy.parens[p] =
-                caps.get(p + 1).map(|m| m.text.clone()).unwrap_or_default();
+            interp.regexp_legacy.parens[p] = caps
+                .get(p + 1)
+                .map(|m| regex_input.subject_slice(view, m.start, m.end))
+                .unwrap_or_default();
         }
     }
 
     let mut elements: Vec<JsValue> = Vec::new();
-    elements.push(JsValue::string(regex_output_to_js_string(&full_match.text)));
+    elements.push(JsValue::string(regex_input.subject_slice(
+        view,
+        full_match.start,
+        full_match.end,
+    )));
     for i in 1..caps.len() {
         match caps.get(i) {
-            Some(m) => elements.push(JsValue::string(regex_output_to_js_string(&m.text))),
+            Some(m) => elements.push(JsValue::string(
+                regex_input.subject_slice(view, m.start, m.end),
+            )),
             None => elements.push(JsValue::UNDEFINED),
         }
     }
@@ -8210,7 +8212,7 @@ fn regexp_exec_raw(
             .prototype_id = None;
         for (name, m) in resolved {
             let val = match m {
-                Some(m) => JsValue::string(regex_output_to_js_string(&m.text)),
+                Some(m) => JsValue::string(regex_input.subject_slice(view, m.start, m.end)),
                 None => JsValue::UNDEFINED,
             };
             interp
@@ -8457,7 +8459,7 @@ impl Interpreter {
                 let pattern_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let flags_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                let (pattern_str, flags_str);
+                let flags_str;
                 let pattern_js: Option<JsString>;
 
                 // 3. If pattern is a RegExp object
@@ -8487,16 +8489,13 @@ impl Interpreter {
                     if let Some(pobj) = interp.get_object_cell(po_id) {
                         let b = pobj.borrow();
                         if let Some(r) = b.regexp() {
-                            pattern_str = js_string_to_regex_input(&r.source.code_units);
                             pattern_js = Some(r.source.clone());
                             flags_str = r.flags.to_rust_string();
                         } else {
-                            pattern_str = "(?:)".to_string();
                             pattern_js = None;
                             flags_str = String::new();
                         }
                     } else {
-                        pattern_str = "(?:)".to_string();
                         pattern_js = None;
                         flags_str = String::new();
                     }
@@ -8510,7 +8509,6 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    pattern_str = js_string_to_regex_input(&p_js.code_units);
                     pattern_js = Some(p_js);
                     flags_str = if flags_arg.is_undefined() {
                         String::new()
@@ -8521,6 +8519,11 @@ impl Interpreter {
                         }
                     };
                 }
+
+                let pattern_str = pattern_js
+                    .as_ref()
+                    .map(|pattern| js_string_to_regex_pattern(&pattern.code_units, &flags_str))
+                    .unwrap_or_else(|| "(?:)".to_string());
 
                 // Validate flags: no invalid chars and no duplicates
                 {
@@ -8638,9 +8641,10 @@ impl Interpreter {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let r = b.regexp().unwrap();
+                        let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_input(&r.source.code_units),
-                            r.flags.to_rust_string(),
+                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            flags,
                         )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
@@ -8684,13 +8688,16 @@ impl Interpreter {
                         if sticky && full_match.start != last_index_byte {
                             break;
                         }
-                        let match_text = &full_match.text;
                         let match_end_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.end);
 
-                        results.push(JsValue::string(regex_output_to_js_string(match_text)));
+                        results.push(JsValue::string(regex_input.subject_slice(
+                            view,
+                            full_match.start,
+                            full_match.end,
+                        )));
 
-                        if match_text.is_empty() {
+                        if full_match.start == full_match.end {
                             let match_start_utf16 =
                                 regex_input.byte_offset_to_utf16(view, full_match.start);
                             // AdvanceStringIndex per spec operates on the original S, not the
@@ -8884,10 +8891,6 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                // Non-unicode version for string slicing (surrogates kept as
-                // individual PUA chars so UTF-16 indexing works correctly)
-                let s_slice = regex_input.as_str(false);
-                let length_s = s_slice.len();
                 let s_utf16_len = regex_input.subject.len();
 
                 // 5. Let functionalReplace be IsCallable(replaceValue).
@@ -8896,7 +8899,7 @@ impl Interpreter {
 
                 // 6. If functionalReplace is false, set replaceValue to ? ToString(replaceValue).
                 let replace_str = if !functional_replace {
-                    match interp.to_string_value(&replace_value) {
+                    match interp.to_js_string(&replace_value) {
                         Ok(s) => Some(s),
                         Err(e) => return Completion::Throw(e),
                     }
@@ -8950,17 +8953,18 @@ impl Interpreter {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let r = b.regexp().unwrap();
+                        let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_input(&r.source.code_units),
-                            r.flags.to_rust_string(),
+                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            flags,
                         )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
                         Ok(r) => r,
                         Err(_) => {
-                            return Completion::Normal(JsValue::string(regex_output_to_js_string(
-                                s_slice,
-                            )));
+                            return Completion::Normal(JsValue::string(
+                                regex_input.subject.clone(),
+                            ));
                         }
                     };
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
@@ -8969,7 +8973,7 @@ impl Interpreter {
                     let view = RegexView::select(is_bytes_mode, unicode);
                     let input_utf16_len = regex_input.subject.len();
                     let template = replace_str.as_ref().unwrap();
-                    let mut accumulated_result = String::new();
+                    let mut accumulated_result = Vec::new();
                     let mut next_source_position: usize = 0;
                     let mut last_index_utf16: usize = 0;
 
@@ -9012,24 +9016,22 @@ impl Interpreter {
                         ensure_capture_slots(&mut caps, cached.total_groups);
 
                         let full_match = caps.get(0).unwrap();
-                        let matched = &full_match.text;
                         let match_start_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.start);
                         let match_end_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.end);
-                        let match_length_utf16 =
-                            regex_output_to_js_string(matched).code_units.len();
+                        let match_length_utf16 = match_end_utf16 - match_start_utf16;
                         let position_utf16 = match_start_utf16;
-                        let position = regex_input
-                            .utf16_to_byte_offset(RegexView::NonUnicode, position_utf16)
-                            .min(length_s);
+                        let matched =
+                            regex_input.subject_slice(view, full_match.start, full_match.end);
 
                         // Build captures as JsValues for get_substitution
                         let mut capture_vals: Vec<JsValue> = Vec::new();
                         for i in 1..caps.len() {
                             match caps.get(i) {
-                                Some(m) => capture_vals
-                                    .push(JsValue::string(regex_output_to_js_string(&m.text))),
+                                Some(m) => capture_vals.push(JsValue::string(
+                                    regex_input.subject_slice(view, m.start, m.end),
+                                )),
                                 None => capture_vals.push(JsValue::UNDEFINED),
                             }
                         }
@@ -9053,7 +9055,7 @@ impl Interpreter {
                                                 && let Some(m) = caps.get(i)
                                             {
                                                 matched_val = JsValue::string(
-                                                    regex_output_to_js_string(&m.text),
+                                                    regex_input.subject_slice(view, m.start, m.end),
                                                 );
                                                 break;
                                             }
@@ -9075,7 +9077,7 @@ impl Interpreter {
                                         {
                                             val = match caps.get(i) {
                                                 Some(m) => JsValue::string(
-                                                    regex_output_to_js_string(&m.text),
+                                                    regex_input.subject_slice(view, m.start, m.end),
                                                 ),
                                                 None => JsValue::UNDEFINED,
                                             };
@@ -9102,33 +9104,33 @@ impl Interpreter {
                         } else {
                             JsValue::UNDEFINED
                         };
-                        let tail_pos = regex_input.utf16_to_byte_offset(
-                            RegexView::NonUnicode,
-                            (position_utf16 + match_length_utf16).min(s_utf16_len),
-                        );
+                        let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         let replacement = match get_substitution(
                             interp,
-                            matched,
-                            s_slice,
-                            position,
+                            &matched.code_units,
+                            &regex_input.subject.code_units,
+                            position_utf16,
                             tail_pos,
                             &capture_vals,
                             &named_captures_for_sub,
-                            template,
+                            &template.code_units,
                         ) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         };
 
-                        if position >= next_source_position {
-                            accumulated_result.push_str(&s_slice[next_source_position..position]);
-                            accumulated_result.push_str(&replacement);
+                        if position_utf16 >= next_source_position {
+                            accumulated_result.extend_from_slice(
+                                &regex_input.subject.code_units
+                                    [next_source_position..position_utf16],
+                            );
+                            accumulated_result.extend_from_slice(&replacement);
                             next_source_position = tail_pos;
                         }
 
                         // Advance past match — AdvanceStringIndex per spec operates on the
                         // original S, not the possibly-preprocessed `input`.
-                        if matched.is_empty() {
+                        if full_match.start == full_match.end {
                             last_index_utf16 =
                                 advance_string_index(&regex_input, match_start_utf16, full_unicode);
                         } else {
@@ -9139,11 +9141,13 @@ impl Interpreter {
                     if let Err(e) = set_last_index_strict(interp, rx_id, 0.0) {
                         return Completion::Throw(e);
                     }
-                    if next_source_position < length_s {
-                        accumulated_result.push_str(&s_slice[next_source_position..]);
+                    if next_source_position < s_utf16_len {
+                        accumulated_result.extend_from_slice(
+                            &regex_input.subject.code_units[next_source_position..],
+                        );
                     }
-                    return Completion::Normal(JsValue::string(regex_output_to_js_string(
-                        &accumulated_result,
+                    return Completion::Normal(JsValue::string(JsString::from_vec(
+                        accumulated_result,
                     )));
                 }
 
@@ -9233,7 +9237,7 @@ impl Interpreter {
                 }
 
                 // 14. For each element result of results, do
-                let mut accumulated_result = String::new();
+                let mut accumulated_result = Vec::new();
                 let mut next_source_position: usize = 0;
 
                 for result_val in &results {
@@ -9285,7 +9289,6 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     };
-                    let matched = js_string_to_regex_input_non_unicode(&matched_js.code_units);
                     // Compute matchLength in UTF-16 code units for tail_pos calculation.
                     let match_length_utf16 = matched_js.code_units.len();
 
@@ -9298,9 +9301,7 @@ impl Interpreter {
                             return other;
                         }
                     };
-                    // Keep UTF-16 position for passing to replacement function;
-                    // convert to byte offset for string slicing in PUA-mapped string.
-                    let (position_utf16, position) = {
+                    let position_utf16 = {
                         let n = match interp.to_number_value(&index_val) {
                             Ok(n) => n,
                             Err(e) => {
@@ -9309,13 +9310,7 @@ impl Interpreter {
                             }
                         };
                         let int = to_integer_or_infinity(n);
-                        let utf16_pos = int.max(0.0) as usize;
-                        (
-                            utf16_pos,
-                            regex_input
-                                .utf16_to_byte_offset(RegexView::NonUnicode, utf16_pos)
-                                .min(length_s),
-                        )
+                        (int.max(0.0) as usize).min(s_utf16_len)
                     };
 
                     // g-i. Get captures
@@ -9375,7 +9370,7 @@ impl Interpreter {
                         );
                         match repl_val {
                             Completion::Normal(v) => match interp.to_js_string(&v) {
-                                Ok(s) => js_string_to_regex_input_non_unicode(&s.code_units),
+                                Ok(s) => s.code_units.to_vec(),
                                 Err(e) => {
                                     interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
@@ -9402,19 +9397,16 @@ impl Interpreter {
                         } else {
                             JsValue::UNDEFINED
                         };
-                        let tail_pos = regex_input.utf16_to_byte_offset(
-                            RegexView::NonUnicode,
-                            (position_utf16 + match_length_utf16).min(s_utf16_len),
-                        );
+                        let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         match get_substitution(
                             interp,
-                            &matched,
-                            s_slice,
-                            position,
+                            &matched_js.code_units,
+                            &regex_input.subject.code_units,
+                            position_utf16,
                             tail_pos,
                             &captures,
                             &named_captures_obj,
-                            template,
+                            &template.code_units,
                         ) {
                             Ok(s) => s,
                             Err(e) => {
@@ -9425,13 +9417,12 @@ impl Interpreter {
                     };
 
                     // p. If position >= nextSourcePosition, then
-                    let tail_pos_final = regex_input.utf16_to_byte_offset(
-                        RegexView::NonUnicode,
-                        (position_utf16 + match_length_utf16).min(s_utf16_len),
-                    );
-                    if position >= next_source_position {
-                        accumulated_result.push_str(&s_slice[next_source_position..position]);
-                        accumulated_result.push_str(&replacement);
+                    let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
+                    if position_utf16 >= next_source_position {
+                        accumulated_result.extend_from_slice(
+                            &regex_input.subject.code_units[next_source_position..position_utf16],
+                        );
+                        accumulated_result.extend_from_slice(&replacement);
                         next_source_position = tail_pos_final;
                     }
                 }
@@ -9439,12 +9430,11 @@ impl Interpreter {
                 interp.gc_temp_roots.truncate(gc_root_start);
 
                 // 15. Return accumulatedResult + remainder of S.
-                if next_source_position < length_s {
-                    accumulated_result.push_str(&s_slice[next_source_position..]);
+                if next_source_position < s_utf16_len {
+                    accumulated_result
+                        .extend_from_slice(&regex_input.subject.code_units[next_source_position..]);
                 }
-                Completion::Normal(JsValue::string(regex_output_to_js_string(
-                    &accumulated_result,
-                )))
+                Completion::Normal(JsValue::string(JsString::from_vec(accumulated_result)))
             },
         ));
         if let Some(key) = get_symbol_key(self, "replace") {
@@ -9473,10 +9463,6 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                // @@split slices S itself, so it works in the Unicode view
-                // regardless of the splitter's own flags.
-                let s = regex_input.as_str(true);
-
                 // 3. Let C be ? SpeciesConstructor(rx, %RegExp%).
                 let rx_val = JsValue::object(rx_id);
                 let regexp_ctor = interp
@@ -9558,7 +9544,7 @@ impl Interpreter {
                     let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
                     match z {
                         Completion::Normal(ref v) if v.is_null() => {
-                            a.push(JsValue::string(regex_output_to_js_string(s)));
+                            a.push(JsValue::string(regex_input.subject.clone()));
                         }
                         Completion::Normal(_) => {}
                         other => return other,
@@ -9625,11 +9611,10 @@ impl Interpreter {
                     }
 
                     //   iii. Else,
-                    // Push substring from p to q (convert UTF-16 positions to byte offsets)
-                    let p_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, p);
-                    let q_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, q);
-                    let t = &s[p_byte..q_byte];
-                    a.push(JsValue::string(regex_output_to_js_string(t)));
+                    // Push the substring of the original S from p to q.
+                    a.push(JsValue::string(JsString::from_vec(
+                        regex_input.subject.code_units[p..q].to_vec(),
+                    )));
                     length_a += 1;
                     if length_a == lim {
                         return Completion::Normal(interp.create_array(a));
@@ -9682,9 +9667,9 @@ impl Interpreter {
                 }
 
                 // 16. Push remaining substring
-                let p_byte = regex_input.utf16_to_byte_offset(RegexView::Unicode, p);
-                let t = &s[p_byte..];
-                a.push(JsValue::string(regex_output_to_js_string(t)));
+                a.push(JsValue::string(JsString::from_vec(
+                    regex_input.subject.code_units[p..].to_vec(),
+                )));
                 Completion::Normal(interp.create_array(a))
             },
         ));
@@ -10062,12 +10047,15 @@ impl Interpreter {
                         let match_end = last_index + full.end;
 
                         let mut elements: Vec<JsValue> = Vec::new();
-                        elements.push(JsValue::string(JsString::from_str(&full.text)));
+                        elements.push(JsValue::string(JsString::from_str(
+                            &regex_string[match_start..match_end],
+                        )));
                         for i in 1..caps.len() {
                             match caps.get(i) {
-                                Some(m) => elements.push(JsValue::string(
-                                    JsString::from_str(&m.text),
-                                )),
+                                Some(m) => elements.push(JsValue::string(JsString::from_str(
+                                    &regex_string
+                                        [last_index + m.start..last_index + m.end],
+                                ))),
                                 None => elements.push(JsValue::UNDEFINED),
                             }
                         }
@@ -10091,7 +10079,11 @@ impl Interpreter {
                         }
 
                         let new_last_index = if global {
-                            if full.text.is_empty() { match_end + 1 } else { match_end }
+                            if full.start == full.end {
+                                match_end + 1
+                            } else {
+                                match_end
+                            }
                         } else {
                             last_index
                         };
@@ -10357,14 +10349,13 @@ impl Interpreter {
                     Resolved(String),
                     NeedsToString(JsValue),
                 }
-                let (pattern_js, pattern_str, raw_flags) = if has_regexp_matcher
+                let (pattern_js, raw_flags) = if has_regexp_matcher
                     && let Some(pat_id) = pattern_arg.as_object_id()
                 {
                     let src_js = interp
                         .get_object_cell(pat_id)
                         .and_then(|obj| obj.borrow().regexp().map(|r| r.source.clone()))
                         .unwrap_or_else(|| JsString::from_str(""));
-                    let src = js_string_to_regex_input(&src_js.code_units);
                     let flg = if flags_arg.is_undefined() {
                         RawFlags::Resolved(
                             interp
@@ -10375,7 +10366,7 @@ impl Interpreter {
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (src_js, src, flg)
+                    (src_js, flg)
                 } else if is_regexp_obj && let Some(pat_id) = pattern_arg.as_object_id() {
                     let src = match interp.get_object_property(pat_id, "source", &pattern_arg) {
                         Completion::Normal(v) => match interp.to_js_string(&v) {
@@ -10385,7 +10376,6 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => JsString::from_str(""),
                     };
-                    let src_str = js_string_to_regex_input(&src.code_units);
                     let flg = if flags_arg.is_undefined() {
                         let f = match interp.get_object_property(pat_id, "flags", &pattern_arg) {
                             Completion::Normal(v) => v,
@@ -10396,7 +10386,7 @@ impl Interpreter {
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (src, src_str, flg)
+                    (src, flg)
                 } else {
                     let p_js = if pattern_arg.is_undefined() {
                         JsString::from_str("")
@@ -10406,13 +10396,12 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let p_str = js_string_to_regex_input(&p_js.code_units);
                     let flg = if flags_arg.is_undefined() {
                         RawFlags::Resolved(String::new())
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (p_js, p_str, flg)
+                    (p_js, flg)
                 };
 
                 // §22.2.3.1 step 5: RegExpAlloc — get prototype from new target
@@ -10459,6 +10448,8 @@ impl Interpreter {
                         &format!("Invalid regular expression flags '{}'", flags_str),
                     ));
                 }
+
+                let pattern_str = js_string_to_regex_pattern(&pattern_js.code_units, &flags_str);
 
                 // Validate the pattern
                 if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
@@ -10596,8 +10587,9 @@ impl Interpreter {
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            let val = interp.regexp_legacy.parens[(idx - 1) as usize].clone();
-                            Completion::Normal(JsValue::string(JsString::from_str(&val)))
+                            Completion::Normal(JsValue::string(
+                                interp.regexp_legacy.parens[(idx - 1) as usize].clone(),
+                            ))
                         },
                     ));
                 obj.borrow_mut().insert_property(
@@ -10666,22 +10658,21 @@ impl Interpreter {
             // lastMatch / $& — get-only
             for prop_name in &["lastMatch", "$&"] {
                 let pn = prop_name.to_string();
-                let getter =
-                    self.create_function(JsFunction::native(
-                        format!("get {}", pn),
-                        0,
-                        move |interp, this_val, _args| {
-                            match this_val.as_object_id() {
-                                Some(id) if id == ctor_id => {}
-                                _ => return Completion::Throw(interp.create_type_error(
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    move |interp, this_val, _args| {
+                        match this_val.as_object_id() {
+                            Some(id) if id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
-                                )),
+                                ));
                             }
-                            Completion::Normal(JsValue::string(JsString::from_str(
-                                &interp.regexp_legacy.last_match,
-                            )))
-                        },
-                    ));
+                        }
+                        Completion::Normal(JsValue::string(interp.regexp_legacy.last_match.clone()))
+                    },
+                ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -10698,22 +10689,21 @@ impl Interpreter {
             // lastParen / $+ — get-only
             for prop_name in &["lastParen", "$+"] {
                 let pn = prop_name.to_string();
-                let getter =
-                    self.create_function(JsFunction::native(
-                        format!("get {}", pn),
-                        0,
-                        move |interp, this_val, _args| {
-                            match this_val.as_object_id() {
-                                Some(id) if id == ctor_id => {}
-                                _ => return Completion::Throw(interp.create_type_error(
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    move |interp, this_val, _args| {
+                        match this_val.as_object_id() {
+                            Some(id) if id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
-                                )),
+                                ));
                             }
-                            Completion::Normal(JsValue::string(JsString::from_str(
-                                &interp.regexp_legacy.last_paren,
-                            )))
-                        },
-                    ));
+                        }
+                        Completion::Normal(JsValue::string(interp.regexp_legacy.last_paren.clone()))
+                    },
+                ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {

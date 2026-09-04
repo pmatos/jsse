@@ -20,7 +20,7 @@ pub(crate) use types::*;
 mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
-pub(crate) use builtins::regexp::validate_js_pattern;
+pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
 mod env_helpers;
 mod eval;
@@ -769,7 +769,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                let mut p = match crate::parser::Parser::new(&code) {
+                let mut p = match crate::parser::Parser::new_for_eval(&code) {
                     Ok(p) => p,
                     Err(_) => {
                         return Completion::Throw(
