@@ -7,6 +7,7 @@ info: |
   disposable resource stack in reverse list order and combines a disposal
   error with an existing throw in a SuppressedError.
 flags: [module, async]
+includes: [compareArray.js]
 features: [dynamic-import, explicit-resource-management]
 ---*/
 
