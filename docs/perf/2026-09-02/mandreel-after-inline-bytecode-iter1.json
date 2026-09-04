@@ -1,0 +1,185 @@
+{
+  "engine": "/tmp/jsse-539-after-inline-bytecode",
+  "jetstream_version": "3.0",
+  "timestamp": "2026-09-02T14:08:48",
+  "measurement_protocol": {
+    "repeats": 3,
+    "idle_gate_enabled": false,
+    "idle_threshold": 1.5,
+    "instability_threshold": 0.05,
+    "interrupted_by_busy_host": false
+  },
+  "host": {
+    "hostname": "ravenwing",
+    "cpu_model": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+    "nproc": 24,
+    "loadavg_start": {
+      "one_minute": 33.39,
+      "five_minutes": 18.74,
+      "fifteen_minutes": 13.11
+    },
+    "loadavg_error": null,
+    "available_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "cpu_topology": "heterogeneous",
+    "cpu_max_freq_khz": {
+      "0": 5157895,
+      "1": 5157895,
+      "2": 5157895,
+      "3": 5157895,
+      "4": 3289474,
+      "5": 3289474,
+      "6": 3289474,
+      "7": 3289474,
+      "8": 3289474,
+      "9": 3289474,
+      "10": 3289474,
+      "11": 3289474,
+      "12": 5157895,
+      "13": 5157895,
+      "14": 5157895,
+      "15": 5157895,
+      "16": 3289474,
+      "17": 3289474,
+      "18": 3289474,
+      "19": 3289474,
+      "20": 3289474,
+      "21": 3289474,
+      "22": 3289474,
+      "23": 3289474
+    },
+    "fast_cores": [
+      0,
+      1,
+      2,
+      3,
+      12,
+      13,
+      14,
+      15
+    ],
+    "pinning": {
+      "applied": true,
+      "cpu_list": "0-3,12-15",
+      "reason": "pinned to maximum-frequency CPUs 0-3,12-15"
+    }
+  },
+  "overall_score": 0.14121501398028638,
+  "passed": 1,
+  "total": 1,
+  "results": [
+    {
+      "name": "mandreel",
+      "status": "pass",
+      "elapsed": 71.39053630828857,
+      "iterations": 1,
+      "scores": {
+        "first_time": 35407,
+        "first_score": 0.14121501398028638,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 35407,
+        "average_score": 0.14121501398028638,
+        "overall_score": 0.14121501398028638
+      },
+      "raw_times": [
+        35407
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.14121501398028638,
+        "min": 0.07480438652922607,
+        "max": 0.17015484090522376,
+        "relative_range": 1.2746639441892125,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "mandreel",
+          "status": "pass",
+          "elapsed": 118.48579859733582,
+          "iterations": 1,
+          "scores": {
+            "first_time": 66841,
+            "first_score": 0.07480438652922608,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 66841,
+            "average_score": 0.07480438652922608,
+            "overall_score": 0.07480438652922607
+          },
+          "raw_times": [
+            66841
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "mandreel",
+          "status": "pass",
+          "elapsed": 71.39053630828857,
+          "iterations": 1,
+          "scores": {
+            "first_time": 29385,
+            "first_score": 0.17015484090522376,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 29385,
+            "average_score": 0.17015484090522376,
+            "overall_score": 0.17015484090522376
+          },
+          "raw_times": [
+            29385
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "mandreel",
+          "status": "pass",
+          "elapsed": 58.103700399398804,
+          "iterations": 1,
+          "scores": {
+            "first_time": 35407,
+            "first_score": 0.14121501398028638,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 35407,
+            "average_score": 0.14121501398028638,
+            "overall_score": 0.14121501398028638
+          },
+          "raw_times": [
+            35407
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    }
+  ]
+}

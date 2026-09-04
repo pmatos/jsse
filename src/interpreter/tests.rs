@@ -16,9 +16,25 @@ fn parse_module_program(source: &str) -> Program {
         .expect("parse module program")
 }
 
+fn run_step(interp: &mut Interpreter, source: &str) {
+    let program = parse_program(source);
+    let result = interp.run(&program);
+    assert!(
+        matches!(result, Completion::Normal(_) | Completion::Empty),
+        "unexpected completion: {result:?}"
+    );
+}
+
 fn run_script(source: &str) -> Interpreter {
+    let mut interp = Interpreter::new();
+    run_step(&mut interp, source);
+    interp
+}
+
+fn run_script_as_blocking_agent(source: &str) -> Interpreter {
     let program = parse_program(source);
     let mut interp = Interpreter::new();
+    interp.can_block = true;
     let result = interp.run(&program);
     assert!(
         matches!(result, Completion::Normal(_) | Completion::Empty),
@@ -50,23 +66,31 @@ fn run_module_with_path(source: &str, path: &Path) -> Interpreter {
 }
 
 fn global_string(interp: &Interpreter, name: &str) -> String {
-    match interp
+    let value = interp
         .get_global_var_ref(name)
-        .unwrap_or(JsValue::Undefined)
-    {
-        JsValue::String(s) => s.to_string(),
-        other => panic!("expected global string for {name}, got {other:?}"),
-    }
+        .unwrap_or(JsValue::UNDEFINED);
+    value
+        .as_string()
+        .unwrap_or_else(|| panic!("expected global string for {name}, got {value:?}"))
+        .to_string()
 }
 
 fn global_number(interp: &Interpreter, name: &str) -> f64 {
-    match interp
+    let value = interp
         .get_global_var_ref(name)
-        .unwrap_or(JsValue::Undefined)
-    {
-        JsValue::Number(n) => n,
-        other => panic!("expected global number for {name}, got {other:?}"),
-    }
+        .unwrap_or(JsValue::UNDEFINED);
+    value
+        .as_number()
+        .unwrap_or_else(|| panic!("expected global number for {name}, got {value:?}"))
+}
+
+fn global_object_id(interp: &Interpreter, name: &str) -> u64 {
+    let value = interp
+        .get_global_var_ref(name)
+        .unwrap_or(JsValue::UNDEFINED);
+    value
+        .as_object_id()
+        .unwrap_or_else(|| panic!("expected global object for {name}, got {value:?}"))
 }
 
 fn temp_case_dir(label: &str) -> PathBuf {
@@ -89,18 +113,72 @@ fn write_case_file(dir: &Path, name: &str, source: &str) -> PathBuf {
 }
 
 #[test]
+fn function_environment_pool_reuses_and_resets_unescaped_storage() {
+    let mut interp = Interpreter::new();
+    let first_parent = Environment::new(None);
+    let env = interp.acquire_function_environment(first_parent, 3);
+    let allocation = Rc::as_ptr(&env);
+    {
+        let mut env = env.borrow_mut();
+        env.declare("stale", BindingKind::Var);
+        env.is_arrow_scope = true;
+        env.arguments_immutable = true;
+    }
+
+    interp.recycle_function_environment(env);
+    assert_eq!(interp.function_env_pool.len(), 1);
+
+    let second_parent = Environment::new(None);
+    let reused = interp.acquire_function_environment(second_parent.clone(), 2);
+    assert_eq!(Rc::as_ptr(&reused), allocation);
+    let reused_env = reused.borrow();
+    assert!(reused_env.bindings.is_empty());
+    assert!(!reused_env.is_arrow_scope);
+    assert!(!reused_env.arguments_immutable);
+    assert!(Rc::ptr_eq(
+        reused_env.parent.as_ref().expect("new parent"),
+        &second_parent
+    ));
+}
+
+#[test]
+fn function_environment_pool_rejects_escaped_storage() {
+    let mut interp = Interpreter::new();
+    let env = interp.acquire_function_environment(Environment::new(None), 1);
+    env.borrow_mut().declare("captured", BindingKind::Var);
+    let escaped = env.clone();
+
+    interp.recycle_function_environment(env);
+
+    assert!(interp.function_env_pool.is_empty());
+    assert!(escaped.borrow().bindings.contains_key("captured"));
+}
+
+#[test]
+fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
+    let interp = run_script(
+        r#"
+        function addOne(value) { return value + 1; }
+        var result = addOne(addOne(0));
+        if (result !== 2) throw new Error("unexpected result");
+        "#,
+    );
+
+    assert!(!interp.function_env_pool.is_empty());
+}
+
+#[test]
 fn define_method_installs_a_correctly_shaped_builtin() {
     let mut interp = Interpreter::new();
     let target_id = interp.create_object_id();
 
     interp.define_method(target_id, "greet", 1, |_interp, _this, args| {
-        let name = match args.first() {
-            Some(JsValue::String(s)) => s.to_rust_string(),
-            _ => "world".to_string(),
-        };
-        Completion::Normal(JsValue::String(JsString::from_str(&format!(
-            "hello {name}"
-        ))))
+        let name = args
+            .first()
+            .and_then(JsValue::as_string)
+            .map(|s| s.to_rust_string())
+            .unwrap_or_else(|| "world".to_string());
+        Completion::Normal(JsValue::from_str(&format!("hello {name}")))
     });
 
     let desc = interp
@@ -123,27 +201,37 @@ fn define_method_installs_a_correctly_shaped_builtin() {
 
     // define_method must still route through create_function, so name/length bookkeeping
     // (used by Function.prototype.toString, .length, etc.) isn't lost.
-    let JsValue::Object(fn_obj) = &greet_fn else {
-        panic!("expected greet to be a function object")
-    };
-    let fn_cell = interp.get_object_cell_expect(fn_obj.id);
-    match fn_cell.borrow().get_own_property("name").unwrap().value {
-        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "greet"),
-        ref other => panic!("expected name string, got {other:?}"),
-    }
-    match fn_cell.borrow().get_own_property("length").unwrap().value {
-        Some(JsValue::Number(n)) => assert_eq!(n, 1.0),
-        ref other => panic!("expected length number, got {other:?}"),
-    }
+    let fn_id = greet_fn
+        .as_object_id()
+        .expect("expected greet to be a function object");
+    let fn_cell = interp.get_object_cell_expect(fn_id);
+    let name = fn_cell
+        .borrow()
+        .get_own_property("name")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_string())
+        .expect("expected name string");
+    assert_eq!(name.to_rust_string(), "greet");
+    let length = fn_cell
+        .borrow()
+        .get_own_property("length")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_number())
+        .expect("expected length number");
+    assert_eq!(length, 1.0);
 
-    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
-    let result = interp.call_function(
-        &greet_fn,
-        &target_val,
-        &[JsValue::String(JsString::from_str("jsse"))],
-    );
+    let target_val = JsValue::object(target_id);
+    let result = interp.call_function(&greet_fn, &target_val, &[JsValue::from_str("jsse")]);
     match result {
-        Completion::Normal(JsValue::String(s)) => assert_eq!(s.to_rust_string(), "hello jsse"),
+        Completion::Normal(value) => assert_eq!(
+            value
+                .as_string()
+                .expect("expected string completion")
+                .to_rust_string(),
+            "hello jsse"
+        ),
         other => panic!("unexpected completion: {other:?}"),
     }
 }
@@ -154,7 +242,7 @@ fn define_getter_installs_a_correctly_shaped_accessor() {
     let target_id = interp.create_object_id();
 
     let getter = interp.define_getter(target_id, "answer", |_interp, _this, _args| {
-        Completion::Normal(JsValue::Number(42.0))
+        Completion::Normal(JsValue::number(42.0))
     });
 
     // Raw stored descriptor (get_own_property would complete an absent setter
@@ -183,29 +271,109 @@ fn define_getter_installs_a_correctly_shaped_accessor() {
 
     // define_getter must return the same function it installed as the getter.
     let installed_getter = desc.get.expect("getter value present");
-    assert!(
-        matches!((&installed_getter, &getter), (JsValue::Object(a), JsValue::Object(b)) if a.id == b.id),
+    let getter_id = getter
+        .as_object_id()
+        .expect("expected getter to be a function object");
+    assert_eq!(
+        installed_getter.as_object_id(),
+        Some(getter_id),
         "returned getter must be the one installed on the accessor"
     );
 
     // Getter bookkeeping: name is prefixed with "get ", length is 0 (per spec).
-    let JsValue::Object(fn_obj) = &getter else {
-        panic!("expected getter to be a function object")
-    };
-    let fn_cell = interp.get_object_cell_expect(fn_obj.id);
-    match fn_cell.borrow().get_own_property("name").unwrap().value {
-        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "get answer"),
-        ref other => panic!("expected name string, got {other:?}"),
-    }
-    match fn_cell.borrow().get_own_property("length").unwrap().value {
-        Some(JsValue::Number(n)) => assert_eq!(n, 0.0),
-        ref other => panic!("expected length number, got {other:?}"),
-    }
+    let fn_cell = interp.get_object_cell_expect(getter_id);
+    let name = fn_cell
+        .borrow()
+        .get_own_property("name")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_string())
+        .expect("expected name string");
+    assert_eq!(name.to_rust_string(), "get answer");
+    let length = fn_cell
+        .borrow()
+        .get_own_property("length")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_number())
+        .expect("expected length number");
+    assert_eq!(length, 0.0);
 
     // The getter is callable and returns its computed value.
-    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    let target_val = JsValue::object(target_id);
     match interp.call_function(&getter, &target_val, &[]) {
-        Completion::Normal(JsValue::Number(n)) => assert_eq!(n, 42.0),
+        Completion::Normal(value) => assert_eq!(value.as_number(), Some(42.0)),
+        other => panic!("unexpected completion: {other:?}"),
+    }
+}
+
+#[test]
+fn define_to_string_tag_installs_a_correctly_shaped_data_property() {
+    let mut interp = Interpreter::new();
+    let target_id = interp.create_object_id();
+
+    interp.define_to_string_tag(target_id, "CorrectlyShaped");
+
+    // The tag lives under the @@toStringTag well-known symbol key.
+    let tag_key = crate::types::JsPropertyKey::well_known_symbol("toStringTag");
+
+    // Raw stored descriptor pins exactly what define_to_string_tag installs.
+    let desc = interp
+        .get_object_cell_expect(target_id)
+        .borrow()
+        .get_own_property_full(&tag_key)
+        .expect("@@toStringTag property installed");
+
+    // Per spec, @@toStringTag on builtin prototypes is a data property:
+    // { [[Value]]: tag, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
+    let tag = desc
+        .value
+        .as_ref()
+        .and_then(JsValue::as_string)
+        .expect("expected string tag value");
+    assert_eq!(tag.to_rust_string(), "CorrectlyShaped");
+    assert_eq!(desc.writable, Some(false), "@@toStringTag is non-writable");
+    assert_eq!(
+        desc.enumerable,
+        Some(false),
+        "@@toStringTag is non-enumerable"
+    );
+    assert_eq!(
+        desc.configurable,
+        Some(true),
+        "@@toStringTag stays configurable"
+    );
+    assert!(desc.get.is_none(), "data property has no getter");
+    assert!(desc.set.is_none(), "data property has no setter");
+
+    // Routed through insert_property, so property_order and properties stay in
+    // sync: the symbol key must appear exactly once in the enumeration order.
+    let cell = interp.get_object_cell_expect(target_id);
+    let order_hits = cell
+        .borrow()
+        .property_order
+        .iter()
+        .filter(|k| k.as_bytes() == tag_key.as_bytes())
+        .count();
+    assert_eq!(
+        order_hits, 1,
+        "@@toStringTag appears once in property_order"
+    );
+
+    // Observable: Object.prototype.toString sees the installed tag.
+    let target_val = JsValue::object(target_id);
+    let to_string = match interp.run(&parse_program("Object.prototype.toString;")) {
+        Completion::Normal(v) => v,
+        other => panic!("expected Object.prototype.toString value, got {other:?}"),
+    };
+    match interp.call_function(&to_string, &target_val, &[]) {
+        Completion::Normal(value) => assert_eq!(
+            value
+                .as_string()
+                .expect("expected string completion")
+                .to_rust_string(),
+            "[object CorrectlyShaped]"
+        ),
         other => panic!("unexpected completion: {other:?}"),
     }
 }
@@ -236,6 +404,235 @@ fn nested_microtasks_run_to_quiescence_in_order() {
     );
     assert_eq!(global_string(&interp, "order"), "abc");
     assert!(interp.scheduler.microtask_queue_is_empty());
+}
+
+#[test]
+fn timers_fire_before_run_returns() {
+    let interp = run_script(
+        r#"
+        var result = "pending";
+        setTimeout(() => { result = "done"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "done");
+}
+
+#[test]
+fn timer_ids_are_distinct_and_never_zero() {
+    // Issue #254: setTimeout used to return 0 for every call, so nothing could
+    // be cancelled even once clearTimeout existed.
+    let interp = run_script(
+        r#"
+        var a = setTimeout(() => {}, 1000);
+        var b = setTimeout(() => {}, 1000);
+        var distinct = a !== b && a !== 0 && b !== 0;
+        clearTimeout(a);
+        clearTimeout(b);
+        "#,
+    );
+    assert_eq!(
+        interp
+            .get_global_var_ref("distinct")
+            .and_then(|v| v.as_boolean()),
+        Some(true)
+    );
+}
+
+#[test]
+fn clear_timeout_cancels_a_pending_timer() {
+    let interp = run_script(
+        r#"
+        var log = "";
+        var cancelled = setTimeout(() => { log += "cancelled"; }, 0);
+        setTimeout(() => { log += "kept"; }, 0);
+        clearTimeout(cancelled);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "log"), "kept");
+}
+
+#[test]
+fn clear_timeout_of_an_unknown_id_is_a_no_op() {
+    let interp = run_script(
+        r#"
+        var log = "";
+        clearTimeout(0);
+        clearTimeout(9999);
+        clearTimeout(undefined);
+        clearTimeout("not an id");
+        setTimeout(() => { log += "ran"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "log"), "ran");
+}
+
+#[test]
+fn clear_timeout_does_not_coerce_a_non_primitive_id() {
+    // Node resolves an id only from a number or a string and ignores anything
+    // else outright, so clearing with an object must not run its valueOf.
+    let interp = run_script(
+        r#"
+        var coerced = "no";
+        clearTimeout({ valueOf: function () { coerced = "yes"; return 1; } });
+        "#,
+    );
+    assert_eq!(global_string(&interp, "coerced"), "no");
+}
+
+#[test]
+fn clear_timeout_accepts_a_string_id() {
+    let interp = run_script(
+        r#"
+        var log = "";
+        var id = setTimeout(function () { log += "ran"; }, 0);
+        clearTimeout(String(id));
+        "#,
+    );
+    assert_eq!(global_string(&interp, "log"), "");
+}
+
+#[test]
+fn interval_repeats_until_cleared() {
+    let interp = run_script(
+        r#"
+        var ticks = 0;
+        var id = setInterval(() => {
+          ticks++;
+          if (ticks === 3) clearInterval(id);
+        }, 1);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "ticks"), 3.0);
+}
+
+#[test]
+fn microtasks_drain_between_timer_callbacks() {
+    // Each timer callback is a task, so its microtasks run before the next
+    // callback — matching the HTML/Node event loop.
+    let interp = run_script(
+        r#"
+        var order = "";
+        setTimeout(() => {
+          order += "t1";
+          Promise.resolve().then(() => { order += "m1"; });
+        }, 0);
+        setTimeout(() => { order += "t2"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "order"), "t1m1t2");
+}
+
+#[test]
+fn same_delay_timers_fire_in_arming_order() {
+    let interp = run_script(
+        r#"
+        var order = "";
+        setTimeout(() => { order += "c"; }, 5);
+        setTimeout(() => { order += "a"; }, 0);
+        setTimeout(() => { order += "b"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "order"), "abc");
+}
+
+#[test]
+fn timer_extra_arguments_are_forwarded_to_the_callback() {
+    let interp = run_script(
+        r#"
+        var seen = "";
+        setTimeout((x, y) => { seen = x + "," + y; }, 0, "first", "second");
+        "#,
+    );
+    assert_eq!(global_string(&interp, "seen"), "first,second");
+}
+
+#[test]
+fn non_callable_timer_callback_throws_a_type_error() {
+    for source in [
+        "try { setTimeout(42, 0); } catch (e) { var name = e.constructor.name; }",
+        "try { setInterval(42, 0); } catch (e) { var name = e.constructor.name; }",
+    ] {
+        let interp = run_script(source);
+        assert_eq!(global_string(&interp, "name"), "TypeError");
+    }
+}
+
+#[test]
+fn a_gc_inside_one_timer_callback_does_not_collect_the_rest_of_the_batch() {
+    // The due batch is handed out of the scheduler before any of it runs, so
+    // nothing in the queue roots it any more. A callback that allocates enough
+    // to trigger a collection must not take its unrun siblings with it.
+    let interp = run_script(
+        r#"
+        var fired = 0;
+        for (var i = 0; i < 200; i++) {
+          (function (n) {
+            setTimeout(function () {
+              fired++;
+              if (n === 0) {
+                var junk = [];
+                for (var k = 0; k < 400000; k++) junk.push({ a: k, b: [k, k] });
+                junk = null;
+              }
+            }, 0);
+          })(i);
+        }
+        "#,
+    );
+    assert_eq!(global_number(&interp, "fired"), 200.0);
+}
+
+#[test]
+fn a_nested_interpreter_run_does_not_re_enter_timer_dispatch() {
+    // A zero-delay interval re-arms for the next turn before its callback runs.
+    // If a nested run (`$262.evalScript`) serviced timers, it would find that
+    // re-armed interval due and recurse until the drain deadline — the callback
+    // never reached its own clearInterval, and the process hung.
+    let interp = run_script(
+        r#"
+        var ticks = 0;
+        var id = setInterval(function () {
+          ticks++;
+          $262.evalScript("void 0;");
+          clearInterval(id);
+        }, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "ticks"), 1.0);
+}
+
+#[test]
+fn a_timer_scheduled_inside_a_callback_waits_for_the_next_turn() {
+    // The child timeout must not be fired by the nested run started inside its
+    // parent's callback: tasks do not re-enter one another.
+    let interp = run_script(
+        r#"
+        var order = "";
+        setTimeout(function () {
+          order += "a";
+          setTimeout(function () { order += "b"; }, 0);
+          order += "c";
+          $262.evalScript("void 0;");
+          order += "d";
+        }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "order"), "acdb");
+}
+
+#[test]
+fn many_concurrent_timers_run_without_a_thread_per_timer() {
+    // The failure in issue #254: a thread per setTimeout exhausted the OS
+    // thread limit once enough timers were armed at once.
+    let interp = run_script(
+        r#"
+        var fired = 0;
+        var ids = [];
+        for (var i = 0; i < 20000; i++) ids.push(setTimeout(() => { fired++; }, 20));
+        for (var i = 0; i < 20000; i += 2) clearTimeout(ids[i]);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "fired"), 10000.0);
 }
 
 #[test]
@@ -317,6 +714,57 @@ fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
     assert_eq!(interp.module_registry.len(), 3);
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn module_key_canonicalization_distinguishes_host_identity_from_a_real_file() {
+    let dir = temp_case_dir("module-key");
+    let file_path = write_case_file(&dir, MODULE_SOURCE_SPECIFIER, "export const value = 1;");
+
+    let host_key = ModuleKey::module_source();
+    assert!(host_key.is_module_source());
+    assert!(host_key.file_path().is_none());
+    assert_eq!(host_key.canonicalize(), host_key);
+
+    let file_key = ModuleKey::for_file(file_path.clone());
+    assert!(!file_key.is_module_source());
+    assert_eq!(file_key.file_path(), Some(file_path.as_path()));
+    assert_eq!(file_key.canonicalize(), file_key);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn module_loader_dispatch_owns_host_type_and_mode_handling() {
+    let mut interp = Interpreter::new();
+    let key = interp
+        .resolve_module_specifier(MODULE_SOURCE_SPECIFIER, None)
+        .expect("host module should resolve");
+
+    let eager = interp
+        .load_module_for_type(&key, None, ModuleLoadMode::Evaluate)
+        .expect("untyped eager host module should load");
+    let deferred = interp
+        .load_module_for_type(&key, None, ModuleLoadMode::Defer)
+        .expect("untyped deferred host module should load");
+    assert!(Rc::ptr_eq(&eager, &deferred));
+
+    for import_type in [ImportModuleType::Text, ImportModuleType::Bytes] {
+        let mut messages = Vec::new();
+        for mode in [ModuleLoadMode::Evaluate, ModuleLoadMode::Defer] {
+            let error = match interp.load_module_for_type(&key, Some(import_type), mode) {
+                Ok(_) => panic!("typed host module request unexpectedly loaded"),
+                Err(error) => error,
+            };
+            let message = interp.format_value(&error);
+            assert!(
+                message.starts_with("TypeError:"),
+                "unexpected error: {message}"
+            );
+            messages.push(message);
+        }
+        assert_eq!(messages[0], messages[1]);
+    }
 }
 
 #[test]
@@ -512,11 +960,11 @@ fn transitive_module_import_link_error_aborts_parent_before_evaluation() {
     assert!(err.contains("nonExistent"), "unexpected error: {err}");
     assert!(interp.get_global_var_ref("marker").is_none());
 
-    let broken_canon = broken_path.canonicalize().unwrap_or(broken_path.clone());
+    let broken_key = ModuleKey::for_file(broken_path.clone());
     let realm_id = interp.current_realm_id;
     let cached = interp
         .module_registry
-        .get(&(realm_id, broken_canon))
+        .get(&(realm_id, broken_key))
         .expect("broken module registry entry")
         .borrow()
         .error
@@ -643,14 +1091,73 @@ fn missing_named_module_import_throws_syntax_error() {
 }
 
 #[test]
+fn clear_timeout_from_js_disarms_the_timer_and_releases_its_callback() {
+    let mut interp = Interpreter::new();
+    interp.run(&parse_program(
+        "var cb = () => {}; clearTimeout(setTimeout(cb, 3600000));",
+    ));
+    assert!(
+        !interp.scheduler.has_timers(),
+        "clearTimeout must reach the timer queue, not just return undefined"
+    );
+
+    let callback_id = global_object_id(&interp, "cb");
+    interp.run(&parse_program("cb = null;"));
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_id).is_none(),
+        "a timer cleared from JS must stop rooting its callback"
+    );
+}
+
+#[test]
+fn gc_keeps_timer_roots_alive_until_the_timer_is_cleared() {
+    let mut interp = Interpreter::new();
+    let callback_id = interp.create_object_id();
+    let arg_id = interp.create_object_id();
+
+    let timer_id = interp.scheduler.add_timer(
+        JsValue::object(callback_id),
+        vec![JsValue::object(arg_id)],
+        std::time::Duration::from_secs(3600),
+        false,
+    );
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_id).is_some(),
+        "an armed timer must keep its callback alive"
+    );
+    assert!(
+        interp.get_object_cell(arg_id).is_some(),
+        "an armed timer must keep its bound arguments alive"
+    );
+
+    // Cancellation drops the roots; the thread-per-timer model leaked them
+    // instead, because only a fired timer ever unrooted.
+    interp.scheduler.clear_timer(timer_id);
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_id).is_none(),
+        "a cleared timer must release its callback"
+    );
+    assert!(
+        interp.get_object_cell(arg_id).is_none(),
+        "a cleared timer must release its bound arguments"
+    );
+}
+
+#[test]
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
     let id = interp.create_object_id();
-    let obj_val = JsValue::Object(crate::types::JsObject { id });
+    let obj_val = JsValue::object(id);
 
     interp.scheduler.enqueue_microtask((
         vec![obj_val.clone()],
-        Box::new(|_| Completion::Normal(JsValue::Undefined)),
+        Box::new(|_| Completion::Normal(JsValue::UNDEFINED)),
     ));
     interp.gc.request();
     interp.gc_safepoint();
@@ -668,15 +1175,227 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     );
 }
 
+/// Run each source in turn on one interpreter, forcing a major collection
+/// between steps. Combinator machinery that is only reachable through a native
+/// closure capture is reclaimed at those points unless it is pinned.
+fn run_steps_with_major_gc_between(steps: &[&str]) -> Interpreter {
+    let mut interp = Interpreter::new();
+    for step in steps {
+        run_step(&mut interp, step);
+        interp.gc.request();
+        interp.gc_safepoint();
+    }
+    interp
+}
+
+// The promise combinators build their per-element resolve/reject functions as
+// native closures that capture the capability's resolving function and the
+// shared result accumulator by value. Those captures are invisible to the GC
+// tracer, so a major collection while the combinator is in flight used to
+// reclaim them: the element function then called a dead id, the combinator
+// promise never settled, and every continuation awaiting it was lost (#309).
+// In each case below the input promises are scoped to an IIFE, so nothing but
+// the combinator's own machinery keeps them — or their settled values — alive.
+
+#[test]
+fn promise_all_settles_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((resolve) => { globalThis.releaseFirst = resolve; });
+            const second = new Promise((resolve) => { globalThis.releaseSecond = resolve; });
+            Promise.all([first, second]).then((values) => {
+                globalThis.outcome = "all:" + values[0].marker + "," + values[1].marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseFirst;
+            delete globalThis.releaseFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseSecond;
+            delete globalThis.releaseSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "all:first,second");
+}
+
+#[test]
+fn promise_all_settled_settles_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((resolve) => { globalThis.releaseFirst = resolve; });
+            const second = new Promise((_, reject) => { globalThis.rejectSecond = reject; });
+            Promise.allSettled([first, second]).then((results) => {
+                globalThis.outcome = "settled:" + results[0].status + ":" +
+                    results[0].value.marker + "," + results[1].status + ":" +
+                    results[1].reason.marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseFirst;
+            delete globalThis.releaseFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectSecond;
+            delete globalThis.rejectSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(
+        global_string(&interp, "outcome"),
+        "settled:fulfilled:first,rejected:second"
+    );
+}
+
+#[test]
+fn promise_any_rejects_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((_, reject) => { globalThis.rejectFirst = reject; });
+            const second = new Promise((_, reject) => { globalThis.rejectSecond = reject; });
+            Promise.any([first, second]).catch((error) => {
+                globalThis.outcome = "any:" + error.errors[0].marker + "," +
+                    error.errors[1].marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectFirst;
+            delete globalThis.rejectFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectSecond;
+            delete globalThis.rejectSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "any:first,second");
+}
+
+#[test]
+fn promise_finally_runs_callback_across_major_gc() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const inner = new Promise((resolve) => { globalThis.release = resolve; });
+            inner.finally(() => { globalThis.outcome = "ran"; });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.release;
+            delete globalThis.release;
+            settle("v");
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "ran");
+}
+
+#[test]
+fn promise_finally_forwards_value_across_major_gc() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const inner = new Promise((resolve) => { globalThis.release = resolve; });
+            inner.finally(() => {}).then((v) => { globalThis.outcome = "value:" + v.marker; });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.release;
+            delete globalThis.release;
+            settle({ marker: "kept" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "value:kept");
+}
+
+/// Number of GC pins recorded on the object held by global `name`.
+fn global_pin_count(interp: &Interpreter, name: &str) -> usize {
+    let value = interp
+        .get_global_var_ref(name)
+        .unwrap_or_else(|| panic!("expected global {name}"));
+    let id = value
+        .as_object_id()
+        .unwrap_or_else(|| panic!("global {name} must be an object"));
+    interp
+        .get_object_cell(id)
+        .expect("global object must be live")
+        .borrow()
+        .gc_native_roots
+        .as_ref()
+        .map_or(0, Vec::len)
+}
+
+#[test]
+fn combinator_pins_do_not_accumulate_on_a_reused_capability_function() {
+    // A constructor may hand the same resolving function to every capability it
+    // builds. Pins are never removed, so anchoring the accumulated values on the
+    // capability function would leave one settled value pinned per call — growth
+    // without bound. The anchor must be per-invocation instead.
+    let interp = run_steps_with_major_gc_between(&[r#"
+        globalThis.sharedResolve = function () {};
+        globalThis.sharedReject = function () {};
+        globalThis.Ctor = function (executor) {
+            executor(globalThis.sharedResolve, globalThis.sharedReject);
+        };
+        globalThis.Ctor.resolve = function (value) { return Promise.resolve(value); };
+
+        for (var i = 0; i < 50; i++) {
+            Promise.all.call(globalThis.Ctor, [{ marker: i }]);
+            Promise.allSettled.call(globalThis.Ctor, [{ marker: i }]);
+        }
+        "#]);
+
+    assert_eq!(
+        global_pin_count(&interp, "sharedResolve"),
+        0,
+        "a reused capability resolve function must not accumulate combinator pins"
+    );
+    assert_eq!(
+        global_pin_count(&interp, "sharedReject"),
+        0,
+        "a reused capability reject function must not accumulate combinator pins"
+    );
+}
+
 #[test]
 fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
     let dir = temp_case_dir("module-gc");
     let main_path = write_case_file(&dir, "main.js", r#"export const obj = { marker: 1 };"#);
 
     let mut interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
-    let canon = main_path.canonicalize().unwrap_or(main_path.clone());
+    let module_key = ModuleKey::for_file(main_path.clone());
     let realm_id = interp.current_realm_id;
-    let key = (realm_id, canon.clone());
+    let key = (realm_id, module_key);
     let module = interp
         .module_registry
         .get(&key)
@@ -688,20 +1407,172 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
         .get("obj")
         .expect("module export")
         .clone();
-    let JsValue::Object(obj_ref) = export_val else {
-        panic!("expected exported object");
-    };
+    let object_id = export_val.as_object_id().expect("expected exported object");
 
     interp.gc.request();
     interp.gc_safepoint();
-    assert!(interp.get_object_cell(obj_ref.id).is_some());
+    assert!(interp.get_object_cell(object_id).is_some());
 
     interp.module_registry.remove(&key);
     interp.gc.request();
     interp.gc_safepoint();
-    assert!(interp.get_object_cell(obj_ref.id).is_none());
+    assert!(interp.get_object_cell(object_id).is_none());
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn array_literal_releases_temp_roots_after_abrupt_completion() {
+    let interp = run_script(
+        r#"
+        try {
+            [{ marker: "ordinary" }, ...[{ marker: "spread" }], ...null];
+        } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "array literal temporary roots must be released after a throw"
+    );
+}
+
+#[test]
+fn private_update_releases_temp_roots_after_abrupt_completion() {
+    // The private update branch roots its receiver across
+    // PrivateGet -> ToNumeric -> PrivateSet. Every abrupt exit inside that
+    // window must still release the temp-root frame.
+    let interp = run_script(
+        r#"
+        class C {
+            get #x() { return { valueOf() { throw new Error("coercion"); } }; }
+            set #x(v) {}
+            static bump() { return (new C()).#x++; }
+        }
+        try { C.bump(); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "private update temporary roots must be released after a throw"
+    );
+}
+
+#[test]
+fn private_logical_assign_releases_temp_roots_after_abrupt_completion() {
+    // Same contract for the logical-assignment branch, whose rooted window
+    // spans PrivateGet -> right-hand side evaluation -> PrivateSet.
+    let interp = run_script(
+        r#"
+        class C {
+            get #x() { return undefined; }
+            set #x(v) {}
+            static assign() {
+                return (new C()).#x ??= (function () { throw new Error("rhs"); })();
+            }
+        }
+        try { C.assign(); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "private logical-assignment temporary roots must be released after a throw"
+    );
+}
+
+#[test]
+fn private_destructuring_releases_temp_roots_after_abrupt_completion() {
+    // Destructuring evaluates each private target before iterator/property
+    // access. Throws from those intervening operations must release both the
+    // private receiver's scoped root and the array iterator's existing root.
+    let interp = run_script(
+        r#"
+        var throwingIterable = {
+            [Symbol.iterator]: function () {
+                return {
+                    next: function () { throw new Error("iterator step"); }
+                };
+            }
+        };
+        var throwingSource = {
+            get item() { throw new Error("source getter"); }
+        };
+        class C {
+            set #x(v) {}
+            static element() { [(new C()).#x] = throwingIterable; }
+            static rest() { [...(new C()).#x] = throwingIterable; }
+            static property() { ({ item: (new C()).#x } = throwingSource); }
+        }
+        try { C.element(); } catch (e) {}
+        try { C.rest(); } catch (e) {}
+        try { C.property(); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "private destructuring temporary roots must be released after a throw"
+    );
+}
+
+#[test]
+fn computed_member_destructuring_releases_temp_roots_after_abrupt_key_evaluation() {
+    // The member base is rooted while its computed key is evaluated. An abrupt
+    // key completion must release that scoped root before propagating the throw.
+    let interp = run_script(
+        r#"
+        function fail() { throw new Error("computed key"); }
+        try { [Object.create({})[fail()]] = [1]; } catch (e) {}
+        try { ({ item: Object.create({})[fail()] } = { item: 1 }); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "computed member target roots must be released after key evaluation throws"
+    );
+}
+
+#[test]
+fn private_method_call_with_non_iterable_spread_throws() {
+    // A spread argument that is not iterable must throw a TypeError, even when the
+    // callee is a private method reached through `this.#m(...)`. The private-call
+    // path used to hand-roll argument evaluation and silently drop the iteration
+    // error, invoking the method with zero arguments instead of throwing.
+    let interp = run_script(
+        r#"
+        var result = "";
+        class C {
+            #m() { return "called"; }
+            run() { return this.#m(...5); }
+        }
+        try {
+            new C().run();
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
+#[test]
+fn private_method_call_forwards_iterable_spread_arguments() {
+    // The private-method call path must forward spread arguments from an iterable,
+    // matching the ordinary member-call path.
+    let interp = run_script(
+        r#"
+        class D {
+            #m(a, b, c) { return a + b + c; }
+            run() { return this.#m(1, ...[2, 3]); }
+        }
+        var result = new D().run();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 6.0);
 }
 
 #[test]
@@ -719,6 +1590,107 @@ fn shared_array_buffer_atomics_smoke() {
     assert_eq!(global_string(&interp, "result"), "7");
 }
 
+// -- Atomics / SharedArrayBuffer edge cases (issue #25) ----------------------------
+// Deterministic, single-threaded coverage of Atomics plumbing that test262 mostly
+// exercises only through the real multi-agent $262.agent harness. Cross-thread
+// wake-up itself is deliberately NOT tested here (timing-dependent, and already
+// exercised by test262's own agent tests) — these instead lock down the branch
+// logic directly, setting `can_block` on the interpreter rather than spawning a
+// real OS thread.
+
+#[test]
+fn atomics_wait_on_matching_value_throws_on_non_blocking_main_agent() {
+    let interp = run_script(
+        r#"
+        var result = "";
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        try {
+            Atomics.wait(view, 0, 0);
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
+#[test]
+fn atomics_wait_value_mismatch_returns_not_equal_without_blocking() {
+    let start = std::time::Instant::now();
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.wait(view, 0, 1, Infinity);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "not-equal");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a value mismatch must return immediately, never touching the wait/notify blocking path"
+    );
+}
+
+#[test]
+fn atomics_wait_zero_timeout_on_blocking_agent_returns_timed_out_immediately() {
+    let start = std::time::Instant::now();
+    let interp = run_script_as_blocking_agent(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.wait(view, 0, 0, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "timed-out");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a zero timeout must never register a waiter or actually block"
+    );
+}
+
+#[test]
+fn atomics_notify_on_non_shared_buffer_returns_zero_without_throwing() {
+    let interp = run_script(
+        r#"
+        var view = new Int32Array(new ArrayBuffer(4));
+        var result = Atomics.notify(view, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 0.0);
+}
+
+#[test]
+fn atomics_notify_on_shared_buffer_with_no_waiters_returns_zero() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.notify(view, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 0.0);
+}
+
+#[test]
+fn atomics_add_on_non_integer_typed_array_throws_type_error() {
+    let interp = run_script(
+        r#"
+        var result = "";
+        var sab = new SharedArrayBuffer(8);
+        var view = new Float64Array(sab);
+        try {
+            Atomics.add(view, 0, 1);
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
 #[test]
 fn typed_array_clamps_assigned_values() {
     let interp = run_script(
@@ -730,6 +1702,193 @@ fn typed_array_clamps_assigned_values() {
         "#,
     );
     assert_eq!(global_string(&interp, "result"), "255");
+}
+
+#[test]
+fn typed_array_define_own_property_coerces_string_value_via_tonumber() {
+    // A typed array's [[DefineOwnProperty]] runs IntegerIndexedElementSet, which
+    // coerces a String [[Value]] with the canonical ToNumber (§7.1.4). Reached via
+    // Object.defineProperties with a raw descriptor value, this must honour the
+    // 0x/0o/0b prefixes, trim exactly the ECMAScript whitespace set, and treat
+    // "inf" as NaN — not defer to a naive float parse.
+    let interp = run_script(
+        r#"
+        function define(TA, v) { var a = new TA(1); Object.defineProperties(a, { 0: { value: v } }); return a[0]; }
+        var hexInt8 = define(Int8Array, "0x10");
+        var octInt8 = define(Int8Array, "0o17");
+        var binInt8 = define(Int8Array, "0b101");
+        var wsInt8  = define(Int8Array, "\t\n\r 5 ");
+        var hexF64  = define(Float64Array, "0x10");
+        var wsF64   = define(Float64Array, " 3.5 ");
+        var infF64  = String(define(Float64Array, "inf"));
+        var num300  = define(Int8Array, 300);
+        var boolT   = define(Int8Array, true);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "hexInt8"), 16.0);
+    assert_eq!(global_number(&interp, "octInt8"), 15.0);
+    assert_eq!(global_number(&interp, "binInt8"), 5.0);
+    assert_eq!(global_number(&interp, "wsInt8"), 5.0);
+    assert_eq!(global_number(&interp, "hexF64"), 16.0);
+    assert_eq!(global_number(&interp, "wsF64"), 3.5);
+    assert_eq!(global_string(&interp, "infF64"), "NaN");
+    // Non-String branches of ToNumber are unchanged.
+    assert_eq!(global_number(&interp, "num300"), 44.0);
+    assert_eq!(global_number(&interp, "boolT"), 1.0);
+}
+
+// -- Resizable ArrayBuffer / growable SharedArrayBuffer invariants (issue #25) -----
+// Whitebox checks on the length-tracking bookkeeping in types.rs. A bug here is a
+// Rust panic or an out-of-bounds slice access, not just a wrong JS-visible value, so
+// these need direct Rust coverage rather than relying on test262 alone.
+
+#[test]
+fn length_tracking_view_recomputes_length_after_resizable_buffer_grows() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(4, { maxByteLength: 16 });
+        var view = new Int32Array(buf);
+        buf.resize(16);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        ta.is_length_tracking,
+        "omitted length over a resizable buffer must be length-tracking"
+    );
+    assert_eq!(
+        typed_array_length(ta),
+        4,
+        "length must recompute to the grown buffer's element count"
+    );
+    assert!(!is_typed_array_out_of_bounds(ta));
+}
+
+#[test]
+fn length_tracking_view_with_offset_goes_out_of_bounds_after_shrink_below_offset() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf, 8);
+        buf.resize(4);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        is_typed_array_out_of_bounds(ta),
+        "byte_offset (8) now exceeds the shrunk buffer length (4)"
+    );
+    assert_eq!(
+        typed_array_length(ta),
+        0,
+        "an out-of-bounds length-tracking view must saturate to zero, not underflow"
+    );
+}
+
+#[test]
+fn length_tracking_view_recomputes_length_after_growable_shared_buffer_grows() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4, { maxByteLength: 16 });
+        var view = new Int32Array(sab);
+        sab.grow(16);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(ta.is_length_tracking);
+    assert_eq!(typed_array_length(ta), 4);
+    assert!(!is_typed_array_out_of_bounds(ta));
+}
+
+#[test]
+fn explicit_length_view_over_resizable_buffer_is_not_fixed_length() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf, 0, 2);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    let buf_obj = interp.get_object(global_object_id(&interp, "buf")).unwrap();
+    let buf_ref = buf_obj.borrow();
+    assert!(
+        !is_typed_array_fixed_length(ta, &buf_ref),
+        "an explicit-length view over a resizable (non-shared) buffer can still go \
+         out-of-bounds if the buffer shrinks, so it is not IsTypedArrayFixedLength"
+    );
+}
+
+#[test]
+fn explicit_length_view_over_growable_shared_buffer_is_fixed_length() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(sab, 0, 2);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    let buf_obj = interp.get_object(global_object_id(&interp, "sab")).unwrap();
+    let buf_ref = buf_obj.borrow();
+    assert!(
+        is_typed_array_fixed_length(ta, &buf_ref),
+        "a growable SharedArrayBuffer can only grow, never shrink, so an explicit-length \
+         view over it stays IsTypedArrayFixedLength"
+    );
+}
+
+#[test]
+fn is_valid_integer_index_rejects_stale_and_malformed_indices() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf);
+        buf.resize(8);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        is_valid_integer_index(ta, 1.0),
+        "index 1 is still within the shrunk length (2)"
+    );
+    assert!(
+        !is_valid_integer_index(ta, 3.0),
+        "index 3 was valid before the shrink but must be rejected now"
+    );
+    assert!(!is_valid_integer_index(ta, f64::NAN));
+    assert!(!is_valid_integer_index(ta, f64::INFINITY));
+    assert!(
+        !is_valid_integer_index(ta, -0.0),
+        "-0 is not a valid integer index"
+    );
+    assert!(!is_valid_integer_index(ta, -1.0));
+    assert!(
+        !is_valid_integer_index(ta, 1.5),
+        "non-integer index must be rejected"
+    );
 }
 
 /// Regression test for PR 1b.2 (#105): prototype chain survives GC.
@@ -815,7 +1974,7 @@ fn set_property_value_add_bumps_shape() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     assert!(
         ok,
         "set_property_value should succeed on extensible empty obj"
@@ -836,13 +1995,13 @@ fn set_property_value_update_existing_does_not_bump_shape() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     interp
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(2.0));
+        .set_property_value("x", JsValue::number(2.0));
     let after = interp.get_object(id).unwrap().borrow().shape_id;
     assert_eq!(
         after, before,
@@ -860,7 +2019,7 @@ fn define_own_property_bumps_shape_on_attribute_change() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     let ok = interp
         .get_object(id)
@@ -869,7 +2028,7 @@ fn define_own_property_bumps_shape_on_attribute_change() {
         .define_own_property(
             "x".to_string(),
             PropertyDescriptor {
-                value: Some(JsValue::Number(1.0)),
+                value: Some(JsValue::number(1.0)),
                 writable: Some(false),
                 enumerable: Some(true),
                 configurable: Some(true),
@@ -1454,7 +2613,7 @@ fn define_own_property_bumps_shape_on_data_to_accessor_swap() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     // Swap data → accessor by defining a getter.
     let ok = interp
@@ -1466,7 +2625,7 @@ fn define_own_property_bumps_shape_on_data_to_accessor_swap() {
             PropertyDescriptor {
                 value: None,
                 writable: None,
-                get: Some(JsValue::Undefined), // sentinel — real getter not needed for this test
+                get: Some(JsValue::UNDEFINED), // sentinel — real getter not needed for this test
                 set: None,
                 enumerable: Some(true),
                 configurable: Some(true),
@@ -1554,18 +2713,28 @@ fn array_prototype_methods_have_correctly_shaped_builtins() {
             Some(true),
             "Array.prototype.{name} must stay configurable"
         );
-        let JsValue::Object(fn_obj) = desc.value.expect("method has a function value") else {
-            panic!("Array.prototype.{name} is not a function object")
-        };
-        let fn_cell = interp.get_object_cell_expect(fn_obj.id);
-        match fn_cell.borrow().get_own_property("name").unwrap().value {
-            Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), *name),
-            ref other => panic!("Array.prototype.{name}: expected name string, got {other:?}"),
-        }
-        match fn_cell.borrow().get_own_property("length").unwrap().value {
-            Some(JsValue::Number(n)) => assert_eq!(n, *len, "Array.prototype.{name}.length"),
-            ref other => panic!("Array.prototype.{name}: expected length number, got {other:?}"),
-        }
+        let fn_id = desc
+            .value
+            .expect("method has a function value")
+            .as_object_id()
+            .unwrap_or_else(|| panic!("Array.prototype.{name} is not a function object"));
+        let fn_cell = interp.get_object_cell_expect(fn_id);
+        let actual_name = fn_cell
+            .borrow()
+            .get_own_property("name")
+            .unwrap()
+            .value
+            .and_then(|value| value.as_string())
+            .unwrap_or_else(|| panic!("Array.prototype.{name}: expected name string"));
+        assert_eq!(actual_name.to_rust_string(), *name);
+        let actual_length = fn_cell
+            .borrow()
+            .get_own_property("length")
+            .unwrap()
+            .value
+            .and_then(|value| value.as_number())
+            .unwrap_or_else(|| panic!("Array.prototype.{name}: expected length number"));
+        assert_eq!(actual_length, *len, "Array.prototype.{name}.length");
     }
 
     // Array.prototype[@@iterator] must be the very same function object as .values (§23.1.3.35).
@@ -1580,16 +2749,18 @@ fn array_prototype_methods_have_correctly_shaped_builtins() {
         .borrow()
         .get_own_property(&iterator_key)
         .expect("@@iterator installed");
-    let (JsValue::Object(values_obj), JsValue::Object(iterator_obj)) = (
-        values_desc.value.expect("values has a function value"),
-        iterator_desc
-            .value
-            .expect("@@iterator has a function value"),
-    ) else {
-        panic!("expected both values and @@iterator to be function objects")
-    };
+    let values_id = values_desc
+        .value
+        .expect("values has a function value")
+        .as_object_id()
+        .expect("values must be a function object");
+    let iterator_id = iterator_desc
+        .value
+        .expect("@@iterator has a function value")
+        .as_object_id()
+        .expect("@@iterator must be a function object");
     assert_eq!(
-        values_obj.id, iterator_obj.id,
+        values_id, iterator_id,
         "Array.prototype[@@iterator] must be identical to Array.prototype.values"
     );
 }
@@ -1762,6 +2933,191 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__d"), 1.0);
 }
 
+// #165 / #468: both per-Body caches pin each Body they memoise, so either
+// unbounded table would retain every `new Function` / `eval` Body the program
+// ever ran. This pins both independent bounds through the normal call path.
+#[test]
+fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
+    let bodies = super::hoist_cache::DEFAULT_CAPACITY + 2000;
+    let interp = run_script(&format!(
+        r#"
+        var sum = 0;
+        for (var i = 0; i < {bodies}; i++) {{
+          // A distinct source per iteration, so each call dispatches a body the
+          // cache has never seen, with both var and Annex-B names to collect.
+          var f = new Function("var x" + i + " = 1; {{ function g" + i + "(){{}} }} return x" + i + ";");
+          sum += f();
+        }}
+        globalThis.__sum = sum;
+        "#
+    ));
+    assert_eq!(global_number(&interp, "__sum"), bodies as f64);
+    assert!(
+        interp.hoist_cache.len() <= super::hoist_cache::DEFAULT_CAPACITY,
+        "hoist cache grew to {} entries for {bodies} dynamic bodies",
+        interp.hoist_cache.len()
+    );
+    // Guards against the bound passing vacuously: these bodies must really be
+    // reaching the cache, which means it fills and then evicts.
+    assert!(
+        interp.hoist_cache.len() > super::hoist_cache::DEFAULT_CAPACITY / 2,
+        "expected the dynamic bodies to fill the cache, got {} entries",
+        interp.hoist_cache.len()
+    );
+    assert!(
+        interp.ic_store.len() <= super::ic_store::DEFAULT_CAPACITY,
+        "IC store grew to {} entries for {bodies} dynamic bodies",
+        interp.ic_store.len()
+    );
+    assert!(
+        interp.ic_store.slot_count() <= super::ic_store::DEFAULT_CAPACITY,
+        "IC store allocated {} slots for {bodies} dynamic bodies",
+        interp.ic_store.slot_count()
+    );
+    assert!(
+        interp.ic_store.len() > super::ic_store::DEFAULT_CAPACITY / 2,
+        "expected the dynamic bodies to fill the IC store, got {} entries",
+        interp.ic_store.len()
+    );
+}
+
+#[test]
+fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
+    let interp = run_script(
+        r#"
+        function f(n) { var acc = 0; for (var i = 0; i < n; i++) { acc += i; } return acc; }
+        var total = 0;
+        for (var k = 0; k < 50; k++) { total += f(3); }
+        globalThis.__total = total;
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__total"), 150.0);
+    assert!(
+        interp.hoist_cache.hits() >= 49,
+        "expected the repeatedly-called body to be memoised, got {} hits",
+        interp.hoist_cache.hits()
+    );
+}
+
+// Loop and labelled-statement completion values are the observable surface of
+// the `v = val` folding consolidated into `handle_loop_body_completion`
+// (src/interpreter/exec.rs). These pin the behaviour across the six loop heads
+// migrated to the shared helper, plus the two deliberately-excluded forms
+// (for-of interleaves IteratorClose; switch has no `continue` arm). Expected
+// values are the ECMAScript completion-value semantics, cross-checked against
+// Node — not recomputed from jsse's code.
+mod loop_completion_value_tests {
+    use super::*;
+
+    fn completion_value(source: &str) -> JsValue {
+        let program = parse_program(source);
+        let mut interp = Interpreter::new();
+        match interp.run(&program) {
+            Completion::Normal(v) => v,
+            other => panic!("unexpected completion for `{source}`: {other:?}"),
+        }
+    }
+
+    fn assert_number(source: &str, expected: f64) {
+        let value = completion_value(source);
+        assert_eq!(
+            value.as_number(),
+            Some(expected),
+            "completion value of `{source}`"
+        );
+    }
+
+    #[test]
+    fn while_loop_yields_last_body_value() {
+        assert_number("var i=0; while(i<3){ i++; 42; }", 42.0);
+    }
+
+    #[test]
+    fn do_while_yields_last_body_value() {
+        assert_number("do { 5; } while(false)", 5.0);
+    }
+
+    #[test]
+    fn for_loop_yields_last_body_value() {
+        assert_number("for(var i=0;i<1;i++){ 7; }", 7.0);
+    }
+
+    #[test]
+    fn for_in_yields_last_body_value() {
+        assert_number("for(var k in {a:1,b:2}){ 33; }", 33.0);
+    }
+
+    #[test]
+    fn while_break_with_value_wins() {
+        assert_number(
+            "var n=0; while(n<3){ n++; if(n===2){ 99; break; } 44; }",
+            99.0,
+        );
+    }
+
+    #[test]
+    fn labelled_for_continue_carries_value() {
+        assert_number(
+            "outer: for(var i=0;i<2;i++){ for(var j=0;j<2;j++){ 9; continue outer; } }",
+            9.0,
+        );
+    }
+
+    #[test]
+    fn labelled_while_body_value_after_inner_break() {
+        assert_number(
+            "var o=0; outer: while(o<2){ o++; inner: while(true){ 11; break inner; } 22; }",
+            22.0,
+        );
+    }
+
+    #[test]
+    fn labelled_do_while_continue_then_body_value() {
+        assert_number(
+            "var m=0; outer: do { m++; if(m<3){ 55; continue outer; } 66; } while(m<3)",
+            66.0,
+        );
+    }
+
+    #[test]
+    fn labelled_for_in_continue_carries_value() {
+        assert_number(
+            "outer: for(var k in {a:1,b:2}){ for(var j=0;j<2;j++){ 77; continue outer; } }",
+            77.0,
+        );
+    }
+
+    #[test]
+    fn labelled_break_out_of_for_carries_value() {
+        assert_number(
+            "L: for (var i=0;i<3;i++){ if(i===1){ 71; break L; } }",
+            71.0,
+        );
+    }
+
+    #[test]
+    fn labelled_block_break_yields_value() {
+        assert_number("l: { 1; break l; }", 1.0);
+    }
+
+    // Guard: for-of and switch are deliberately NOT routed through the shared
+    // helper. These pin that the refactor left them unaffected.
+    #[test]
+    fn for_of_completion_value_unaffected() {
+        assert_number("for(var x of [1,2,3]){ x*10; }", 30.0);
+    }
+
+    #[test]
+    fn for_of_break_with_value_unaffected() {
+        assert_number("for(var x of [1,2,3]){ if(x===2){ 88; break; } }", 88.0);
+    }
+
+    #[test]
+    fn switch_break_with_value_unaffected() {
+        assert_number("switch(1){ case 1: 111; break; }", 111.0);
+    }
+}
+
 // §7.1.5 ToIntegerOrInfinity — the combined `? ToIntegerOrInfinity(argument)`
 // coercion method that sits alongside to_number_value / to_string_value / to_index.
 // Expected values are the spec's, not recomputed the way the code does it.
@@ -1777,43 +3133,40 @@ mod to_integer_or_infinity_value_tests {
 
     #[test]
     fn truncates_toward_zero() {
-        assert_eq!(conv(JsValue::Number(3.7)), 3.0);
-        assert_eq!(conv(JsValue::Number(-3.7)), -3.0);
-        assert_eq!(conv(JsValue::Number(5.0)), 5.0);
-        assert_eq!(conv(JsValue::Number(-0.9)), 0.0);
+        assert_eq!(conv(JsValue::number(3.7)), 3.0);
+        assert_eq!(conv(JsValue::number(-3.7)), -3.0);
+        assert_eq!(conv(JsValue::number(5.0)), 5.0);
+        assert_eq!(conv(JsValue::number(-0.9)), 0.0);
     }
 
     #[test]
     fn nan_becomes_positive_zero() {
-        let r = conv(JsValue::Number(f64::NAN));
+        let r = conv(JsValue::number(f64::NAN));
         assert_eq!(r, 0.0);
         assert!(r.is_sign_positive(), "ToIntegerOrInfinity(NaN) is +0");
     }
 
     #[test]
     fn infinities_pass_through() {
-        assert_eq!(conv(JsValue::Number(f64::INFINITY)), f64::INFINITY);
-        assert_eq!(conv(JsValue::Number(f64::NEG_INFINITY)), f64::NEG_INFINITY);
+        assert_eq!(conv(JsValue::number(f64::INFINITY)), f64::INFINITY);
+        assert_eq!(conv(JsValue::number(f64::NEG_INFINITY)), f64::NEG_INFINITY);
     }
 
     #[test]
     fn coerces_booleans_null_and_undefined() {
-        assert_eq!(conv(JsValue::Boolean(true)), 1.0); // ToNumber(true) = 1
-        assert_eq!(conv(JsValue::Boolean(false)), 0.0);
-        assert_eq!(conv(JsValue::Null), 0.0); // ToNumber(null) = 0
-        assert_eq!(conv(JsValue::Undefined), 0.0); // ToNumber(undefined) = NaN -> 0
+        assert_eq!(conv(JsValue::TRUE), 1.0); // ToNumber(true) = 1
+        assert_eq!(conv(JsValue::FALSE), 0.0);
+        assert_eq!(conv(JsValue::NULL), 0.0); // ToNumber(null) = 0
+        assert_eq!(conv(JsValue::UNDEFINED), 0.0); // ToNumber(undefined) = NaN -> 0
     }
 
     #[test]
     fn coerces_strings() {
-        assert_eq!(conv(JsValue::String(JsString::from_str("42"))), 42.0);
-        assert_eq!(conv(JsValue::String(JsString::from_str("42.9"))), 42.0);
-        assert_eq!(conv(JsValue::String(JsString::from_str("  -7.5 "))), -7.0);
-        assert_eq!(conv(JsValue::String(JsString::from_str("abc"))), 0.0); // NaN -> 0
-        assert_eq!(
-            conv(JsValue::String(JsString::from_str("Infinity"))),
-            f64::INFINITY
-        );
+        assert_eq!(conv(JsValue::from_str("42")), 42.0);
+        assert_eq!(conv(JsValue::from_str("42.9")), 42.0);
+        assert_eq!(conv(JsValue::from_str("  -7.5 ")), -7.0);
+        assert_eq!(conv(JsValue::from_str("abc")), 0.0); // NaN -> 0
+        assert_eq!(conv(JsValue::from_str("Infinity")), f64::INFINITY);
     }
 
     #[test]
@@ -1839,6 +3192,215 @@ mod to_integer_or_infinity_value_tests {
             "#,
         );
         assert_eq!(global_string(&interp, "R"), "threw");
+    }
+}
+
+/// §7.1.4.1 StringToNumber through the public `Number(...)` seam. Expected
+/// values are the ECMA-262 truth table (cross-checked against node): these lock
+/// the three divergences the deepened conversion fixes — Rust's whitespace set,
+/// hex overflow, and leaked `inf`/`nan` spellings. Whitespace chars are built
+/// with `String.fromCharCode` so the source stays ASCII-clean.
+mod string_to_number_seam_tests {
+    use super::*;
+
+    #[test]
+    fn ecmascript_whitespace_is_trimmed_but_rust_only_whitespace_is_not() {
+        let interp = run_script(
+            r#"
+            var nel    = Number(String.fromCharCode(0x85) + "1");   // U+0085 NEL: not WhiteSpace
+            var zwnbsp = Number(String.fromCharCode(0xFEFF) + "1"); // U+FEFF ZWNBSP: WhiteSpace
+            var mixed  = Number("\t\n\r 5 \t");
+            "#,
+        );
+        assert!(global_number(&interp, "nel").is_nan());
+        assert_eq!(global_number(&interp, "zwnbsp"), 1.0);
+        assert_eq!(global_number(&interp, "mixed"), 5.0);
+    }
+
+    #[test]
+    fn only_the_capitalized_infinity_word_is_infinite() {
+        let interp = run_script(
+            r#"
+            var inf   = Number("inf");
+            var pInf  = Number("+Infinity");
+            var nInf  = Number("-Infinity");
+            var lc    = Number("infinity");
+            var nan   = +"nan";
+            "#,
+        );
+        assert!(global_number(&interp, "inf").is_nan());
+        assert_eq!(global_number(&interp, "pInf"), f64::INFINITY);
+        assert_eq!(global_number(&interp, "nInf"), f64::NEG_INFINITY);
+        assert!(global_number(&interp, "lc").is_nan());
+        assert!(global_number(&interp, "nan").is_nan());
+    }
+
+    #[test]
+    fn large_non_decimal_literals_round_instead_of_overflowing() {
+        let interp = run_script(
+            r#"
+            var big   = Number("0x10000000000000000"); // 2**64
+            var exact = Number("0x6269e107215582e");
+            var carry = Number("0x200000000000011");
+            var small = Number("0o17");
+            var empty = Number("0x");
+            "#,
+        );
+        assert_eq!(global_number(&interp, "big"), 2f64.powi(64));
+        assert_eq!(global_number(&interp, "exact"), 443_215_406_813_239_360.0);
+        assert_eq!(global_number(&interp, "carry"), 2f64.powi(57) + 32.0);
+        assert_eq!(global_number(&interp, "small"), 15.0);
+        assert!(global_number(&interp, "empty").is_nan());
+    }
+}
+
+/// §10.4.3 String-exotic objects expose an own indexed character property only
+/// when the key is the CanonicalNumericIndexString of an in-range integer.
+/// These exercise the public seams (member read, `in`, GetOwnPropertyDescriptor,
+/// DefineProperty, delete, Reflect) that all route through `string_exotic_index`.
+/// Expected values are node's (spec-conformant) results as known-good literals.
+mod string_exotic_index_seam_tests {
+    use super::*;
+
+    #[test]
+    fn non_canonical_index_keys_are_not_own_string_properties() {
+        // "01"/"+1"/"1.0" are not CanonicalNumericIndexStrings, so they name no
+        // own character property of the string; only "1" does.
+        let interp = run_script(
+            r#"
+            var s = "abc";
+            var o = Object("abc");
+            var report = [
+                String(s["01"]),
+                String(s["+1"]),
+                String(s["1.0"]),
+                String(s["1"]),
+                String(o["01"]),
+                ("01" in o),
+                ("1" in o),
+                (Object.getOwnPropertyDescriptor(o, "01") === undefined),
+                Object.keys(o).join(",")
+            ].join("|");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "report"),
+            "undefined|undefined|undefined|b|undefined|false|true|true|0,1,2"
+        );
+    }
+
+    #[test]
+    fn define_property_on_non_canonical_index_is_allowed() {
+        // "01" is an ordinary property key, so defineProperty must succeed and
+        // the value must read back (the string-index redefinition guard must
+        // not fire for a look-alike key).
+        let interp = run_script(
+            r#"
+            var o = Object("abc");
+            Object.defineProperty(o, "01", {
+                value: "z", writable: true, configurable: true, enumerable: true
+            });
+            // [[Set]] of a look-alike key must also store an ordinary property
+            // (the non-writable string-index guard must not fire for "+2").
+            var p = Object("abc");
+            p["+2"] = "w";
+            var report = String(o["01"]) + "|" + String(p["+2"]);
+            "#,
+        );
+        assert_eq!(global_string(&interp, "report"), "z|w");
+    }
+
+    #[test]
+    fn delete_distinguishes_canonical_indices_from_look_alikes() {
+        // Own indices are non-configurable (delete -> false); look-alikes are
+        // ordinary absent properties (delete -> true). Indexing is by UTF-16
+        // code unit, so both halves of a non-BMP code point are in range.
+        let interp = run_script(
+            r#"
+            var report = [
+                delete Object("abc")["01"],
+                delete Object("abc")[1],
+                Reflect.deleteProperty(Object("abc"), "1"),
+                Reflect.deleteProperty(Object("abc"), "01"),
+                Reflect.deleteProperty(Object("\u{1F4A9}"), "1"),
+                Reflect.deleteProperty(Object("\u{1F4A9}"), "0")
+            ].join(",");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "report"),
+            "true,false,false,true,false,false"
+        );
+    }
+
+    #[test]
+    fn strict_delete_of_own_string_index_throws_but_look_alike_succeeds() {
+        // Index 1 is a non-configurable own property, so strict-mode delete
+        // throws a TypeError; "01" is deletable and returns true.
+        let interp = run_script(
+            r#"
+            "use strict";
+            var deleted01 = delete Object("abc")["01"];
+            var threw = false;
+            try { delete Object("abc")[1]; } catch (e) { threw = (e instanceof TypeError); }
+            var report = String(deleted01) + "|" + String(threw);
+            "#,
+        );
+        assert_eq!(global_string(&interp, "report"), "true|true");
+    }
+}
+
+/// §13.3.7 Optional Chains and §6.2.5.5 GetValue require primitive property
+/// references to perform wrapper [[Get]] with the primitive as the receiver.
+mod optional_chain_primitive_get_tests {
+    use super::*;
+
+    #[test]
+    fn prototype_accessors_are_invoked_with_the_primitive_receiver() {
+        run_script(
+            r#"
+            function install(proto, key, expectedThis, result) {
+                Object.defineProperty(proto, key, {
+                    configurable: true,
+                    get: function () {
+                        "use strict";
+                        if (this !== expectedThis) {
+                            throw new Error("getter received the wrong primitive");
+                        }
+                        return result;
+                    }
+                });
+            }
+
+            var symbol = Symbol("receiver");
+            install(String.prototype, "01", "abc", 41);
+            install(String.prototype, "5", "abc", 42);
+            install(Number.prototype, "optionalAccessor", 5, 43);
+            install(Boolean.prototype, "optionalAccessor", true, 44);
+            install(Symbol.prototype, "optionalAccessor", symbol, 45);
+            install(BigInt.prototype, "optionalAccessor", 7n, 46);
+
+            if ("abc"?.["01"] !== 41) throw new Error("String look-alike getter skipped");
+            if ("abc"?.["5"] !== 42) throw new Error("String out-of-range getter skipped");
+            if ((5)?.optionalAccessor !== 43) throw new Error("Number getter skipped");
+            if ((true)?.["optionalAccessor"] !== 44) throw new Error("Boolean getter skipped");
+            if (symbol?.optionalAccessor !== 45) throw new Error("Symbol getter skipped");
+            if ((7n)?.["optionalAccessor"] !== 46) throw new Error("BigInt getter skipped");
+
+            var marker = {};
+            Object.defineProperty(Boolean.prototype, "throwingOptionalAccessor", {
+                configurable: true,
+                get: function () { throw marker; }
+            });
+            var propagated = false;
+            try {
+                (false)?.throwingOptionalAccessor;
+            } catch (error) {
+                propagated = error === marker;
+            }
+            if (!propagated) throw new Error("getter exception was not propagated");
+            "#,
+        );
     }
 }
 
@@ -1877,12 +3439,14 @@ mod node_host_tests {
               typeof globalThis.__host_exit,
               typeof __host_hrtime,
               typeof __host_random_bytes,
+              typeof __host_proxy_target,
+              typeof __host_array_extra_keys,
             ].join(",");
             "#,
         );
         assert_eq!(
             global_string(&interp, "r"),
-            "undefined,undefined,undefined,undefined"
+            "undefined,undefined,undefined,undefined,undefined,undefined"
         );
     }
 
@@ -1890,10 +3454,14 @@ mod node_host_tests {
     fn host_globals_are_non_enumerable_functions() {
         assert_node_ok(
             r#"
-            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes"]) {
+            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes","__host_proxy_target","__host_array_extra_keys"]) {
               const d = Object.getOwnPropertyDescriptor(globalThis, name);
               if (!d) throw new Error(name + " missing");
               if (d.enumerable) throw new Error(name + " is enumerable");
+              // node-shim.js deletes its metadata hooks under "use strict" to
+              // keep the seams private; a non-configurable binding would make
+              // that delete throw and kill the prelude.
+              if (!d.configurable) throw new Error(name + " is not configurable");
               if (typeof globalThis[name] !== "function") throw new Error(name + " not a function");
               if (Object.keys(globalThis).includes(name)) throw new Error(name + " shows in keys");
             }
@@ -1960,6 +3528,93 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_proxy_target_bypasses_handler_traps() {
+        assert_node_ok(
+            r#"
+            let calls = 0;
+            const target = { value: 1 };
+            const proxy = new Proxy(target, {
+              get() { calls++; throw new Error("get trap"); },
+              getPrototypeOf() { calls++; throw new Error("getPrototypeOf trap"); },
+              ownKeys() { calls++; throw new Error("ownKeys trap"); },
+              getOwnPropertyDescriptor() {
+                calls++;
+                throw new Error("getOwnPropertyDescriptor trap");
+              },
+            });
+            if (__host_proxy_target(proxy) !== target) throw new Error("wrong target");
+            if (__host_proxy_target(target) !== undefined) throw new Error("ordinary object");
+            if (__host_proxy_target(1) !== undefined) throw new Error("primitive");
+            if (calls !== 0) throw new Error("handler trap invoked");
+
+            const revocable = Proxy.revocable({}, {});
+            revocable.revoke();
+            if (__host_proxy_target(revocable.proxy) !== null) {
+              throw new Error("revoked Proxy marker");
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_array_extra_keys_uses_named_metadata_without_getting_values() {
+        assert_node_ok(
+            r#"
+            let getterCalls = 0;
+            // The Array storage shapes must agree even though their dense-index
+            // descriptor layouts differ. The host hook reads the dedicated
+            // non-index String-key order, never either dense representation.
+            const builders = {
+              literal: () => [1, 2, 3, 4, 5],
+              fill: () => new Array(5).fill(1),
+              arrayFrom: () => Array.from({ length: 5 }, () => 1),
+            };
+            for (const [shape, build] of Object.entries(builders)) {
+              const a = build();
+              a.z = 2;
+              Object.defineProperty(a, "getter", {
+                get() { getterCalls++; throw new Error("named getter ran"); },
+                enumerable: true,
+                configurable: true,
+              });
+              Object.defineProperty(a, "hidden", {
+                value: 3,
+                enumerable: false,
+                configurable: true,
+              });
+              Object.defineProperty(a, "2", {
+                get() { getterCalls++; throw new Error("index getter ran"); },
+                enumerable: true,
+                configurable: true,
+              });
+              a["4294967295"] = "max";
+              a["-0"] = "minus";
+              Object.defineProperty(a, "+1", {
+                value: "plus",
+                enumerable: true,
+                configurable: true,
+              });
+              a["01"] = "leading";
+              a["1e0"] = "exponential";
+              a[Symbol("marker")] = 4;
+
+              const keys = __host_array_extra_keys(a);
+              if (keys.join(",") !== "z,getter,4294967295,-0,+1,01,1e0") {
+                throw new Error(shape + " wrong keys: " + keys.join(","));
+              }
+            }
+            if (getterCalls !== 0) throw new Error("getter invoked");
+            if (__host_array_extra_keys({ z: 1 }).length !== 0) {
+              throw new Error("ordinary object accepted");
+            }
+            if (__host_array_extra_keys(1).length !== 0) {
+              throw new Error("primitive accepted");
+            }
+"#,
+        );
+    }
+
+    #[test]
     fn host_exit_is_uncatchable_and_records_code() {
         let (interp, c) = run_node_script(
             r#"
@@ -1977,6 +3632,61 @@ mod node_host_tests {
         // The exit propagates structurally as `Completion::Exit` (issue #242) —
         // not a `Throw` — so no `catch`/`finally` can consume it.
         assert!(matches!(c, Completion::Exit(42)));
+    }
+
+    #[test]
+    fn host_exit_from_module_top_level_using_skips_disposer_and_records_code() {
+        // #554 review (PR #583, P1): a top-level `__host_exit` in a module
+        // must stop the module body immediately and skip Symbol.dispose,
+        // matching Node's process.exit — not fall through to a later
+        // statement, and not run disposers after synthesizing a `Normal`
+        // completion from the (empty) error state.
+        let dir = temp_case_dir("module-host-exit-using");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            globalThis.disposed = "no";
+            globalThis.after = "no";
+            using r = { [Symbol.dispose]() { globalThis.disposed = "yes"; } };
+            __host_exit(7);
+            globalThis.after = "yes";
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "disposed"), "no");
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn host_exit_from_module_export_initializer_stops_body() {
+        // The `ExportDeclaration` arm of the module-item loop needs the same
+        // `Completion::Exit` handling as the `Statement` arm: an exit from an
+        // export's initializer expression must stop the module body too.
+        let dir = temp_case_dir("module-host-exit-export");
+        let main_path = write_case_file(
+            &dir,
+            "main.mjs",
+            r#"
+            globalThis.after = "no";
+            export const x = __host_exit(5);
+            globalThis.after = "yes";
+            "#,
+        );
+        let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.run_with_path(&program, &main_path);
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2013,6 +3723,201 @@ mod node_host_tests {
         );
         assert_eq!(interp.pending_exit, Some(7)); // not overwritten by return()'s exit(99)
         assert_eq!(global_string(&interp, "cleanup"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_async_loop_disposer_skips_iterator_close() {
+        // Async functions with a suspension point use the transformed for-of
+        // path. If iteration disposal exits, IteratorClose must not invoke the
+        // iterator's user-defined return() afterward.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.cleanup = "no";
+            const iter = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                if (this.done) return { done: true };
+                this.done = true;
+                return {
+                  value: { [Symbol.dispose]() { __host_exit(3); } },
+                  done: false,
+                };
+              },
+              return() { globalThis.cleanup = "ran"; return { done: true }; },
+            };
+            async function f() {
+              for (using resource of iter) {
+                await null;
+                return 1;
+              }
+            }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_generator_loop_disposer_stops_iteration() {
+        // A resumed generator disposes the previous `for (using ...)`
+        // iteration before requesting the next value. An exit from that
+        // disposer must complete the generator without calling next() or
+        // IteratorClose afterward.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.nextCalls = 0;
+            globalThis.cleanup = "no";
+            globalThis.after = "no";
+            globalThis.iter = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                globalThis.nextCalls++;
+                if (this.done) return { done: true };
+                this.done = true;
+                return {
+                  value: { [Symbol.dispose]() { __host_exit(3); } },
+                  done: false,
+                };
+              },
+              return() { globalThis.cleanup = "ran"; return { done: true }; },
+            };
+            function* g() {
+              for (using resource of iter) {
+                yield resource;
+              }
+            }
+            globalThis.gen = g();
+            gen.next();
+            gen.next();
+            globalThis.after = "yes";
+            "#,
+        );
+        assert!(matches!(c, Completion::Exit(3)));
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_number(&interp, "nextCalls"), 1.0);
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let generator_id = global_object_id(&interp, "gen");
+        let iterator_id = global_object_id(&interp, "iter");
+        let generator = interp.get_object(generator_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert!(!interp.generator_for_of_stacks.contains_key(&generator_id));
+        assert!(!interp.generator_inline_iters.contains_key(&generator_id));
+        assert!(!interp.gc_temp_roots.contains(&iterator_id));
+    }
+
+    #[test]
+    fn host_exit_from_async_generator_loop_disposer_stops_iteration() {
+        // The async-generator queue is a completion-less boundary. It must
+        // latch an Exit returned by the resumed state machine, leave the
+        // request promise unsettled, and stop the current reaction immediately.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.nextCalls = 0;
+            globalThis.cleanup = "no";
+            globalThis.after = "no";
+            globalThis.iter = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                globalThis.nextCalls++;
+                if (this.done) return { done: true };
+                this.done = true;
+                return {
+                  value: { [Symbol.dispose]() { __host_exit(4); } },
+                  done: false,
+                };
+              },
+              return() { globalThis.cleanup = "ran"; return { done: true }; },
+            };
+            async function* g() {
+              for (using resource of iter) {
+                yield resource;
+              }
+            }
+            globalThis.gen = g();
+            gen.next().then(function () {
+              gen.next();
+              globalThis.after = "yes";
+            });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_number(&interp, "nextCalls"), 1.0);
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+        assert_eq!(global_string(&interp, "after"), "no");
+
+        let generator_id = global_object_id(&interp, "gen");
+        let iterator_id = global_object_id(&interp, "iter");
+        let generator = interp.get_object(generator_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert!(!interp.generator_for_of_stacks.contains_key(&generator_id));
+        assert!(!interp.generator_inline_iters.contains_key(&generator_id));
+        assert!(!interp.gc_temp_roots.contains(&iterator_id));
+    }
+
+    #[test]
+    fn host_exit_from_inner_async_iterator_close_skips_outer_cleanup() {
+        // An exit requested by an inner iterator's return() must stop the
+        // transformed unwind before it invokes an outer iterator's return().
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.innerCleanup = "no";
+            globalThis.outerCleanup = "no";
+            const outer = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                if (this.done) return { done: true };
+                this.done = true;
+                return { value: 1, done: false };
+              },
+              return() { globalThis.outerCleanup = "ran"; return { done: true }; },
+            };
+            const inner = {
+              done: false,
+              [Symbol.iterator]() { return this; },
+              next() {
+                if (this.done) return { done: true };
+                this.done = true;
+                return { value: 2, done: false };
+              },
+              return() {
+                globalThis.innerCleanup = "ran";
+                __host_exit(4);
+                return { done: true };
+              },
+            };
+            async function f() {
+              for (const outerValue of outer) {
+                for (const innerValue of inner) {
+                  await null;
+                  return outerValue + innerValue;
+                }
+              }
+            }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "innerCleanup"), "ran");
+        assert_eq!(global_string(&interp, "outerCleanup"), "no");
     }
 
     #[test]
@@ -2310,4 +4215,222 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(23));
         assert_eq!(global_string(&interp, "after"), "no");
     }
+
+    #[test]
+    fn host_exit_from_promise_try_callback_skips_custom_constructor() {
+        // Promise.try's catch-all match arm used to run new_promise_capability
+        // (which can invoke a custom receiver constructor) before checking
+        // whether the callback's completion was a `__host_exit` (issue #242).
+        // The exit must propagate immediately, so the constructor never runs
+        // and execution after the Promise.try call site never resumes.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            class C extends Promise {
+              constructor(executor) {
+                super(executor);
+                globalThis.log += "ctor;";
+              }
+            }
+            Promise.try.call(C, () => { globalThis.log += "cb;"; __host_exit(7); });
+            globalThis.log += "after;";
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "log"), "cb;");
+        assert!(matches!(c, Completion::Exit(7)));
+    }
+
+    #[test]
+    fn host_exit_from_promise_try_custom_reject_propagates() {
+        // Promise.try's Throw arm calls `cap.reject`, which a custom receiver
+        // constructor can bind to arbitrary user code. A `__host_exit` there
+        // (issue #242) must propagate rather than being discarded once the
+        // reject call returns.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            function C(executor) {
+              executor(() => {}, () => { globalThis.log += "reject;"; __host_exit(3); });
+            }
+            Promise.try.call(C, () => { throw new Error("boom"); });
+            globalThis.log += "after;";
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "log"), "reject;");
+        assert!(matches!(c, Completion::Exit(3)));
+    }
+}
+
+// Spec-derived property-descriptor invariants for the builtin methods installed
+// by iterators.rs, promise.rs and disposable.rs. Every built-in method must be
+// a `{ writable: true, enumerable: false, configurable: true }` own property
+// whose function object carries `name`/`length` own props that are
+// `{ writable: false, enumerable: false, configurable: true }` (ECMAScript
+// §10.2.9 SetFunctionName / §10.2.10 SetFunctionLength, §20 built-in intro).
+// Expected `name`/`length` values are the reference values reported by Node
+// (v26), an independent source of truth — not read off jsse's implementation.
+// These pin the observable shape so the define_method adoption refactor is
+// verifiably behavior-preserving.
+mod builtin_method_descriptors {
+    use super::run_script;
+
+    // JS helpers shared by every descriptor check. `checkMethod` returns the
+    // function object so aliased-symbol checks can assert value identity.
+    const PRELUDE: &str = r#"
+        function _attrs(d) { return [d.writable, d.enumerable, d.configurable]; }
+        function checkMethod(obj, objName, key, expName, expLen) {
+            var d = Object.getOwnPropertyDescriptor(obj, key);
+            if (!d) throw new Error(objName + "." + String(key) + " missing");
+            var a = _attrs(d);
+            if (!(a[0] === true && a[1] === false && a[2] === true))
+                throw new Error(objName + "." + String(key) + " method attrs " + a);
+            var f = d.value;
+            if (typeof f !== "function")
+                throw new Error(objName + "." + String(key) + " value not a function");
+            var nd = Object.getOwnPropertyDescriptor(f, "name");
+            var na = _attrs(nd);
+            if (!(na[0] === false && na[1] === false && na[2] === true))
+                throw new Error(objName + "." + String(key) + " name attrs " + na);
+            if (nd.value !== expName)
+                throw new Error(objName + "." + String(key) + " name " + nd.value + " != " + expName);
+            var ld = Object.getOwnPropertyDescriptor(f, "length");
+            var la = _attrs(ld);
+            if (!(la[0] === false && la[1] === false && la[2] === true))
+                throw new Error(objName + "." + String(key) + " length attrs " + la);
+            if (ld.value !== expLen)
+                throw new Error(objName + "." + String(key) + " length " + ld.value + " != " + expLen);
+            return f;
+        }
+        // A symbol-keyed method that must be the *same* function object as a
+        // named data-key method (e.g. @@dispose === dispose), same attrs.
+        function checkAlias(obj, objName, symKey, dataKey) {
+            var d = Object.getOwnPropertyDescriptor(obj, symKey);
+            if (!d) throw new Error(objName + " @@" + " alias missing");
+            var a = _attrs(d);
+            if (!(a[0] === true && a[1] === false && a[2] === true))
+                throw new Error(objName + " alias attrs " + a);
+            if (d.value !== obj[dataKey])
+                throw new Error(objName + " alias not same object as " + dataKey);
+        }
+    "#;
+
+    fn run_checks(checks: &str) {
+        run_script(&format!("{PRELUDE}\n{checks}"));
+    }
+
+    #[test]
+    fn promise_builtin_method_descriptors() {
+        run_checks(
+            r#"
+            var P = Promise.prototype;
+            checkMethod(P, "Promise.prototype", "then", "then", 2);
+            checkMethod(P, "Promise.prototype", "catch", "catch", 1);
+            checkMethod(P, "Promise.prototype", "finally", "finally", 1);
+            checkMethod(Promise, "Promise", "resolve", "resolve", 1);
+            checkMethod(Promise, "Promise", "reject", "reject", 1);
+            checkMethod(Promise, "Promise", "all", "all", 1);
+            checkMethod(Promise, "Promise", "allSettled", "allSettled", 1);
+            checkMethod(Promise, "Promise", "race", "race", 1);
+            checkMethod(Promise, "Promise", "any", "any", 1);
+            checkMethod(Promise, "Promise", "withResolvers", "withResolvers", 0);
+        "#,
+        );
+    }
+
+    #[test]
+    fn iterator_helper_builtin_method_descriptors() {
+        run_checks(
+            r#"
+            var I = Iterator.prototype;
+            checkMethod(I, "Iterator.prototype", "map", "map", 1);
+            checkMethod(I, "Iterator.prototype", "filter", "filter", 1);
+            checkMethod(I, "Iterator.prototype", "take", "take", 1);
+            checkMethod(I, "Iterator.prototype", "drop", "drop", 1);
+            checkMethod(I, "Iterator.prototype", "flatMap", "flatMap", 1);
+            checkMethod(I, "Iterator.prototype", "toArray", "toArray", 0);
+            checkMethod(I, "Iterator.prototype", "forEach", "forEach", 1);
+            checkMethod(I, "Iterator.prototype", "some", "some", 1);
+            checkMethod(I, "Iterator.prototype", "every", "every", 1);
+            checkMethod(I, "Iterator.prototype", "find", "find", 1);
+            checkMethod(I, "Iterator.prototype", "reduce", "reduce", 1);
+            checkMethod(Iterator, "Iterator", "from", "from", 1);
+            checkMethod(Iterator, "Iterator", "concat", "concat", 0);
+        "#,
+        );
+    }
+
+    #[test]
+    fn disposable_stack_builtin_method_descriptors() {
+        run_checks(
+            r#"
+            var D = DisposableStack.prototype;
+            checkMethod(D, "DisposableStack.prototype", "dispose", "dispose", 0);
+            checkMethod(D, "DisposableStack.prototype", "use", "use", 1);
+            checkMethod(D, "DisposableStack.prototype", "adopt", "adopt", 2);
+            checkMethod(D, "DisposableStack.prototype", "defer", "defer", 1);
+            checkMethod(D, "DisposableStack.prototype", "move", "move", 0);
+            checkAlias(D, "DisposableStack.prototype", Symbol.dispose, "dispose");
+
+            var A = AsyncDisposableStack.prototype;
+            checkMethod(A, "AsyncDisposableStack.prototype", "disposeAsync", "disposeAsync", 0);
+            checkMethod(A, "AsyncDisposableStack.prototype", "use", "use", 1);
+            checkMethod(A, "AsyncDisposableStack.prototype", "adopt", "adopt", 2);
+            checkMethod(A, "AsyncDisposableStack.prototype", "defer", "defer", 1);
+            checkMethod(A, "AsyncDisposableStack.prototype", "move", "move", 0);
+            checkAlias(A, "AsyncDisposableStack.prototype", Symbol.asyncDispose, "disposeAsync");
+        "#,
+        );
+    }
+}
+
+/// Pins the `with_gc_root_scope` seam: whatever the body pushes onto the
+/// temp-root stack is bulk-unrooted on *every* exit path — normal return and
+/// early return alike — while roots taken before the scope are left untouched.
+/// This is the interface the `array.rs` epilogue migration relies on, exercised
+/// through the seam rather than by reaching into `gc_temp_roots` directly.
+#[test]
+fn with_gc_root_scope_truncates_on_every_exit() {
+    let mut interp = Interpreter::new();
+
+    // A value rooted before the scope must survive it.
+    interp.gc_root_value(&JsValue::object(9_001));
+    let baseline = interp.gc_root_frame();
+
+    // Normal completion: temps rooted inside are released; the body value returns.
+    let returned = interp.with_gc_root_scope(|i| {
+        i.gc_root_value(&JsValue::object(9_002));
+        i.gc_root_value(&JsValue::object(9_003));
+        assert_eq!(
+            i.gc_root_frame(),
+            baseline + 2,
+            "temps rooted inside the scope"
+        );
+        42u32
+    });
+    assert_eq!(returned, 42);
+    assert_eq!(
+        interp.gc_root_frame(),
+        baseline,
+        "scope truncated back to baseline on normal return",
+    );
+
+    // Early return from the body: the scope must still truncate.
+    let outcome: Result<(), ()> = interp.with_gc_root_scope(|i| {
+        i.gc_root_value(&JsValue::object(9_004));
+        if i.gc_root_frame() == baseline + 1 {
+            return Err(());
+        }
+        Ok(())
+    });
+    assert_eq!(outcome, Err(()));
+    assert_eq!(
+        interp.gc_root_frame(),
+        baseline,
+        "scope truncated back to baseline on early return",
+    );
+
+    // The pre-scope root is untouched.
+    assert!(interp.gc_temp_roots.contains(&9_001));
 }

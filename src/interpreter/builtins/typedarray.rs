@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::interpreter::types::BufferData;
-use crate::types::{JsBigInt, JsObject, JsString, JsValue, number_ops};
+use crate::types::{JsBigInt, JsValue, ValueKind, number_ops};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -38,186 +38,55 @@ impl Interpreter {
             .class_name = "ArrayBuffer".to_string();
         self.realm_mut().arraybuffer_prototype = Some(ab_proto_id);
 
-        // byteLength getter
+        // byteLength getter — 0 when detached, else the byte length.
         self.define_getter(ab_proto_id, "byteLength", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Detached,
-                Bytes(usize),
-            }
-            let probe = if let JsValue::Object(o) = this_val {
-                interp
-                    .get_object_cell(o.id)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if let Some(buf_data) = r.arraybuffer_data() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()) {
-                                Probe::Detached
-                            } else {
-                                Probe::Bytes(buffer_len(buf_data))
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::Shared | Probe::NotAB => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
-                Probe::Bytes(n) => Completion::Normal(JsValue::Number(n as f64)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::number(if s.is_detached {
+                    0.0
+                } else {
+                    s.byte_length as f64
+                })),
+                Err(c) => c,
             }
         });
 
         // detached getter
         self.define_getter(ab_proto_id, "detached", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Detached(bool),
-            }
-            let probe = if let JsValue::Object(o) = this_val {
-                interp
-                    .get_object_cell(o.id)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else {
-                                let det =
-                                    r.arraybuffer_detached().as_ref().is_some_and(|d| d.get());
-                                Probe::Detached(det)
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Detached(b) => Completion::Normal(JsValue::Boolean(b)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.is_detached)),
+                Err(c) => c,
             }
         });
 
-        // resizable getter
+        // resizable getter — whether a maximum byte length was set.
         self.define_getter(ab_proto_id, "resizable", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Resizable(bool),
-            }
-            let probe = if let JsValue::Object(o) = this_val {
-                interp
-                    .get_object_cell(o.id)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else {
-                                Probe::Resizable(r.arraybuffer_max_byte_length().is_some())
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Resizable(b) => Completion::Normal(JsValue::Boolean(b)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.max_byte_length.is_some())),
+                Err(c) => c,
             }
         });
 
         // immutable getter
         self.define_getter(ab_proto_id, "immutable", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Immutable(bool),
-            }
-            let probe = if let JsValue::Object(o) = this_val {
-                interp
-                    .get_object_cell(o.id)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else {
-                                Probe::Immutable(r.arraybuffer_is_immutable())
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                }
-                Probe::Immutable(b) => Completion::Normal(JsValue::Boolean(b)),
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.is_immutable)),
+                Err(c) => c,
             }
         });
 
-        // maxByteLength getter
+        // maxByteLength getter — 0 when detached, else the max capacity,
+        // defaulting to the current length for a non-resizable buffer.
         self.define_getter(ab_proto_id, "maxByteLength", |interp, this_val, _args| {
-            enum Probe {
-                NotAB,
-                Shared,
-                Detached,
-                Max(usize),
-            }
-            let probe = if let JsValue::Object(o) = this_val {
-                interp
-                    .get_object_cell(o.id)
-                    .map(|cell| {
-                        let r = cell.borrow();
-                        if r.arraybuffer_data().is_some() {
-                            if r.arraybuffer_is_shared() {
-                                Probe::Shared
-                            } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()) {
-                                Probe::Detached
-                            } else {
-                                let max = r
-                                    .arraybuffer_max_byte_length()
-                                    .unwrap_or_else(|| buffer_len(r.arraybuffer_data().unwrap()));
-                                Probe::Max(max)
-                            }
-                        } else {
-                            Probe::NotAB
-                        }
-                    })
-                    .unwrap_or(Probe::NotAB)
-            } else {
-                Probe::NotAB
-            };
-            match probe {
-                Probe::NotAB | Probe::Shared => {
-                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            match require_array_buffer(interp, this_val) {
+                Ok(s) => {
+                    let max = if s.is_detached {
+                        0
+                    } else {
+                        s.max_byte_length.unwrap_or(s.byte_length)
+                    };
+                    Completion::Normal(JsValue::number(max as f64))
                 }
-                Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
-                Probe::Max(n) => Completion::Normal(JsValue::Number(n as f64)),
+                Err(c) => c,
             }
         });
 
@@ -227,8 +96,8 @@ impl Interpreter {
                 "slice".to_string(),
                 2,
                 |interp, this_val, args| {
-                    if let JsValue::Object(o) = this_val
-                        && let Some(obj) = interp.get_object(o.id)
+                    if let Some(o) = this_val.as_object_id()
+                        && let Some(obj) = interp.get_object(o)
                     {
                         {
                             let obj_ref = obj.borrow();
@@ -254,43 +123,25 @@ impl Interpreter {
                             let obj_ref = obj.borrow();
                             buffer_len(obj_ref.arraybuffer_data().unwrap())
                         };
-                        let len = buf_len as f64;
-                        let start_arg = if let Some(a) = args.first() {
-                            match interp.to_number_value(a) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
+                        // Steps 6-9: resolve start/end via ToIntegerOrInfinity then
+                        // clamp against the pre-coercion length. Coerce start before
+                        // end; a truncating relative-index resolution (e.g. -0.9 → 0,
+                        // not len + (-0.9)) is shared with the Array/TypedArray/String
+                        // range methods.
+                        let start = match resolve_start_index(interp, args.first(), buf_len) {
+                            Ok(v) => v,
+                            Err(c) => return c,
                         };
-                        let start = if start_arg.is_nan() {
-                            0
-                        } else if start_arg < 0.0 {
-                            ((len + start_arg) as isize).max(0) as usize
-                        } else {
-                            (start_arg as usize).min(buf_len)
-                        };
-                        let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                            match interp.to_number_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len
-                        };
-                        let end = if end_arg.is_nan() {
-                            0
-                        } else if end_arg < 0.0 {
-                            ((len + end_arg) as isize).max(0) as usize
-                        } else {
-                            (end_arg as usize).min(buf_len)
+                        let end = match resolve_end_index(interp, args.get(1), buf_len) {
+                            Ok(v) => v,
+                            Err(c) => return c,
                         };
                         let new_len = end.saturating_sub(start);
 
                         // SpeciesConstructor(O, %ArrayBuffer%)
                         let ab_ctor = interp
                             .get_global_var("ArrayBuffer")
-                            .unwrap_or(JsValue::Undefined);
+                            .unwrap_or(JsValue::UNDEFINED);
                         let ctor = match interp.species_constructor(this_val, &ab_ctor) {
                             Ok(c) => c,
                             Err(e) => return Completion::Throw(e),
@@ -298,16 +149,16 @@ impl Interpreter {
                         // Construct(ctor, «newLen»)
                         let new_val = match interp.construct_with_new_target(
                             &ctor,
-                            &[JsValue::Number(new_len as f64)],
+                            &[JsValue::number(new_len as f64)],
                             ctor.clone(),
                         ) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => return Completion::Normal(JsValue::Undefined),
+                            _ => return Completion::Normal(JsValue::UNDEFINED),
                         };
                         // Validate: must be an ArrayBuffer, not shared, not detached, not same, byteLength >= newLen
-                        let new_id = if let JsValue::Object(ref no) = new_val {
-                            no.id
+                        let new_id = if let Some(no) = new_val.as_object_id() {
+                            no
                         } else {
                             return Completion::Throw(interp.create_type_error(
                                 "species constructor must return an ArrayBuffer",
@@ -342,7 +193,7 @@ impl Interpreter {
                                 "species constructor must return an ArrayBuffer",
                             ));
                         }
-                        if new_id == o.id {
+                        if new_id == o {
                             return Completion::Throw(interp.create_type_error(
                                 "species constructor must not return the same ArrayBuffer",
                             ));
@@ -393,8 +244,8 @@ impl Interpreter {
             "transfer".to_string(),
             0,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
@@ -412,16 +263,16 @@ impl Interpreter {
                         );
                     }
                     // Step 3-4: newByteLength
-                    let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len_arg = args.first().unwrap_or(JsValue::undefined_ref());
                     let old_len = {
                         let obj_ref = obj.borrow();
                         buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
-                    let new_len = if matches!(new_len_arg, JsValue::Undefined) {
+                    let new_len = if new_len_arg.is_undefined() {
                         old_len
                     } else {
                         match interp.to_index(new_len_arg) {
-                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                            Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
                         }
@@ -479,7 +330,7 @@ impl Interpreter {
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
                     let id = interp.create_arraybuffer_resizable(new_data, max_byte_length);
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                    return Completion::Normal(JsValue::object(id));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
@@ -493,8 +344,8 @@ impl Interpreter {
             "transferToFixedLength".to_string(),
             0,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
@@ -515,12 +366,12 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
-                    let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
-                    let new_len = if matches!(new_len_arg, JsValue::Undefined) {
+                    let new_len_arg = args.first().unwrap_or(JsValue::undefined_ref());
+                    let new_len = if new_len_arg.is_undefined() {
                         old_len
                     } else {
                         match interp.to_index(new_len_arg) {
-                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                            Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
                         }
@@ -563,7 +414,7 @@ impl Interpreter {
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
                     let id = interp.create_arraybuffer(new_data);
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                    return Completion::Normal(JsValue::object(id));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
@@ -577,8 +428,8 @@ impl Interpreter {
             "transferToImmutable".to_string(),
             0,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
@@ -599,12 +450,12 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
-                    let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
-                    let new_len = if matches!(new_len_arg, JsValue::Undefined) {
+                    let new_len_arg = args.first().unwrap_or(JsValue::undefined_ref());
+                    let new_len = if new_len_arg.is_undefined() {
                         old_len
                     } else {
                         match interp.to_index(new_len_arg) {
-                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                            Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
                         }
@@ -655,7 +506,7 @@ impl Interpreter {
                     {
                         ab.is_immutable = true;
                     }
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                    return Completion::Normal(JsValue::object(id));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
@@ -673,12 +524,12 @@ impl Interpreter {
             2,
             |interp, this_val, args| {
                 // Step 1-2: RequireInternalSlot(O, [[ArrayBufferData]])
-                let JsValue::Object(o) = this_val else {
+                let Some(o) = this_val.as_object_id() else {
                     return Completion::Throw(interp.create_type_error(
                         "ArrayBuffer.prototype.sliceToImmutable called on non-object",
                     ));
                 };
-                let Some(obj) = interp.get_object(o.id) else {
+                let Some(obj) = interp.get_object(o) else {
                     return Completion::Throw(interp.create_type_error(
                         "ArrayBuffer.prototype.sliceToImmutable called on invalid receiver",
                     ));
@@ -714,51 +565,18 @@ impl Interpreter {
                     let obj_ref = obj.borrow();
                     buffer_len(obj_ref.arraybuffer_data().unwrap())
                 };
-                let len_f = len as f64;
-
-                // ResolveBounds via ToIntegerOrInfinity semantics.
-                // Truncate is needed: e.g. -0.9 → 0, not (len + -0.9).
-                let resolve = |num: f64| -> usize {
-                    if num.is_nan() || num == 0.0 {
-                        return 0;
-                    }
-                    if num == f64::NEG_INFINITY {
-                        return 0;
-                    }
-                    if num == f64::INFINITY {
-                        return len;
-                    }
-                    let int_val = num.trunc();
-                    if int_val < 0.0 {
-                        ((len_f + int_val) as isize).max(0) as usize
-                    } else if int_val >= len_f {
-                        len
-                    } else {
-                        int_val as usize
-                    }
+                // Step 6: ResolveBounds(len, start, end) — coerce start first, then
+                // end, via the shared truncating relative-index resolution
+                // (ToIntegerOrInfinity then clamp; e.g. -0.9 → 0, not len + (-0.9)),
+                // as used by ArrayBuffer/SharedArrayBuffer.prototype.slice.
+                let first = match resolve_start_index(interp, args.first(), len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
                 };
-
-                // Step 6: ResolveBounds(len, start, end). Coerce start first, then end.
-                let start_num = if let Some(a) = args.first() {
-                    match interp.to_number_value(a) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
+                let final_to = match resolve_end_index(interp, args.get(1), len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
                 };
-                let first = resolve(start_num);
-
-                let end_undefined = args.len() < 2 || matches!(args[1], JsValue::Undefined);
-                let end_num = if end_undefined {
-                    len_f
-                } else {
-                    match interp.to_number_value(&args[1]) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-                let final_to = resolve(end_num);
 
                 // Step 9: newLen = max(final - first, 0)
                 let new_len = final_to.saturating_sub(first);
@@ -803,7 +621,7 @@ impl Interpreter {
                 {
                     ab.is_immutable = true;
                 }
-                Completion::Normal(JsValue::Object(JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
         self.get_object_cell_expect(ab_proto_id)
@@ -815,8 +633,8 @@ impl Interpreter {
             "resize".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let (is_ab, is_shared, is_immutable, max_byte_length) = {
                         let obj_ref = obj.borrow();
@@ -836,9 +654,9 @@ impl Interpreter {
                         );
                     }
                     // Step 4: ToIndex(newLength) — BEFORE detach check
-                    let new_len_val = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len_val = args.first().unwrap_or(JsValue::undefined_ref());
                     let new_len = match interp.to_index(new_len_val) {
-                        Completion::Normal(JsValue::Number(n)) => n as usize,
+                        Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => 0,
                     };
@@ -873,7 +691,7 @@ impl Interpreter {
                     } else {
                         interp.gc_untrack_external_bytes(old_len - new_len);
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
@@ -883,11 +701,7 @@ impl Interpreter {
             .insert_builtin("resize".to_string(), resize_fn);
 
         // @@toStringTag
-        let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
-        let sym_key = "Symbol(Symbol.toStringTag)".to_string();
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(sym_key, PropertyDescriptor::data(tag, false, false, true));
+        self.define_to_string_tag(ab_proto_id, "ArrayBuffer");
 
         // ArrayBuffer constructor
         let ab_proto_clone_id = ab_proto_id;
@@ -900,25 +714,24 @@ impl Interpreter {
                         interp.create_type_error("Constructor ArrayBuffer requires 'new'"),
                     );
                 }
-                let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let len_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = match interp.to_index(&len_val) {
-                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                    Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
                 };
                 let max_byte_length = if args.len() > 1 {
-                    if let JsValue::Object(opts_o) = &args[1] {
-                        let opts_val = JsValue::Object(opts_o.clone());
+                    if let Some(opts_o) = args[1].as_object_id() {
+                        let opts_val = JsValue::object(opts_o);
                         let max_val =
-                            match interp.get_object_property(opts_o.id, "maxByteLength", &opts_val)
-                            {
+                            match interp.get_object_property(opts_o, "maxByteLength", &opts_val) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
-                        if !matches!(max_val, JsValue::Undefined) {
+                        if !max_val.is_undefined() {
                             let max = match interp.to_index(&max_val) {
-                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
@@ -981,7 +794,7 @@ impl Interpreter {
                 }
                 interp.gc_track_external_bytes(buf_len);
                 let id = obj_id;
-                Completion::Normal(JsValue::Object(JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
 
@@ -990,27 +803,27 @@ impl Interpreter {
             "isView".to_string(),
             1,
             |interp, _this, args| {
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(o) = &arg
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if let Some(o) = arg.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.typed_array_info().is_some() || obj_ref.data_view_info().is_some() {
-                        return Completion::Normal(JsValue::Boolean(true));
+                        return Completion::Normal(JsValue::boolean(true));
                     }
                 }
-                Completion::Normal(JsValue::Boolean(false))
+                Completion::Normal(JsValue::boolean(false))
             },
         ));
         // Wire ArrayBuffer.prototype to the proto object with all the methods
         let ab_proto_val = {
             let id = ab_proto_id;
-            JsValue::Object(crate::types::JsObject { id })
+            JsValue::object(id)
         };
-        if let JsValue::Object(o) = &ctor
-            && self.get_object_cell(o.id).is_some()
+        if let Some(o) = ctor.as_object_id()
+            && self.get_object_cell(o).is_some()
         {
-            let ctor_id = o.id;
+            let ctor_id = o;
             {
                 let mut b = self.get_object_cell_expect(ctor_id).borrow_mut();
                 b.insert_property(
@@ -1029,7 +842,7 @@ impl Interpreter {
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.species)".to_string(),
+                    JsPropertyKey::well_known_symbol("species"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,
@@ -1048,8 +861,8 @@ impl Interpreter {
             );
 
         // Mark deferred_construct: ArrayBuffer validates args before OrdinaryCreateFromConstructor
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
@@ -1096,8 +909,8 @@ impl Interpreter {
     }
 
     pub(crate) fn detach_arraybuffer(&mut self, ab_val: &JsValue) -> Completion {
-        if let JsValue::Object(o) = ab_val
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ab_val.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             let old_len;
             {
@@ -1132,7 +945,7 @@ impl Interpreter {
                 }
             }
             self.gc_untrack_external_bytes(old_len);
-            return Completion::Normal(JsValue::Undefined);
+            return Completion::Normal(JsValue::UNDEFINED);
         }
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
     }
@@ -1146,50 +959,28 @@ impl Interpreter {
 
         // byteLength getter
         self.define_getter(sab_proto_id, "byteLength", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object_cell(o.id)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_is_shared()
-                    && let Some(buf) = obj_ref.arraybuffer_data()
-                {
-                    return Completion::Normal(JsValue::Number(buffer_len(buf) as f64));
-                }
+            match require_shared_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::number(s.byte_length as f64)),
+                Err(c) => c,
             }
-            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
         });
 
-        // maxByteLength getter
+        // maxByteLength getter — max capacity, defaulting to the current length.
         self.define_getter(sab_proto_id, "maxByteLength", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object_cell(o.id)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_is_shared()
-                    && let Some(buf) = obj_ref.arraybuffer_data()
-                {
-                    let max = obj_ref
-                        .arraybuffer_max_byte_length()
-                        .unwrap_or_else(|| buffer_len(buf));
-                    return Completion::Normal(JsValue::Number(max as f64));
-                }
+            match require_shared_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::number(
+                    s.max_byte_length.unwrap_or(s.byte_length) as f64,
+                )),
+                Err(c) => c,
             }
-            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
         });
 
-        // growable getter
+        // growable getter — whether a maximum byte length was set.
         self.define_getter(sab_proto_id, "growable", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object(o.id)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_is_shared() {
-                    return Completion::Normal(JsValue::Boolean(
-                        obj_ref.arraybuffer_max_byte_length().is_some(),
-                    ));
-                }
+            match require_shared_array_buffer(interp, this_val) {
+                Ok(s) => Completion::Normal(JsValue::boolean(s.max_byte_length.is_some())),
+                Err(c) => c,
             }
-            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
         });
 
         // grow(newLength)
@@ -1197,8 +988,8 @@ impl Interpreter {
             "grow".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let (is_shared, max_byte_length) = {
                         let obj_ref = obj.borrow();
@@ -1217,9 +1008,9 @@ impl Interpreter {
                             interp.create_type_error("SharedArrayBuffer is not growable"),
                         );
                     }
-                    let new_len_val = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len_val = args.first().unwrap_or(JsValue::undefined_ref());
                     let new_len = match interp.to_index(new_len_val) {
-                        Completion::Normal(JsValue::Number(n)) => n as usize,
+                        Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => 0,
                     };
@@ -1240,7 +1031,7 @@ impl Interpreter {
                         );
                     }
                     buf.borrow_mut().resize(new_len, 0u8);
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
@@ -1254,8 +1045,8 @@ impl Interpreter {
             "slice".to_string(),
             2,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let buf_len = {
                         let obj_ref = obj.borrow();
@@ -1272,59 +1063,40 @@ impl Interpreter {
                             );
                         }
                     };
-                    let len = buf_len as f64;
-                    let start_arg = if let Some(a) = args.first() {
-                        match interp.to_number_value(a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        0.0
+                    // Resolve start/end via ToIntegerOrInfinity then clamp against
+                    // the byte length, sharing the truncating relative-index
+                    // resolution used by ArrayBuffer.prototype.slice and the
+                    // Array/TypedArray/String range methods.
+                    let start = match resolve_start_index(interp, args.first(), buf_len) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let start = if start_arg.is_nan() {
-                        0
-                    } else if start_arg < 0.0 {
-                        ((len + start_arg) as isize).max(0) as usize
-                    } else {
-                        (start_arg as usize).min(buf_len)
-                    };
-                    let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        match interp.to_number_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        len
-                    };
-                    let end = if end_arg.is_nan() {
-                        0
-                    } else if end_arg < 0.0 {
-                        ((len + end_arg) as isize).max(0) as usize
-                    } else {
-                        (end_arg as usize).min(buf_len)
+                    let end = match resolve_end_index(interp, args.get(1), buf_len) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let new_len = end.saturating_sub(start);
 
                     // SpeciesConstructor(O, %SharedArrayBuffer%)
                     let sab_ctor = interp
                         .get_global_var("SharedArrayBuffer")
-                        .unwrap_or(JsValue::Undefined);
+                        .unwrap_or(JsValue::UNDEFINED);
                     let ctor = match interp.species_constructor(this_val, &sab_ctor) {
                         Ok(c) => c,
                         Err(e) => return Completion::Throw(e),
                     };
                     let new_val = match interp.construct_with_new_target(
                         &ctor,
-                        &[JsValue::Number(new_len as f64)],
+                        &[JsValue::number(new_len as f64)],
                         ctor.clone(),
                     ) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(JsValue::Undefined),
+                        _ => return Completion::Normal(JsValue::UNDEFINED),
                     };
                     // Validate result
-                    let new_id = if let JsValue::Object(ref no) = new_val {
-                        no.id
+                    let new_id = if let Some(no) = new_val.as_object_id() {
+                        no
                     } else {
                         return Completion::Throw(
                             interp.create_type_error("species constructor must return a SharedArrayBuffer"),
@@ -1342,7 +1114,7 @@ impl Interpreter {
                             interp.create_type_error("species constructor must return a SharedArrayBuffer"),
                         );
                     }
-                    if new_id == o.id {
+                    if new_id == o {
                         return Completion::Throw(
                             interp.create_type_error("species constructor must not return the same SharedArrayBuffer"),
                         );
@@ -1381,19 +1153,7 @@ impl Interpreter {
             .insert_builtin("slice".to_string(), slice_fn);
 
         // @@toStringTag
-        {
-            let tag = JsValue::String(JsString::from_str("SharedArrayBuffer"));
-            let sym_key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
-            let desc = PropertyDescriptor::data(tag, false, false, true);
-            self.get_object_cell_expect(sab_proto_id)
-                .borrow_mut()
-                .property_order
-                .push(sym_key.clone());
-            self.get_object_cell_expect(sab_proto_id)
-                .borrow_mut()
-                .properties
-                .insert(sym_key, desc);
-        }
+        self.define_to_string_tag(sab_proto_id, "SharedArrayBuffer");
 
         // SharedArrayBuffer constructor
         let sab_proto_clone_id = sab_proto_id;
@@ -1406,26 +1166,25 @@ impl Interpreter {
                         interp.create_type_error("Constructor SharedArrayBuffer requires 'new'"),
                     );
                 }
-                let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let len_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = match interp.to_index(&len_val) {
-                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                    Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
                 };
                 let max_byte_length = if args.len() > 1 {
-                    if let JsValue::Object(opts_o) = &args[1] {
-                        let opts_val = JsValue::Object(opts_o.clone());
+                    if let Some(opts_o) = args[1].as_object_id() {
+                        let opts_val = JsValue::object(opts_o);
                         // Use Get() (get_object_property) to trigger getters
                         let max_val =
-                            match interp.get_object_property(opts_o.id, "maxByteLength", &opts_val)
-                            {
+                            match interp.get_object_property(opts_o, "maxByteLength", &opts_val) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
-                        if !matches!(max_val, JsValue::Undefined) {
+                        if !max_val.is_undefined() {
                             let max = match interp.to_index(&max_val) {
-                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
@@ -1482,19 +1241,19 @@ impl Interpreter {
                     );
                 }
                 let id = obj_id;
-                Completion::Normal(JsValue::Object(JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
 
         // Wire SharedArrayBuffer.prototype_id
         let sab_proto_val = {
             let id = sab_proto_id;
-            JsValue::Object(crate::types::JsObject { id })
+            JsValue::object(id)
         };
-        if let JsValue::Object(o) = &ctor
-            && self.get_object_cell(o.id).is_some()
+        if let Some(o) = ctor.as_object_id()
+            && self.get_object_cell(o).is_some()
         {
-            let ctor_id = o.id;
+            let ctor_id = o;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -1511,7 +1270,7 @@ impl Interpreter {
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.species)".to_string(),
+                    JsPropertyKey::well_known_symbol("species"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,
@@ -1529,8 +1288,8 @@ impl Interpreter {
                 PropertyDescriptor::data(ctor.clone(), true, false, true),
             );
 
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
@@ -1552,45 +1311,45 @@ impl Interpreter {
 
         // byteOffset getter
         self.define_getter(proto_id, "byteOffset", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object_cell(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object_cell(o)
             {
                 let obj_ref = obj.borrow();
                 if let Some(ta) = obj_ref.typed_array_info() {
                     if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                        return Completion::Normal(JsValue::Number(0.0));
+                        return Completion::Normal(JsValue::number(0.0));
                     }
-                    return Completion::Normal(JsValue::Number(ta.byte_offset as f64));
+                    return Completion::Normal(JsValue::number(ta.byte_offset as f64));
                 }
             }
             Completion::Throw(interp.create_type_error("not a TypedArray"))
         });
         // byteLength getter
         self.define_getter(proto_id, "byteLength", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object_cell(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object_cell(o)
             {
                 let obj_ref = obj.borrow();
                 if let Some(ta) = obj_ref.typed_array_info() {
                     if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                        return Completion::Normal(JsValue::Number(0.0));
+                        return Completion::Normal(JsValue::number(0.0));
                     }
-                    return Completion::Normal(JsValue::Number(typed_array_byte_length(ta) as f64));
+                    return Completion::Normal(JsValue::number(typed_array_byte_length(ta) as f64));
                 }
             }
             Completion::Throw(interp.create_type_error("not a TypedArray"))
         });
         // length getter
         self.define_getter(proto_id, "length", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object_cell(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object_cell(o)
             {
                 let obj_ref = obj.borrow();
                 if let Some(ta) = obj_ref.typed_array_info() {
                     if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                        return Completion::Normal(JsValue::Number(0.0));
+                        return Completion::Normal(JsValue::number(0.0));
                     }
-                    return Completion::Normal(JsValue::Number(typed_array_length(ta) as f64));
+                    return Completion::Normal(JsValue::number(typed_array_length(ta) as f64));
                 }
             }
             Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1598,14 +1357,14 @@ impl Interpreter {
 
         // buffer getter (returns the ArrayBuffer object - we need to find it)
         self.define_getter(proto_id, "buffer", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object(o)
             {
                 let obj_ref = obj.borrow();
                 if obj_ref.typed_array_info().is_some()
                     && let Some(buf_id) = obj_ref.view_buffer_object_id()
                 {
-                    return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
+                    return Completion::Normal(JsValue::object(buf_id));
                 }
             }
             Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1623,36 +1382,27 @@ impl Interpreter {
             "at".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    // Capture len BEFORE argument coercion (may resize buffer)
-                    let len = typed_array_length(&ta) as i64;
-                    let idx_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let idx = match interp.to_integer_or_infinity_value(&idx_val) {
-                        Ok(n) => n as i64,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let actual = if idx < 0 { len + idx } else { idx };
-                    if actual < 0 || actual >= len {
-                        return Completion::Normal(JsValue::Undefined);
-                    }
-                    // Use Get semantics (checks OOB post-resize via is_valid_integer_index)
-                    let key = actual.to_string();
-                    return interp.get_object_property(o.id, &key, this_val);
-                }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let o = this_val
+                    .as_object_id()
+                    .expect("validated: receiver is a TypedArray object");
+                // Capture len BEFORE argument coercion (may resize buffer)
+                let len = typed_array_length(&ta);
+                let idx_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let idx = match interp.to_integer_or_infinity_value(&idx_val) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let actual = match resolve_element_index(idx, len) {
+                    Some(k) => k,
+                    None => return Completion::Normal(JsValue::UNDEFINED),
+                };
+                // Use Get semantics (checks OOB post-resize via is_valid_integer_index)
+                let key = actual.to_string();
+                interp.get_object_property(o, &key, this_val)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1665,8 +1415,8 @@ impl Interpreter {
             1,
             |interp, this_val, args| {
                 // Step 1: ValidateTypedArray(this)
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
@@ -1680,7 +1430,7 @@ impl Interpreter {
                         return c;
                     }
 
-                    let source = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let source = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
                     // Step 2: ToIntegerOrInfinity(offset) BEFORE detach check
                     let offset_f = if args.len() > 1 {
@@ -1704,8 +1454,8 @@ impl Interpreter {
                     }
 
                     // Check if source is a TypedArray
-                    if let JsValue::Object(src_o) = &source
-                        && let Some(src_obj) = interp.get_object_cell(src_o.id)
+                    if let Some(src_o) = source.as_object_id()
+                        && let Some(src_obj) = interp.get_object_cell(src_o)
                     {
                         let is_ta = src_obj.borrow().typed_array_info().is_some();
                         if is_ta {
@@ -1766,7 +1516,7 @@ impl Interpreter {
                                     typed_array_set_index(&ta, offset + i, &val);
                                 }
                             }
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                     }
 
@@ -1777,9 +1527,8 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let JsValue::Object(src_o) = &src_obj {
-                        let len_val = match interp.get_object_property(src_o.id, "length", &src_obj)
-                        {
+                    if let Some(src_o) = src_obj.as_object_id() {
+                        let len_val = match interp.get_object_property(src_o, "length", &src_obj) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -1793,14 +1542,11 @@ impl Interpreter {
                             );
                         }
                         for i in 0..src_len {
-                            let val = match interp.get_object_property(
-                                src_o.id,
-                                &i.to_string(),
-                                &src_obj,
-                            ) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
+                            let val =
+                                match interp.get_object_property(src_o, &i.to_string(), &src_obj) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
                             // Coerce with proper ContentType
                             let coerced = match interp.typed_array_coerce_value(ta.kind, &val) {
                                 Ok(v) => v,
@@ -1812,7 +1558,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
@@ -1826,16 +1572,16 @@ impl Interpreter {
             "subarray".to_string(),
             2,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let (ta, buf_val) = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
                             let bv = obj_ref
                                 .view_buffer_object_id()
-                                .map(|id| JsValue::Object(JsObject { id }))
-                                .unwrap_or(JsValue::Undefined);
+                                .map(JsValue::object)
+                                .unwrap_or(JsValue::UNDEFINED);
                             (ta.clone(), bv)
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
@@ -1847,39 +1593,25 @@ impl Interpreter {
                     } else {
                         typed_array_length(&ta) as i64
                     };
-                    let begin = {
-                        let n = to_integer_or_infinity(if let Some(a) = args.first() {
-                            match interp.to_number_value(a) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
-                        });
-                        resolve_relative_index(n, src_len as usize)
+                    let begin = match resolve_start_index(interp, args.first(), src_len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let end_is_undefined =
-                        args.len() <= 1 || matches!(args.get(1), Some(JsValue::Undefined));
-                    let end = {
-                        let n = if !end_is_undefined {
-                            match interp.to_integer_or_infinity_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            src_len as f64
-                        };
-                        resolve_relative_index(n, src_len as usize)
+                        args.len() <= 1 || args.get(1).is_some_and(|v| v.is_undefined());
+                    let end = match resolve_end_index(interp, args.get(1), src_len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let new_len = end.saturating_sub(begin);
                     let bpe = ta.kind.bytes_per_element();
                     let new_offset = ta.byte_offset + begin * bpe;
 
-                    let offset_val = JsValue::Number(new_offset as f64);
+                    let offset_val = JsValue::number(new_offset as f64);
                     let ctor_args: Vec<JsValue> = if end_is_undefined && ta.is_length_tracking {
                         vec![buf_val, offset_val]
                     } else {
-                        vec![buf_val, offset_val, JsValue::Number(new_len as f64)]
+                        vec![buf_val, offset_val, JsValue::number(new_len as f64)]
                     };
                     return match interp.typed_array_species_create(this_val, &ctor_args) {
                         Ok(v) => Completion::Normal(v),
@@ -1898,8 +1630,8 @@ impl Interpreter {
             "slice".to_string(),
             2,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
@@ -1913,42 +1645,28 @@ impl Interpreter {
                         }
                     };
                     let len = typed_array_length(&ta) as i64;
-                    let begin = {
-                        let n = to_integer_or_infinity(if let Some(a) = args.first() {
-                            match interp.to_number_value(a) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
-                        });
-                        resolve_relative_index(n, len as usize)
+                    let begin = match resolve_start_index(interp, args.first(), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let end = {
-                        let n = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                            match interp.to_integer_or_infinity_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len as f64
-                        };
-                        resolve_relative_index(n, len as usize)
+                    let end = match resolve_end_index(interp, args.get(1), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let count = end.saturating_sub(begin);
 
                     // Use TypedArraySpeciesCreate
                     let new_ta_val = match interp
-                        .typed_array_species_create(this_val, &[JsValue::Number(count as f64)])
+                        .typed_array_species_create(this_val, &[JsValue::number(count as f64)])
                     {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
                     // TypedArrayCreateFromConstructor(..., accessMode=~write~):
                     // reject result backed by immutable buffer before any writes.
-                    if let JsValue::Object(new_o) = &new_ta_val {
+                    if let Some(new_o) = new_ta_val.as_object_id() {
                         let new_info_opt = interp
-                            .get_object_cell(new_o.id)
+                            .get_object_cell(new_o)
                             .and_then(|cell| cell.borrow().typed_array_info().cloned());
                         if let Some(info) = new_info_opt
                             && ta_buffer_is_immutable(interp, &info)
@@ -1977,8 +1695,8 @@ impl Interpreter {
                         let count = end.saturating_sub(begin);
 
                         if count > 0
-                            && let JsValue::Object(new_o) = &new_ta_val
-                            && let Some(new_obj) = interp.get_object(new_o.id)
+                            && let Some(new_o) = new_ta_val.as_object_id()
+                            && let Some(new_obj) = interp.get_object(new_o)
                         {
                             let new_ta = {
                                 let obj_ref = new_obj.borrow();
@@ -2033,83 +1751,53 @@ impl Interpreter {
             "copyWithin".to_string(),
             2,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
-                        return c;
-                    }
-                    let len = typed_array_length(&ta) as i64;
-                    let target = {
-                        let n = match interp.to_integer_or_infinity_value(
-                            args.first().unwrap_or(&JsValue::Undefined),
-                        ) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        resolve_relative_index(n, len as usize)
-                    };
-                    let start = {
-                        let n = match interp.to_integer_or_infinity_value(
-                            args.get(1).unwrap_or(&JsValue::Undefined),
-                        ) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        resolve_relative_index(n, len as usize)
-                    };
-                    let end = {
-                        let n = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            match interp.to_integer_or_infinity_value(&args[2]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len as f64
-                        };
-                        resolve_relative_index(n, len as usize)
-                    };
-                    // Re-check detach and OOB after coercion
-                    if let Err(c) = check_detached_or_out_of_bounds(interp, &ta) {
-                        return c;
-                    }
-                    // Use original len for count (per spec), but bound copy by actual buffer
-                    let _cur_len = typed_array_length(&ta);
-                    let count = if end <= start || target >= len as usize {
-                        0
-                    } else {
-                        (end - start).min(len as usize - target)
-                    };
-                    if count > 0 {
-                        let bpe = ta.kind.bytes_per_element();
-                        with_buffer_write(&ta.buffer, |buf| {
-                            let buf_len = buf.len();
-                            let src_byte_start = ta.byte_offset + start * bpe;
-                            let dst_byte_start = ta.byte_offset + target * bpe;
-                            let max_src_bytes = buf_len.saturating_sub(src_byte_start);
-                            let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
-                            let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
-                            if byte_count > 0 {
-                                let src = buf[src_byte_start..src_byte_start + byte_count].to_vec();
-                                buf[dst_byte_start..dst_byte_start + byte_count]
-                                    .copy_from_slice(&src);
-                            }
-                        });
-                    }
-                    return Completion::Normal(this_val.clone());
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let len = typed_array_length(&ta) as i64;
+                let target = match resolve_start_index(interp, args.first(), len as usize) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                let start = match resolve_start_index(interp, args.get(1), len as usize) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                let end = match resolve_end_index(interp, args.get(2), len as usize) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                // Re-check detach and OOB after coercion
+                if let Err(c) = check_detached_or_out_of_bounds(interp, &ta) {
+                    return c;
+                }
+                // Use original len for count (per spec), but bound copy by actual buffer
+                let _cur_len = typed_array_length(&ta);
+                let count = if end <= start || target >= len as usize {
+                    0
+                } else {
+                    (end - start).min(len as usize - target)
+                };
+                if count > 0 {
+                    let bpe = ta.kind.bytes_per_element();
+                    with_buffer_write(&ta.buffer, |buf| {
+                        let buf_len = buf.len();
+                        let src_byte_start = ta.byte_offset + start * bpe;
+                        let dst_byte_start = ta.byte_offset + target * bpe;
+                        let max_src_bytes = buf_len.saturating_sub(src_byte_start);
+                        let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
+                        let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
+                        if byte_count > 0 {
+                            let src = buf[src_byte_start..src_byte_start + byte_count].to_vec();
+                            buf[dst_byte_start..dst_byte_start + byte_count].copy_from_slice(&src);
+                        }
+                    });
+                }
+                Completion::Normal(this_val.clone())
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2121,75 +1809,46 @@ impl Interpreter {
             "fill".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    // ValidateTypedArray(..., ~write~): immutability check fires before any
-                    // argument coercion so callers observe no side effects on TypeError.
-                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
-                        return c;
-                    }
-                    // Step 3: compute len BEFORE coercion
-                    let len = typed_array_length(&ta);
-                    // Per spec: coerce value BEFORE start/end
-                    let raw_value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let coerced = match interp.typed_array_coerce_value(ta.kind, &raw_value) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let len_f = len as f64;
-                    let start = {
-                        let v = to_integer_or_infinity(if args.len() > 1 {
-                            match interp.to_number_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
-                        });
-                        resolve_relative_index(v, len)
-                    };
-                    let end = {
-                        let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            match interp.to_integer_or_infinity_value(&args[2]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len_f
-                        };
-                        resolve_relative_index(v, len)
-                    };
-                    // Re-check detach and OOB after coercion (buffer may have been resized)
-                    if ta.is_detached.get() {
-                        return Completion::Throw(
-                            interp.create_type_error("typed array is detached"),
-                        );
-                    }
-                    if is_typed_array_out_of_bounds(&ta) {
-                        return Completion::Throw(
-                            interp.create_type_error("typed array is out of bounds"),
-                        );
-                    }
-                    let new_len = typed_array_length(&ta);
-                    let end = end.min(new_len);
-                    for i in start..end {
-                        typed_array_set_index(&ta, i, &coerced);
-                    }
-                    return Completion::Normal(this_val.clone());
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                // ValidateTypedArray(..., ~write~): immutability check fires before any
+                // argument coercion so callers observe no side effects on TypeError.
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                // Step 3: compute len BEFORE coercion
+                let len = typed_array_length(&ta);
+                // Per spec: coerce value BEFORE start/end
+                let raw_value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let coerced = match interp.typed_array_coerce_value(ta.kind, &raw_value) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let start = match resolve_start_index(interp, args.get(1), len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                let end = match resolve_end_index(interp, args.get(2), len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                // Re-check detach and OOB after coercion (buffer may have been resized)
+                if ta.is_detached.get() {
+                    return Completion::Throw(interp.create_type_error("typed array is detached"));
+                }
+                if is_typed_array_out_of_bounds(&ta) {
+                    return Completion::Throw(
+                        interp.create_type_error("typed array is out of bounds"),
+                    );
+                }
+                let new_len = typed_array_length(&ta);
+                let end = end.min(new_len);
+                for i in start..end {
+                    typed_array_set_index(&ta, i, &coerced);
+                }
+                Completion::Normal(this_val.clone())
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2201,51 +1860,39 @@ impl Interpreter {
             "indexOf".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta) as i64;
-                    if len == 0 {
-                        return Completion::Normal(JsValue::Number(-1.0));
-                    }
-                    let search = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let from = if args.len() > 1 {
-                        (match interp.to_integer_or_infinity_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }) as i64
-                    } else {
-                        0
-                    };
-                    let start = if from < 0 {
-                        (len + from).max(0) as usize
-                    } else {
-                        from as usize
-                    };
-                    for i in start..len as usize {
-                        // indexOf uses HasProperty semantics: skip elements that are not valid
-                        if !is_valid_integer_index(&ta, i as f64) {
-                            continue;
-                        }
-                        let elem = typed_array_get_index(&ta, i);
-                        if strict_eq(&elem, &search) {
-                            return Completion::Normal(JsValue::Number(i as f64));
-                        }
-                    }
-                    return Completion::Normal(JsValue::Number(-1.0));
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let len = typed_array_length(&ta) as i64;
+                if len == 0 {
+                    return Completion::Normal(JsValue::number(-1.0));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let from = if args.len() > 1 {
+                    (match interp.to_integer_or_infinity_value(&args[1]) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    }) as i64
+                } else {
+                    0
+                };
+                let start = if from < 0 {
+                    (len + from).max(0) as usize
+                } else {
+                    from as usize
+                };
+                for i in start..len as usize {
+                    // indexOf uses HasProperty semantics: skip elements that are not valid
+                    if !is_valid_integer_index(&ta, i as f64) {
+                        continue;
+                    }
+                    let elem = typed_array_get_index(&ta, i);
+                    if strict_eq(&elem, &search) {
+                        return Completion::Normal(JsValue::number(i as f64));
+                    }
+                }
+                Completion::Normal(JsValue::number(-1.0))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2257,52 +1904,40 @@ impl Interpreter {
             "lastIndexOf".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta) as i64;
-                    if len == 0 {
-                        return Completion::Normal(JsValue::Number(-1.0));
-                    }
-                    let search = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let from = if args.len() > 1 {
-                        (match interp.to_integer_or_infinity_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }) as i64
-                    } else {
-                        len - 1
-                    };
-                    let start = if from < 0 {
-                        (len + from).max(-1)
-                    } else {
-                        from.min(len - 1)
-                    };
-                    let mut i = start;
-                    while i >= 0 {
-                        // lastIndexOf uses HasProperty semantics: skip elements that are not valid
-                        if is_valid_integer_index(&ta, i as f64) {
-                            let elem = typed_array_get_index(&ta, i as usize);
-                            if strict_eq(&elem, &search) {
-                                return Completion::Normal(JsValue::Number(i as f64));
-                            }
-                        }
-                        i -= 1;
-                    }
-                    return Completion::Normal(JsValue::Number(-1.0));
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let len = typed_array_length(&ta) as i64;
+                if len == 0 {
+                    return Completion::Normal(JsValue::number(-1.0));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let from = if args.len() > 1 {
+                    (match interp.to_integer_or_infinity_value(&args[1]) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    }) as i64
+                } else {
+                    len - 1
+                };
+                let start = if from < 0 {
+                    (len + from).max(-1)
+                } else {
+                    from.min(len - 1)
+                };
+                let mut i = start;
+                while i >= 0 {
+                    // lastIndexOf uses HasProperty semantics: skip elements that are not valid
+                    if is_valid_integer_index(&ta, i as f64) {
+                        let elem = typed_array_get_index(&ta, i as usize);
+                        if strict_eq(&elem, &search) {
+                            return Completion::Normal(JsValue::number(i as f64));
+                        }
+                    }
+                    i -= 1;
+                }
+                Completion::Normal(JsValue::number(-1.0))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2314,47 +1949,35 @@ impl Interpreter {
             "includes".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta) as i64;
-                    if len == 0 {
-                        return Completion::Normal(JsValue::Boolean(false));
-                    }
-                    let search = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let from = if args.len() > 1 {
-                        (match interp.to_integer_or_infinity_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }) as i64
-                    } else {
-                        0
-                    };
-                    let start = if from < 0 {
-                        (len + from).max(0) as usize
-                    } else {
-                        from as usize
-                    };
-                    for i in start..len as usize {
-                        let elem = typed_array_get_index(&ta, i);
-                        if same_value_zero(&elem, &search) {
-                            return Completion::Normal(JsValue::Boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::Boolean(false));
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let len = typed_array_length(&ta) as i64;
+                if len == 0 {
+                    return Completion::Normal(JsValue::boolean(false));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let from = if args.len() > 1 {
+                    (match interp.to_integer_or_infinity_value(&args[1]) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    }) as i64
+                } else {
+                    0
+                };
+                let start = if from < 0 {
+                    (len + from).max(0) as usize
+                } else {
+                    from as usize
+                };
+                for i in start..len as usize {
+                    let elem = typed_array_get_index(&ta, i);
+                    if same_value_zero(&elem, &search) {
+                        return Completion::Normal(JsValue::boolean(true));
+                    }
+                }
+                Completion::Normal(JsValue::boolean(false))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2371,36 +1994,24 @@ impl Interpreter {
             "reverse".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
-                        return c;
-                    }
-                    let mut lo = 0usize;
-                    let mut hi = typed_array_length(&ta);
-                    while lo < hi {
-                        hi -= 1;
-                        let a = typed_array_get_index(&ta, lo);
-                        let b = typed_array_get_index(&ta, hi);
-                        typed_array_set_index(&ta, lo, &b);
-                        typed_array_set_index(&ta, hi, &a);
-                        lo += 1;
-                    }
-                    return Completion::Normal(this_val.clone());
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let mut lo = 0usize;
+                let mut hi = typed_array_length(&ta);
+                while lo < hi {
+                    hi -= 1;
+                    let a = typed_array_get_index(&ta, lo);
+                    let b = typed_array_get_index(&ta, hi);
+                    typed_array_set_index(&ta, lo, &b);
+                    typed_array_set_index(&ta, hi, &a);
+                    lo += 1;
+                }
+                Completion::Normal(this_val.clone())
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2412,8 +2023,8 @@ impl Interpreter {
             "sort".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
@@ -2431,11 +2042,11 @@ impl Interpreter {
                     }
                     let comparefn = args.first().cloned();
                     if let Some(ref cmp) = comparefn
-                        && !matches!(cmp, JsValue::Undefined)
+                        && !cmp.is_undefined()
                     {
-                        let is_callable = if let JsValue::Object(co) = cmp {
+                        let is_callable = if let Some(co) = cmp.as_object_id() {
                             interp
-                                .get_object_cell(co.id)
+                                .get_object_cell(co)
                                 .is_some_and(|obj| obj.borrow().callable.is_some())
                         } else {
                             false
@@ -2456,11 +2067,11 @@ impl Interpreter {
                             return std::cmp::Ordering::Equal;
                         }
                         if let Some(ref cmp) = comparefn
-                            && !matches!(cmp, JsValue::Undefined)
+                            && !cmp.is_undefined()
                         {
                             match interp.call_function(
                                 cmp,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 &[a.clone(), b.clone()],
                             ) {
                                 Completion::Normal(v) => match interp.to_number_value(&v) {
@@ -2489,9 +2100,9 @@ impl Interpreter {
                             }
                         }
                         // Default sort: numeric for Number types, BigInt comparison for BigInt types
-                        match (a, b) {
-                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => ba.value.cmp(&bb.value),
-                            _ => {
+                        match a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
+                            Some(ord) => ord,
+                            None => {
                                 let na = to_number(a);
                                 let nb = to_number(b);
                                 // Per spec: -0 < +0 is false, +0 < -0 is false
@@ -2533,46 +2144,33 @@ impl Interpreter {
             "join".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta);
-                    let sep = if args.is_empty() || matches!(args[0], JsValue::Undefined) {
-                        ",".to_string()
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let len = typed_array_length(&ta);
+                let sep = if args.is_empty() || args[0].is_undefined() {
+                    ",".to_string()
+                } else {
+                    match interp.to_string_value(&args[0]) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                };
+                let mut parts: Vec<String> = Vec::with_capacity(len);
+                for i in 0..len {
+                    let elem = typed_array_get_index(&ta, i);
+                    let s = if elem.is_nullish() {
+                        String::new()
                     } else {
-                        match interp.to_string_value(&args[0]) {
+                        match interp.to_string_value(&elem) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let mut parts: Vec<String> = Vec::with_capacity(len);
-                    for i in 0..len {
-                        let elem = typed_array_get_index(&ta, i);
-                        let s = if matches!(elem, JsValue::Undefined | JsValue::Null) {
-                            String::new()
-                        } else {
-                            match interp.to_string_value(&elem) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        };
-                        parts.push(s);
-                    }
-                    Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
-                } else {
-                    Completion::Throw(interp.create_type_error("not a TypedArray"))
+                    parts.push(s);
                 }
+                Completion::Normal(JsValue::from_str(&parts.join(&sep)))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2594,76 +2192,62 @@ impl Interpreter {
             0,
             |interp, this_val, args| {
                 // ValidateTypedArray: Type(O) must be Object
-                if !matches!(this_val, JsValue::Object(_)) {
+                if !this_val.is_object() {
                     return Completion::Throw(interp.create_type_error("not a TypedArray"));
                 }
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            // ValidateTypedArray: Must have [[TypedArrayName]] slot
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let separator = ",";
-                    let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let pass_args = vec![locales, options];
-                    let len = typed_array_length(&ta);
-                    let mut parts: Vec<String> = Vec::with_capacity(len);
-                    for k in 0..len {
-                        let next_element = typed_array_get_index(&ta, k);
-                        if matches!(next_element, JsValue::Undefined | JsValue::Null) {
-                            parts.push(String::new());
-                        } else {
-                            // Convert to object to get toLocaleString method
-                            let element_obj = match interp.to_object(&next_element) {
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let separator = ",";
+                let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                let pass_args = vec![locales, options];
+                let len = typed_array_length(&ta);
+                let mut parts: Vec<String> = Vec::with_capacity(len);
+                for k in 0..len {
+                    let next_element = typed_array_get_index(&ta, k);
+                    if next_element.is_nullish() {
+                        parts.push(String::new());
+                    } else {
+                        // Convert to object to get toLocaleString method
+                        let element_obj = match interp.to_object(&next_element) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let Some(elem_ref) = element_obj.as_object_id() {
+                            let to_locale_str_method = match interp.get_object_property(
+                                elem_ref,
+                                "toLocaleString",
+                                &element_obj,
+                            ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            if let JsValue::Object(ref elem_ref) = element_obj {
-                                let to_locale_str_method = match interp.get_object_property(
-                                    elem_ref.id,
-                                    "toLocaleString",
-                                    &element_obj,
+                            if interp.is_callable(&to_locale_str_method) {
+                                match interp.call_function(
+                                    &to_locale_str_method,
+                                    &next_element,
+                                    &pass_args,
                                 ) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                if interp.is_callable(&to_locale_str_method) {
-                                    match interp.call_function(
-                                        &to_locale_str_method,
-                                        &next_element,
-                                        &pass_args,
-                                    ) {
-                                        Completion::Normal(v) => {
-                                            let s = match interp.to_string_value(&v) {
-                                                Ok(s) => s,
-                                                Err(e) => return Completion::Throw(e),
-                                            };
-                                            parts.push(s);
-                                        }
-                                        other => return other,
+                                    Completion::Normal(v) => {
+                                        let s = match interp.to_string_value(&v) {
+                                            Ok(s) => s,
+                                            Err(e) => return Completion::Throw(e),
+                                        };
+                                        parts.push(s);
                                     }
-                                } else {
-                                    let err = interp
-                                        .create_type_error("toLocaleString is not a function");
-                                    return Completion::Throw(err);
+                                    other => return other,
                                 }
+                            } else {
+                                let err =
+                                    interp.create_type_error("toLocaleString is not a function");
+                                return Completion::Throw(err);
                             }
                         }
                     }
-                    Completion::Normal(JsValue::String(JsString::from_str(&parts.join(separator))))
-                } else {
-                    Completion::Throw(interp.create_type_error("not a TypedArray"))
                 }
+                Completion::Normal(JsValue::from_str(&parts.join(separator)))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2675,64 +2259,52 @@ impl Interpreter {
             "toReversed".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta);
-                    let bpe = ta.kind.bytes_per_element();
-                    let buf_byte_len = len * bpe;
-                    let new_buf = vec![0u8; buf_byte_len];
-                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
-                    let new_detached = Rc::new(Cell::new(false));
-                    let new_ta = TypedArrayInfo {
-                        kind: ta.kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: buf_byte_len,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                        buffer_object_id: None,
-                    };
-                    for i in 0..len {
-                        let val = typed_array_get_index(&ta, len - 1 - i);
-                        typed_array_set_index(&new_ta, i, &val);
-                    }
-                    let ab_obj_id = interp.create_object_id();
-                    let ab_proto = interp.realm().arraybuffer_prototype;
-                    {
-                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                        ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype_id = ab_proto;
-                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
-                            crate::interpreter::types::ArrayBufferData {
-                                data: new_buf_rc,
-                                detached: Some(new_detached),
-                                max_byte_length: None,
-                                is_shared: false,
-                                is_immutable: false,
-                                sab_shared: None,
-                            },
-                        );
-                    }
-                    interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj_id;
-                    let buf_val = JsValue::Object(JsObject { id: ab_id });
-                    let id = interp.create_typed_array_object(new_ta, buf_val);
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let len = typed_array_length(&ta);
+                let bpe = ta.kind.bytes_per_element();
+                let buf_byte_len = len * bpe;
+                let new_buf = vec![0u8; buf_byte_len];
+                let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
+                let new_detached = Rc::new(Cell::new(false));
+                let new_ta = TypedArrayInfo {
+                    kind: ta.kind,
+                    buffer: new_buf_rc.clone(),
+                    byte_offset: 0,
+                    byte_length: buf_byte_len,
+                    array_length: len,
+                    is_detached: new_detached.clone(),
+                    is_length_tracking: false,
+                    buffer_object_id: None,
+                };
+                for i in 0..len {
+                    let val = typed_array_get_index(&ta, len - 1 - i);
+                    typed_array_set_index(&new_ta, i, &val);
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let ab_obj_id = interp.create_object_id();
+                let ab_proto = interp.realm().arraybuffer_prototype;
+                {
+                    let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
+                    ab.class_name = "ArrayBuffer".to_string();
+                    ab.prototype_id = ab_proto;
+                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                        crate::interpreter::types::ArrayBufferData {
+                            data: new_buf_rc,
+                            detached: Some(new_detached),
+                            max_byte_length: None,
+                            is_shared: false,
+                            is_immutable: false,
+                            sab_shared: None,
+                        },
+                    );
+                }
+                interp.gc_track_external_bytes(buf_byte_len);
+                let ab_id = ab_obj_id;
+                let buf_val = JsValue::object(ab_id);
+                let id = interp.create_typed_array_object(new_ta, buf_val);
+                Completion::Normal(JsValue::object(id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2744,8 +2316,8 @@ impl Interpreter {
             "toSorted".to_string(),
             1,
             |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
@@ -2760,11 +2332,11 @@ impl Interpreter {
                     };
                     let comparefn = args.first().cloned();
                     if let Some(ref cmp) = comparefn
-                        && !matches!(cmp, JsValue::Undefined)
+                        && !cmp.is_undefined()
                     {
-                        let is_callable = if let JsValue::Object(co) = cmp {
+                        let is_callable = if let Some(co) = cmp.as_object_id() {
                             interp
-                                .get_object_cell(co.id)
+                                .get_object_cell(co)
                                 .is_some_and(|obj| obj.borrow().callable.is_some())
                         } else {
                             false
@@ -2784,11 +2356,11 @@ impl Interpreter {
                             return std::cmp::Ordering::Equal;
                         }
                         if let Some(ref cmp) = comparefn
-                            && !matches!(cmp, JsValue::Undefined)
+                            && !cmp.is_undefined()
                         {
                             match interp.call_function(
                                 cmp,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 &[a.clone(), b.clone()],
                             ) {
                                 Completion::Normal(v) => match interp.to_number_value(&v) {
@@ -2817,9 +2389,9 @@ impl Interpreter {
                             }
                         }
                         // Default sort: numeric for Number types, BigInt comparison for BigInt types
-                        match (a, b) {
-                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => ba.value.cmp(&bb.value),
-                            _ => {
+                        match a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
+                            Some(ord) => ord,
+                            None => {
                                 let na = to_number(a);
                                 let nb = to_number(b);
                                 if na.is_nan() && nb.is_nan() {
@@ -2877,9 +2449,9 @@ impl Interpreter {
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj_id;
-                    let buf_val = JsValue::Object(JsObject { id: ab_id });
+                    let buf_val = JsValue::object(ab_id);
                     let id = interp.create_typed_array_object(new_ta, buf_val);
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                    return Completion::Normal(JsValue::object(id));
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
@@ -2898,16 +2470,17 @@ impl Interpreter {
                     interp: &mut Interpreter,
                     val: &JsValue,
                 ) -> Result<f64, JsValue> {
-                    match val {
-                        JsValue::Object(o) => {
+                    match val.kind() {
+                        ValueKind::Object => {
+                            let obj_id = val.as_object_id().unwrap();
                             let method = interp
-                                .get_property_descriptor_on_id(o.id, "valueOf")
+                                .get_property_descriptor_on_id(obj_id, "valueOf")
                                 .and_then(|d| d.value);
                             if let Some(func) = method
                                 && interp.is_callable(&func)
                             {
                                 match interp.call_function(&func, val, &[]) {
-                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                    Completion::Normal(v) if !v.is_object() => {
                                         return to_number_throwing(interp, &v);
                                     }
                                     Completion::Normal(_) => {}
@@ -2916,13 +2489,13 @@ impl Interpreter {
                                 }
                             }
                             let tostring_method = interp
-                                .get_property_descriptor_on_id(o.id, "toString")
+                                .get_property_descriptor_on_id(obj_id, "toString")
                                 .and_then(|d| d.value);
                             if let Some(func) = tostring_method
                                 && interp.is_callable(&func)
                             {
                                 match interp.call_function(&func, val, &[]) {
-                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                    Completion::Normal(v) if !v.is_object() => {
                                         return to_number_throwing(interp, &v);
                                     }
                                     Completion::Normal(_) => {}
@@ -2932,11 +2505,11 @@ impl Interpreter {
                             }
                             Ok(f64::NAN)
                         }
-                        JsValue::Symbol(_) => {
+                        ValueKind::Symbol => {
                             Err(interp
                                 .create_type_error("Cannot convert a Symbol value to a number"))
                         }
-                        JsValue::BigInt(_) => {
+                        ValueKind::BigInt => {
                             Err(interp
                                 .create_type_error("Cannot convert a BigInt value to a number"))
                         }
@@ -2949,17 +2522,20 @@ impl Interpreter {
                     interp: &mut Interpreter,
                     val: &JsValue,
                 ) -> Result<JsValue, JsValue> {
-                    match val {
-                        JsValue::BigInt(_) => Ok(val.clone()),
-                        JsValue::Object(o) => {
+                    match val.kind() {
+                        ValueKind::BigInt => Ok(val.clone()),
+                        ValueKind::Object => {
                             let method = interp
-                                .get_property_descriptor_on_id(o.id, "valueOf")
+                                .get_property_descriptor_on_id(
+                                    val.as_object_id().unwrap(),
+                                    "valueOf",
+                                )
                                 .and_then(|d| d.value);
                             if let Some(func) = method
                                 && interp.is_callable(&func)
                             {
                                 match interp.call_function(&func, val, &[]) {
-                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                    Completion::Normal(v) if !v.is_object() => {
                                         return to_bigint_throwing(interp, &v);
                                     }
                                     Completion::Normal(_) => {}
@@ -2969,39 +2545,19 @@ impl Interpreter {
                             }
                             Err(interp.create_type_error("Cannot convert value to a BigInt"))
                         }
-                        JsValue::Boolean(b) => Ok(JsValue::BigInt(JsBigInt {
-                            value: num_bigint::BigInt::from(if *b { 1 } else { 0 }),
-                        })),
-                        JsValue::Number(n) => {
+                        ValueKind::Boolean => Ok(JsValue::bigint(JsBigInt::new(
+                            num_bigint::BigInt::from(if val.as_boolean().unwrap() { 1 } else { 0 }),
+                        ))),
+                        ValueKind::Number => {
                             // ToBigInt throws TypeError for Number values
+                            let n = val.as_number().unwrap();
                             Err(interp
                                 .create_type_error(&format!("Cannot convert {} to a BigInt", n)))
                         }
-                        JsValue::String(s) => {
-                            let text = s.to_rust_string().trim().to_string();
-                            if text.is_empty() {
-                                return Err(interp.create_error(
-                                    "SyntaxError",
-                                    "Cannot convert empty string to a BigInt",
-                                ));
-                            }
-                            let parsed = if let Some(hex) =
-                                text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
-                            {
-                                num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-                            } else if let Some(oct) =
-                                text.strip_prefix("0o").or_else(|| text.strip_prefix("0O"))
-                            {
-                                num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-                            } else if let Some(bin) =
-                                text.strip_prefix("0b").or_else(|| text.strip_prefix("0B"))
-                            {
-                                num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
-                            } else {
-                                text.parse::<num_bigint::BigInt>().ok()
-                            };
-                            match parsed {
-                                Some(v) => Ok(JsValue::BigInt(JsBigInt { value: v })),
+                        ValueKind::String => {
+                            let text = val.as_string().unwrap().to_rust_string();
+                            match crate::interpreter::helpers::string_to_bigint(&text) {
+                                Some(v) => Ok(JsValue::bigint(JsBigInt::new(v))),
                                 None => Err(interp.create_error(
                                     "SyntaxError",
                                     &format!("Cannot convert {} to a BigInt", text),
@@ -3012,103 +2568,90 @@ impl Interpreter {
                     }
                 }
 
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta) as i64;
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let len = typed_array_length(&ta) as i64;
 
-                    // Step 4: ToIntegerOrInfinity(index) - must call valueOf on objects
-                    let index_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let relative_index = match to_number_throwing(interp, &index_arg) {
-                        Ok(n) => to_integer_or_infinity(n) as i64,
+                // Step 4: ToIntegerOrInfinity(index) - must call valueOf on objects
+                let index_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let relative_index = match to_number_throwing(interp, &index_arg) {
+                    Ok(n) => to_integer_or_infinity(n) as i64,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let actual_index = if relative_index >= 0 {
+                    relative_index
+                } else {
+                    len + relative_index
+                };
+
+                // Steps 7-8: Coerce value BEFORE checking index bounds
+                let value_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                let numeric_value = if ta.kind.is_bigint() {
+                    match to_bigint_throwing(interp, &value_arg) {
+                        Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
-                    };
-                    let actual_index = if relative_index >= 0 {
-                        relative_index
-                    } else {
-                        len + relative_index
-                    };
-
-                    // Steps 7-8: Coerce value BEFORE checking index bounds
-                    let value_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let numeric_value = if ta.kind.is_bigint() {
-                        match to_bigint_throwing(interp, &value_arg) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        match to_number_throwing(interp, &value_arg) {
-                            Ok(n) => JsValue::Number(n),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    };
-
-                    // Step 9: Check IsValidIntegerIndex after coercions (uses current TA state)
-                    if !is_valid_integer_index(&ta, actual_index as f64) {
-                        return Completion::Throw(
-                            interp
-                                .create_range_error("Invalid index for TypedArray.prototype.with"),
-                        );
                     }
+                } else {
+                    match to_number_throwing(interp, &value_arg) {
+                        Ok(n) => JsValue::number(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                };
 
-                    let bpe = ta.kind.bytes_per_element();
-                    let buf_byte_len = len as usize * bpe;
-                    let new_buf = vec![0u8; buf_byte_len];
-                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
-                    let new_detached = Rc::new(Cell::new(false));
-                    let new_ta = TypedArrayInfo {
-                        kind: ta.kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: buf_byte_len,
-                        array_length: len as usize,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                        buffer_object_id: None,
-                    };
-                    for k in 0..len as usize {
-                        let elem = if k == actual_index as usize {
-                            numeric_value.clone()
-                        } else {
-                            typed_array_get_index(&ta, k)
-                        };
-                        typed_array_set_index(&new_ta, k, &elem);
-                    }
-                    let ab_obj_id = interp.create_object_id();
-                    let ab_proto = interp.realm().arraybuffer_prototype;
-                    {
-                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                        ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype_id = ab_proto;
-                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
-                            crate::interpreter::types::ArrayBufferData {
-                                data: new_buf_rc,
-                                detached: Some(new_detached),
-                                max_byte_length: None,
-                                is_shared: false,
-                                is_immutable: false,
-                                sab_shared: None,
-                            },
-                        );
-                    }
-                    interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj_id;
-                    let buf_val = JsValue::Object(JsObject { id: ab_id });
-                    let id = interp.create_typed_array_object(new_ta, buf_val);
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                // Step 9: Check IsValidIntegerIndex after coercions (uses current TA state)
+                if !is_valid_integer_index(&ta, actual_index as f64) {
+                    return Completion::Throw(
+                        interp.create_range_error("Invalid index for TypedArray.prototype.with"),
+                    );
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+
+                let bpe = ta.kind.bytes_per_element();
+                let buf_byte_len = len as usize * bpe;
+                let new_buf = vec![0u8; buf_byte_len];
+                let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
+                let new_detached = Rc::new(Cell::new(false));
+                let new_ta = TypedArrayInfo {
+                    kind: ta.kind,
+                    buffer: new_buf_rc.clone(),
+                    byte_offset: 0,
+                    byte_length: buf_byte_len,
+                    array_length: len as usize,
+                    is_detached: new_detached.clone(),
+                    is_length_tracking: false,
+                    buffer_object_id: None,
+                };
+                for k in 0..len as usize {
+                    let elem = if k == actual_index as usize {
+                        numeric_value.clone()
+                    } else {
+                        typed_array_get_index(&ta, k)
+                    };
+                    typed_array_set_index(&new_ta, k, &elem);
+                }
+                let ab_obj_id = interp.create_object_id();
+                let ab_proto = interp.realm().arraybuffer_prototype;
+                {
+                    let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
+                    ab.class_name = "ArrayBuffer".to_string();
+                    ab.prototype_id = ab_proto;
+                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                        crate::interpreter::types::ArrayBufferData {
+                            data: new_buf_rc,
+                            detached: Some(new_detached),
+                            max_byte_length: None,
+                            is_shared: false,
+                            is_immutable: false,
+                            sab_shared: None,
+                        },
+                    );
+                }
+                interp.gc_track_external_bytes(buf_byte_len);
+                let ab_id = ab_obj_id;
+                let buf_val = JsValue::object(ab_id);
+                let id = interp.create_typed_array_object(new_ta, buf_val);
+                Completion::Normal(JsValue::object(id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3120,23 +2663,21 @@ impl Interpreter {
             "get [Symbol.toStringTag]".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(o) = this_val.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let obj_ref = obj.borrow();
                     if let Some(ta) = obj_ref.typed_array_info() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            ta.kind.name(),
-                        )));
+                        return Completion::Normal(JsValue::from_str(ta.kind.name()));
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -3153,23 +2694,14 @@ impl Interpreter {
             "values".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    }
-                    let iter = interp.create_typed_array_iterator(o.id, IteratorKind::Value);
-                    return Completion::Normal(iter);
+                if let Err(c) = validate_typed_array(interp, this_val) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let o = this_val
+                    .as_object_id()
+                    .expect("validated: receiver is a TypedArray object");
+                let iter = interp.create_typed_array_iterator(o, IteratorKind::Value);
+                Completion::Normal(iter)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3177,7 +2709,7 @@ impl Interpreter {
             .insert_builtin("values".to_string(), values_fn.clone());
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .insert_builtin("Symbol(Symbol.iterator)".to_string(), values_fn);
+            .insert_builtin(JsPropertyKey::well_known_symbol("iterator"), values_fn);
     }
 
     fn setup_ta_iterator_methods(&mut self, proto_id: u64) {
@@ -3185,23 +2717,14 @@ impl Interpreter {
             "entries".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    }
-                    let iter = interp.create_typed_array_iterator(o.id, IteratorKind::KeyValue);
-                    return Completion::Normal(iter);
+                if let Err(c) = validate_typed_array(interp, this_val) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let o = this_val
+                    .as_object_id()
+                    .expect("validated: receiver is a TypedArray object");
+                let iter = interp.create_typed_array_iterator(o, IteratorKind::KeyValue);
+                Completion::Normal(iter)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3212,23 +2735,14 @@ impl Interpreter {
             "keys".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    }
-                    let iter = interp.create_typed_array_iterator(o.id, IteratorKind::Key);
-                    return Completion::Normal(iter);
+                if let Err(c) = validate_typed_array(interp, this_val) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let o = this_val
+                    .as_object_id()
+                    .expect("validated: receiver is a TypedArray object");
+                let iter = interp.create_typed_array_iterator(o, IteratorKind::Key);
+                Completion::Normal(iter)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3246,14 +2760,14 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 for i in 0..len {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val.clone(), JsValue::Number(i as f64), this_val.clone()],
+                        &[val.clone(), JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if interp.to_boolean_val(&result) {
@@ -3263,7 +2777,7 @@ impl Interpreter {
                         other => return other,
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3279,24 +2793,24 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 for i in 0..len {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val, JsValue::Number(i as f64), this_val.clone()],
+                        &[val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::Number(i as f64));
+                                return Completion::Normal(JsValue::number(i as f64));
                             }
                         }
                         other => return other,
                     }
                 }
-                Completion::Normal(JsValue::Number(-1.0))
+                Completion::Normal(JsValue::number(-1.0))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3312,7 +2826,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 let mut i = len as i64 - 1;
                 while i >= 0 {
@@ -3320,7 +2834,7 @@ impl Interpreter {
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val.clone(), JsValue::Number(i as f64), this_val.clone()],
+                        &[val.clone(), JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if interp.to_boolean_val(&result) {
@@ -3331,7 +2845,7 @@ impl Interpreter {
                     }
                     i -= 1;
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3347,7 +2861,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 let mut i = len as i64 - 1;
                 while i >= 0 {
@@ -3355,18 +2869,18 @@ impl Interpreter {
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val, JsValue::Number(i as f64), this_val.clone()],
+                        &[val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::Number(i as f64));
+                                return Completion::Normal(JsValue::number(i as f64));
                             }
                         }
                         other => return other,
                     }
                     i -= 1;
                 }
-                Completion::Normal(JsValue::Number(-1.0))
+                Completion::Normal(JsValue::number(-1.0))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3382,20 +2896,20 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 for i in 0..len {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val, JsValue::Number(i as f64), this_val.clone()],
+                        &[val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(_) => {}
                         other => return other,
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3411,20 +2925,20 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
 
                 // Use TypedArraySpeciesCreate
                 let new_ta_val = match interp
-                    .typed_array_species_create(this_val, &[JsValue::Number(len as f64)])
+                    .typed_array_species_create(this_val, &[JsValue::number(len as f64)])
                 {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
                 interp.gc_root_value(&new_ta_val);
 
-                let new_ta = if let JsValue::Object(o) = &new_ta_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                let new_ta = if let Some(o) = new_ta_val.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     obj.borrow().typed_array_info().unwrap().clone()
                 } else {
@@ -3441,7 +2955,7 @@ impl Interpreter {
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val, JsValue::Number(i as f64), this_val.clone()],
+                        &[val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             typed_array_set_index(&new_ta, i, &result);
@@ -3465,7 +2979,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let mut kept: Vec<JsValue> = Vec::new();
                 let len = typed_array_length(&ta);
                 for i in 0..len {
@@ -3473,7 +2987,7 @@ impl Interpreter {
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val.clone(), JsValue::Number(i as f64), this_val.clone()],
+                        &[val.clone(), JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if interp.to_boolean_val(&result) {
@@ -3487,14 +3001,14 @@ impl Interpreter {
 
                 // Use TypedArraySpeciesCreate
                 let new_ta_val = match interp
-                    .typed_array_species_create(this_val, &[JsValue::Number(len as f64)])
+                    .typed_array_species_create(this_val, &[JsValue::number(len as f64)])
                 {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
 
-                if let JsValue::Object(o) = &new_ta_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                if let Some(o) = new_ta_val.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let new_ta = obj.borrow().typed_array_info().unwrap().clone();
                     // TypedArrayCreateFromConstructor(..., accessMode=~write~):
@@ -3522,24 +3036,24 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 for i in 0..len {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val, JsValue::Number(i as f64), this_val.clone()],
+                        &[val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if !interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::Boolean(false));
+                                return Completion::Normal(JsValue::boolean(false));
                             }
                         }
                         other => return other,
                     }
                 }
-                Completion::Normal(JsValue::Boolean(true))
+                Completion::Normal(JsValue::boolean(true))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3555,24 +3069,24 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let len = typed_array_length(&ta);
                 for i in 0..len {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
                         &this_arg,
-                        &[val, JsValue::Number(i as f64), this_val.clone()],
+                        &[val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
                             if interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::Boolean(true));
+                                return Completion::Normal(JsValue::boolean(true));
                             }
                         }
                         other => return other,
                     }
                 }
-                Completion::Normal(JsValue::Boolean(false))
+                Completion::Normal(JsValue::boolean(false))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -3607,8 +3121,8 @@ impl Interpreter {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
-                        &JsValue::Undefined,
-                        &[acc, val, JsValue::Number(i as f64), this_val.clone()],
+                        &JsValue::UNDEFINED,
+                        &[acc, val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => acc = result,
                         other => return other,
@@ -3650,8 +3164,8 @@ impl Interpreter {
                     let val = typed_array_get_index(&ta, i as usize);
                     match interp.call_function(
                         &callback,
-                        &JsValue::Undefined,
-                        &[acc, val, JsValue::Number(i as f64), this_val.clone()],
+                        &JsValue::UNDEFINED,
+                        &[acc, val, JsValue::number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => acc = result,
                         other => return other,
@@ -3700,13 +3214,15 @@ impl Interpreter {
             1,
             |interp, this_val, args| {
                 // Step 1: C = this value
-                let source = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let source = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let map_fn_arg = args.get(1).cloned();
-                let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Step 2: IsConstructor(C)
-                let is_ctor = matches!(this_val, JsValue::Object(o) if {
-                    interp.get_object_cell(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                let is_ctor = this_val.as_object_id().is_some_and(|o| {
+                    interp
+                        .get_object_cell(o)
+                        .is_some_and(|obj| obj.borrow().callable.is_some())
                 });
                 if !is_ctor {
                     return Completion::Throw(
@@ -3716,10 +3232,12 @@ impl Interpreter {
 
                 // Step 3: If mapfn is provided and not undefined, check callable
                 let mapping = if let Some(ref mf) = map_fn_arg
-                    && !matches!(mf, JsValue::Undefined)
+                    && !mf.is_undefined()
                 {
-                    let is_callable = matches!(mf, JsValue::Object(o) if {
-                        interp.get_object_cell(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                    let is_callable = mf.as_object_id().is_some_and(|o| {
+                        interp
+                            .get_object_cell(o)
+                            .is_some_and(|obj| obj.borrow().callable.is_some())
                     });
                     if !is_callable {
                         return Completion::Throw(
@@ -3732,17 +3250,17 @@ impl Interpreter {
                 };
 
                 // Step 4: Get @@iterator from raw source (before ToObject)
-                let using_iterator = if let JsValue::Object(ref o) = source {
-                    match interp.get_object_property(o.id, "Symbol(Symbol.iterator)", &source) {
-                        Completion::Normal(v)
-                            if !matches!(v, JsValue::Undefined | JsValue::Null) =>
-                        {
-                            Some(v)
-                        }
+                let using_iterator = if let Some(o) = source.as_object_id() {
+                    match interp.get_object_property(
+                        o,
+                        &JsPropertyKey::well_known_symbol("iterator"),
+                        &source,
+                    ) {
+                        Completion::Normal(v) if !v.is_nullish() => Some(v),
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => None,
                     }
-                } else if matches!(source, JsValue::Undefined | JsValue::Null) {
+                } else if source.is_nullish() {
                     // GetMethod on non-object primitive: need ToObject first for null/undefined → TypeError
                     return Completion::Throw(
                         interp.create_type_error("Cannot convert undefined or null to object"),
@@ -3758,14 +3276,13 @@ impl Interpreter {
                             );
                         }
                     };
-                    if let JsValue::Object(ref wo) = wrapped {
-                        match interp.get_object_property(wo.id, "Symbol(Symbol.iterator)", &wrapped)
-                        {
-                            Completion::Normal(v)
-                                if !matches!(v, JsValue::Undefined | JsValue::Null) =>
-                            {
-                                Some(v)
-                            }
+                    if let Some(wo) = wrapped.as_object_id() {
+                        match interp.get_object_property(
+                            wo,
+                            &JsPropertyKey::well_known_symbol("iterator"),
+                            &wrapped,
+                        ) {
+                            Completion::Normal(v) if !v.is_nullish() => Some(v),
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => None,
                         }
@@ -3788,10 +3305,10 @@ impl Interpreter {
                     if let Err(c) = check_target_ta_writable(interp, &target_obj) {
                         return c;
                     }
-                    let ta_kind = if let JsValue::Object(ref o) = target_obj {
-                        interp.get_object_cell(o.id).and_then(|obj| {
-                            obj.borrow().typed_array_info().map(|ta| ta.kind)
-                        })
+                    let ta_kind = if let Some(o) = target_obj.as_object_id() {
+                        interp
+                            .get_object_cell(o)
+                            .and_then(|obj| obj.borrow().typed_array_info().map(|ta| ta.kind))
                     } else {
                         None
                     };
@@ -3810,7 +3327,7 @@ impl Interpreter {
                             match interp.call_function(
                                 mf,
                                 &this_arg,
-                                &[val.clone(), JsValue::Number(k as f64)],
+                                &[val.clone(), JsValue::number(k as f64)],
                             ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -3823,8 +3340,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         let key = k.to_string();
-                        if let JsValue::Object(ref o) = target_obj
-                            && let Some(obj) = interp.get_object_cell(o.id)
+                        if let Some(o) = target_obj.as_object_id()
+                            && let Some(obj) = interp.get_object_cell(o)
                         {
                             obj.borrow_mut().set_property_value(&key, coerced);
                         }
@@ -3842,12 +3359,11 @@ impl Interpreter {
                         }
                     };
                     // Step 7: len = LengthOfArrayLike (ToLength calls ToNumber which invokes valueOf)
-                    let len = if let JsValue::Object(ref o) = array_like {
-                        let len_val = match interp.get_object_property(o.id, "length", &array_like)
-                        {
+                    let len = if let Some(o) = array_like.as_object_id() {
+                        let len_val = match interp.get_object_property(o, "length", &array_like) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         let n = match interp.to_number_value(&len_val) {
                             Ok(v) => v,
@@ -3871,10 +3387,10 @@ impl Interpreter {
                     if let Err(c) = check_target_ta_writable(interp, &target_obj) {
                         return c;
                     }
-                    let ta_kind = if let JsValue::Object(ref o) = target_obj {
-                        interp.get_object_cell(o.id).and_then(|obj| {
-                            obj.borrow().typed_array_info().map(|ta| ta.kind)
-                        })
+                    let ta_kind = if let Some(o) = target_obj.as_object_id() {
+                        interp
+                            .get_object_cell(o)
+                            .and_then(|obj| obj.borrow().typed_array_info().map(|ta| ta.kind))
                     } else {
                         None
                     };
@@ -3889,21 +3405,21 @@ impl Interpreter {
                         };
                     // Step 9: For each k, get element from source
                     for k in 0..len {
-                        let val = if let JsValue::Object(ref o) = array_like {
-                            match interp.get_object_property(o.id, &k.to_string(), &array_like) {
+                        let val = if let Some(o) = array_like.as_object_id() {
+                            match interp.get_object_property(o, &k.to_string(), &array_like) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
                         let mapped_val = if mapping {
                             let mf = map_fn_arg.as_ref().unwrap();
                             match interp.call_function(
                                 mf,
                                 &this_arg,
-                                &[val.clone(), JsValue::Number(k as f64)],
+                                &[val.clone(), JsValue::number(k as f64)],
                             ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -3916,8 +3432,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         let key = k.to_string();
-                        if let JsValue::Object(ref o) = target_obj
-                            && let Some(obj) = interp.get_object_cell(o.id)
+                        if let Some(o) = target_obj.as_object_id()
+                            && let Some(obj) = interp.get_object_cell(o)
                         {
                             obj.borrow_mut().set_property_value(&key, coerced);
                         }
@@ -3926,8 +3442,8 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ta_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("from".to_string(), ta_from_fn);
@@ -3947,9 +3463,9 @@ impl Interpreter {
                     return c;
                 }
                 // Get ta_kind for coercion
-                let ta_kind = if let JsValue::Object(ref o) = new_obj {
+                let ta_kind = if let Some(o) = new_obj.as_object_id() {
                     interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(o)
                         .and_then(|obj| obj.borrow().typed_array_info().map(|ta| ta.kind))
                 } else {
                     None
@@ -3969,8 +3485,8 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let key = k.to_string();
-                    if let JsValue::Object(ref o) = new_obj
-                        && let Some(obj) = interp.get_object_cell(o.id)
+                    if let Some(o) = new_obj.as_object_id()
+                        && let Some(obj) = interp.get_object_cell(o)
                     {
                         obj.borrow_mut().set_property_value(&key, coerced);
                     }
@@ -3978,24 +3494,19 @@ impl Interpreter {
                 Completion::Normal(new_obj)
             },
         ));
-        if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ta_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_builtin("of".to_string(), ta_of_fn);
         }
 
         // Set %TypedArray%.prototype → %TypedArray.prototype%
-        if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ta_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(JsObject { id: ta_proto_id }),
-                    false,
-                    false,
-                    false,
-                ),
+                PropertyDescriptor::data(JsValue::object(ta_proto_id), false, false, false),
             );
         }
 
@@ -4013,11 +3524,11 @@ impl Interpreter {
             0,
             |_interp, this_val, _args| Completion::Normal(this_val.clone()),
         ));
-        if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ta_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
+                JsPropertyKey::well_known_symbol("species"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -4045,7 +3556,7 @@ impl Interpreter {
                 p.class_name = name.clone();
                 p.insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(bpe as f64), false, false, false),
+                    PropertyDescriptor::data(JsValue::number(bpe as f64), false, false, false),
                 );
             }
 
@@ -4088,9 +3599,9 @@ impl Interpreter {
                         return interp.create_typed_array_from_length(kind, 0, proto);
                     }
                     let first = &args[0];
-                    match first {
-                        JsValue::Object(o) => {
-                            if let Some(src_obj) = interp.get_object_cell(o.id) {
+                    match first.as_object_id() {
+                        Some(o) => {
+                            if let Some(src_obj) = interp.get_object_cell(o) {
                                 let src_ref = src_obj.borrow();
                                 // Case: new XArray(arraybuffer, byteOffset?, length?)
                                 if let Some(ab_data) = src_ref.arraybuffer_data() {
@@ -4106,13 +3617,13 @@ impl Interpreter {
                                         Ok(p) => p,
                                         Err(e) => return Completion::Throw(e),
                                     };
-                                    let byte_offset = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
+                                    let byte_offset = if args.len() > 1 && !args[1].is_undefined() {
                                         let offset_val = match interp.to_index(&args[1]) {
                                             Completion::Normal(v) => v,
                                             Completion::Throw(e) => return Completion::Throw(e),
-                                            _ => return Completion::Normal(JsValue::Undefined),
+                                            _ => return Completion::Normal(JsValue::UNDEFINED),
                                         };
-                                        if let JsValue::Number(n) = offset_val { n as usize } else { 0 }
+                                        offset_val.as_number().map_or(0, |n| n as usize)
                                     } else { 0 };
                                     // §22.2.4.5 step 7: modulo check before detach check
                                     if byte_offset % bpe != 0 {
@@ -4120,13 +3631,13 @@ impl Interpreter {
                                             "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
                                         ));
                                     }
-                                    let has_length_arg = args.len() > 2 && !matches!(args[2], JsValue::Undefined);
+                                    let has_length_arg = args.len() > 2 && !args[2].is_undefined();
                                     let is_length_tracking = is_resizable && !has_length_arg;
                                     let array_length = if has_length_arg {
                                         let len_val = match interp.to_index(&args[2]) {
                                             Completion::Normal(v) => v,
                                             Completion::Throw(e) => return Completion::Throw(e),
-                                            _ => return Completion::Normal(JsValue::Undefined),
+                                            _ => return Completion::Normal(JsValue::UNDEFINED),
                                         };
                                         // §22.2.4.5 step 9: check detach after length ToIndex
                                         if detached.get() {
@@ -4134,7 +3645,7 @@ impl Interpreter {
                                                 "Cannot construct TypedArray from detached ArrayBuffer"
                                             ));
                                         }
-                                        if let JsValue::Number(n) = len_val { n as usize } else { 0 }
+                                        len_val.as_number().map_or(0, |n| n as usize)
                                     } else {
                                         // §22.2.4.5 step 9: detach check (no length arg path)
                                         if detached.get() {
@@ -4174,7 +3685,7 @@ impl Interpreter {
                                     };
                                     let buf_val = first.clone();
                                     let id = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
-                                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                                    return Completion::Normal(JsValue::object(id));
                                 }
                                 // Case: new XArray(typedArray)
                                 if let Some(src_ta) = src_ref.typed_array_info() {
@@ -4236,9 +3747,9 @@ impl Interpreter {
                                         Err(e) => return Completion::Throw(e),
                                     };
                                     let ab_id = ab_obj_id;
-                                    let buf_val = JsValue::Object(JsObject { id: ab_id });
+                                    let buf_val = JsValue::object(ab_id);
                                     let id = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
-                                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                                    return Completion::Normal(JsValue::object(id));
                                 }
                                 // Case: new XArray(arrayLike/iterable)
                                 drop(src_ref);
@@ -4290,9 +3801,9 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let ab_id = ab_obj_id;
-                                let buf_val = JsValue::Object(JsObject { id: ab_id });
+                                let buf_val = JsValue::object(ab_id);
                                 let id = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
-                                return Completion::Normal(JsValue::Object(JsObject { id }));
+                                return Completion::Normal(JsValue::object(id));
                             }
                             Completion::Throw(interp.create_type_error("invalid argument"))
                         }
@@ -4301,9 +3812,9 @@ impl Interpreter {
                             let len_val = match interp.to_index(first) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => return Completion::Normal(JsValue::Undefined),
+                                _ => return Completion::Normal(JsValue::UNDEFINED),
                             };
-                            let len = if let JsValue::Number(n) = len_val { n as usize } else { 0 };
+                            let len = len_val.as_number().map_or(0, |n| n as usize);
                             let proto = match get_proto(interp) {
                                 Ok(p) => p,
                                 Err(e) => return Completion::Throw(e),
@@ -4316,34 +3827,29 @@ impl Interpreter {
 
             // Set deferred_construct so construct_with_new_target doesn't access
             // newTarget.prototype before the constructor body runs (spec ordering)
-            if let JsValue::Object(o) = &ctor
-                && let Some(obj) = self.get_object_cell(o.id)
+            if let Some(o) = ctor.as_object_id()
+                && let Some(obj) = self.get_object_cell(o)
             {
                 obj.borrow_mut().deferred_construct = true;
             }
 
             // Set BYTES_PER_ELEMENT on constructor
-            if let JsValue::Object(o) = &ctor
-                && let Some(obj) = self.get_object_cell(o.id)
+            if let Some(o) = ctor.as_object_id()
+                && let Some(obj) = self.get_object_cell(o)
             {
                 obj.borrow_mut().insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(bpe as f64), false, false, false),
+                    PropertyDescriptor::data(JsValue::number(bpe as f64), false, false, false),
                 );
                 // Set prototype property
                 let proto_id = type_proto_id;
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Object(JsObject { id: proto_id }),
-                        false,
-                        false,
-                        false,
-                    ),
+                    PropertyDescriptor::data(JsValue::object(proto_id), false, false, false),
                 );
                 // Set __proto__ to %TypedArray% so from/of are inherited
-                if let JsValue::Object(ta_o) = &ta_ctor_clone
-                    && let Some(ta_obj) = self.get_object_cell(ta_o.id)
+                if let Some(ta_o) = ta_ctor_clone.as_object_id()
+                    && let Some(ta_obj) = self.get_object_cell(ta_o)
                 {
                     obj.borrow_mut().prototype_id = Some(ta_obj.borrow().id.unwrap());
                 }
@@ -4416,15 +3922,15 @@ impl Interpreter {
             "fromBase64".to_string(),
             1,
             |interp, _this, args| {
-                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(input, JsValue::String(_)) {
+                let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !input.is_string() {
                     return Completion::Throw(
                         interp.create_type_error("fromBase64 requires a string argument"),
                     );
                 }
                 let input_str = to_js_string(&input);
 
-                let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let opts = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let (alphabet, last_chunk) = match parse_base64_options(interp, &opts) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -4443,8 +3949,8 @@ impl Interpreter {
             "fromHex".to_string(),
             1,
             |interp, _this, args| {
-                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(input, JsValue::String(_)) {
+                let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !input.is_string() {
                     return Completion::Throw(
                         interp.create_type_error("fromHex requires a string argument"),
                     );
@@ -4459,8 +3965,8 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(o) = &uint8_ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = uint8_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("fromBase64".to_string(), from_base64_fn);
@@ -4487,7 +3993,7 @@ impl Interpreter {
                         result.push_str(&format!("{:02x}", b));
                     }
                 });
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(uint8_proto_id)
@@ -4504,7 +4010,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
 
-                let opts = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let opts = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let (alphabet, omit_padding) = match parse_to_base64_options(interp, &opts) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -4519,7 +4025,7 @@ impl Interpreter {
                 let result = with_buffer_read(&ta.buffer, |buf| {
                     encode_base64(&buf[start..end], &alphabet, omit_padding)
                 });
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(uint8_proto_id)
@@ -4539,8 +4045,8 @@ impl Interpreter {
                     return c;
                 }
 
-                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(input, JsValue::String(_)) {
+                let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !input.is_string() {
                     return Completion::Throw(
                         interp.create_type_error("setFromHex requires a string argument"),
                     );
@@ -4581,15 +4087,15 @@ impl Interpreter {
                     return c;
                 }
 
-                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(input, JsValue::String(_)) {
+                let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !input.is_string() {
                     return Completion::Throw(
                         interp.create_type_error("setFromBase64 requires a string argument"),
                     );
                 }
                 let input_str = to_js_string(&input);
 
-                let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let opts = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let (alphabet, last_chunk) = match parse_base64_options(interp, &opts) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -4628,8 +4134,8 @@ impl Interpreter {
         exemplar: &JsValue,
         args: &[JsValue],
     ) -> Result<JsValue, JsValue> {
-        let snapshot = if let JsValue::Object(o) = exemplar {
-            self.get_object_cell(o.id)
+        let snapshot = if let Some(o) = exemplar.as_object_id() {
+            self.get_object_cell(o)
                 .and_then(|cell| cell.borrow().typed_array_info().cloned())
         } else {
             None
@@ -4642,7 +4148,7 @@ impl Interpreter {
         let default_ctor_name = kind.name();
         let default_ctor = self
             .get_global_var(default_ctor_name)
-            .unwrap_or(JsValue::Undefined);
+            .unwrap_or(JsValue::UNDEFINED);
 
         let ctor = self.species_constructor(exemplar, &default_ctor)?;
 
@@ -4659,8 +4165,8 @@ impl Interpreter {
             Detached,
             Kind(TypedArrayKind),
         }
-        let kind_probe = if let JsValue::Object(o) = &result_val {
-            self.get_object_cell(o.id)
+        let kind_probe = if let Some(o) = result_val.as_object_id() {
+            self.get_object_cell(o)
                 .map(|cell| {
                     let r = cell.borrow();
                     if let Some(ta) = r.typed_array_info() {
@@ -4697,10 +4203,10 @@ impl Interpreter {
         }
 
         // Validate length >= requested
-        if let Some(JsValue::Number(requested_len)) = args.first() {
-            let requested = *requested_len as usize;
-            let too_small = if let JsValue::Object(o) = &result_val {
-                self.get_object_cell(o.id)
+        if let Some(requested_len) = args.first().and_then(JsValue::as_number) {
+            let requested = requested_len as usize;
+            let too_small = if let Some(o) = result_val.as_object_id() {
+                self.get_object_cell(o)
                     .and_then(|cell| {
                         cell.borrow()
                             .typed_array_info()
@@ -4731,7 +4237,7 @@ impl Interpreter {
         if kind.is_bigint() {
             self.to_bigint_value(value)
         } else {
-            self.to_number_value(value).map(JsValue::Number)
+            self.to_number_value(value).map(JsValue::number)
         }
     }
 
@@ -4775,9 +4281,9 @@ impl Interpreter {
         }
         self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj_id;
-        let buf_val = JsValue::Object(JsObject { id: ab_id });
+        let buf_val = JsValue::object(ab_id);
         let id = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto_id);
-        Completion::Normal(JsValue::Object(JsObject { id }))
+        Completion::Normal(JsValue::object(id))
     }
 
     pub(crate) fn create_typed_array_object(
@@ -4787,8 +4293,8 @@ impl Interpreter {
     ) -> u64 {
         let proto = self.get_typed_array_prototype(info.kind);
         let obj_id = self.create_object_id();
-        if let JsValue::Object(ref bobj) = buf_val {
-            info.buffer_object_id = Some(bobj.id);
+        if let Some(bobj) = buf_val.as_object_id() {
+            info.buffer_object_id = Some(bobj);
         }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
@@ -4806,8 +4312,8 @@ impl Interpreter {
         proto_id: u64,
     ) -> u64 {
         let obj_id = self.create_object_id();
-        if let JsValue::Object(ref bobj) = buf_val {
-            info.buffer_object_id = Some(bobj.id);
+        if let Some(bobj) = buf_val.as_object_id() {
+            info.buffer_object_id = Some(bobj);
         }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
@@ -4839,8 +4345,8 @@ impl Interpreter {
     /// Creates a TypedArray by calling C with argumentList. Validates result is a TypedArray.
     fn typed_array_create(&mut self, ctor: &JsValue, len: usize) -> Completion {
         // Fast path for known built-in TypedArray constructors
-        if let JsValue::Object(o) = ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             let name = {
                 let obj_ref = obj.borrow();
@@ -4872,12 +4378,11 @@ impl Interpreter {
                 if let Some(kind) = kind {
                     // Get prototype from the constructor's .prototype property
                     // (handles cross-realm constructors correctly)
-                    let proto: Option<u64> =
-                        match self.get_object_property(o.id, "prototype", ctor) {
-                            Completion::Normal(JsValue::Object(po)) => Some(po.id),
-                            _ => None,
-                        }
-                        .or_else(|| self.get_typed_array_prototype(kind));
+                    let proto: Option<u64> = match self.get_object_property(o, "prototype", ctor) {
+                        Completion::Normal(v) => v.as_object_id(),
+                        _ => None,
+                    }
+                    .or_else(|| self.get_typed_array_prototype(kind));
                     let bpe = kind.bytes_per_element();
                     let buf_byte_len = len * bpe;
                     let new_buf = vec![0u8; buf_byte_len];
@@ -4919,21 +4424,21 @@ impl Interpreter {
                         r.kind = crate::interpreter::types::ObjectKind::TypedArray(ta);
                     }
                     let id = result_id;
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                    return Completion::Normal(JsValue::object(id));
                 }
             }
         }
         // Generic path: call ctor(len), validate result is TypedArray
         let new_obj = match self.construct_with_new_target(
             ctor,
-            &[JsValue::Number(len as f64)],
+            &[JsValue::number(len as f64)],
             ctor.clone(),
         ) {
             Completion::Normal(v) => v,
             other => return other,
         };
-        if let JsValue::Object(ref o) = new_obj
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = new_obj.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             let ta_len = obj.borrow().typed_array_info().map(|ti| ti.array_length);
             if let Some(ta_len) = ta_len {
@@ -4966,14 +4471,14 @@ impl Interpreter {
             Completion::Throw(e) => return Err(Completion::Throw(e)),
             _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
         };
-        if !matches!(iter, JsValue::Object(_)) {
+        if !iter.is_object() {
             return Err(Completion::Throw(self.create_type_error(
                 "Result of the Symbol.iterator method is not an object",
             )));
         }
         // Cache `next` once per IteratorRecord (spec §7.4.5 GetIteratorFromMethod step 3).
-        let next_fn = if let JsValue::Object(io) = &iter {
-            match self.get_object_property(io.id, "next", &iter) {
+        let next_fn = if let Some(io) = iter.as_object_id() {
+            match self.get_object_property(io, "next", &iter) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
@@ -4982,29 +4487,29 @@ impl Interpreter {
             return Err(Completion::Throw(self.create_type_error("bad iterator")));
         };
         let mut values = Vec::new();
-        while let JsValue::Object(_) = &iter {
+        while iter.is_object() {
             let result = match self.call_function(&next_fn, &iter, &[]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => break,
             };
-            if !matches!(result, JsValue::Object(_)) {
+            if !result.is_object() {
                 return Err(Completion::Throw(
                     self.create_type_error("Iterator result is not an object"),
                 ));
             }
-            if let JsValue::Object(ro) = &result {
-                let done = match self.get_object_property(ro.id, "done", &result) {
+            if let Some(ro) = result.as_object_id() {
+                let done = match self.get_object_property(ro, "done", &result) {
                     Completion::Normal(v) => self.to_boolean_val(&v),
                     _ => true,
                 };
                 if done {
                     break;
                 }
-                let value = match self.get_object_property(ro.id, "value", &result) {
+                let value = match self.get_object_property(ro, "value", &result) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(Completion::Throw(e)),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
                 values.push(value);
             } else {
@@ -5029,17 +4534,21 @@ impl Interpreter {
         &mut self,
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
-        if let JsValue::Object(o) = val
-            && let Some(_obj) = self.get_object_cell(o.id)
+        if let Some(o) = val.as_object_id()
+            && let Some(_obj) = self.get_object_cell(o)
         {
             // Step 5: Let usingIterator be ? GetMethod(object, @@iterator).
-            let iter_fn = match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
+            let iter_fn = match self.get_object_property(
+                o,
+                &JsPropertyKey::well_known_symbol("iterator"),
+                val,
+            ) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             // GetMethod: if null or undefined, treat as no iterator (array-like)
-            let using_iterator = if matches!(iter_fn, JsValue::Undefined | JsValue::Null) {
+            let using_iterator = if iter_fn.is_nullish() {
                 None
             } else if self.is_callable(&iter_fn) {
                 Some(iter_fn)
@@ -5055,14 +4564,14 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(Completion::Throw(e)),
                     _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
                 };
-                if !matches!(iter, JsValue::Object(_)) {
+                if !iter.is_object() {
                     return Err(Completion::Throw(self.create_type_error(
                         "Result of the Symbol.iterator method is not an object",
                     )));
                 }
                 let mut values = Vec::new();
-                while let JsValue::Object(io) = &iter {
-                    let next_fn = match self.get_object_property(io.id, "next", &iter) {
+                while let Some(io) = iter.as_object_id() {
+                    let next_fn = match self.get_object_property(io, "next", &iter) {
                         Completion::Normal(v) => v,
                         _ => break,
                     };
@@ -5071,23 +4580,23 @@ impl Interpreter {
                         Completion::Throw(e) => return Err(Completion::Throw(e)),
                         _ => break,
                     };
-                    if !matches!(result, JsValue::Object(_)) {
+                    if !result.is_object() {
                         return Err(Completion::Throw(
                             self.create_type_error("Iterator result is not an object"),
                         ));
                     }
-                    if let JsValue::Object(ro) = &result {
-                        let done = match self.get_object_property(ro.id, "done", &result) {
+                    if let Some(ro) = result.as_object_id() {
+                        let done = match self.get_object_property(ro, "done", &result) {
                             Completion::Normal(v) => self.to_boolean_val(&v),
                             _ => true,
                         };
                         if done {
                             break;
                         }
-                        let value = match self.get_object_property(ro.id, "value", &result) {
+                        let value = match self.get_object_property(ro, "value", &result) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(Completion::Throw(e)),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         values.push(value);
                     } else {
@@ -5098,7 +4607,7 @@ impl Interpreter {
             }
 
             // Array-like
-            let len_val = match self.get_object_property(o.id, "length", val) {
+            let len_val = match self.get_object_property(o, "length", val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => return Ok(Vec::new()),
@@ -5116,10 +4625,10 @@ impl Interpreter {
             let len = len_f as usize;
             let mut values = Vec::new();
             for i in 0..len {
-                let v = match self.get_object_property(o.id, &i.to_string(), val) {
+                let v = match self.get_object_property(o, &i.to_string(), val) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(Completion::Throw(e)),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
                 values.push(v);
             }
@@ -5137,15 +4646,15 @@ impl Interpreter {
 
         // Getters: buffer, byteOffset, byteLength
         self.define_getter(dv_proto_id, "buffer", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object(o)
             {
                 let obj_ref = obj.borrow();
                 if obj_ref.data_view_info().is_some() {
                     if let Some(buf_id) = obj_ref.view_buffer_object_id() {
-                        return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
+                        return Completion::Normal(JsValue::object(buf_id));
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
             }
             Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5153,8 +4662,8 @@ impl Interpreter {
 
         // byteOffset getter
         self.define_getter(dv_proto_id, "byteOffset", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object(o)
             {
                 let obj_ref = obj.borrow();
                 if let Some(dv) = obj_ref.data_view_info() {
@@ -5175,15 +4684,15 @@ impl Interpreter {
                             interp.create_type_error("DataView is out of bounds"),
                         );
                     }
-                    return Completion::Normal(JsValue::Number(dv.byte_offset as f64));
+                    return Completion::Normal(JsValue::number(dv.byte_offset as f64));
                 }
             }
             Completion::Throw(interp.create_type_error("not a DataView"))
         });
         // byteLength getter
         self.define_getter(dv_proto_id, "byteLength", |interp, this_val, _args| {
-            if let JsValue::Object(o) = this_val
-                && let Some(obj) = interp.get_object(o.id)
+            if let Some(o) = this_val.as_object_id()
+                && let Some(obj) = interp.get_object(o)
             {
                 let obj_ref = obj.borrow();
                 if let Some(dv) = obj_ref.data_view_info() {
@@ -5199,7 +4708,7 @@ impl Interpreter {
                                 interp.create_type_error("DataView is out of bounds"),
                             );
                         }
-                        return Completion::Normal(JsValue::Number(
+                        return Completion::Normal(JsValue::number(
                             (buf_len - dv.byte_offset) as f64,
                         ));
                     } else {
@@ -5208,7 +4717,7 @@ impl Interpreter {
                                 interp.create_type_error("DataView is out of bounds"),
                             );
                         }
-                        return Completion::Normal(JsValue::Number(dv.byte_length as f64));
+                        return Completion::Normal(JsValue::number(dv.byte_length as f64));
                     }
                 }
             }
@@ -5228,8 +4737,8 @@ impl Interpreter {
                     $method_name.to_string(),
                     1,
                     |interp, this_val, args| {
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
+                        if let Some(o) = this_val.as_object_id()
+                            && let Some(obj) = interp.get_object(o)
                         {
                             {
                                 let obj_ref = obj.borrow();
@@ -5240,9 +4749,9 @@ impl Interpreter {
                                 }
                             }
                             let byte_offset = match interp
-                                .to_index(args.first().unwrap_or(&JsValue::Undefined))
+                                .to_index(args.first().unwrap_or(JsValue::undefined_ref()))
                             {
-                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
@@ -5298,10 +4807,10 @@ impl Interpreter {
         }
 
         dv_get_method!("getInt8", 1, |buf: &[u8], _le: bool| -> JsValue {
-            JsValue::Number(buf[0] as i8 as f64)
+            JsValue::number(buf[0] as i8 as f64)
         });
         dv_get_method!("getUint8", 1, |buf: &[u8], _le: bool| -> JsValue {
-            JsValue::Number(buf[0] as f64)
+            JsValue::number(buf[0] as f64)
         });
         dv_get_method!("getInt16", 2, |buf: &[u8], le: bool| -> JsValue {
             let v = if le {
@@ -5309,7 +4818,7 @@ impl Interpreter {
             } else {
                 i16::from_be_bytes([buf[0], buf[1]])
             };
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         });
         dv_get_method!("getUint16", 2, |buf: &[u8], le: bool| -> JsValue {
             let v = if le {
@@ -5317,7 +4826,7 @@ impl Interpreter {
             } else {
                 u16::from_be_bytes([buf[0], buf[1]])
             };
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         });
         dv_get_method!("getInt32", 4, |buf: &[u8], le: bool| -> JsValue {
             let v = if le {
@@ -5325,7 +4834,7 @@ impl Interpreter {
             } else {
                 i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]])
             };
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         });
         dv_get_method!("getUint32", 4, |buf: &[u8], le: bool| -> JsValue {
             let v = if le {
@@ -5333,7 +4842,7 @@ impl Interpreter {
             } else {
                 u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]])
             };
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         });
         dv_get_method!("getFloat32", 4, |buf: &[u8], le: bool| -> JsValue {
             let v = if le {
@@ -5341,7 +4850,7 @@ impl Interpreter {
             } else {
                 f32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]])
             };
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         });
         dv_get_method!("getFloat64", 8, |buf: &[u8], le: bool| -> JsValue {
             let mut bytes = [0u8; 8];
@@ -5351,7 +4860,7 @@ impl Interpreter {
             } else {
                 f64::from_be_bytes(bytes)
             };
-            JsValue::Number(v)
+            JsValue::number(v)
         });
         dv_get_method!("getBigInt64", 8, |buf: &[u8], le: bool| -> JsValue {
             let mut bytes = [0u8; 8];
@@ -5361,9 +4870,7 @@ impl Interpreter {
             } else {
                 i64::from_be_bytes(bytes)
             };
-            JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(v),
-            })
+            JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(v)))
         });
         dv_get_method!("getBigUint64", 8, |buf: &[u8], le: bool| -> JsValue {
             let mut bytes = [0u8; 8];
@@ -5373,9 +4880,7 @@ impl Interpreter {
             } else {
                 u64::from_be_bytes(bytes)
             };
-            JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(v),
-            })
+            JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(v)))
         });
         dv_get_method!("getFloat16", 2, |buf: &[u8], le: bool| -> JsValue {
             let bits = if le {
@@ -5383,7 +4888,7 @@ impl Interpreter {
             } else {
                 u16::from_be_bytes([buf[0], buf[1]])
             };
-            JsValue::Number(dv_f16_to_f64(bits))
+            JsValue::number(dv_f16_to_f64(bits))
         });
 
         // DataView set methods
@@ -5401,8 +4906,8 @@ impl Interpreter {
                     2,
                     |interp, this_val, args| {
                         // Step 1: Require this to be a DataView (no detach check)
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
+                        if let Some(o) = this_val.as_object_id()
+                            && let Some(obj) = interp.get_object(o)
                         {
                             {
                                 let obj_ref = obj.borrow();
@@ -5422,15 +4927,15 @@ impl Interpreter {
                             }
                             // Step 4: ToIndex(byteOffset) — before detach check
                             let byte_offset = match interp
-                                .to_index(args.first().unwrap_or(&JsValue::Undefined))
+                                .to_index(args.first().unwrap_or(JsValue::undefined_ref()))
                             {
-                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
                             // Step 3: ToNumber(value) — before detach check
                             let num_value = match interp
-                                .to_number_value(args.get(1).unwrap_or(&JsValue::Undefined))
+                                .to_number_value(args.get(1).unwrap_or(JsValue::undefined_ref()))
                             {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
@@ -5476,7 +4981,7 @@ impl Interpreter {
                             with_buffer_write(&dv.buffer, |buf| {
                                 $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
                             });
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
                     },
@@ -5491,8 +4996,8 @@ impl Interpreter {
                     2,
                     |interp, this_val, args| {
                         // Step 1: Require this to be a DataView (no detach check)
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
+                        if let Some(o) = this_val.as_object_id()
+                            && let Some(obj) = interp.get_object(o)
                         {
                             {
                                 let obj_ref = obj.borrow();
@@ -5512,15 +5017,15 @@ impl Interpreter {
                             }
                             // Step 2: ToIndex(byteOffset) — before detach check
                             let byte_offset = match interp
-                                .to_index(args.first().unwrap_or(&JsValue::Undefined))
+                                .to_index(args.first().unwrap_or(JsValue::undefined_ref()))
                             {
-                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
                             // Step 3: ToBigInt(value) — before detach check
                             let bigint_value = match interp
-                                .to_bigint_value(args.get(1).unwrap_or(&JsValue::Undefined))
+                                .to_bigint_value(args.get(1).unwrap_or(JsValue::undefined_ref()))
                             {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -5566,7 +5071,7 @@ impl Interpreter {
                             with_buffer_write(&dv.buffer, |buf| {
                                 $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
                             });
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
                     },
@@ -5656,10 +5161,9 @@ impl Interpreter {
             8,
             bigint,
             |buf: &mut [u8], v: &JsValue, le: bool| {
-                let n = match v {
-                    JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
-                    _ => 0,
-                };
+                let n = v
+                    .with_bigint(|b| i64::try_from(b).unwrap_or(0))
+                    .unwrap_or(0);
                 let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
                 buf.copy_from_slice(&bytes);
             }
@@ -5669,23 +5173,16 @@ impl Interpreter {
             8,
             bigint,
             |buf: &mut [u8], v: &JsValue, le: bool| {
-                let n = match v {
-                    JsValue::BigInt(b) => u64::try_from(&b.value).unwrap_or(0),
-                    _ => 0,
-                };
+                let n = v
+                    .with_bigint(|b| u64::try_from(b).unwrap_or(0))
+                    .unwrap_or(0);
                 let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
                 buf.copy_from_slice(&bytes);
             }
         );
 
         // @@toStringTag
-        let tag = JsValue::String(JsString::from_str("DataView"));
-        self.get_object_cell_expect(dv_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor::data(tag, false, false, true),
-            );
+        self.define_to_string_tag(dv_proto_id, "DataView");
 
         // DataView constructor
         let dv_proto_clone_id = dv_proto_id;
@@ -5698,9 +5195,9 @@ impl Interpreter {
                         interp.create_type_error("Constructor DataView requires 'new'"),
                     );
                 }
-                let buf_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(o) = &buf_arg
-                    && let Some(obj) = interp.get_object(o.id)
+                let buf_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if let Some(o) = buf_arg.as_object_id()
+                    && let Some(obj) = interp.get_object(o)
                 {
                     let is_arraybuffer = {
                         let obj_ref = obj.borrow();
@@ -5713,8 +5210,8 @@ impl Interpreter {
                     }
                     // ToIndex(byteOffset) BEFORE detach check
                     let byte_offset =
-                        match interp.to_index(args.get(1).unwrap_or(&JsValue::Undefined)) {
-                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                        match interp.to_index(args.get(1).unwrap_or(JsValue::undefined_ref())) {
+                            Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
                         };
@@ -5743,23 +5240,26 @@ impl Interpreter {
                             "offset is outside the bounds of the buffer",
                         ));
                     }
-                    let byte_length_arg = args.get(2).unwrap_or(&JsValue::Undefined);
-                    let has_byte_length = !matches!(byte_length_arg, JsValue::Undefined);
+                    let byte_length_arg = args.get(2).unwrap_or(JsValue::undefined_ref());
+                    let has_byte_length = !byte_length_arg.is_undefined();
                     let is_length_tracking = is_resizable && !has_byte_length;
                     let byte_length = if !has_byte_length {
                         buf_len - byte_offset
                     } else {
                         match interp.to_index(byte_length_arg) {
-                            Completion::Normal(JsValue::Number(n)) => {
-                                let bl = n as usize;
-                                if byte_offset + bl > buf_len {
-                                    return Completion::Throw(
-                                        interp
-                                            .create_error("RangeError", "invalid DataView length"),
-                                    );
+                            Completion::Normal(v) => match v.as_number() {
+                                Some(n) => {
+                                    let bl = n as usize;
+                                    if byte_offset + bl > buf_len {
+                                        return Completion::Throw(interp.create_error(
+                                            "RangeError",
+                                            "invalid DataView length",
+                                        ));
+                                    }
+                                    bl
                                 }
-                                bl
-                            }
+                                None => 0,
+                            },
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
                         }
@@ -5805,8 +5305,8 @@ impl Interpreter {
                         }
                     }
                     let mut dv_info = dv_info;
-                    if let JsValue::Object(ref bobj) = buf_arg {
-                        dv_info.buffer_object_id = Some(bobj.id);
+                    if let Some(bobj) = buf_arg.as_object_id() {
+                        dv_info.buffer_object_id = Some(bobj);
                     }
                     let result_id = interp.create_object_id();
                     {
@@ -5816,7 +5316,7 @@ impl Interpreter {
                         r.kind = crate::interpreter::types::ObjectKind::DataView(dv_info);
                     }
                     let id = result_id;
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                    return Completion::Normal(JsValue::object(id));
                 }
                 Completion::Throw(interp.create_type_error(
                     "First argument to DataView constructor must be an ArrayBuffer",
@@ -5827,10 +5327,10 @@ impl Interpreter {
         // Wire DataView.prototype to the proto object with all the methods
         let dv_proto_val = {
             let id = dv_proto_id;
-            JsValue::Object(crate::types::JsObject { id })
+            JsValue::object(id)
         };
-        if let JsValue::Object(o) = &ctor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -5844,8 +5344,8 @@ impl Interpreter {
                 PropertyDescriptor::data(ctor.clone(), true, false, true),
             );
 
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
@@ -5864,8 +5364,8 @@ fn extract_ta_and_callback(
     this_val: &JsValue,
     args: &[JsValue],
 ) -> Result<(TypedArrayInfo, JsValue), Completion> {
-    if let JsValue::Object(o) = this_val
-        && let Some(obj) = interp.get_object(o.id)
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
     {
         let ta = {
             let obj_ref = obj.borrow();
@@ -5878,10 +5378,10 @@ fn extract_ta_and_callback(
                 ));
             }
         };
-        let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-        let is_callable = if let JsValue::Object(co) = &callback {
+        let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+        let is_callable = if let Some(co) = callback.as_object_id() {
             interp
-                .get_object_cell(co.id)
+                .get_object_cell(co)
                 .is_some_and(|obj| obj.borrow().callable.is_some())
         } else {
             false
@@ -6029,12 +5529,12 @@ fn is_bigint_kind(kind: TypedArrayKind) -> bool {
 }
 
 fn same_value_zero(x: &JsValue, y: &JsValue) -> bool {
-    match (x, y) {
-        (JsValue::Number(a), JsValue::Number(b)) => {
+    match (x.as_number(), y.as_number()) {
+        (Some(a), Some(b)) => {
             if a.is_nan() && b.is_nan() {
                 return true;
             }
-            if *a == 0.0 && *b == 0.0 {
+            if a == 0.0 && b == 0.0 {
                 return true;
             }
             a == b
@@ -6044,23 +5544,138 @@ fn same_value_zero(x: &JsValue, y: &JsValue) -> bool {
 }
 
 fn strict_eq(x: &JsValue, y: &JsValue) -> bool {
-    match (x, y) {
-        (JsValue::Undefined, JsValue::Undefined) | (JsValue::Null, JsValue::Null) => true,
-        (JsValue::Boolean(a), JsValue::Boolean(b)) => a == b,
-        (JsValue::Number(a), JsValue::Number(b)) => a == b,
-        (JsValue::String(a), JsValue::String(b)) => a.to_rust_string() == b.to_rust_string(),
-        (JsValue::BigInt(a), JsValue::BigInt(b)) => a.value == b.value,
-        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
+    if x.kind() != y.kind() {
+        return false;
+    }
+    match x.kind() {
+        ValueKind::Undefined | ValueKind::Null => true,
+        ValueKind::Boolean => x.as_boolean() == y.as_boolean(),
+        ValueKind::Number => x.as_number() == y.as_number(),
+        ValueKind::String => {
+            x.as_string().map(|s| s.to_rust_string()) == y.as_string().map(|s| s.to_rust_string())
+        }
+        ValueKind::BigInt => x.as_bigint().map(|b| b.value) == y.as_bigint().map(|b| b.value),
+        ValueKind::Object => x.as_object_id() == y.as_object_id(),
         _ => false,
     }
+}
+
+/// Spec ValidateTypedArray(this, accessMode=~read~): the receiver-validation
+/// prologue shared by the TypedArray prototype methods. Throws TypeError
+/// "not a TypedArray" for a non-TypedArray receiver, otherwise runs the
+/// detached / out-of-bounds check and returns a clone of its `TypedArrayInfo`.
+/// The kind-gated `validate_uint8array` below is the same shape for one kind.
+/// Owned, borrow-free snapshot of an (Shared)ArrayBuffer's observable state,
+/// captured under a single `cell.borrow()` so the brand-check prologue can drop
+/// the borrow before `create_type_error` (which needs `&mut Interpreter`) runs.
+/// A dumb record: every getter reads one or two fields straight off it. For a
+/// SharedArrayBuffer, `is_detached`/`is_immutable` are always `false` (a SAB
+/// never detaches and is never immutable).
+struct BufferSnapshot {
+    byte_length: usize,
+    is_detached: bool,
+    is_immutable: bool,
+    max_byte_length: Option<usize>,
+}
+
+/// Brand-check `this_val` as an `ArrayBuffer` (has buffer data **and** is not
+/// shared) and snapshot the fields its getters read. Rejects a
+/// SharedArrayBuffer and any non-buffer with a `"not an ArrayBuffer"`
+/// TypeError. **Never throws on a detached buffer** — detachment is reported
+/// through `is_detached`, because `byteLength`/`maxByteLength` return `0` (not a
+/// throw) on a detached buffer and `detached` returns the flag itself. Mirrors
+/// the sibling `validate_typed_array`.
+fn require_array_buffer(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<BufferSnapshot, Completion> {
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
+    {
+        let snapshot = {
+            let r = obj.borrow();
+            if let Some(buf) = r.arraybuffer_data()
+                && !r.arraybuffer_is_shared()
+            {
+                Some(BufferSnapshot {
+                    byte_length: buffer_len(buf),
+                    is_detached: r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()),
+                    is_immutable: r.arraybuffer_is_immutable(),
+                    max_byte_length: r.arraybuffer_max_byte_length(),
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(snapshot) = snapshot {
+            return Ok(snapshot);
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not an ArrayBuffer"),
+    ))
+}
+
+/// Brand-check `this_val` as a `SharedArrayBuffer` (has buffer data **and** is
+/// shared) and snapshot the fields its getters read. Rejects a plain
+/// ArrayBuffer and any non-buffer with a `"not a SharedArrayBuffer"` TypeError.
+/// A SAB never detaches and is never immutable, so those snapshot fields are
+/// pinned to `false`.
+fn require_shared_array_buffer(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<BufferSnapshot, Completion> {
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
+    {
+        let snapshot = {
+            let r = obj.borrow();
+            if let Some(buf) = r.arraybuffer_data()
+                && r.arraybuffer_is_shared()
+            {
+                Some(BufferSnapshot {
+                    byte_length: buffer_len(buf),
+                    is_detached: false,
+                    is_immutable: false,
+                    max_byte_length: r.arraybuffer_max_byte_length(),
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(snapshot) = snapshot {
+            return Ok(snapshot);
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not a SharedArrayBuffer"),
+    ))
+}
+
+fn validate_typed_array(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<TypedArrayInfo, Completion> {
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
+    {
+        let ta = obj.borrow().typed_array_info().cloned();
+        if let Some(ta) = ta {
+            check_detached_or_out_of_bounds(interp, &ta)?;
+            return Ok(ta);
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not a TypedArray"),
+    ))
 }
 
 fn validate_uint8array(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let JsValue::Object(o) = this_val
-        && let Some(obj) = interp.get_object(o.id)
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
     {
         let obj_ref = obj.borrow();
         if let Some(ta) = obj_ref.typed_array_info() {
@@ -6086,8 +5701,8 @@ fn validate_uint8array_no_detach_check(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let JsValue::Object(o) = this_val
-        && let Some(obj) = interp.get_object(o.id)
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object(o)
     {
         let obj_ref = obj.borrow();
         if let Some(ta) = obj_ref.typed_array_info() {
@@ -6157,11 +5772,11 @@ fn check_ta_buffer_writable(
 /// Like check_ta_buffer_writable but accepts a JsValue (the target TA), used after
 /// TypedArrayCreateFromConstructor returns. No-op for non-TypedArray values.
 fn check_target_ta_writable(interp: &mut Interpreter, target: &JsValue) -> Result<(), Completion> {
-    let JsValue::Object(o) = target else {
+    let Some(o) = target.as_object_id() else {
         return Ok(());
     };
     let info_opt = interp
-        .get_object_cell(o.id)
+        .get_object_cell(o)
         .and_then(|cell| cell.borrow().typed_array_info().cloned());
     let Some(info) = info_opt else {
         return Ok(());
@@ -6176,15 +5791,15 @@ fn parse_base64_options(
     let mut alphabet = "base64".to_string();
     let mut last_chunk = "loose".to_string();
 
-    if !matches!(opts, JsValue::Undefined | JsValue::Null)
-        && let JsValue::Object(o) = opts
+    if !opts.is_nullish()
+        && let Some(o) = opts.as_object_id()
     {
-        let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
+        let alpha_val = match interp.get_object_property(o, "alphabet", opts) {
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        if !matches!(alpha_val, JsValue::Undefined) {
-            if !matches!(alpha_val, JsValue::String(_)) {
+        if !alpha_val.is_undefined() {
+            if !alpha_val.is_string() {
                 return Err(Completion::Throw(
                     interp.create_type_error("alphabet must be a string"),
                 ));
@@ -6198,12 +5813,12 @@ fn parse_base64_options(
             alphabet = s;
         }
 
-        let lch_val = match interp.get_object_property(o.id, "lastChunkHandling", opts) {
+        let lch_val = match interp.get_object_property(o, "lastChunkHandling", opts) {
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        if !matches!(lch_val, JsValue::Undefined) {
-            if !matches!(lch_val, JsValue::String(_)) {
+        if !lch_val.is_undefined() {
+            if !lch_val.is_string() {
                 return Err(Completion::Throw(
                     interp.create_type_error("lastChunkHandling must be a string"),
                 ));
@@ -6227,15 +5842,15 @@ fn parse_to_base64_options(
     let mut alphabet = "base64".to_string();
     let mut omit_padding = false;
 
-    if !matches!(opts, JsValue::Undefined | JsValue::Null)
-        && let JsValue::Object(o) = opts
+    if !opts.is_nullish()
+        && let Some(o) = opts.as_object_id()
     {
-        let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
+        let alpha_val = match interp.get_object_property(o, "alphabet", opts) {
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        if !matches!(alpha_val, JsValue::Undefined) {
-            if !matches!(alpha_val, JsValue::String(_)) {
+        if !alpha_val.is_undefined() {
+            if !alpha_val.is_string() {
                 return Err(Completion::Throw(
                     interp.create_type_error("alphabet must be a string"),
                 ));
@@ -6249,7 +5864,7 @@ fn parse_to_base64_options(
             alphabet = s;
         }
 
-        let omit_val = match interp.get_object_property(o.id, "omitPadding", opts) {
+        let omit_val = match interp.get_object_property(o, "omitPadding", opts) {
             Completion::Normal(v) => v,
             other => return Err(other),
         };
@@ -6718,11 +6333,11 @@ pub(crate) fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8
     }
     interp.gc_track_external_bytes(len);
     let ab_id = ab_obj_id;
-    let buf_val = JsValue::Object(JsObject { id: ab_id });
+    let buf_val = JsValue::object(ab_id);
 
     let proto_id = interp.realm().uint8array_prototype.unwrap();
     let id = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
-    Completion::Normal(JsValue::Object(JsObject { id }))
+    Completion::Normal(JsValue::object(id))
 }
 
 fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usize) -> Completion {
@@ -6730,11 +6345,242 @@ fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usiz
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .set_property_value("read", JsValue::Number(read as f64));
+        .set_property_value("read", JsValue::number(read as f64));
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .set_property_value("written", JsValue::Number(written as f64));
+        .set_property_value("written", JsValue::number(written as f64));
     let id = obj_id;
-    Completion::Normal(JsValue::Object(JsObject { id }))
+    Completion::Normal(JsValue::object(id))
+}
+
+#[cfg(test)]
+mod validate_typed_array_tests {
+    //! Pins the `validate_typed_array` seam — the receiver-validation prologue
+    //! shared by the TypedArray prototype methods. A live, attached TypedArray
+    //! receiver yields its `TypedArrayInfo`; anything else throws the same
+    //! TypeError the open-coded prologues throw ("not a TypedArray" for a
+    //! non-TypedArray receiver, "typed array is detached" for a detached one).
+    use super::validate_typed_array;
+    use crate::interpreter::{Completion, Interpreter, TypedArrayKind};
+    use crate::parser::Parser;
+    use crate::types::JsValue;
+
+    fn interp_with(source: &str) -> Interpreter {
+        let mut parser = Parser::new(source).expect("parser init");
+        let program = parser.parse_program().expect("parse program");
+        let mut interp = Interpreter::new();
+        let result = interp.run(&program);
+        assert!(
+            matches!(result, Completion::Normal(_) | Completion::Empty),
+            "unexpected completion: {result:?}"
+        );
+        interp
+    }
+
+    fn global(interp: &Interpreter, name: &str) -> JsValue {
+        interp
+            .get_global_var_ref(name)
+            .unwrap_or_else(|| panic!("expected global {name}"))
+    }
+
+    #[test]
+    fn accepts_a_live_typed_array_and_returns_its_info() {
+        let mut interp = interp_with("var ta = new Uint8Array([10, 20, 30, 40]);");
+        let ta = global(&interp, "ta");
+        let info = validate_typed_array(&mut interp, &ta).expect("valid TypedArray");
+        assert_eq!(info.kind, TypedArrayKind::Uint8);
+        assert_eq!(info.array_length, 4);
+    }
+
+    #[test]
+    fn rejects_a_non_object_receiver_as_not_a_typed_array() {
+        let mut interp = interp_with("");
+        let err = match validate_typed_array(&mut interp, &JsValue::UNDEFINED) {
+            Ok(_) => panic!("expected undefined receiver to be rejected"),
+            Err(Completion::Throw(e)) => interp.format_value(&e),
+            Err(other) => panic!("expected Throw, got {other:?}"),
+        };
+        assert!(err.contains("not a TypedArray"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rejects_a_plain_object_as_not_a_typed_array() {
+        let mut interp = interp_with("var o = {};");
+        let o = global(&interp, "o");
+        let err = match validate_typed_array(&mut interp, &o) {
+            Ok(_) => panic!("expected plain object to be rejected"),
+            Err(Completion::Throw(e)) => interp.format_value(&e),
+            Err(other) => panic!("expected Throw, got {other:?}"),
+        };
+        assert!(err.contains("not a TypedArray"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rejects_a_detached_typed_array() {
+        let mut interp =
+            interp_with("var buf = new ArrayBuffer(8); var dta = new Uint8Array(buf);");
+        let buf = global(&interp, "buf");
+        let dta = global(&interp, "dta");
+        // Detach through the same MOP the spec's DetachArrayBuffer uses.
+        interp.detach_arraybuffer(&buf);
+        let err = match validate_typed_array(&mut interp, &dta) {
+            Ok(_) => panic!("expected detached TypedArray to be rejected"),
+            Err(Completion::Throw(e)) => interp.format_value(&e),
+            Err(other) => panic!("expected Throw, got {other:?}"),
+        };
+        assert!(
+            err.contains("typed array is detached"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod require_array_buffer_tests {
+    //! Pins the `require_array_buffer` / `require_shared_array_buffer` seams —
+    //! the receiver-validation prologue shared by the (Shared)ArrayBuffer
+    //! prototype getters. A live receiver of the right brand yields a
+    //! `BufferSnapshot`; a detached ArrayBuffer still yields a snapshot with
+    //! `is_detached = true` (getters return `0`, they never throw on detached);
+    //! the wrong brand or a non-buffer throws the same TypeError the open-coded
+    //! prologues threw. The final block also drives the getters through
+    //! `[[Get]]` to pin the value rules (`detached → 0`, `unwrap_or(bytes)`).
+    use super::{require_array_buffer, require_shared_array_buffer};
+    use crate::interpreter::{Completion, Interpreter};
+    use crate::parser::Parser;
+    use crate::types::JsValue;
+
+    fn interp_with(source: &str) -> Interpreter {
+        let mut parser = Parser::new(source).expect("parser init");
+        let program = parser.parse_program().expect("parse program");
+        let mut interp = Interpreter::new();
+        let result = interp.run(&program);
+        assert!(
+            matches!(result, Completion::Normal(_) | Completion::Empty),
+            "unexpected completion: {result:?}"
+        );
+        interp
+    }
+
+    fn global(interp: &Interpreter, name: &str) -> JsValue {
+        interp
+            .get_global_var_ref(name)
+            .unwrap_or_else(|| panic!("expected global {name}"))
+    }
+
+    fn throw_message(
+        interp: &Interpreter,
+        result: Result<super::BufferSnapshot, Completion>,
+    ) -> String {
+        match result {
+            Ok(_) => panic!("expected the receiver to be rejected"),
+            Err(Completion::Throw(e)) => interp.format_value(&e),
+            Err(other) => panic!("expected Throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_a_live_array_buffer() {
+        let mut interp = interp_with("var ab = new ArrayBuffer(8);");
+        let ab = global(&interp, "ab");
+        let snap = require_array_buffer(&mut interp, &ab).expect("valid ArrayBuffer");
+        assert_eq!(snap.byte_length, 8);
+        assert!(!snap.is_detached);
+        assert!(!snap.is_immutable);
+        assert_eq!(snap.max_byte_length, None);
+    }
+
+    #[test]
+    fn accepts_a_resizable_array_buffer() {
+        let mut interp = interp_with("var ab = new ArrayBuffer(8, { maxByteLength: 16 });");
+        let ab = global(&interp, "ab");
+        let snap = require_array_buffer(&mut interp, &ab).expect("valid resizable ArrayBuffer");
+        assert_eq!(snap.byte_length, 8);
+        assert_eq!(snap.max_byte_length, Some(16));
+    }
+
+    #[test]
+    fn detached_array_buffer_returns_a_snapshot_not_a_throw() {
+        // `transfer()` detaches the source buffer through the same MOP the spec
+        // uses; the getters must still validate (returning `is_detached`), never
+        // throw.
+        let mut interp = interp_with("var ab = new ArrayBuffer(8); ab.transfer();");
+        let ab = global(&interp, "ab");
+        let snap = require_array_buffer(&mut interp, &ab).expect("detached AB still validates");
+        assert!(snap.is_detached);
+    }
+
+    #[test]
+    fn require_array_buffer_rejects_a_shared_array_buffer() {
+        let mut interp = interp_with("var sab = new SharedArrayBuffer(8);");
+        let sab = global(&interp, "sab");
+        let result = require_array_buffer(&mut interp, &sab);
+        let err = throw_message(&interp, result);
+        assert!(
+            err.contains("not an ArrayBuffer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn require_array_buffer_rejects_a_plain_object() {
+        let mut interp = interp_with("var o = {};");
+        let o = global(&interp, "o");
+        let result = require_array_buffer(&mut interp, &o);
+        let err = throw_message(&interp, result);
+        assert!(
+            err.contains("not an ArrayBuffer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn require_shared_array_buffer_accepts_a_shared_array_buffer() {
+        let mut interp = interp_with("var sab = new SharedArrayBuffer(8);");
+        let sab = global(&interp, "sab");
+        let snap = require_shared_array_buffer(&mut interp, &sab).expect("valid SharedArrayBuffer");
+        assert_eq!(snap.byte_length, 8);
+        assert!(!snap.is_detached);
+    }
+
+    #[test]
+    fn require_shared_array_buffer_rejects_a_plain_array_buffer() {
+        let mut interp = interp_with("var ab = new ArrayBuffer(8);");
+        let ab = global(&interp, "ab");
+        let result = require_shared_array_buffer(&mut interp, &ab);
+        let err = throw_message(&interp, result);
+        assert!(
+            err.contains("not a SharedArrayBuffer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn getter_value_rules_through_get() {
+        // Resizable buffer: byteLength = current, maxByteLength = the max,
+        // resizable = true. Detached buffer: byteLength and maxByteLength both
+        // 0, detached = true — the `detached → 0` rule the getters encode.
+        let interp = interp_with(
+            "var rab = new ArrayBuffer(8, { maxByteLength: 16 });\n\
+             var r_bl = rab.byteLength;\n\
+             var r_mbl = rab.maxByteLength;\n\
+             var r_rz = rab.resizable;\n\
+             var dab = new ArrayBuffer(8); dab.transfer();\n\
+             var d_bl = dab.byteLength;\n\
+             var d_mbl = dab.maxByteLength;\n\
+             var d_det = dab.detached;",
+        );
+        let num = |interp: &Interpreter, name: &str| {
+            global(interp, name)
+                .as_number()
+                .unwrap_or_else(|| panic!("{name} not a number"))
+        };
+        assert_eq!(num(&interp, "r_bl"), 8.0);
+        assert_eq!(num(&interp, "r_mbl"), 16.0);
+        assert!(interp.to_boolean_val(&global(&interp, "r_rz")));
+        assert_eq!(num(&interp, "d_bl"), 0.0);
+        assert_eq!(num(&interp, "d_mbl"), 0.0);
+        assert!(interp.to_boolean_val(&global(&interp, "d_det")));
+    }
 }

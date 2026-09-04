@@ -55,59 +55,12 @@ fn encode_for_regexp_escape(c: char) -> String {
     }
 }
 
-/// Convert a byte offset in a UTF-8 string to a UTF-16 code unit offset
-fn byte_offset_to_utf16(s: &str, byte_offset: usize) -> usize {
-    if s.is_ascii() {
-        return byte_offset;
-    }
-    let mut utf16_offset = 0;
-    for c in s[..byte_offset].chars() {
-        if pua_to_surrogate(c).is_some() {
-            utf16_offset += 1;
-        } else {
-            utf16_offset += c.len_utf16();
-        }
-    }
-    utf16_offset
-}
-
-/// Convert a UTF-16 code unit offset to a byte offset in a UTF-8 string
-fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
-    if s.is_ascii() {
-        return utf16_offset.min(s.len());
-    }
-    let mut utf16_count = 0;
-    for (byte_idx, c) in s.char_indices() {
-        if utf16_count >= utf16_offset {
-            return byte_idx;
-        }
-        if pua_to_surrogate(c).is_some() {
-            utf16_count += 1;
-        } else {
-            utf16_count += c.len_utf16();
-        }
-    }
-    s.len()
-}
-
 // Surrogate code points (U+D800-U+DFFF) can't be represented as Rust chars.
 // We remap them to Supplementary PUA-A (U+F0000+) so regex matching works
 // on strings containing lone surrogates.
 const SURROGATE_START: u32 = 0xD800;
 const SURROGATE_END: u32 = 0xDFFF;
 const SURROGATE_PUA_BASE: u32 = 0xF0000;
-
-fn pua_aware_utf16_len(s: &str) -> usize {
-    s.chars()
-        .map(|c| {
-            if pua_to_surrogate(c).is_some() {
-                1
-            } else {
-                c.len_utf16()
-            }
-        })
-        .sum()
-}
 
 fn is_surrogate(cp: u32) -> bool {
     (SURROGATE_START..=SURROGATE_END).contains(&cp)
@@ -117,7 +70,7 @@ fn surrogate_to_pua(cp: u32) -> char {
     char::from_u32(SURROGATE_PUA_BASE + (cp - SURROGATE_START)).unwrap()
 }
 
-fn pua_to_surrogate(c: char) -> Option<u16> {
+pub(crate) fn pua_to_surrogate(c: char) -> Option<u16> {
     let cp = c as u32;
     if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)).contains(&cp) {
         Some((cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16)
@@ -137,8 +90,107 @@ fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, false)
 }
 
+fn js_string_to_regex_pattern(code_units: &[u16], flags: &str) -> String {
+    if flags.contains('u') || flags.contains('v') {
+        js_string_to_regex_input(code_units)
+    } else {
+        js_string_to_regex_pattern_non_unicode(code_units)
+    }
+}
+
+/// Encode non-Unicode pattern atoms as individual UTF-16 code units while
+/// retaining surrogate pairs inside GroupName syntax. Group names and named
+/// backreferences use RegExpIdentifierName's Unicode interpretation even when
+/// the pattern itself is not in Unicode mode.
+fn js_string_to_regex_pattern_non_unicode(code_units: &[u16]) -> String {
+    if code_units_are_ascii(code_units) {
+        return js_string_to_regex_input_non_unicode(code_units);
+    }
+
+    let mut unicode_name_unit = vec![false; code_units.len()];
+    let mut i = 0;
+    let mut in_class = false;
+    while i < code_units.len() {
+        match code_units[i] {
+            0x005C => {
+                if !in_class
+                    && code_units.get(i + 1) == Some(&(b'k' as u16))
+                    && code_units.get(i + 2) == Some(&(b'<' as u16))
+                {
+                    let mut end = i + 3;
+                    while end < code_units.len() && code_units[end] != b'>' as u16 {
+                        unicode_name_unit[end] = true;
+                        end += 1;
+                    }
+                    i = end.saturating_add(1);
+                } else {
+                    // Skip the escaped code unit so it cannot start syntax.
+                    i = (i + 2).min(code_units.len());
+                }
+            }
+            0x005B if !in_class => {
+                in_class = true;
+                i += 1;
+            }
+            0x005D if in_class => {
+                in_class = false;
+                i += 1;
+            }
+            0x0028
+                if !in_class
+                    && code_units.get(i + 1) == Some(&(b'?' as u16))
+                    && code_units.get(i + 2) == Some(&(b'<' as u16))
+                    && !matches!(code_units.get(i + 3), Some(&0x003D) | Some(&0x0021)) =>
+            {
+                let mut end = i + 3;
+                while end < code_units.len() && code_units[end] != b'>' as u16 {
+                    unicode_name_unit[end] = true;
+                    end += 1;
+                }
+                i = end.saturating_add(1);
+            }
+            _ => i += 1,
+        }
+    }
+
+    let mut result = String::with_capacity(code_units.len());
+    i = 0;
+    while i < code_units.len() {
+        let cu = code_units[i];
+        if unicode_name_unit[i]
+            && (0xD800..=0xDBFF).contains(&cu)
+            && i + 1 < code_units.len()
+            && unicode_name_unit[i + 1]
+            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
+        {
+            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
+            result.push(char::from_u32(cp).expect("surrogate pair must form a Unicode scalar"));
+            i += 2;
+        } else if (0xD800..=0xDFFF).contains(&cu) {
+            result.push(surrogate_to_pua(cu as u32));
+            i += 1;
+        } else {
+            result.push(char::from_u32(cu as u32).expect("non-surrogate UTF-16 unit is a scalar"));
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Both regex views encode an all-ASCII subject identically to its code units,
+/// which is what lets `RegexInput` map offsets without a boundary table. The
+/// conversion fast path and that offset shortcut must agree on "ASCII", so both
+/// ask here rather than each spelling the test their own way.
+fn code_units_are_ascii(code_units: &[u16]) -> bool {
+    code_units.iter().all(|&cu| cu < 0x80)
+}
+
 fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
-    let mut result = String::new();
+    if code_units_are_ascii(code_units) {
+        return code_units.iter().map(|&cu| cu as u8 as char).collect();
+    }
+
+    let mut result = String::with_capacity(code_units.len());
     let mut i = 0;
     while i < code_units.len() {
         let cu = code_units[i];
@@ -181,34 +233,6 @@ pub(crate) fn regex_output_to_js_string(s: &str) -> JsString {
         }
     }
     JsString::from_vec(code_units)
-}
-
-/// Convert UTF-16 code units that may contain PUA-encoded surrogates back to
-/// actual surrogate code units. PUA chars U+F0000-U+F07FF encode as UTF-16
-/// pairs [0xDB80..=0xDB81, 0xDC00..=0xDFFF]; these map back to U+D800-U+DFFF.
-pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
-    let mut result = Vec::with_capacity(code_units.len());
-    let mut i = 0;
-    while i < code_units.len() {
-        let cu = code_units[i];
-        if (0xDB80..=0xDB81).contains(&cu)
-            && i + 1 < code_units.len()
-            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
-        {
-            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
-            if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START))
-                .contains(&cp)
-            {
-                let surrogate = (cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16;
-                result.push(surrogate);
-                i += 2;
-                continue;
-            }
-        }
-        result.push(cu);
-        i += 1;
-    }
-    result
 }
 
 /// Encode UTF-16 code units as WTF-8 bytes.
@@ -304,58 +328,6 @@ fn utf16_to_wtf8_byte_offset(bytes: &[u8], target_utf16: usize) -> usize {
     i
 }
 
-/// Convert a WTF-8 byte slice to a PUA-encoded string.
-/// WTF-8 surrogates (ED [A0-BF] xx) become PUA chars; everything else stays as UTF-8.
-fn wtf8_slice_to_pua_string(bytes: &[u8]) -> String {
-    let mut result = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b < 0x80 {
-            result.push(b as char);
-            i += 1;
-        } else if b < 0xC0 {
-            i += 1;
-        } else if b < 0xE0 {
-            if i + 1 < bytes.len() {
-                let cp = ((b as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
-                if let Some(c) = char::from_u32(cp) {
-                    result.push(c);
-                }
-            }
-            i += 2;
-        } else if b == 0xED && i + 2 < bytes.len() && bytes[i + 1] >= 0xA0 {
-            let cp = ((b as u32 & 0x0F) << 12)
-                | ((bytes[i + 1] as u32 & 0x3F) << 6)
-                | (bytes[i + 2] as u32 & 0x3F);
-            result.push(surrogate_to_pua(cp));
-            i += 3;
-        } else if b < 0xF0 {
-            if i + 2 < bytes.len() {
-                let cp = ((b as u32 & 0x0F) << 12)
-                    | ((bytes[i + 1] as u32 & 0x3F) << 6)
-                    | (bytes[i + 2] as u32 & 0x3F);
-                if let Some(c) = char::from_u32(cp) {
-                    result.push(c);
-                }
-            }
-            i += 3;
-        } else {
-            if i + 3 < bytes.len() {
-                let cp = ((b as u32 & 0x07) << 18)
-                    | ((bytes[i + 1] as u32 & 0x3F) << 12)
-                    | ((bytes[i + 2] as u32 & 0x3F) << 6)
-                    | (bytes[i + 3] as u32 & 0x3F);
-                if let Some(c) = char::from_u32(cp) {
-                    result.push(c);
-                }
-            }
-            i += 4;
-        }
-    }
-    result
-}
-
 fn is_cs_property(content: &str) -> bool {
     if let Some(eq_pos) = content.find('=') {
         let prop = &content[..eq_pos];
@@ -376,21 +348,338 @@ fn is_co_property(content: &str) -> bool {
     }
 }
 
-fn to_regex_input_with_units(
-    interp: &mut Interpreter,
-    val: &JsValue,
-) -> Result<(String, Vec<u16>), JsValue> {
-    match val {
-        JsValue::String(s) => Ok((
-            js_string_to_regex_input(&s.code_units),
-            s.code_units.to_vec(),
-        )),
-        _ => {
-            let s = interp.to_string_value(val)?;
-            let js = JsString::from_str(&s);
-            Ok((js_string_to_regex_input(&js.code_units), js.into_vec()))
+struct RegexInput {
+    subject: JsString,
+    ascii: bool,
+    unicode: std::cell::OnceCell<Box<str>>,
+    non_unicode: std::cell::OnceCell<Box<str>>,
+    unicode_boundaries: std::cell::OnceCell<Vec<RegexInputBoundary>>,
+    non_unicode_offsets: std::cell::OnceCell<Vec<usize>>,
+    wtf8: std::cell::OnceCell<Vec<u8>>,
+}
+
+/// Which representation of the subject a set of byte offsets belongs to. The
+/// three are not interchangeable, so offset conversion takes this rather than a
+/// bare bool: callers that pick a view and callers that convert an offset now
+/// name the same thing, and a `@@replace` holding both text views at once
+/// cannot silently cross their offsets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegexView {
+    /// `u`/`v` mode: a surrogate pair became one scalar.
+    Unicode,
+    /// Default mode: exactly one character per UTF-16 code unit.
+    NonUnicode,
+    /// `\p{Cs}`/`\p{Co}` patterns, which match over raw WTF-8 bytes.
+    Wtf8,
+}
+
+impl RegexView {
+    fn select(bytes_mode: bool, unicode: bool) -> Self {
+        match (bytes_mode, unicode) {
+            (true, _) => Self::Wtf8,
+            (false, true) => Self::Unicode,
+            (false, false) => Self::NonUnicode,
         }
     }
+}
+
+/// How many characters lie between two sampled offset boundaries.
+///
+/// The offset tables are the one part of a cached subject that is proportional
+/// to its length rather than to the work asked of it, so they are sampled: a
+/// lookup binary-searches the samples and then walks at most one interval. 32
+/// keeps that walk far cheaper than the binary search it replaces while cutting
+/// the retained table to a thirty-second of a full one — enough that the tables
+/// no longer dominate the cached subject's footprint.
+const BOUNDARY_SAMPLE_INTERVAL: usize = 32;
+
+/// UTF-16 width, in code units, of the character starting at `index`.
+///
+/// A high surrogate immediately followed by a low surrogate is one two-unit
+/// character; anything else, including an unpaired surrogate, is one unit.
+fn utf16_char_width(code_units: &[u16], index: usize) -> usize {
+    if (0xD800..=0xDBFF).contains(&code_units[index])
+        && index + 1 < code_units.len()
+        && (0xDC00..=0xDFFF).contains(&code_units[index + 1])
+    {
+        2
+    } else {
+        1
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RegexInputBoundary {
+    byte: usize,
+    utf16: usize,
+}
+
+impl RegexInput {
+    fn new(subject: JsString) -> Self {
+        Self {
+            ascii: code_units_are_ascii(&subject.code_units),
+            subject,
+            unicode: std::cell::OnceCell::new(),
+            non_unicode: std::cell::OnceCell::new(),
+            unicode_boundaries: std::cell::OnceCell::new(),
+            non_unicode_offsets: std::cell::OnceCell::new(),
+            wtf8: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Every view is built from the retained UTF-16 code units, never derived
+    /// from another view: the PUA encoding of lone surrogates is not injective,
+    /// so a genuine U+F0000-U+F07FF scalar is indistinguishable from an encoded
+    /// surrogate once converted. An all-ASCII subject is the one case where the
+    /// two text views coincide, so they share a cell and convert only once.
+    fn as_str(&self, unicode: bool) -> &str {
+        if unicode || self.ascii {
+            self.unicode
+                .get_or_init(|| js_string_to_regex_input(&self.subject.code_units).into())
+        } else {
+            self.non_unicode.get_or_init(|| {
+                js_string_to_regex_input_non_unicode(&self.subject.code_units).into()
+            })
+        }
+    }
+
+    fn wtf8(&self) -> &[u8] {
+        self.wtf8
+            .get_or_init(|| js_code_units_to_wtf8(&self.subject.code_units))
+    }
+
+    /// Sampled boundaries: one entry per [`BOUNDARY_SAMPLE_INTERVAL`]
+    /// characters, always including the first and last. A lookup binary-searches
+    /// the samples and then walks at most `BOUNDARY_SAMPLE_INTERVAL - 1`
+    /// characters, so it stays O(1) while the table costs a fraction of an entry
+    /// per character rather than a whole one — a prefix-only match on a
+    /// multi-megabyte subject no longer retains a table larger than the subject.
+    fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
+        self.unicode_boundaries.get_or_init(|| {
+            let view = self.as_str(true);
+            let code_units = &self.subject.code_units;
+            let mut boundaries =
+                Vec::with_capacity(code_units.len() / BOUNDARY_SAMPLE_INTERVAL + 2);
+            let mut byte = 0;
+            let mut utf16 = 0;
+            let mut chars = 0usize;
+            boundaries.push(RegexInputBoundary { byte, utf16 });
+
+            while utf16 < code_units.len() {
+                let encoded = view[byte..]
+                    .chars()
+                    .next()
+                    .expect("each UTF-16 character must have a regex input character");
+                byte += encoded.len_utf8();
+                utf16 += utf16_char_width(code_units, utf16);
+                chars += 1;
+                if chars.is_multiple_of(BOUNDARY_SAMPLE_INTERVAL) {
+                    boundaries.push(RegexInputBoundary { byte, utf16 });
+                }
+            }
+
+            debug_assert_eq!(byte, view.len());
+            // The end of the subject must always be addressable, even when the
+            // character count is not a multiple of the sample interval.
+            if !chars.is_multiple_of(BOUNDARY_SAMPLE_INTERVAL) {
+                boundaries.push(RegexInputBoundary { byte, utf16 });
+            }
+            boundaries.shrink_to_fit();
+            boundaries
+        })
+    }
+
+    fn unicode_utf16_to_byte_offset(&self, offset: usize) -> usize {
+        let target = offset.min(self.subject.len());
+        let boundaries = self.unicode_boundaries();
+        let start = match boundaries.binary_search_by_key(&target, |boundary| boundary.utf16) {
+            Ok(index) => return boundaries[index].byte,
+            Err(index) => boundaries[index.saturating_sub(1)],
+        };
+
+        // Walk the sampled span. A UTF-16 index within a surrogate pair refers
+        // to the character that starts at the preceding code-unit boundary, so
+        // stop at the last character beginning at or before `target`.
+        let view = self.as_str(true);
+        let code_units = &self.subject.code_units;
+        let mut byte = start.byte;
+        let mut utf16 = start.utf16;
+        while utf16 < target {
+            let width = utf16_char_width(code_units, utf16);
+            if utf16 + width > target {
+                break;
+            }
+            byte += view[byte..]
+                .chars()
+                .next()
+                .expect("each UTF-16 character must have a regex input character")
+                .len_utf8();
+            utf16 += width;
+        }
+        byte
+    }
+
+    fn unicode_byte_offset_to_utf16(&self, offset: usize) -> usize {
+        let view = self.as_str(true);
+        let target = offset.min(view.len());
+        let boundaries = self.unicode_boundaries();
+        let start = match boundaries.binary_search_by_key(&target, |boundary| boundary.byte) {
+            Ok(index) => return boundaries[index].utf16,
+            Err(index) => boundaries[index.saturating_sub(1)],
+        };
+
+        let code_units = &self.subject.code_units;
+        let mut byte = start.byte;
+        let mut utf16 = start.utf16;
+        while byte < target {
+            let encoded = view[byte..]
+                .chars()
+                .next()
+                .expect("each UTF-16 character must have a regex input character");
+            if byte + encoded.len_utf8() > target {
+                break;
+            }
+            byte += encoded.len_utf8();
+            utf16 += utf16_char_width(code_units, utf16);
+        }
+        utf16
+    }
+
+    /// Byte offset of every [`BOUNDARY_SAMPLE_INTERVAL`]-th UTF-16 code unit in
+    /// the non-Unicode view, plus a trailing total length. That view encodes
+    /// each code unit as exactly one character (a supplementary scalar arrives
+    /// as a surrogate pair and becomes two PUA characters), so a code-unit
+    /// offset divides straight into a sample and then walks at most one
+    /// interval — no rescanning the subject on every exec, and no entry
+    /// retained per code unit.
+    fn non_unicode_offsets(&self) -> &[usize] {
+        self.non_unicode_offsets.get_or_init(|| {
+            let view = self.as_str(false);
+            let mut offsets = Vec::with_capacity(self.subject.len() / BOUNDARY_SAMPLE_INTERVAL + 2);
+            offsets.extend(
+                view.char_indices()
+                    .step_by(BOUNDARY_SAMPLE_INTERVAL)
+                    .map(|(byte, _)| byte),
+            );
+            // One past the final code unit, so the end of the subject is
+            // addressable whatever the code-unit count is modulo the interval.
+            offsets.push(view.len());
+            offsets.shrink_to_fit();
+            offsets
+        })
+    }
+
+    fn non_unicode_utf16_to_byte_offset(&self, offset: usize) -> usize {
+        let view = self.as_str(false);
+        let target = offset.min(self.subject.len());
+        if target == self.subject.len() {
+            return view.len();
+        }
+        let offsets = self.non_unicode_offsets();
+        let sample = target / BOUNDARY_SAMPLE_INTERVAL;
+        let mut byte = offsets[sample];
+        let mut unit = sample * BOUNDARY_SAMPLE_INTERVAL;
+        while unit < target {
+            byte += view[byte..]
+                .chars()
+                .next()
+                .expect("each code unit must have a non-Unicode view character")
+                .len_utf8();
+            unit += 1;
+        }
+        byte
+    }
+
+    fn non_unicode_byte_offset_to_utf16(&self, offset: usize) -> usize {
+        let view = self.as_str(false);
+        let target = offset.min(view.len());
+        let offsets = self.non_unicode_offsets();
+        let sample = match offsets.binary_search(&target) {
+            // The final entry is the total length, one past the last code unit.
+            Ok(index) if index + 1 == offsets.len() => return self.subject.len(),
+            Ok(index) => return index * BOUNDARY_SAMPLE_INTERVAL,
+            Err(index) => index.saturating_sub(1),
+        };
+        let mut byte = offsets[sample];
+        let mut unit = sample * BOUNDARY_SAMPLE_INTERVAL;
+        while byte < target {
+            let encoded = view[byte..]
+                .chars()
+                .next()
+                .expect("each code unit must have a non-Unicode view character");
+            // A byte offset inside a character refers to the code unit that
+            // character starts at.
+            if byte + encoded.len_utf8() > target {
+                break;
+            }
+            byte += encoded.len_utf8();
+            unit += 1;
+        }
+        unit
+    }
+
+    /// Map a UTF-16 code-unit offset to a byte offset within `view`.
+    ///
+    /// The Unicode view is surrogate-ambiguous once converted, so its offsets
+    /// come from boundaries derived from the original UTF-16 subject. The
+    /// non-Unicode view encodes one character per code unit and indexes its own
+    /// table directly. An all-ASCII subject needs no table in either case.
+    fn utf16_to_byte_offset(&self, view: RegexView, offset: usize) -> usize {
+        // The start of the subject is offset 0 in every view. Worth its own
+        // arm: a non-global match reads lastIndex 0 and then never converts
+        // again, so without this a single lookup builds a whole index table.
+        if offset == 0 {
+            return 0;
+        }
+        match view {
+            RegexView::Wtf8 => utf16_to_wtf8_byte_offset(self.wtf8(), offset),
+            _ if self.ascii => offset.min(self.subject.len()),
+            RegexView::Unicode => self.unicode_utf16_to_byte_offset(offset),
+            RegexView::NonUnicode => self.non_unicode_utf16_to_byte_offset(offset),
+        }
+    }
+
+    /// Inverse of [`RegexInput::utf16_to_byte_offset`].
+    fn byte_offset_to_utf16(&self, view: RegexView, offset: usize) -> usize {
+        if offset == 0 {
+            return 0;
+        }
+        match view {
+            RegexView::Wtf8 => wtf8_byte_offset_to_utf16(self.wtf8(), offset),
+            _ if self.ascii => offset,
+            RegexView::Unicode => self.unicode_byte_offset_to_utf16(offset),
+            RegexView::NonUnicode => self.non_unicode_byte_offset_to_utf16(offset),
+        }
+    }
+
+    /// Materialize a match span from the original UTF-16 subject. Matcher text
+    /// cannot be decoded safely because the lone-surrogate sentinel range also
+    /// contains genuine Unicode scalars.
+    fn subject_slice(&self, view: RegexView, byte_start: usize, byte_end: usize) -> JsString {
+        let start = self.byte_offset_to_utf16(view, byte_start);
+        let end = self.byte_offset_to_utf16(view, byte_end);
+        JsString::from_vec(self.subject.code_units[start..end].to_vec())
+    }
+}
+
+fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
+    if let Some(cached) = interp.regexp_legacy.input_cache.as_ref()
+        && Arc::ptr_eq(&cached.subject.code_units, &subject.code_units)
+    {
+        return Rc::clone(cached);
+    }
+
+    let input = Rc::new(RegexInput::new(subject));
+    interp.regexp_legacy.input_cache = Some(Rc::clone(&input));
+    input
+}
+
+fn regex_input_for_value(
+    interp: &mut Interpreter,
+    val: &JsValue,
+) -> Result<Rc<RegexInput>, JsValue> {
+    let subject = interp.to_js_string(val)?;
+    Ok(regex_input_for_subject(interp, subject))
 }
 
 fn escape_regexp_pattern_code_units(code_units: &[u16]) -> JsString {
@@ -867,8 +1156,9 @@ impl VClassSet {
         let has_strings = !s.strings.is_empty();
 
         if !has_ranges && !has_strings {
-            // Empty set: match nothing
-            return "(?!)".to_string();
+            // Empty sets are always-failing consuming atoms, so zero-count
+            // quantifiers over them can still match the empty string.
+            return "[^\\s\\S]".to_string();
         }
 
         let mut char_class = String::new();
@@ -1464,6 +1754,61 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     translate_js_pattern_ex(source, flags).map(|r| r.pattern)
 }
 
+fn nq_internal_condition_header_end(
+    chars: &[char],
+    start: usize,
+    sentinel_names: &HashSet<String>,
+) -> Option<usize> {
+    let len = chars.len();
+    if !sentinel_names.is_empty()
+        && start + 10 <= len
+        && chars[start..start + 10] == ['(', '?', '(', 'D', 'E', 'F', 'I', 'N', 'E', ')']
+    {
+        return Some(start + 10);
+    }
+    if start + 5 >= len
+        || chars[start] != '('
+        || chars[start + 1] != '?'
+        || chars[start + 2] != '('
+        || chars[start + 3] != '<'
+    {
+        return None;
+    }
+    let mut name_end = start + 4;
+    while name_end < len && chars[name_end] != '>' {
+        name_end += 1;
+    }
+    if name_end + 1 >= len || chars[name_end + 1] != ')' {
+        return None;
+    }
+    let name: String = chars[start + 4..name_end].iter().collect();
+    sentinel_names.contains(&name).then_some(name_end + 2)
+}
+
+fn nq_internal_subroutine_end(
+    chars: &[char],
+    start: usize,
+    sentinel_names: &HashSet<String>,
+) -> Option<usize> {
+    let len = chars.len();
+    if start + 4 >= len
+        || chars[start] != '\\'
+        || chars[start + 1] != 'g'
+        || chars[start + 2] != '<'
+    {
+        return None;
+    }
+    let mut name_end = start + 3;
+    while name_end < len && chars[name_end] != '>' {
+        name_end += 1;
+    }
+    if name_end >= len {
+        return None;
+    }
+    let name: String = chars[start + 3..name_end].iter().collect();
+    sentinel_names.contains(&name).then_some(name_end + 1)
+}
+
 /// Find the closing ')' matching the '(' at position `open` in `chars`.
 /// Returns None if not found.
 fn find_matching_close_paren(chars: &[char], open: usize) -> Option<usize> {
@@ -1878,19 +2223,27 @@ pub(super) fn translate_js_pattern_ex(
     source: &str,
     flags: &str,
 ) -> Result<TranslationResult, String> {
+    translate_js_pattern_ex_with_sentinels(source, flags, &HashSet::new())
+}
+
+fn translate_js_pattern_ex_with_sentinels(
+    source: &str,
+    flags: &str,
+    sentinel_names: &HashSet<String>,
+) -> Result<TranslationResult, String> {
     let mut result = String::new();
     if flags.contains('i') {
         result.push_str("(?i)");
     }
-    if flags.contains('m') {
-        result.push_str("(?m)");
-    }
-
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut i = 0;
     let mut in_char_class = false;
     let mut cc_prev_was_class_escape = false;
+    // Index just past the '[' that opened the current class. A negation '^'
+    // (if present) sits here and is not part of ClassContents, so it must never
+    // be taken as the low endpoint of a surrogate-range expansion.
+    let mut cc_content_start: usize = 0;
     let mut groups_seen: u32 = 0;
     let mut open_groups: Vec<u32> = Vec::new();
     let mut open_group_names: Vec<Option<String>> = Vec::new();
@@ -1908,6 +2261,11 @@ pub(super) fn translate_js_pattern_ex(
     // or None for regular groups.
     let mut dotall_stack: Vec<Option<bool>> = Vec::new();
     let mut dot_all = dot_all_base;
+    // Rust regex multiline anchors only recognize LF. ECMAScript recognizes
+    // LF, CR, LINE SEPARATOR, and PARAGRAPH SEPARATOR, so translate anchors
+    // explicitly and track modifier-group state ourselves.
+    let mut multiline_stack: Vec<Option<bool>> = Vec::new();
+    let mut multiline = flags.contains('m');
     let unicode = flags.contains('u') || flags.contains('v');
     let icase_base = flags.contains('i');
     let mut icase = icase_base;
@@ -1920,6 +2278,13 @@ pub(super) fn translate_js_pattern_ex(
         let mut j = 0;
         let mut in_cc = false;
         while j < len {
+            if !in_cc
+                && let Some(header_end) =
+                    nq_internal_condition_header_end(&chars, j, sentinel_names)
+            {
+                j = header_end;
+                continue;
+            }
             match chars[j] {
                 '[' if !in_cc => {
                     in_cc = true;
@@ -1937,7 +2302,14 @@ pub(super) fn translate_js_pattern_ex(
                             if j + 3 < len && (chars[j + 3] == '=' || chars[j + 3] == '!') {
                                 // lookbehind, not capturing
                             } else {
-                                count += 1; // named group
+                                let mut name_end = j + 3;
+                                while name_end < len && chars[name_end] != '>' {
+                                    name_end += 1;
+                                }
+                                let name: String = chars[j + 3..name_end].iter().collect();
+                                if !sentinel_names.contains(&name) {
+                                    count += 1; // JavaScript named group
+                                }
                             }
                         }
                         // (?:...), (?=...), (?!...) are non-capturing
@@ -2064,6 +2436,9 @@ pub(super) fn translate_js_pattern_ex(
     // When any named groups exist, fancy_regex requires ALL backreferences to
     // use named syntax. We auto-name unnamed capturing groups with a special
     // prefix so we can use named backreferences throughout.
+    let has_source_named_groups = all_group_names
+        .iter()
+        .any(|name| !sentinel_names.contains(name));
     let has_named_groups = !all_group_names.is_empty();
     // Track how many times we've seen each duplicated name during translation
     let mut dup_seen_count: HashMap<String, u32> = HashMap::new();
@@ -2074,7 +2449,41 @@ pub(super) fn translate_js_pattern_ex(
     while i < len {
         let c = chars[i];
 
+        if !in_char_class
+            && let Some(header_end) = nq_internal_condition_header_end(&chars, i, sentinel_names)
+        {
+            dotall_stack.push(None);
+            multiline_stack.push(None);
+            icase_stack.push(None);
+            group_is_capturing.push(false);
+            is_lookbehind_group.push(false);
+            is_lookahead_group.push(false);
+            group_result_start.push(None);
+            open_group_names.push(None);
+            result.extend(chars[i..header_end].iter());
+            i = header_end;
+            continue;
+        }
+        if !in_char_class
+            && let Some(subroutine_end) = nq_internal_subroutine_end(&chars, i, sentinel_names)
+        {
+            result.extend(chars[i..subroutine_end].iter());
+            i = subroutine_end;
+            continue;
+        }
+
         if c == '[' && !in_char_class {
+            // An empty JS character class matches nothing, but it is a
+            // *consuming* atom: under a zero-permitting quantifier (`[]*`,
+            // `[]?`, `[]{0,n}`) it still yields an empty match, while bare `[]`
+            // and `[]+` fail. fancy-regex rejects the literal `[]`, so translate
+            // to the negated-everything class `[^\s\S]`, which preserves both
+            // behaviours (a zero-width `(?!)` would fail even when quantified).
+            if i + 1 < len && chars[i + 1] == ']' {
+                result.push_str("[^\\s\\S]");
+                i += 2;
+                continue;
+            }
             // [^] in JS means "match any character" — translate to (?s:.)
             if i + 2 < len && chars[i + 1] == '^' && chars[i + 2] == ']' {
                 result.push_str("(?s:.)");
@@ -2093,6 +2502,7 @@ pub(super) fn translate_js_pattern_ex(
             in_char_class = true;
             result.push(c);
             i += 1;
+            cc_content_start = i;
             continue;
         }
         if c == ']' && in_char_class {
@@ -2108,6 +2518,28 @@ pub(super) fn translate_js_pattern_ex(
             result.push_str("\\[");
             cc_prev_was_class_escape = false;
             i += 1;
+            continue;
+        }
+
+        // Non-Unicode matching represents each surrogate code unit as a PUA
+        // scalar. Expand simple character-class ranges that cross the
+        // surrogate interval so those mapped values remain members of the JS
+        // range (for example, [\u007f-\uffff] must match both halves of an
+        // astral character).
+        if in_char_class
+            && !unicode
+            && !(i == cc_content_start && chars[i] == '^')
+            && let Some((lo, lo_end)) = parse_simple_class_atom(&chars, i)
+            && lo_end < len
+            && chars[lo_end] == '-'
+            && let Some((hi, hi_end)) = parse_simple_class_atom(&chars, lo_end + 1)
+            && lo <= hi
+            && lo <= SURROGATE_END
+            && hi >= SURROGATE_START
+        {
+            append_non_unicode_class_range(&mut result, lo, hi);
+            cc_prev_was_class_escape = false;
+            i = hi_end;
             continue;
         }
 
@@ -2134,7 +2566,7 @@ pub(super) fn translate_js_pattern_ex(
             match next {
                 // Named backreference: \k<name> → (?P=name) or alternation for duplicates
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
-                    if !unicode && all_group_names.is_empty() {
+                    if !unicode && !has_source_named_groups {
                         // Annex B: \k without named groups is identity escape
                         if non_unicode_icase(icase) {
                             push_case_fold_guarded(&mut result, 'k', false);
@@ -2695,6 +3127,7 @@ pub(super) fn translate_js_pattern_ex(
                 // Lookbehind - pass through
                 lookbehind_depth += 1;
                 dotall_stack.push(None);
+                multiline_stack.push(None);
                 icase_stack.push(None);
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(true);
@@ -2717,6 +3150,7 @@ pub(super) fn translate_js_pattern_ex(
                     None
                 });
                 dotall_stack.push(None);
+                multiline_stack.push(None);
                 icase_stack.push(None);
                 // Extract the group name to check if it's duplicated
                 let name_start = i + 3;
@@ -2802,6 +3236,15 @@ pub(super) fn translate_js_pattern_ex(
                 }
                 dotall_stack.push(Some(prev_dot_all));
 
+                let prev_multiline = multiline;
+                if add_m {
+                    multiline = true;
+                }
+                if remove_m {
+                    multiline = false;
+                }
+                multiline_stack.push(Some(prev_multiline));
+
                 let prev_icase = icase;
                 if add_i {
                     icase = true;
@@ -2816,31 +3259,17 @@ pub(super) fn translate_js_pattern_ex(
                 group_result_start.push(None);
                 open_group_names.push(None);
 
-                // Emit the group with s stripped from flags
+                // Emit the group with s and m stripped from flags. Their
+                // semantics are handled by the translator.
                 result.push_str("(?");
                 if add_i {
                     result.push('i');
                 }
-                if add_m {
-                    result.push('m');
-                }
-                let has_add = add_i || add_m;
-                let has_remove = remove_i || remove_m;
-                if has_remove {
+                if remove_i {
                     result.push('-');
-                    if remove_i {
-                        result.push('i');
-                    }
-                    if remove_m {
-                        result.push('m');
-                    }
+                    result.push('i');
                 }
-                if !has_add && !has_remove {
-                    // All flags were s-only, emit as plain non-capturing group
-                    result.push(':');
-                } else {
-                    result.push(':');
-                }
+                result.push(':');
                 i = j + 1; // skip past ':'
                 continue;
             }
@@ -2850,6 +3279,9 @@ pub(super) fn translate_js_pattern_ex(
         if c == ')' && !in_char_class {
             if let Some(Some(prev)) = dotall_stack.pop() {
                 dot_all = prev;
+            }
+            if let Some(Some(prev)) = multiline_stack.pop() {
+                multiline = prev;
             }
             if let Some(Some(prev)) = icase_stack.pop() {
                 icase = prev;
@@ -2873,7 +3305,10 @@ pub(super) fn translate_js_pattern_ex(
             //   min == 0: remove the assertion entirely
             if was_lookahead && !unicode && i + 1 < len {
                 let qc = chars[i + 1];
-                let is_quant = qc == '*' || qc == '+' || qc == '?' || qc == '{';
+                let is_quant = qc == '*'
+                    || qc == '+'
+                    || qc == '?'
+                    || (qc == '{' && quantifier_brace_end(&chars, i + 1, len).is_some());
                 if is_quant {
                     let (min_is_zero, quant_end) = parse_quantifier_min(&chars, i + 1, len);
                     if min_is_zero {
@@ -2943,6 +3378,7 @@ pub(super) fn translate_js_pattern_ex(
         // Handle '(' for other group types (non-capturing (?:), lookahead (?=), (?!), plain)
         if c == '(' && !in_char_class {
             dotall_stack.push(None);
+            multiline_stack.push(None);
             icase_stack.push(None);
             if i + 1 >= len || chars[i + 1] != '?' {
                 groups_seen += 1;
@@ -2976,6 +3412,28 @@ pub(super) fn translate_js_pattern_ex(
             }
         }
 
+        // CompileAssertion for ^ and $ uses all four ECMAScript line
+        // terminators in multiline mode. \A and \z keep the non-multiline
+        // alternatives absolute instead of inheriting the host regex rules.
+        if c == '^' && !in_char_class {
+            if multiline {
+                result.push_str("(?:\\A|(?<=[\\n\\r\\u{2028}\\u{2029}]))");
+            } else {
+                result.push_str("\\A");
+            }
+            i += 1;
+            continue;
+        }
+        if c == '$' && !in_char_class {
+            if multiline {
+                result.push_str("(?:\\z|(?=[\\n\\r\\u{2028}\\u{2029}]))");
+            } else {
+                result.push_str("\\z");
+            }
+            i += 1;
+            continue;
+        }
+
         // Dot handling: expand based on dotAll state and unicode mode
         if c == '.' && !in_char_class {
             if unicode {
@@ -2994,6 +3452,17 @@ pub(super) fn translate_js_pattern_ex(
                     );
                 }
             }
+            i += 1;
+            continue;
+        }
+
+        // Annex B: a '{' that doesn't open a valid quantifier is an ordinary
+        // literal character. fancy-regex is more lenient than ECMAScript here
+        // (e.g. it accepts `{,n}` as shorthand for `{0,n}`), so it must be
+        // escaped explicitly rather than passed through, or it and the
+        // characters after it get reinterpreted as a real quantifier.
+        if c == '{' && !in_char_class && quantifier_brace_end(&chars, i, len).is_none() {
+            push_escaped(&mut result, c);
             i += 1;
             continue;
         }
@@ -3028,6 +3497,53 @@ fn append_unicode_range(result: &mut String, lo: u32, hi: u32) {
         result.push_str(&format!("\\u{{{:X}}}", lo));
     } else {
         result.push_str(&format!("\\u{{{:X}}}-\\u{{{:X}}}", lo, hi));
+    }
+}
+
+fn parse_simple_class_atom(chars: &[char], start: usize) -> Option<(u32, usize)> {
+    let ch = *chars.get(start)?;
+    if ch == '\\' {
+        match *chars.get(start + 1)? {
+            'u' if chars.get(start + 2) != Some(&'{') => {
+                let digits: String = chars.get(start + 2..start + 6)?.iter().collect();
+                u32::from_str_radix(&digits, 16)
+                    .ok()
+                    .map(|code| (code, start + 6))
+            }
+            'x' => {
+                let digits: String = chars.get(start + 2..start + 4)?.iter().collect();
+                u32::from_str_radix(&digits, 16)
+                    .ok()
+                    .map(|code| (code, start + 4))
+            }
+            // Escaped syntax characters denote that literal code point.
+            escaped if is_syntax_character(escaped) || escaped == '/' || escaped == '-' => {
+                Some((escaped as u32, start + 2))
+            }
+            _ => None,
+        }
+    } else if ch != ']' && ch != '-' {
+        Some((ch as u32, start + 1))
+    } else {
+        None
+    }
+}
+
+fn append_non_unicode_class_range(result: &mut String, lo: u32, hi: u32) {
+    if lo < SURROGATE_START {
+        append_unicode_range(result, lo, hi.min(SURROGATE_START - 1));
+    }
+
+    let surrogate_lo = lo.max(SURROGATE_START);
+    let surrogate_hi = hi.min(SURROGATE_END);
+    append_unicode_range(
+        result,
+        SURROGATE_PUA_BASE + surrogate_lo - SURROGATE_START,
+        SURROGATE_PUA_BASE + surrogate_hi - SURROGATE_START,
+    );
+
+    if hi > SURROGATE_END {
+        append_unicode_range(result, lo.max(SURROGATE_END + 1), hi);
     }
 }
 
@@ -3136,7 +3652,7 @@ fn push_case_fold_guarded(result: &mut String, ch: char, in_char_class: bool) {
     }
 }
 
-fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
+fn resolve_class_escape(chars: &[char], i: &mut usize, unicode: bool) -> Option<u32> {
     if *i >= chars.len() {
         return None;
     }
@@ -3205,7 +3721,7 @@ fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
                     }
                 }
                 'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' => None,
-                'p' | 'P' => {
+                'p' | 'P' if unicode => {
                     if *i < chars.len() && chars[*i] == '{' {
                         *i += 1;
                         while *i < chars.len() && chars[*i] != '}' {
@@ -3757,6 +4273,35 @@ fn validate_v_flag_class_inner(
     err("Unterminated character class")
 }
 
+/// If `chars[open]` is `{` and it begins a syntactically valid quantifier body
+/// (`{n}`, `{n,}`, `{n,m}`, each requiring at least one leading digit per
+/// ECMA-262 QuantifierPrefix), returns the index just past the closing `}`.
+/// Otherwise returns `None`, meaning Annex B treats the brace as an ordinary
+/// literal character (`ExtendedPatternCharacter`) rather than a quantifier.
+fn quantifier_brace_end(chars: &[char], open: usize, len: usize) -> Option<usize> {
+    let mut j = open + 1;
+    let min_start = j;
+    while j < len && chars[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == min_start {
+        return None;
+    }
+    if j < len && chars[j] == '}' {
+        return Some(j + 1);
+    }
+    if j < len && chars[j] == ',' {
+        j += 1;
+        while j < len && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j < len && chars[j] == '}' {
+            return Some(j + 1);
+        }
+    }
+    None
+}
+
 pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), String> {
     let unicode = flags.contains('u') || flags.contains('v');
     let v_flag = flags.contains('v');
@@ -4220,7 +4765,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                     }
 
                     let save_i = i;
-                    let val = resolve_class_escape(&chars, &mut i);
+                    let val = resolve_class_escape(&chars, &mut i, unicode);
                     let is_class_esc = val.is_none()
                         && save_i < len
                         && chars[save_i] == '\\'
@@ -4355,25 +4900,11 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                                 source
                             ));
                         }
-                        if qc == '{' {
-                            let mut j = i + 1;
-                            let mut is_quant = false;
-                            while j < len {
-                                if chars[j] == '}' {
-                                    is_quant = true;
-                                    break;
-                                }
-                                if !chars[j].is_ascii_digit() && chars[j] != ',' {
-                                    break;
-                                }
-                                j += 1;
-                            }
-                            if is_quant {
-                                return Err(format!(
-                                    "Invalid regular expression: /{}/ : Nothing to repeat",
-                                    source
-                                ));
-                            }
+                        if qc == '{' && quantifier_brace_end(&chars, i, len).is_some() {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Nothing to repeat",
+                                source
+                            ));
                         }
                     }
                     has_atom = false;
@@ -4400,30 +4931,16 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
         if c == '*' || c == '+' || c == '?' || c == '{' {
             if !has_atom {
                 // Check if '{' is really a quantifier
-                if c == '{' {
-                    let mut j = i + 1;
-                    let mut is_quant = false;
-                    while j < len {
-                        if chars[j] == '}' {
-                            is_quant = true;
-                            break;
-                        }
-                        if !chars[j].is_ascii_digit() && chars[j] != ',' {
-                            break;
-                        }
-                        j += 1;
+                if c == '{' && quantifier_brace_end(&chars, i, len).is_none() {
+                    if unicode {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                            source
+                        ));
                     }
-                    if !is_quant {
-                        if unicode {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Lone quantifier brackets",
-                                source
-                            ));
-                        }
-                        has_atom = true;
-                        i += 1;
-                        continue;
-                    }
+                    has_atom = true;
+                    i += 1;
+                    continue;
                 }
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Nothing to repeat",
@@ -4639,31 +5156,41 @@ enum CompiledRegex {
         remaining_source: Option<String>,
     },
 }
-/// Annex B.1.2 legacy RegExp static state — the `RegExp.input`, `RegExp.$1`-`$9`,
-/// `RegExp.lastMatch`, `RegExp.lastParen`, `RegExp.leftContext`,
-/// `RegExp.rightContext` statics and the compiled-pattern cache.
+/// RegExp-owned interpreter state: the Annex B.1.2 legacy statics
+/// (`RegExp.input`, `RegExp.$1`-`$9`, `RegExp.lastMatch`, `RegExp.lastParen`,
+/// `RegExp.leftContext`, `RegExp.rightContext`) plus the compiled-pattern and
+/// most-recent-subject caches.
 ///
 /// All eight legacy fields were previously flat fields on the `Interpreter`
-/// god object (mod.rs L113–119 + L137), touched only by this file. Colocating
-/// them into a single struct deepens the Interpreter: 8 fields collapse to 1,
-/// and the regexp concern gains a clean seam. See `JobScheduler` for the same
-/// pattern (embedded struct accessed via `self.scheduler`).
+/// god object, touched only by this file. Colocating them into a single struct
+/// deepens the Interpreter: 8 fields collapse to 1, and the regexp concern
+/// gains a clean seam. See `JobScheduler` for the same pattern (embedded
+/// struct accessed via `self.scheduler`).
+///
+/// `input` and `context_input` are assigned the same subject after a match but
+/// are NOT redundant: the `RegExp.input` setter replaces `input` alone, and
+/// `leftContext`/`rightContext` must keep slicing the subject the last match
+/// actually ran against. Collapsing them into one field silently breaks that.
+/// They retain UTF-16 offsets and materialize only when their accessors run.
 #[derive(Default)]
 pub(crate) struct RegexpLegacyState {
-    pub(crate) input: String,
-    pub(crate) last_match: String,
-    pub(crate) last_paren: String,
-    pub(crate) left_context: String,
-    pub(crate) right_context: String,
-    pub(crate) parens: [String; 9],
+    pub(crate) input: JsString,
+    pub(crate) last_match: JsString,
+    pub(crate) last_paren: JsString,
+    context_input: JsString,
+    left_context_end: usize,
+    right_context_start: usize,
+    pub(crate) parens: [JsString; 9],
     pub(crate) constructor_id: Option<u64>,
     pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
+    input_cache: Option<Rc<RegexInput>>,
 }
 
 pub(crate) struct CachedRegex {
     compiled: CompiledRegex,
     dup_map: DupGroupMap,
     name_order: Vec<String>,
+    total_groups: usize,
 }
 
 const REGEX_CACHE_MAX: usize = 256;
@@ -4682,6 +5209,7 @@ fn build_regex_cached(
         compiled,
         dup_map,
         name_order,
+        total_groups: count_capture_groups(source),
     });
     if interp.regexp_legacy.regex_cache.len() >= REGEX_CACHE_MAX {
         interp.regexp_legacy.regex_cache.clear();
@@ -4696,7 +5224,6 @@ fn build_regex_cached(
 struct RegexMatch {
     start: usize,
     end: usize,
-    text: String,
 }
 
 struct RegexCaptures {
@@ -4939,31 +5466,34 @@ fn build_quantified_parent_map(
         if chars[i] == ')' {
             if let Some(group_idx) = group_stack.pop() {
                 groups_info[group_idx].end_pos = i;
-                // Check if followed by a quantifier
+                // Check if followed by a quantifier. A '{' only counts if it
+                // genuinely opens one (Annex B literal forms like `{0,foo}`
+                // must not be mistaken for a real min-zero quantifier).
                 let next = i + 1;
-                if next < len
+                let is_quant = next < len
                     && (chars[next] == '*'
                         || chars[next] == '+'
                         || chars[next] == '?'
-                        || chars[next] == '{')
-                {
+                        || (chars[next] == '{'
+                            && quantifier_brace_end(&chars, next, len).is_some()));
+                if is_quant {
                     groups_info[group_idx].is_quantified = true;
                     let min_zero = match chars[next] {
                         '*' | '?' => true,
                         '{' => {
-                            // Parse {N,...} to check if N == 0
+                            // Already confirmed valid above; parse the leading
+                            // DecimalDigits to check if the minimum is 0.
                             let mut k = next + 1;
                             let ns = k;
                             while k < len && chars[k].is_ascii_digit() {
                                 k += 1;
                             }
-                            if k > ns {
-                                let n: u32 =
-                                    chars[ns..k].iter().collect::<String>().parse().unwrap_or(1);
-                                n == 0
-                            } else {
-                                false
-                            }
+                            chars[ns..k]
+                                .iter()
+                                .collect::<String>()
+                                .parse::<u32>()
+                                .unwrap_or(1)
+                                == 0
                         }
                         _ => false, // '+'
                     };
@@ -5719,12 +6249,170 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
 
 /// Per spec §22.2.2.6.1 step 2.b: when a nullable group body (one that can
 /// match the empty string) is quantified with `*` or `+`, an iteration that
-/// matches empty must fail.  fancy-regex stops the loop instead of
-/// backtracking, so we convert lazy min-0 quantifiers (`??`, `*?`) inside
-/// nullable bodies to greedy, forcing them to consume characters.
-fn fix_nullable_quantifiers(source: &str) -> String {
-    if !source.contains("??") && !source.contains("*?") {
-        return source.to_string();
+/// matches empty must fail. `regex`/fancy-regex stop the loop instead of
+/// backtracking, so:
+/// - a single-alternative nullable body has its lazy min-0 quantifiers
+///   (`??`, `*?`) converted to greedy, forcing them to consume characters
+///   (greedy sub-quantifiers already prefer to consume as much as possible,
+///   so this alone is enough — see nq_mark_lazy).
+/// - a multi-alternative (`|`) nullable body additionally needs each
+///   individually-nullable branch to be prevented from ever contributing a
+///   zero-width "success" that pre-empts a sibling branch able to consume at
+///   this position (e.g. `(a*|dc??)*` on "dc"). Branches that reduce to a
+///   single quantified atom (`a*`, `a?`, `a{0,n}`) are rewritten to forbid
+///   zero occurrences (`a+`, `a`, `a{1,n}`) — this only removes the
+///   discarded empty match, identical otherwise — while non-nullable sibling
+///   branches are left untouched (previously *all* branches were stripped of
+///   laziness regardless of nullability, which is wrong on its own; see
+///   jsse#370). A bare group atom with no quantifier of its own (`(a*)`) is
+///   nullable-checked and fixed by recursing into its own top-level
+///   alternation/sequence (jsse#373, nq_fix_branch's `(` case). A branch that
+///   can only ever match empty — a bare empty alternative (`(|a)*`), or a
+///   single atom with an exact-zero quantifier (`a{0}`, `a{0,0}`) — is
+///   spliced out of the alternation entirely (jsse#373, nq_branch_always_empty
+///   / nq_delete_branch) rather than bumped. Several jointly-optional atoms
+///   (`a?b?`, jointly nullable only because every atom is individually
+///   optional) are expanded into an alternation requiring the
+///   first-consuming atom to be present (jsse#373,
+///   nq_expand_joint_optional), e.g. `a?b?` -> `(?:ab?|b)`. The splice and
+///   expansion rewrites both bail out (falling back to the lazy-strip only,
+///   same as before jsse#373) whenever a capturing group is involved —
+///   deleting or duplicating one would silently renumber every later
+///   capture group.
+/// - positive-minimum outer quantifiers use internal iteration sentinels. A
+///   nullable branch keeps a gated empty path for the first `min` iterations,
+///   then only its consuming rewrite remains. The sentinels are defined after
+///   all JavaScript capture groups and stripped from the result, preserving
+///   numeric capture/backreference indices and last-iteration captures
+///   (jsse#378).
+const NQ_MAX_ITERATION_SENTINELS: usize = 64;
+
+struct NullableQuantifierRewrite {
+    source: String,
+    sentinel_names: HashSet<String>,
+}
+
+struct NqOuterQuantifier {
+    min: usize,
+    max: Option<usize>,
+}
+
+impl NqOuterQuantifier {
+    fn has_post_min_iteration(&self) -> bool {
+        self.max.is_none_or(|max| max > self.min)
+    }
+}
+
+fn nq_outer_quantifier(chars: &[char], pos: usize, end: usize) -> Option<NqOuterQuantifier> {
+    if pos >= end {
+        return None;
+    }
+    match chars[pos] {
+        '*' => Some(NqOuterQuantifier { min: 0, max: None }),
+        '+' => Some(NqOuterQuantifier { min: 1, max: None }),
+        '?' => Some(NqOuterQuantifier {
+            min: 0,
+            max: Some(1),
+        }),
+        '{' => {
+            let brace_end = quantifier_brace_end(chars, pos, end)?;
+            let comma = chars[pos + 1..brace_end - 1]
+                .iter()
+                .position(|&c| c == ',')
+                .map(|offset| pos + 1 + offset);
+            let min_end = comma.unwrap_or(brace_end - 1);
+            let min = chars[pos + 1..min_end]
+                .iter()
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()?;
+            let max = match comma {
+                None => Some(min),
+                Some(comma_pos) if comma_pos + 1 == brace_end - 1 => None,
+                Some(comma_pos) => Some(
+                    chars[comma_pos + 1..brace_end - 1]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<usize>()
+                        .ok()?,
+                ),
+            };
+            Some(NqOuterQuantifier { min, max })
+        }
+        _ => None,
+    }
+}
+
+fn nq_is_nested_in_repeated_group(chars: &[char], open_pos: usize, close_of: &[usize]) -> bool {
+    close_of
+        .iter()
+        .enumerate()
+        .any(|(ancestor_open, &ancestor_close)| {
+            ancestor_open < open_pos
+                && ancestor_close > open_pos
+                && nq_outer_quantifier(chars, ancestor_close + 1, chars.len())
+                    .is_some_and(|quantifier| quantifier.max.is_none_or(|max| max > 1))
+        })
+}
+
+fn nq_iteration_setter(names: &[String]) -> String {
+    let Some((name, rest)) = names.split_first() else {
+        return String::new();
+    };
+    format!(
+        "(?(<{name}>){rest_setter}|\\g<{name}>)",
+        rest_setter = nq_iteration_setter(rest)
+    )
+}
+
+fn nq_empty_gate(name: &str) -> String {
+    format!("(?(<{name}>)(?!)|)")
+}
+
+fn nq_iteration_names(source: &str, state_id: &mut usize, min: usize) -> Vec<String> {
+    loop {
+        let id = *state_id;
+        *state_id += 1;
+        let names: Vec<String> = (1..=min)
+            .map(|iteration| format!("__jsse_qi_nq{id}_{iteration}"))
+            .collect();
+        if names.iter().all(|name| !source.contains(name)) {
+            return names;
+        }
+    }
+}
+
+fn nq_has_source_backreference(chars: &[char]) -> bool {
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < chars.len() {
+        match chars[i] {
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '\\' if !in_cc && i + 1 < chars.len() => {
+                if matches!(chars[i + 1], '1'..='9')
+                    || (chars[i + 1] == 'k' && i + 2 < chars.len() && chars[i + 2] == '<')
+                {
+                    return true;
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn fix_nullable_quantifiers(
+    source: &str,
+    stateful_positive_minimum: bool,
+) -> NullableQuantifierRewrite {
+    if !source.contains('|') && !source.contains("??") && !source.contains("*?") {
+        return NullableQuantifierRewrite {
+            source: source.to_string(),
+            sentinel_names: HashSet::new(),
+        };
     }
 
     let chars: Vec<char> = source.chars().collect();
@@ -5755,6 +6443,12 @@ fn fix_nullable_quantifiers(source: &str) -> String {
     }
 
     let mut remove = vec![false; len];
+    let mut replace: HashMap<usize, char> = HashMap::new();
+    let mut span_replace: HashMap<usize, (usize, String)> = HashMap::new();
+    let mut insert_at: Vec<Vec<String>> = vec![Vec::new(); len + 1];
+    let mut sentinel_names: Vec<String> = Vec::new();
+    let mut state_id = 0usize;
+    let has_source_backreference = nq_has_source_backreference(&chars);
 
     for open_pos in 0..len {
         if chars[open_pos] != '(' || close_of[open_pos] == 0 {
@@ -5762,7 +6456,10 @@ fn fix_nullable_quantifiers(source: &str) -> String {
         }
         let close = close_of[open_pos];
         let after = close + 1;
-        if after >= len || !matches!(chars[after], '*' | '+') {
+        let Some(outer_quantifier) = nq_outer_quantifier(&chars, after, len) else {
+            continue;
+        };
+        if !outer_quantifier.has_post_min_iteration() {
             continue;
         }
         // Find body start (skip group type prefix)
@@ -5770,21 +6467,711 @@ fn fix_nullable_quantifiers(source: &str) -> String {
         if body_start >= close {
             continue;
         }
-        if nq_is_nullable(&chars, body_start, close, &close_of) {
-            nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+
+        let branches = nq_split_branches(&chars, body_start, close);
+        if outer_quantifier.min > 0
+            && (!stateful_positive_minimum
+                || outer_quantifier.min > NQ_MAX_ITERATION_SENTINELS
+                || nq_is_nested_in_repeated_group(&chars, open_pos, &close_of)
+                || (has_source_backreference && nq_branch_has_capture(&chars, body_start, close)))
+        {
+            // Preserve the pre-jsse#378 `+` fallback when stateful conditions
+            // are unavailable (notably the byte matcher), the minimum would
+            // require attacker-controlled source expansion, or a containing
+            // repetition could enter this quantifier more than once, or an
+            // inner source capture is observable by a backreference. Backend
+            // captures cannot be unset between iterations, so sentinels would
+            // either leak their mandatory-iteration state into the next entry
+            // or compound the backend's stale-backreference limitation.
+            if chars[after] != '+' {
+                continue;
+            }
+            let mut gate_used = false;
+            nq_fix_branches(
+                &chars,
+                &branches,
+                &close_of,
+                false,
+                None,
+                &mut replace,
+                &mut remove,
+                &mut span_replace,
+                &mut insert_at,
+                &mut gate_used,
+            );
+            continue;
+        }
+        if outer_quantifier.min == 0 && outer_quantifier.max.is_none() && branches.len() == 1 {
+            // No top-level alternation: greedy sub-quantifiers already
+            // consume maximally, so only lazy ones need forcing.
+            if nq_is_nullable(&chars, body_start, close, &close_of) {
+                nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+            }
+            continue;
+        }
+
+        let iteration_names = if outer_quantifier.min == 0 {
+            Vec::new()
+        } else {
+            nq_iteration_names(source, &mut state_id, outer_quantifier.min)
+        };
+        let empty_gate = iteration_names.last().map(|name| nq_empty_gate(name));
+        let mut gate_used = false;
+        nq_fix_branches(
+            &chars,
+            &branches,
+            &close_of,
+            true,
+            empty_gate.as_deref(),
+            &mut replace,
+            &mut remove,
+            &mut span_replace,
+            &mut insert_at,
+            &mut gate_used,
+        );
+        if gate_used {
+            insert_at[body_start].insert(0, "(?:".to_string());
+            insert_at[close].push(")".to_string());
+            insert_at[close].push(nq_iteration_setter(&iteration_names));
+            sentinel_names.extend(iteration_names);
         }
     }
 
-    if !remove.iter().any(|&r| r) {
-        return source.to_string();
+    if !remove.iter().any(|&r| r)
+        && replace.is_empty()
+        && span_replace.is_empty()
+        && sentinel_names.is_empty()
+    {
+        return NullableQuantifierRewrite {
+            source: source.to_string(),
+            sentinel_names: HashSet::new(),
+        };
     }
     let mut result = String::with_capacity(len);
-    for i in 0..len {
-        if !remove[i] {
-            result.push(chars[i]);
+    let mut i = 0;
+    while i < len {
+        for text in &insert_at[i] {
+            result.push_str(text);
+        }
+        if let Some((send, text)) = span_replace.get(&i) {
+            result.push_str(text);
+            i = *send;
+            continue;
+        }
+        if remove[i] {
+            i += 1;
+            continue;
+        }
+        match replace.get(&i) {
+            Some(&c) => result.push(c),
+            None => result.push(chars[i]),
+        }
+        i += 1;
+    }
+    for text in &insert_at[len] {
+        result.push_str(text);
+    }
+    if !sentinel_names.is_empty() {
+        result.push_str("(?(DEFINE)");
+        for name in &sentinel_names {
+            result.push_str(&format!("(?<{name}>)"));
+        }
+        result.push(')');
+    }
+    NullableQuantifierRewrite {
+        source: result,
+        sentinel_names: sentinel_names.into_iter().collect(),
+    }
+}
+
+/// Process a full set of top-level alternation branches: for each nullable
+/// branch, prevent it from ever contributing a zero-width "success" that
+/// pre-empts a sibling branch able to consume input at this position (spec
+/// §22.2.2.6.1 step 2.b). A branch that can only ever match empty — a bare
+/// empty alternative (`(|a)*`), or a single atom with an exact-zero
+/// quantifier (`a{0}`, `a{0,0}`) — is spliced out entirely (itself plus one
+/// adjacent `|`) rather than bumped, provided it contains no capturing group
+/// (splicing one out would silently renumber every later capture, jsse#373).
+/// Returns true if anything was touched.
+fn nq_fix_branches(
+    chars: &[char],
+    branches: &[(usize, usize)],
+    close_of: &[usize],
+    allow_bump: bool,
+    empty_gate: Option<&str>,
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+    span_replace: &mut HashMap<usize, (usize, String)>,
+    insert_at: &mut [Vec<String>],
+    gate_used: &mut bool,
+) -> bool {
+    let mut touched = false;
+    for (idx, &(bstart, bend)) in branches.iter().enumerate() {
+        if bstart >= bend {
+            // A bare empty alternative contains no capturing group by
+            // construction, so splicing it out is always capture-safe.
+            if let Some(gate) = empty_gate {
+                insert_at[bstart].push(gate.to_string());
+                *gate_used = true;
+                touched = true;
+            } else if allow_bump {
+                nq_delete_branch(branches, idx, remove);
+                touched = true;
+            }
+            continue;
+        }
+        if !nq_is_nullable(chars, bstart, bend, close_of) {
+            continue;
+        }
+        if allow_bump && nq_branch_always_empty(chars, bstart, bend, close_of) {
+            if let Some(gate) = empty_gate {
+                insert_at[bstart].push(format!("(?:{gate}(?:"));
+                insert_at[bend].push("))".to_string());
+                *gate_used = true;
+            } else if !nq_branch_has_capture(chars, bstart, bend) {
+                nq_delete_branch(branches, idx, remove);
+            } else {
+                continue;
+            }
+            touched = true;
+            continue;
+        }
+        if nq_fix_branch(
+            chars,
+            bstart,
+            bend,
+            close_of,
+            allow_bump,
+            empty_gate,
+            replace,
+            remove,
+            span_replace,
+            insert_at,
+            gate_used,
+        ) {
+            touched = true;
         }
     }
-    result
+    touched
+}
+
+/// Remove branch `idx`'s own text plus one adjacent `|`, splicing it out of
+/// its alternation entirely.
+fn nq_delete_branch(branches: &[(usize, usize)], idx: usize, remove: &mut [bool]) {
+    let (bstart, bend) = branches[idx];
+    remove[bstart..bend].fill(true);
+    if idx + 1 < branches.len() {
+        remove[bend] = true; // the `|` immediately after this branch
+    } else if idx > 0 {
+        remove[bstart - 1] = true; // the `|` immediately before this branch
+    }
+}
+
+/// Whether `chars[start..end]` can ONLY ever match the empty string — never
+/// anything else, regardless of input. True for a single atom with an
+/// exact-zero quantifier (`a{0}`, `a{0,0}`), or (recursively) a bare group
+/// with no quantifier of its own whose every top-level branch is itself
+/// always-empty. Callers must additionally confirm the caller already knows
+/// the span is nullable; this only distinguishes "always empty" from
+/// "sometimes empty, sometimes not" within that.
+fn nq_branch_always_empty(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    if start >= end {
+        return true;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                end
+            }
+        }
+        _ => start + 1,
+    };
+    if let Some(q_end) = nq_exact_zero_quant_end(chars, atom_end, end)
+        && q_end == end
+    {
+        return true;
+    }
+    if chars[start] == '(' && atom_end == end {
+        let close = close_of[start];
+        if close > 0 {
+            let interior_start = nq_body_start(chars, start);
+            if interior_start < close {
+                return nq_split_branches(chars, interior_start, close)
+                    .into_iter()
+                    .all(|(bs, be)| nq_branch_always_empty(chars, bs, be, close_of));
+            }
+        }
+    }
+    false
+}
+
+/// If `chars[pos..end]` starts with an exact-zero quantifier (`{0}` or
+/// `{0,0}`, optionally lazy), return the position right after it.
+fn nq_exact_zero_quant_end(chars: &[char], pos: usize, end: usize) -> Option<usize> {
+    if pos >= end || chars[pos] != '{' {
+        return None;
+    }
+    let brace_end = quantifier_brace_end(chars, pos, end)?;
+    let digit_start = pos + 1;
+    let mut digit_end = digit_start;
+    while digit_end < brace_end && chars[digit_end].is_ascii_digit() {
+        digit_end += 1;
+    }
+    if digit_end == digit_start
+        || chars[digit_start..digit_end]
+            .iter()
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(1)
+            != 0
+    {
+        return None;
+    }
+    let is_exact = digit_end == brace_end - 1;
+    let max_is_zero = !is_exact
+        && digit_end < brace_end
+        && chars[digit_end] == ','
+        && digit_end + 1 != brace_end - 1
+        && chars[digit_end + 1..brace_end - 1]
+            .iter()
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(1)
+            == 0;
+    if !is_exact && !max_is_zero {
+        return None;
+    }
+    let mut q_end = brace_end;
+    if q_end < end && chars[q_end] == '?' {
+        q_end += 1;
+    }
+    Some(q_end)
+}
+
+/// Whether `chars[start..end]` contains a capturing group anywhere within it
+/// (including nested inside other groups). Non-capturing forms — `(?:...)`,
+/// lookaround assertions, and (deliberately, conservatively) any other
+/// `(?...)` form this engine doesn't specifically recognize as capturing —
+/// are excluded; a plain `(...)` or named `(?<name>...)` counts.
+fn nq_branch_has_capture(chars: &[char], start: usize, end: usize) -> bool {
+    let mut i = start;
+    let mut in_cc = false;
+    while i < end {
+        match chars[i] {
+            '\\' if !in_cc && i + 1 < end => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc && nq_group_is_capturing(chars, i) => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn nq_group_is_capturing(chars: &[char], open: usize) -> bool {
+    let len = chars.len();
+    if open + 1 >= len || chars[open + 1] != '?' {
+        return true; // plain `(...)`
+    }
+    if open + 2 < len && chars[open + 2] == '<' {
+        // `(?<=...)`/`(?<!...)` are lookbehind assertions; `(?<name>...)` is
+        // a named CAPTURING group.
+        return !(open + 3 < len && matches!(chars[open + 3], '=' | '!'));
+    }
+    false // `(?:...)`, `(?=...)`, `(?!...)` — non-capturing
+}
+
+/// Apply the nullable-branch treatment to one alternation branch that is
+/// nullable but not unconditionally empty. Returns true if the branch was
+/// touched (bumped, fixed via recursion, or lazy-stripped).
+fn nq_fix_branch(
+    chars: &[char],
+    bstart: usize,
+    bend: usize,
+    close_of: &[usize],
+    allow_bump: bool,
+    empty_gate: Option<&str>,
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+    span_replace: &mut HashMap<usize, (usize, String)>,
+    insert_at: &mut [Vec<String>],
+    gate_used: &mut bool,
+) -> bool {
+    let empty_first = nq_bare_atom_quantifier_is_lazy(chars, bstart, bend, close_of);
+    if allow_bump && nq_bump_bare_atom_min(chars, bstart, bend, close_of, replace, remove) {
+        if let Some(gate) = empty_gate {
+            if empty_first {
+                insert_at[bstart].push(format!("(?:{gate}|"));
+                insert_at[bend].push(")".to_string());
+            } else {
+                insert_at[bstart].push("(?:".to_string());
+                insert_at[bend].push(format!("|{gate})"));
+            }
+            *gate_used = true;
+        }
+        return true;
+    }
+    // Several jointly-optional atoms (e.g. `a?b?`) rather than one — expand
+    // into an alternation that requires the first-consuming atom to be
+    // present (jsse#373), unless a capturing group is involved (splicing
+    // atoms across new branches would renumber captures).
+    if allow_bump
+        && !nq_branch_has_capture(chars, bstart, bend)
+        && let Some(text) = nq_expand_joint_optional(chars, bstart, bend, close_of, empty_gate)
+    {
+        *gate_used |= empty_gate.is_some();
+        span_replace.insert(bstart, (bend, text));
+        return true;
+    }
+    // Not a single quantified atom, but still nullable. If the branch is
+    // exactly one group with no quantifier of its own, the nullability came
+    // from the group's own interior (mirrors nq_is_nullable's `(` handling)
+    // — recurse the same per-branch treatment into it (jsse#373).
+    if allow_bump && chars[bstart] == '(' {
+        let close = close_of[bstart];
+        if close > 0 && close + 1 == bend {
+            let interior_start = nq_body_start(chars, bstart);
+            if interior_start < close {
+                let interior_branches = nq_split_branches(chars, interior_start, close);
+                if nq_fix_branches(
+                    chars,
+                    &interior_branches,
+                    close_of,
+                    allow_bump,
+                    empty_gate,
+                    replace,
+                    remove,
+                    span_replace,
+                    insert_at,
+                    gate_used,
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    nq_mark_lazy(chars, bstart, bend, close_of, remove)
+}
+
+fn nq_bare_atom_quantifier_is_lazy(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+) -> bool {
+    if start >= end {
+        return false;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                return false;
+            }
+        }
+        _ => start + 1,
+    };
+    if atom_end >= end {
+        return false;
+    }
+    let quantifier_end = match chars[atom_end] {
+        '?' | '*' | '+' => atom_end + 1,
+        '{' => match quantifier_brace_end(chars, atom_end, end) {
+            Some(end) => end,
+            None => return false,
+        },
+        _ => return false,
+    };
+    quantifier_end + 1 == end && chars[quantifier_end] == '?'
+}
+
+/// If `chars[start..end]` is a sequence of two or more atoms, each with its
+/// own min-0 quantifier (e.g. `a?b?`, `a*b?c{0,2}`), jointly nullable only
+/// because every atom is individually optional, build a replacement that
+/// requires the first-consuming atom to be present while leaving the rest as
+/// optional as before — e.g. `a?b?` -> `(?:ab?|b)`: atoms before the chosen
+/// one are dropped (matching them having occurred zero times), the chosen
+/// atom's own quantifier floor is bumped by one (reusing
+/// nq_bump_bare_atom_min), and atoms after it are left as-is. This preserves
+/// every non-empty match the sequence could produce (spec §22.2.2.6.1 step
+/// 2.b only discards the fully-empty iteration) while forbidding the
+/// all-absent case. Returns None if the span isn't this shape.
+fn nq_expand_joint_optional(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    empty_gate: Option<&str>,
+) -> Option<String> {
+    let mut atoms: Vec<(usize, usize)> = Vec::new();
+    let mut i = start;
+    while i < end {
+        let atom_end = match chars[i] {
+            '\\' if i + 1 < end => i + 2,
+            '[' => {
+                let mut j = i + 1;
+                while j < end && chars[j] != ']' {
+                    if chars[j] == '\\' && j + 1 < end {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                if j < end { j + 1 } else { j }
+            }
+            '(' => {
+                let close = close_of[i];
+                if close == 0 || close >= end {
+                    return None;
+                }
+                close + 1
+            }
+            '^' | '$' => return None, // zero-width assertions aren't quantifiable atoms here
+            _ => i + 1,
+        };
+        if !nq_has_min0(chars, atom_end, end) {
+            return None;
+        }
+        let quant_end = nq_skip_quant(chars, atom_end, end);
+        atoms.push((i, quant_end));
+        i = quant_end;
+    }
+    if atoms.len() < 2 {
+        return None; // single-atom case is nq_bump_bare_atom_min's job
+    }
+
+    let mut consuming_choices: Vec<(String, bool)> = Vec::with_capacity(atoms.len());
+    for (k, &(astart, aend)) in atoms.iter().enumerate() {
+        let mut a_replace: HashMap<usize, char> = HashMap::new();
+        let mut a_remove = vec![false; chars.len()];
+        if !nq_bump_bare_atom_min(chars, astart, aend, close_of, &mut a_replace, &mut a_remove) {
+            return None; // shouldn't happen — a min-0 quantifier was just confirmed
+        }
+        let mut piece = String::new();
+        for idx in astart..aend {
+            if a_remove[idx] {
+                continue;
+            }
+            piece.push(*a_replace.get(&idx).unwrap_or(&chars[idx]));
+        }
+        for &(bstart, bend) in &atoms[k + 1..] {
+            piece.extend(chars[bstart..bend].iter());
+        }
+        consuming_choices.push((
+            piece,
+            nq_bare_atom_quantifier_is_lazy(chars, astart, aend, close_of),
+        ));
+    }
+
+    // Each optional atom contributes a consume-vs-skip choice. Preserve that
+    // decision tree exactly: a greedy atom's consuming choice precedes the
+    // recursively expanded skip path, while a lazy atom's choice follows it.
+    // The gated all-skipped leaf therefore lands at its source priority,
+    // which may be first, last, or between consuming alternatives.
+    let mut branches = std::collections::VecDeque::with_capacity(
+        consuming_choices.len() + usize::from(empty_gate.is_some()),
+    );
+    if let Some(gate) = empty_gate {
+        branches.push_back(gate.to_string());
+    }
+    for (piece, lazy) in consuming_choices.into_iter().rev() {
+        if lazy {
+            branches.push_back(piece);
+        } else {
+            branches.push_front(piece);
+        }
+    }
+    Some(format!(
+        "(?:{})",
+        branches.into_iter().collect::<Vec<_>>().join("|")
+    ))
+}
+
+/// Split `chars[start..end]` into top-level alternative branches (spans),
+/// on `|` not nested inside `(...)`/`[...]` and not escaped.
+fn nq_split_branches(chars: &[char], start: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut branches = Vec::new();
+    let mut branch_start = start;
+    let mut i = start;
+    let mut depth = 0i32;
+    let mut in_cc = false;
+    while i < end {
+        match chars[i] {
+            '\\' if i + 1 < end => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc => depth += 1,
+            ')' if !in_cc => depth -= 1,
+            '|' if !in_cc && depth == 0 => {
+                branches.push((branch_start, i));
+                branch_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    branches.push((branch_start, end));
+    branches
+}
+
+/// If `chars[start..end]` is exactly one atom followed by a single min-0
+/// quantifier (`*`, `?`, or `{0,n}`, greedy or lazy) spanning to `end` with
+/// nothing else in the branch, rewrite that quantifier's lower bound to 1.
+/// This forbids the branch from ever matching empty while leaving every
+/// non-empty match it could produce untouched — exactly the iteration that
+/// spec §22.2.2.6.1 step 2.b would discard anyway. Returns false (no
+/// changes) if the branch isn't this exact bare-atom shape.
+fn nq_bump_bare_atom_min(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+) -> bool {
+    if start >= end {
+        return false;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                end
+            }
+        }
+        _ => start + 1,
+    };
+    if atom_end >= end {
+        return false;
+    }
+    match chars[atom_end] {
+        '*' => {
+            let mut q_end = atom_end + 1;
+            if q_end < end && chars[q_end] == '?' {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            replace.insert(atom_end, '+');
+            true
+        }
+        '?' => {
+            let mut q_end = atom_end + 1;
+            let lazy = q_end < end && chars[q_end] == '?';
+            if lazy {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            remove[atom_end] = true;
+            if lazy {
+                remove[atom_end + 1] = true;
+            }
+            true
+        }
+        '{' => {
+            let brace_end = match quantifier_brace_end(chars, atom_end, end) {
+                Some(e) => e,
+                None => return false,
+            };
+            let mut q_end = brace_end;
+            if q_end < end && chars[q_end] == '?' {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            let digit_start = atom_end + 1;
+            let mut digit_end = digit_start;
+            while digit_end < brace_end && chars[digit_end].is_ascii_digit() {
+                digit_end += 1;
+            }
+            if digit_end == digit_start {
+                return false;
+            }
+            let min_val: u32 = chars[digit_start..digit_end]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .unwrap_or(1);
+            if min_val != 0 {
+                return false;
+            }
+            // "}" right after the min digits means an exact-count {0} quantifier —
+            // always empty, no max to bump against; leave it to the lazy-strip fallback.
+            let max_is_zero = if digit_end < brace_end && chars[digit_end] == ',' {
+                let max_start = digit_end + 1;
+                let max_end = brace_end - 1; // position of the closing '}'
+                if max_start == max_end {
+                    false // "{0,}" — unbounded
+                } else {
+                    chars[max_start..max_end]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .unwrap_or(1)
+                        == 0
+                }
+            } else {
+                true
+            };
+            if max_is_zero {
+                return false;
+            }
+            remove[digit_start..digit_end - 1].fill(true);
+            replace.insert(digit_end - 1, '1');
+            true
+        }
+        _ => false,
+    }
 }
 
 fn nq_body_start(chars: &[char], open: usize) -> usize {
@@ -5813,15 +7200,20 @@ fn nq_body_start(chars: &[char], open: usize) -> usize {
 
 /// Check whether the regex segment chars[start..end] can match the empty string.
 fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    // A top-level alternation is nullable iff any branch is (an empty branch
+    // is trivially nullable). Recurse per branch rather than short-circuiting
+    // on the first one — a later branch may be nullable even if an earlier
+    // one isn't.
+    let branches = nq_split_branches(chars, start, end);
+    if branches.len() > 1 {
+        return branches
+            .into_iter()
+            .any(|(bstart, bend)| bstart >= bend || nq_is_nullable(chars, bstart, bend, close_of));
+    }
+
     let mut i = start;
     while i < end {
         match chars[i] {
-            '|' => {
-                // Left alternative was all nullable (we got here without returning false).
-                // If ANY alternative is nullable, the whole alternation is nullable.
-                // Skip right side — it's nullable if left side was.
-                return true;
-            }
             '\\' if i + 1 < end => {
                 let atom_end = i + 2;
                 if !nq_has_min0(chars, atom_end, end) {
@@ -5849,7 +7241,19 @@ fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) 
                     return false;
                 }
                 let atom_end = close + 1;
-                if !nq_has_min0(chars, atom_end, end) {
+                if nq_has_min0(chars, atom_end, end) {
+                    i = nq_skip_quant(chars, atom_end, end);
+                    continue;
+                }
+                // No min-0 quantifier directly on the group (possibly no
+                // quantifier at all, or one with a nonzero minimum). A single
+                // occurrence can still match empty if the group's own
+                // interior can — e.g. `(a*)`, or `(a*){2,3}` where each of
+                // the required occurrences may itself match empty.
+                let interior_start = nq_body_start(chars, i);
+                if interior_start >= close
+                    || !nq_is_nullable(chars, interior_start, close, close_of)
+                {
                     return false;
                 }
                 i = nq_skip_quant(chars, atom_end, end);
@@ -5876,8 +7280,25 @@ fn nq_has_min0(chars: &[char], pos: usize, end: usize) -> bool {
     match chars[pos] {
         '?' | '*' => true,
         '{' => {
-            // {0,...}
-            pos + 1 < end && chars[pos + 1] == '0'
+            // {0,...} — but only a genuinely valid quantifier; Annex B
+            // literal forms like `{0,foo}` are not quantifiers at all and
+            // must not make the preceding atom look nullable.
+            match quantifier_brace_end(chars, pos, end) {
+                Some(_) => {
+                    let mut j = pos + 1;
+                    let digit_start = j;
+                    while j < end && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    chars[digit_start..j]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .unwrap_or(1)
+                        == 0
+                }
+                None => false,
+            }
         }
         _ => false,
     }
@@ -5912,7 +7333,14 @@ fn nq_skip_quant(chars: &[char], pos: usize, end: usize) -> usize {
 }
 
 /// Mark lazy modifiers (`?` after `?` or `*`) for removal in nullable bodies.
-fn nq_mark_lazy(chars: &[char], start: usize, end: usize, close_of: &[usize], remove: &mut [bool]) {
+fn nq_mark_lazy(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    remove: &mut [bool],
+) -> bool {
+    let mut touched = false;
     let mut i = start;
     while i < end {
         let atom_end = match chars[i] {
@@ -5947,18 +7375,35 @@ fn nq_mark_lazy(chars: &[char], start: usize, end: usize, close_of: &[usize], re
             let lazy_pos = atom_end + 1;
             if lazy_pos < end && chars[lazy_pos] == '?' {
                 remove[lazy_pos] = true;
+                touched = true;
             }
         }
         i = nq_skip_quant(chars, atom_end, end);
     }
+    touched
 }
 
 fn build_regex_ex(
     source: &str,
     flags: &str,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
-    let source = fix_nullable_quantifiers(source);
-    let tr = translate_js_pattern_ex(&source, flags)?;
+    build_regex_ex_with_nullable_state(source, flags, true)
+}
+
+fn build_regex_ex_with_nullable_state(
+    source: &str,
+    flags: &str,
+    stateful_positive_minimum: bool,
+) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
+    let original_source = source;
+    let rewrite = fix_nullable_quantifiers(original_source, stateful_positive_minimum);
+    let tr =
+        translate_js_pattern_ex_with_sentinels(&rewrite.source, flags, &rewrite.sentinel_names)?;
+    if tr.needs_bytes_mode && !rewrite.sentinel_names.is_empty() {
+        return build_regex_ex_with_nullable_state(original_source, flags, false);
+    }
+    let retry_without_sentinels = stateful_positive_minimum && !rewrite.sentinel_names.is_empty();
+    let source = rewrite.source;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
 
@@ -6000,6 +7445,9 @@ fn build_regex_ex(
                     try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
             {
                 return Ok(result);
+            }
+            if retry_without_sentinels {
+                return build_regex_ex_with_nullable_state(original_source, flags, false);
             }
             regex::Regex::new(&tr.pattern)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
@@ -6098,11 +7546,20 @@ macro_rules! build_captures {
             groups.push($caps.get(i).map(|m| RegexMatch {
                 start: m.start(),
                 end: m.end(),
-                text: m.as_str().to_string(),
             }));
         }
         Some(RegexCaptures { groups, names })
     }};
+}
+
+fn ensure_capture_slots(caps: &mut RegexCaptures, total_groups: usize) {
+    let expected_len = total_groups + 1;
+    if caps.groups.len() < expected_len {
+        caps.groups.resize_with(expected_len, || None);
+    }
+    if caps.names.len() < expected_len {
+        caps.names.resize_with(expected_len, || None);
+    }
 }
 
 fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
@@ -6178,11 +7635,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
 
             let mut groups: Vec<Option<RegexMatch>> = Vec::new();
             for cap in &result {
-                groups.push(cap.map(|(start, end)| RegexMatch {
-                    start,
-                    end,
-                    text: text[start..end].to_string(),
-                }));
+                groups.push(cap.map(|(start, end)| RegexMatch { start, end }));
             }
 
             // Ensure we have at least total_groups + 1 entries
@@ -6221,22 +7674,21 @@ fn bytes_regex_captures_at(
         groups.push(caps.get(i).map(|m| RegexMatch {
             start: m.start(),
             end: m.end(),
-            text: wtf8_slice_to_pua_string(&input[m.start()..m.end()]),
         }));
     }
     Some(RegexCaptures { groups, names })
 }
 
 fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
-    if let JsValue::Object(o) = this_val
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(obj_id) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(obj_id)
     {
         let b = obj.borrow();
         let r = b.regexp()?;
-        let source = js_string_to_regex_input(&r.source.code_units);
         let flags = r.flags.to_rust_string();
+        let source = js_string_to_regex_pattern(&r.source.code_units, &flags);
         drop(b);
-        Some((source, flags, o.id))
+        Some((source, flags, obj_id))
     } else {
         None
     }
@@ -6273,9 +7725,9 @@ fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
     };
     let bp = realm_proto.borrow();
     if let Some(pd) = bp.properties.get("exec")
-        && let Some(JsValue::Object(o)) = &pd.value
+        && let Some(exec_id) = pd.value.as_ref().and_then(JsValue::as_object_id)
     {
-        return o.id == builtin_exec_id;
+        return exec_id == builtin_exec_id;
     }
     false
 }
@@ -6288,7 +7740,7 @@ fn spec_set(
     value: JsValue,
     throw: bool,
 ) -> Result<(), JsValue> {
-    let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+    let obj_val = JsValue::object(obj_id);
     if let Some(obj) = interp.get_object_cell(obj_id) {
         // Proxy set trap
         if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
@@ -6305,7 +7757,7 @@ fn spec_set(
         let desc = interp.get_property_descriptor_on_id(obj_id, key);
         if let Some(ref d) = desc
             && let Some(ref setter) = d.set
-            && !matches!(setter, JsValue::Undefined)
+            && !setter.is_undefined()
         {
             let setter = setter.clone();
             return match interp.call_function(&setter, &obj_val, &[value]) {
@@ -6337,16 +7789,11 @@ fn spec_set(
 }
 
 fn set_last_index_strict(interp: &mut Interpreter, obj_id: u64, val: f64) -> Result<(), JsValue> {
-    spec_set(interp, obj_id, "lastIndex", JsValue::Number(val), true)
+    spec_set(interp, obj_id, "lastIndex", JsValue::number(val), true)
 }
 
-fn regexp_exec_abstract(
-    interp: &mut Interpreter,
-    rx_id: u64,
-    s: &str,
-    code_units: &[u16],
-) -> Completion {
-    let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput) -> Completion {
+    let rx_val = JsValue::object(rx_id);
     let exec_val = match interp.get_object_property(rx_id, "exec", &rx_val) {
         Completion::Normal(v) => v,
         other => return other,
@@ -6355,11 +7802,11 @@ fn regexp_exec_abstract(
         let result = interp.call_function(
             &exec_val,
             &rx_val,
-            &[JsValue::String(JsString::from_vec(code_units.to_vec()))],
+            &[JsValue::string(input.subject.clone())],
         );
         match result {
             Completion::Normal(ref v) => {
-                if matches!(v, JsValue::Object(_)) || matches!(v, JsValue::Null) {
+                if v.is_object() || v.is_null() {
                     result
                 } else {
                     Completion::Throw(interp.create_type_error(
@@ -6384,9 +7831,10 @@ fn regexp_exec_abstract(
         let (source, flags) = if let Some(obj) = interp.get_object_cell(rx_id) {
             let b = obj.borrow();
             let (src, fl) = if let Some(r) = b.regexp() {
+                let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_input(&r.source.code_units),
-                    r.flags.to_rust_string(),
+                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    flags,
                 )
             } else {
                 (String::new(), String::new())
@@ -6394,31 +7842,31 @@ fn regexp_exec_abstract(
             drop(b);
             (src, fl)
         } else {
-            return Completion::Normal(JsValue::Null);
+            return Completion::Normal(JsValue::NULL);
         };
-        regexp_exec_raw(interp, rx_id, &source, &flags, s, code_units)
+        regexp_exec_raw(interp, rx_id, &source, &flags, input)
     }
 }
 
 /// Inner implementation of RegExp @@replace result collection and processing.
 /// Extracted so the caller can bracket it with gc_temp_roots save/restore.
-/// AdvanceStringIndex per spec. `index` is in UTF-16 code units.
-fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
+/// AdvanceStringIndex per spec (22.2.7.3). `index` is in UTF-16 code units.
+///
+/// The spec defines this over the original String S, so it reads the retained
+/// UTF-16 code units directly. That is both exact — no PUA sentinel can be
+/// confused with a real scalar — and O(1), where scanning a converted view cost
+/// two full passes over the subject on every call.
+fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usize {
     if !unicode {
         return index + 1;
     }
-    let utf16_len = pua_aware_utf16_len(s);
-    if index + 1 >= utf16_len {
+    let code_units = &input.subject.code_units;
+    if index + 1 >= code_units.len() {
         return index + 1;
     }
-    let byte_offset = utf16_to_byte_offset(s, index);
-    if byte_offset >= s.len() {
-        return index + 1;
-    }
-    let c = s[byte_offset..].chars().next().unwrap_or('\0');
-    if pua_to_surrogate(c).is_some() {
-        index + 1
-    } else if c.len_utf16() == 2 {
+    if (0xD800..=0xDBFF).contains(&code_units[index])
+        && (0xDC00..=0xDFFF).contains(&code_units[index + 1])
+    {
         index + 2
     } else {
         index + 1
@@ -6427,53 +7875,49 @@ fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
 
 fn get_substitution(
     interp: &mut Interpreter,
-    matched: &str,
-    s: &str,
+    matched: &[u16],
+    s: &[u16],
     position: usize,
     tail_pos: usize,
     captures: &[JsValue],
     named_captures: &JsValue,
-    replacement: &str,
-) -> Result<String, JsValue> {
+    replacement: &[u16],
+) -> Result<Vec<u16>, JsValue> {
+    let position = position.min(s.len());
     let tail_pos = tail_pos.min(s.len());
-    let mut result = String::new();
-    let rchars: Vec<char> = replacement.chars().collect();
-    let len = rchars.len();
+    let mut result = Vec::new();
+    let len = replacement.len();
     let mut i = 0;
     let m = captures.len();
     while i < len {
-        if rchars[i] == '$' && i + 1 < len {
-            match rchars[i + 1] {
-                '$' => {
-                    result.push('$');
+        if replacement[i] == b'$' as u16 && i + 1 < len {
+            match replacement[i + 1] {
+                c if c == b'$' as u16 => {
+                    result.push(b'$' as u16);
                     i += 2;
                 }
-                '&' => {
-                    result.push_str(matched);
+                c if c == b'&' as u16 => {
+                    result.extend_from_slice(matched);
                     i += 2;
                 }
-                '`' => {
-                    if let Some(prefix) = s.get(..position) {
-                        result.push_str(prefix);
-                    }
+                c if c == b'`' as u16 => {
+                    result.extend_from_slice(&s[..position]);
                     i += 2;
                 }
-                '\'' => {
-                    if let Some(suffix) = s.get(tail_pos..) {
-                        result.push_str(suffix);
-                    }
+                c if c == b'\'' as u16 => {
+                    result.extend_from_slice(&s[tail_pos..]);
                     i += 2;
                 }
-                c if c.is_ascii_digit() => {
-                    let d1 = (c as u32 - '0' as u32) as usize;
-                    if i + 2 < len && rchars[i + 2].is_ascii_digit() {
-                        let d2 = (rchars[i + 2] as u32 - '0' as u32) as usize;
+                c if (b'0' as u16..=b'9' as u16).contains(&c) => {
+                    let d1 = (c - b'0' as u16) as usize;
+                    if i + 2 < len && (b'0' as u16..=b'9' as u16).contains(&replacement[i + 2]) {
+                        let d2 = (replacement[i + 2] - b'0' as u16) as usize;
                         let nn = d1 * 10 + d2;
                         if nn >= 1 && nn <= m {
                             let cap = &captures[nn - 1];
                             if !cap.is_undefined() {
-                                let cap_s = interp.to_string_value(cap)?;
-                                result.push_str(&cap_s);
+                                let cap_js = interp.to_js_string(cap)?;
+                                result.extend_from_slice(&cap_js.code_units);
                             }
                             i += 3;
                             continue;
@@ -6482,33 +7926,32 @@ fn get_substitution(
                     if d1 >= 1 && d1 <= m {
                         let cap = &captures[d1 - 1];
                         if !cap.is_undefined() {
-                            let cap_s = interp.to_string_value(cap)?;
-                            result.push_str(&cap_s);
+                            let cap_js = interp.to_js_string(cap)?;
+                            result.extend_from_slice(&cap_js.code_units);
                         }
                     } else {
-                        result.push('$');
+                        result.push(b'$' as u16);
                         result.push(c);
                     }
                     i += 2;
                 }
-                '<' => {
-                    if matches!(named_captures, JsValue::Undefined) {
-                        result.push('$');
-                        result.push('<');
+                c if c == b'<' as u16 => {
+                    if named_captures.is_undefined() {
+                        result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                         i += 2;
                     } else {
                         let start = i + 2;
-                        let rest: String = rchars[start..].iter().collect();
-                        if let Some(end_pos) = rest.find('>') {
-                            let group_name: String = rchars
-                                [start..start + rest[..end_pos].chars().count()]
-                                .iter()
-                                .collect();
-                            let nc_obj = match named_captures {
-                                JsValue::Object(o) => o.id,
-                                _ => {
-                                    result.push('$');
-                                    result.push('<');
+                        if let Some(relative_end) = replacement[start..]
+                            .iter()
+                            .position(|&cu| cu == b'>' as u16)
+                        {
+                            let end = start + relative_end;
+                            let group_name = JsString::from_vec(replacement[start..end].to_vec())
+                                .to_rust_string();
+                            let nc_obj = match named_captures.as_object_id() {
+                                Some(id) => id,
+                                None => {
+                                    result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                                     i += 2;
                                     continue;
                                 }
@@ -6520,47 +7963,30 @@ fn get_substitution(
                             ) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Err(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
                             if !capture.is_undefined() {
-                                let cap_str = interp.to_string_value(&capture)?;
-                                result.push_str(&cap_str);
+                                let cap_js = interp.to_js_string(&capture)?;
+                                result.extend_from_slice(&cap_js.code_units);
                             }
-                            i = start + rest[..end_pos].chars().count() + 1;
+                            i = end + 1;
                         } else {
-                            result.push('$');
-                            result.push('<');
+                            result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                             i += 2;
                         }
                     }
                 }
                 _ => {
-                    result.push('$');
+                    result.push(b'$' as u16);
                     i += 1;
                 }
             }
         } else {
-            result.push(rchars[i]);
+            result.push(replacement[i]);
             i += 1;
         }
     }
     Ok(result)
-}
-
-fn split_surrogates_for_non_unicode(input: &str) -> String {
-    let mut result = String::new();
-    for c in input.chars() {
-        if c as u32 >= 0x10000 && pua_to_surrogate(c).is_none() {
-            let cp = c as u32;
-            let hi = ((cp - 0x10000) >> 10) + 0xD800;
-            let lo = ((cp - 0x10000) & 0x3FF) + 0xDC00;
-            result.push(surrogate_to_pua(hi));
-            result.push(surrogate_to_pua(lo));
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 fn resolve_named_group_matches<'a>(
@@ -6606,13 +8032,12 @@ fn regexp_exec_raw(
     this_id: u64,
     source: &str,
     flags: &str,
-    input: &str,
-    input_code_units: &[u16],
+    regex_input: &RegexInput,
 ) -> Completion {
     // Spec: Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
     // ToLength may trigger valueOf side effects that recompile the regexp,
     // so we re-read source/flags from internal slots afterward.
-    let this_val = JsValue::Object(crate::types::JsObject { id: this_id });
+    let this_val = JsValue::object(this_id);
     let li_val = match interp.get_object_property(this_id, "lastIndex", &this_val) {
         Completion::Normal(v) => v,
         other => return other,
@@ -6632,9 +8057,10 @@ fn regexp_exec_raw(
         if let Some(obj) = interp.get_object_cell(this_id) {
             let b = obj.borrow();
             if let Some(r) = b.regexp() {
+                let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_input(&r.source.code_units),
-                    r.flags.to_rust_string(),
+                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    flags,
                 )
             } else {
                 (source.to_string(), flags.to_string())
@@ -6651,23 +8077,15 @@ fn regexp_exec_raw(
     let has_indices = flags.contains('d');
     let unicode = flags.contains('u') || flags.contains('v');
 
-    let non_unicode_input;
-    let input = if !unicode {
-        non_unicode_input = split_surrogates_for_non_unicode(input);
-        &non_unicode_input
-    } else {
-        input
-    };
-
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
-    let input_utf16_len = pua_aware_utf16_len(input);
+    let input_utf16_len = regex_input.subject.len();
     let last_index_utf16 = if global || sticky {
         let li_int = li_length as i64;
         if li_int < 0 || li_int as usize > input_utf16_len {
             if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
                 return Completion::Throw(e);
             }
-            return Completion::Normal(JsValue::Null);
+            return Completion::Normal(JsValue::NULL);
         }
         li_int as usize
     } else {
@@ -6675,24 +8093,16 @@ fn regexp_exec_raw(
     };
     let cached = match build_regex_cached(interp, source, flags) {
         Ok(r) => r,
-        Err(_) => return Completion::Normal(JsValue::Null),
+        Err(_) => return Completion::Normal(JsValue::NULL),
     };
 
     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-    let wtf8_bytes = if is_bytes_mode {
-        js_code_units_to_wtf8(input_code_units)
-    } else {
-        Vec::new()
-    };
-    let last_index_byte = if is_bytes_mode {
-        utf16_to_wtf8_byte_offset(&wtf8_bytes, last_index_utf16)
-    } else {
-        utf16_to_byte_offset(input, last_index_utf16)
-    };
+    let view = RegexView::select(is_bytes_mode, unicode);
+    let last_index_byte = regex_input.utf16_to_byte_offset(view, last_index_utf16);
 
     let mut caps = if is_bytes_mode {
         if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-            match bytes_regex_captures_at(bytes_re, &wtf8_bytes, last_index_byte) {
+            match bytes_regex_captures_at(bytes_re, regex_input.wtf8(), last_index_byte) {
                 Some(c) => c,
                 None => {
                     if (global || sticky)
@@ -6700,14 +8110,18 @@ fn regexp_exec_raw(
                     {
                         return Completion::Throw(e);
                     }
-                    return Completion::Normal(JsValue::Null);
+                    return Completion::Normal(JsValue::NULL);
                 }
             }
         } else {
             unreachable!()
         }
     } else {
-        match regex_captures_at(&cached.compiled, input, last_index_byte) {
+        match regex_captures_at(
+            &cached.compiled,
+            regex_input.as_str(unicode),
+            last_index_byte,
+        ) {
             Some(c) => c,
             None => {
                 if (global || sticky)
@@ -6715,7 +8129,7 @@ fn regexp_exec_raw(
                 {
                     return Completion::Throw(e);
                 }
-                return Completion::Normal(JsValue::Null);
+                return Completion::Normal(JsValue::NULL);
             }
         }
     };
@@ -6723,27 +8137,20 @@ fn regexp_exec_raw(
     clear_stale_dup_captures(&mut caps, &cached.dup_map);
     strip_renamed_qi_captures(&mut caps);
     reset_quantifier_inner_captures(&mut caps, source);
+    ensure_capture_slots(&mut caps, cached.total_groups);
     let dup_map = &cached.dup_map;
     let name_order = &cached.name_order;
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets
-    let match_start_utf16 = if is_bytes_mode {
-        wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.start)
-    } else {
-        byte_offset_to_utf16(input, full_match.start)
-    };
-    let match_end_utf16 = if is_bytes_mode {
-        wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
-    } else {
-        byte_offset_to_utf16(input, full_match.end)
-    };
+    let match_start_utf16 = regex_input.byte_offset_to_utf16(view, full_match.start);
+    let match_end_utf16 = regex_input.byte_offset_to_utf16(view, full_match.end);
 
     if sticky && full_match.start != last_index_byte {
         if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
             return Completion::Throw(e);
         }
-        return Completion::Normal(JsValue::Null);
+        return Completion::Normal(JsValue::NULL);
     }
 
     if (global || sticky)
@@ -6754,42 +8161,44 @@ fn regexp_exec_raw(
 
     // Update Annex B legacy static properties (B.2.4)
     {
-        interp.regexp_legacy.input = input.to_string();
-        interp.regexp_legacy.last_match = full_match.text.clone();
-        interp.regexp_legacy.left_context = if is_bytes_mode {
-            wtf8_slice_to_pua_string(&wtf8_bytes[..full_match.start])
-        } else {
-            input[..full_match.start].to_string()
-        };
-        interp.regexp_legacy.right_context = if is_bytes_mode {
-            wtf8_slice_to_pua_string(&wtf8_bytes[full_match.end..])
-        } else {
-            input[full_match.end..].to_string()
-        };
-        let mut last_paren = String::new();
+        interp.regexp_legacy.input = regex_input.subject.clone();
+        interp.regexp_legacy.context_input = regex_input.subject.clone();
+        interp.regexp_legacy.left_context_end = match_start_utf16;
+        interp.regexp_legacy.right_context_start = match_end_utf16;
+        interp.regexp_legacy.last_match =
+            regex_input.subject_slice(view, full_match.start, full_match.end);
+        let mut last_paren = JsString::default();
         for idx in (1..caps.len()).rev() {
             if let Some(m) = caps.get(idx) {
-                last_paren = m.text.clone();
+                last_paren = regex_input.subject_slice(view, m.start, m.end);
                 break;
             }
         }
         interp.regexp_legacy.last_paren = last_paren;
         for p in 0..9 {
-            interp.regexp_legacy.parens[p] =
-                caps.get(p + 1).map(|m| m.text.clone()).unwrap_or_default();
+            interp.regexp_legacy.parens[p] = caps
+                .get(p + 1)
+                .map(|m| regex_input.subject_slice(view, m.start, m.end))
+                .unwrap_or_default();
         }
     }
 
     let mut elements: Vec<JsValue> = Vec::new();
-    elements.push(JsValue::String(regex_output_to_js_string(&full_match.text)));
+    elements.push(JsValue::string(regex_input.subject_slice(
+        view,
+        full_match.start,
+        full_match.end,
+    )));
     for i in 1..caps.len() {
         match caps.get(i) {
-            Some(m) => elements.push(JsValue::String(regex_output_to_js_string(&m.text))),
-            None => elements.push(JsValue::Undefined),
+            Some(m) => elements.push(JsValue::string(
+                regex_input.subject_slice(view, m.start, m.end),
+            )),
+            None => elements.push(JsValue::UNDEFINED),
         }
     }
 
-    let has_named = caps.names.iter().any(|n| n.is_some());
+    let has_named = !name_order.is_empty();
     let resolved_named = if has_named {
         Some(resolve_named_group_matches(&caps, dup_map, name_order))
     } else {
@@ -6803,8 +8212,8 @@ fn regexp_exec_raw(
             .prototype_id = None;
         for (name, m) in resolved {
             let val = match m {
-                Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
-                None => JsValue::Undefined,
+                Some(m) => JsValue::string(regex_input.subject_slice(view, m.start, m.end)),
+                None => JsValue::UNDEFINED,
             };
             interp
                 .get_object_cell_expect(groups_obj_id)
@@ -6812,34 +8221,29 @@ fn regexp_exec_raw(
                 .insert_value(name.clone(), val);
         }
         let id = groups_obj_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     } else {
-        JsValue::Undefined
+        JsValue::UNDEFINED
     };
 
     let result = interp.create_array(elements);
-    if let JsValue::Object(ref ro) = result
-        && let Some(robj) = interp.get_object(ro.id)
+    if let Some(ro_id) = result.as_object_id()
+        && let Some(robj) = interp.get_object(ro_id)
     {
         robj.borrow_mut().insert_value(
             "index".to_string(),
-            JsValue::Number(match_start_utf16 as f64),
+            JsValue::number(match_start_utf16 as f64),
         );
         robj.borrow_mut().insert_value(
             "input".to_string(),
-            JsValue::String(JsString::from_str(input)),
+            JsValue::string(regex_input.subject.clone()),
         );
         robj.borrow_mut()
             .insert_value("groups".to_string(), groups_val.clone());
 
         if has_indices {
-            let cap_byte_to_utf16 = |offset: usize| -> usize {
-                if is_bytes_mode {
-                    wtf8_byte_offset_to_utf16(&wtf8_bytes, offset)
-                } else {
-                    byte_offset_to_utf16(input, offset)
-                }
-            };
+            let cap_byte_to_utf16 =
+                |offset: usize| -> usize { regex_input.byte_offset_to_utf16(view, offset) };
             let mut index_pairs: Vec<JsValue> = Vec::new();
             for i in 0..caps.len() {
                 match caps.get(i) {
@@ -6847,12 +8251,12 @@ fn regexp_exec_raw(
                         let cap_start = cap_byte_to_utf16(m.start);
                         let cap_end = cap_byte_to_utf16(m.end);
                         let pair = interp.create_array(vec![
-                            JsValue::Number(cap_start as f64),
-                            JsValue::Number(cap_end as f64),
+                            JsValue::number(cap_start as f64),
+                            JsValue::number(cap_end as f64),
                         ]);
                         index_pairs.push(pair);
                     }
-                    None => index_pairs.push(JsValue::Undefined),
+                    None => index_pairs.push(JsValue::UNDEFINED),
                 }
             }
             let indices_arr = interp.create_array(index_pairs);
@@ -6868,30 +8272,28 @@ fn regexp_exec_raw(
                             let cap_start = cap_byte_to_utf16(m.start);
                             let cap_end = cap_byte_to_utf16(m.end);
                             interp.create_array(vec![
-                                JsValue::Number(cap_start as f64),
-                                JsValue::Number(cap_end as f64),
+                                JsValue::number(cap_start as f64),
+                                JsValue::number(cap_end as f64),
                             ])
                         }
-                        None => JsValue::Undefined,
+                        None => JsValue::UNDEFINED,
                     };
                     interp
                         .get_object_cell_expect(idx_groups_id)
                         .borrow_mut()
                         .insert_value(name.clone(), val);
                 }
-                if let JsValue::Object(ref io) = indices_arr
-                    && let Some(iobj) = interp.get_object_cell(io.id)
+                if let Some(io_id) = indices_arr.as_object_id()
+                    && let Some(iobj) = interp.get_object_cell(io_id)
                 {
-                    iobj.borrow_mut().insert_value(
-                        "groups".to_string(),
-                        JsValue::Object(crate::types::JsObject { id: idx_groups_id }),
-                    );
+                    iobj.borrow_mut()
+                        .insert_value("groups".to_string(), JsValue::object(idx_groups_id));
                 }
-            } else if let JsValue::Object(ref io) = indices_arr
-                && let Some(iobj) = interp.get_object_cell(io.id)
+            } else if let Some(io_id) = indices_arr.as_object_id()
+                && let Some(iobj) = interp.get_object_cell(io_id)
             {
                 iobj.borrow_mut()
-                    .insert_value("groups".to_string(), JsValue::Undefined);
+                    .insert_value("groups".to_string(), JsValue::UNDEFINED);
             }
             robj.borrow_mut()
                 .insert_value("indices".to_string(), indices_arr);
@@ -6900,14 +8302,11 @@ fn regexp_exec_raw(
     Completion::Normal(result)
 }
 
-fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
-    interp.get_global_var_ref("Symbol").and_then(|sv| {
-        if let JsValue::Object(so) = sv {
-            Some(to_js_string(&interp.get_property_on_id(so.id, name)))
-        } else {
-            None
-        }
-    })
+fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<JsPropertyKey> {
+    interp
+        .well_known_symbols
+        .get(name)
+        .map(crate::types::JsSymbol::to_property_key)
 }
 
 impl Interpreter {
@@ -6919,9 +8318,9 @@ impl Interpreter {
             "exec".to_string(),
             1,
             |interp, this_val, args| {
-                let obj_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let obj_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.exec requires that 'this' be an Object",
                         ));
@@ -6934,19 +8333,19 @@ impl Interpreter {
                         "RegExp.prototype.exec requires that 'this' be a RegExp object",
                     ));
                 }
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (input, code_units) = match to_regex_input_with_units(interp, &arg) {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
                 if let Some((source, flags, obj_id)) = extract_source_flags(interp, this_val) {
-                    return regexp_exec_raw(interp, obj_id, &source, &flags, &input, &code_units);
+                    return regexp_exec_raw(interp, obj_id, &source, &flags, &input);
                 }
-                Completion::Normal(JsValue::Null)
+                Completion::Normal(JsValue::NULL)
             },
         ));
-        if let JsValue::Object(ref o) = exec_fn {
-            self.realm_mut().builtin_regexp_exec_id = Some(o.id);
+        if let Some(exec_id) = exec_fn.as_object_id() {
+            self.realm_mut().builtin_regexp_exec_id = Some(exec_id);
         }
         self.get_object_cell_expect(regexp_proto_id)
             .borrow_mut()
@@ -6957,24 +8356,22 @@ impl Interpreter {
             "test".to_string(),
             1,
             |interp, this_val, args| {
-                let obj_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let obj_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.test requires that 'this' be an Object",
                         ));
                     }
                 };
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (input, input_cu) = match to_regex_input_with_units(interp, &arg) {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                let result = regexp_exec_abstract(interp, obj_id, &input, &input_cu);
+                let result = regexp_exec_abstract(interp, obj_id, &input);
                 match result {
-                    Completion::Normal(v) => {
-                        Completion::Normal(JsValue::Boolean(!matches!(v, JsValue::Null)))
-                    }
+                    Completion::Normal(v) => Completion::Normal(JsValue::boolean(!v.is_null())),
                     other => other,
                 }
             },
@@ -6988,9 +8385,9 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this_val, _args| {
-                let obj_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let obj_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.toString requires that 'this' be an Object",
                         ));
@@ -7014,7 +8411,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                Completion::Normal(JsValue::string(JsString::from_str(&format!(
                     "/{}/{}",
                     source, flags
                 ))))
@@ -7031,9 +8428,9 @@ impl Interpreter {
             2,
             move |interp, this_val, args| {
                 // 1. Let O be the this value.
-                let obj_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let obj_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.compile requires that 'this' be an Object",
                         ));
@@ -7059,16 +8456,16 @@ impl Interpreter {
                     ));
                 }
 
-                let pattern_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let flags_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let pattern_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let flags_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                let (pattern_str, flags_str);
+                let flags_str;
                 let pattern_js: Option<JsString>;
 
                 // 3. If pattern is a RegExp object
-                let pattern_is_regexp = if let JsValue::Object(po) = &pattern_arg {
+                let pattern_is_regexp = if let Some(po_id) = pattern_arg.as_object_id() {
                     interp
-                        .get_object_cell(po.id)
+                        .get_object_cell(po_id)
                         .map(|o| o.borrow().class_name == "RegExp")
                         .unwrap_or(false)
                 } else {
@@ -7077,37 +8474,34 @@ impl Interpreter {
 
                 if pattern_is_regexp {
                     // a. If flags is not undefined, throw a TypeError exception.
-                    if !matches!(flags_arg, JsValue::Undefined) {
+                    if !flags_arg.is_undefined() {
                         return Completion::Throw(interp.create_type_error(
                             "Cannot supply flags when constructing one RegExp from another",
                         ));
                     }
                     // b. Let P be pattern.[[OriginalSource]].
                     // c. Let F be pattern.[[OriginalFlags]].
-                    let po_id = if let JsValue::Object(po) = &pattern_arg {
-                        po.id
+                    let po_id = if let Some(id) = pattern_arg.as_object_id() {
+                        id
                     } else {
                         unreachable!()
                     };
                     if let Some(pobj) = interp.get_object_cell(po_id) {
                         let b = pobj.borrow();
                         if let Some(r) = b.regexp() {
-                            pattern_str = js_string_to_regex_input(&r.source.code_units);
                             pattern_js = Some(r.source.clone());
                             flags_str = r.flags.to_rust_string();
                         } else {
-                            pattern_str = "(?:)".to_string();
                             pattern_js = None;
                             flags_str = String::new();
                         }
                     } else {
-                        pattern_str = "(?:)".to_string();
                         pattern_js = None;
                         flags_str = String::new();
                     }
                 } else {
                     // 4. Let P be pattern, let F be flags.
-                    let p_js = if matches!(pattern_arg, JsValue::Undefined) {
+                    let p_js = if pattern_arg.is_undefined() {
                         JsString::from_str("")
                     } else {
                         match interp.to_js_string(&pattern_arg) {
@@ -7115,9 +8509,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    pattern_str = js_string_to_regex_input(&p_js.code_units);
                     pattern_js = Some(p_js);
-                    flags_str = if matches!(flags_arg, JsValue::Undefined) {
+                    flags_str = if flags_arg.is_undefined() {
                         String::new()
                     } else {
                         match interp.to_string_value(&flags_arg) {
@@ -7126,6 +8519,11 @@ impl Interpreter {
                         }
                     };
                 }
+
+                let pattern_str = pattern_js
+                    .as_ref()
+                    .map(|pattern| js_string_to_regex_pattern(&pattern.code_units, &flags_str))
+                    .unwrap_or_else(|| "(?:)".to_string());
 
                 // Validate flags: no invalid chars and no duplicates
                 {
@@ -7187,16 +8585,16 @@ impl Interpreter {
             "[Symbol.match]".to_string(),
             1,
             |interp, this_val, args| {
-                let rx_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let rx_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype[@@match] requires that 'this' be an Object",
                         ));
                     }
                 };
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (s, s_cu) = match to_regex_input_with_units(interp, &arg) {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -7205,7 +8603,7 @@ impl Interpreter {
                 // Per spec, must invoke the flags accessor chain so user overrides of
                 // `flags`/`global`/`unicode`/etc. on the instance or prototype take effect.
                 let flags_str = {
-                    let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                    let rx_val = JsValue::object(rx_id);
                     let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -7219,7 +8617,7 @@ impl Interpreter {
                 // 5. If flags does not contain "g", then
                 if !flags_str.contains('g') {
                     // a. Return ? RegExpExec(rx, S).
-                    return regexp_exec_abstract(interp, rx_id, &s, &s_cu);
+                    return regexp_exec_abstract(interp, rx_id, &regex_input);
                 }
 
                 // 6. Let fullUnicode be flags contains "u" or "v".
@@ -7243,61 +8641,45 @@ impl Interpreter {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let r = b.regexp().unwrap();
+                        let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_input(&r.source.code_units),
-                            r.flags.to_rust_string(),
+                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            flags,
                         )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
                         Ok(r) => r,
-                        Err(_) => return Completion::Normal(JsValue::Null),
+                        Err(_) => return Completion::Normal(JsValue::NULL),
                     };
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = flags_owned.contains('y');
-                    let non_unicode_input;
                     let unicode = flags_owned.contains('u') || flags_owned.contains('v');
-                    let input = if is_bytes_mode {
-                        &s
-                    } else if !unicode {
-                        non_unicode_input = split_surrogates_for_non_unicode(&s);
-                        &non_unicode_input
-                    } else {
-                        &s
-                    };
-                    let wtf8_bytes = if is_bytes_mode {
-                        js_code_units_to_wtf8(&s_cu)
-                    } else {
-                        Vec::new()
-                    };
-                    let input_utf16_len: usize = input
-                        .chars()
-                        .map(|c| {
-                            if pua_to_surrogate(c).is_some() {
-                                1
-                            } else {
-                                c.len_utf16()
-                            }
-                        })
-                        .sum();
+                    let view = RegexView::select(is_bytes_mode, unicode);
+                    let input_utf16_len = regex_input.subject.len();
                     let mut results: Vec<JsValue> = Vec::new();
                     let mut last_index_utf16: usize = 0;
                     loop {
                         if last_index_utf16 > input_utf16_len {
                             break;
                         }
-                        let last_index_byte = if is_bytes_mode {
-                            utf16_to_wtf8_byte_offset(&wtf8_bytes, last_index_utf16)
-                        } else {
-                            utf16_to_byte_offset(input, last_index_utf16)
-                        };
+                        let last_index_byte =
+                            regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                bytes_regex_captures_at(bytes_re, &wtf8_bytes, last_index_byte)
+                                bytes_regex_captures_at(
+                                    bytes_re,
+                                    regex_input.wtf8(),
+                                    last_index_byte,
+                                )
                             } else {
                                 unreachable!()
                             }
                         } else {
-                            regex_captures_at(&cached.compiled, input, last_index_byte)
+                            regex_captures_at(
+                                &cached.compiled,
+                                regex_input.as_str(unicode),
+                                last_index_byte,
+                            )
                         };
                         let Some(caps) = caps else { break };
                         let full_match = caps.get(0).unwrap();
@@ -7306,26 +8688,23 @@ impl Interpreter {
                         if sticky && full_match.start != last_index_byte {
                             break;
                         }
-                        let match_text = &full_match.text;
-                        let match_end_utf16 = if is_bytes_mode {
-                            wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
-                        } else {
-                            byte_offset_to_utf16(input, full_match.end)
-                        };
+                        let match_end_utf16 =
+                            regex_input.byte_offset_to_utf16(view, full_match.end);
 
-                        results.push(JsValue::String(regex_output_to_js_string(match_text)));
+                        results.push(JsValue::string(regex_input.subject_slice(
+                            view,
+                            full_match.start,
+                            full_match.end,
+                        )));
 
-                        if match_text.is_empty() {
-                            let match_start_utf16 = if is_bytes_mode {
-                                wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.start)
-                            } else {
-                                byte_offset_to_utf16(input, full_match.start)
-                            };
+                        if full_match.start == full_match.end {
+                            let match_start_utf16 =
+                                regex_input.byte_offset_to_utf16(view, full_match.start);
                             // AdvanceStringIndex per spec operates on the original S, not the
                             // possibly-preprocessed `input` — full_unicode must be able to detect
                             // real surrogate pairs in S even when the matcher runs on a split form.
                             last_index_utf16 =
-                                advance_string_index(&s, match_start_utf16, full_unicode);
+                                advance_string_index(&regex_input, match_start_utf16, full_unicode);
                         } else {
                             last_index_utf16 = match_end_utf16;
                         }
@@ -7335,7 +8714,7 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                     return if results.is_empty() {
-                        Completion::Normal(JsValue::Null)
+                        Completion::Normal(JsValue::NULL)
                     } else {
                         Completion::Normal(interp.create_array(results))
                     };
@@ -7344,14 +8723,12 @@ impl Interpreter {
                 // Slow path: go through regexp_exec_abstract
                 let mut results: Vec<JsValue> = Vec::new();
                 loop {
-                    let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
+                    let result = regexp_exec_abstract(interp, rx_id, &regex_input);
                     match result {
-                        Completion::Normal(JsValue::Null) => break,
-                        Completion::Normal(ref result_val)
-                            if matches!(result_val, JsValue::Object(_)) =>
-                        {
-                            let result_id = if let JsValue::Object(o) = result_val {
-                                o.id
+                        Completion::Normal(ref v) if v.is_null() => break,
+                        Completion::Normal(ref result_val) if result_val.is_object() => {
+                            let result_id = if let Some(id) = result_val.as_object_id() {
+                                id
                             } else {
                                 unreachable!()
                             };
@@ -7366,9 +8743,9 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             let is_empty = match_js_str.code_units.is_empty();
-                            results.push(JsValue::String(match_js_str));
+                            results.push(JsValue::string(match_js_str));
                             if is_empty {
-                                let rx_val2 = JsValue::Object(crate::types::JsObject { id: rx_id });
+                                let rx_val2 = JsValue::object(rx_id);
                                 let li_val = match interp.get_object_property(
                                     rx_id,
                                     "lastIndex",
@@ -7386,7 +8763,8 @@ impl Interpreter {
                                 } else {
                                     li_num.min(9007199254740991.0).floor() as usize
                                 };
-                                let next_index = advance_string_index(&s, this_index, full_unicode);
+                                let next_index =
+                                    advance_string_index(&regex_input, this_index, full_unicode);
                                 if let Err(e) =
                                     set_last_index_strict(interp, rx_id, next_index as f64)
                                 {
@@ -7399,7 +8777,7 @@ impl Interpreter {
                     }
                 }
                 if results.is_empty() {
-                    Completion::Normal(JsValue::Null)
+                    Completion::Normal(JsValue::NULL)
                 } else {
                     Completion::Normal(interp.create_array(results))
                 }
@@ -7416,20 +8794,20 @@ impl Interpreter {
             "[Symbol.search]".to_string(),
             1,
             |interp, this_val, args| {
-                let rx_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let rx_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype[@@search] requires that 'this' be an Object",
                         ));
                     }
                 };
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (s, s_cu) = match to_regex_input_with_units(interp, &arg) {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                let rx_val = JsValue::object(rx_id);
 
                 // 4. Let previousLastIndex be ? Get(rx, "lastIndex").
                 let previous_last_index =
@@ -7440,14 +8818,14 @@ impl Interpreter {
 
                 // 5. If SameValue(previousLastIndex, +0𝔽) is false, then
                 //    a. Perform ? Set(rx, "lastIndex", +0𝔽, true).
-                if !same_value(&previous_last_index, &JsValue::Number(0.0))
-                    && let Err(e) = spec_set(interp, rx_id, "lastIndex", JsValue::Number(0.0), true)
+                if !same_value(&previous_last_index, &JsValue::number(0.0))
+                    && let Err(e) = spec_set(interp, rx_id, "lastIndex", JsValue::number(0.0), true)
                 {
                     return Completion::Throw(e);
                 }
 
                 // 6. Let result be ? RegExpExec(rx, S).
-                let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
+                let result = regexp_exec_abstract(interp, rx_id, &regex_input);
                 let result_val = match result {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -7469,18 +8847,18 @@ impl Interpreter {
                 }
 
                 // 9. If result is null, return -1𝔽.
-                if matches!(result_val, JsValue::Null) {
-                    return Completion::Normal(JsValue::Number(-1.0));
+                if result_val.is_null() {
+                    return Completion::Normal(JsValue::number(-1.0));
                 }
 
                 // 10. Return ? Get(result, "index").
-                if let JsValue::Object(ref o) = result_val {
-                    match interp.get_object_property(o.id, "index", &result_val) {
+                if let Some(res_id) = result_val.as_object_id() {
+                    match interp.get_object_property(res_id, "index", &result_val) {
                         Completion::Normal(v) => Completion::Normal(v),
                         other => other,
                     }
                 } else {
-                    Completion::Normal(JsValue::Number(-1.0))
+                    Completion::Normal(JsValue::number(-1.0))
                 }
             },
         ));
@@ -7497,9 +8875,9 @@ impl Interpreter {
             |interp, this_val, args| {
                 // 1. Let rx be the this value.
                 // 2. If Type(rx) is not Object, throw a TypeError.
-                let rx_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let rx_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         let err = interp.create_type_error(
                             "RegExp.prototype[@@replace] requires that 'this' be an Object",
                         );
@@ -7508,27 +8886,20 @@ impl Interpreter {
                 };
 
                 // 3. Let S be ? ToString(string).
-                let string_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (s, s_cu) = match to_regex_input_with_units(interp, &string_arg) {
+                let string_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let regex_input = match regex_input_for_value(interp, &string_arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                // Non-unicode version for string slicing (surrogates kept as
-                // individual PUA chars so UTF-16 indexing works correctly)
-                let s_slice = match &string_arg {
-                    JsValue::String(js) => js_string_to_regex_input_non_unicode(&js.code_units),
-                    _ => s.clone(),
-                };
-                let length_s = s_slice.len();
-                let s_utf16_len = pua_aware_utf16_len(&s_slice);
+                let s_utf16_len = regex_input.subject.len();
 
                 // 5. Let functionalReplace be IsCallable(replaceValue).
-                let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let replace_value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let functional_replace = interp.is_callable(&replace_value);
 
                 // 6. If functionalReplace is false, set replaceValue to ? ToString(replaceValue).
                 let replace_str = if !functional_replace {
-                    match interp.to_string_value(&replace_value) {
+                    match interp.to_js_string(&replace_value) {
                         Ok(s) => Some(s),
                         Err(e) => return Completion::Throw(e),
                     }
@@ -7538,7 +8909,7 @@ impl Interpreter {
 
                 // 7. Let flags be ? ToString(? Get(rx, "flags")).
                 let flags = {
-                    let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                    let rx_val = JsValue::object(rx_id);
                     let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -7582,48 +8953,27 @@ impl Interpreter {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let r = b.regexp().unwrap();
+                        let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_input(&r.source.code_units),
-                            r.flags.to_rust_string(),
+                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            flags,
                         )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
                         Ok(r) => r,
                         Err(_) => {
-                            return Completion::Normal(JsValue::String(regex_output_to_js_string(
-                                &s_slice,
-                            )));
+                            return Completion::Normal(JsValue::string(
+                                regex_input.subject.clone(),
+                            ));
                         }
                     };
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = flags_owned.contains('y');
                     let unicode = flags_owned.contains('u') || flags_owned.contains('v');
-                    let non_unicode_input;
-                    let input = if is_bytes_mode {
-                        &s
-                    } else if !unicode {
-                        non_unicode_input = split_surrogates_for_non_unicode(&s);
-                        &non_unicode_input
-                    } else {
-                        &s
-                    };
-                    let wtf8_bytes = if is_bytes_mode {
-                        js_code_units_to_wtf8(&s_cu)
-                    } else {
-                        Vec::new()
-                    };
-                    let input_utf16_len: usize = input
-                        .chars()
-                        .map(|c| {
-                            if pua_to_surrogate(c).is_some() {
-                                1
-                            } else {
-                                c.len_utf16()
-                            }
-                        })
-                        .sum();
+                    let view = RegexView::select(is_bytes_mode, unicode);
+                    let input_utf16_len = regex_input.subject.len();
                     let template = replace_str.as_ref().unwrap();
-                    let mut accumulated_result = String::new();
+                    let mut accumulated_result = Vec::new();
                     let mut next_source_position: usize = 0;
                     let mut last_index_utf16: usize = 0;
 
@@ -7631,16 +8981,13 @@ impl Interpreter {
                         if last_index_utf16 > input_utf16_len {
                             break;
                         }
-                        let last_index_byte = if is_bytes_mode {
-                            utf16_to_wtf8_byte_offset(&wtf8_bytes, last_index_utf16)
-                        } else {
-                            utf16_to_byte_offset(input, last_index_utf16)
-                        };
+                        let last_index_byte =
+                            regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let mut caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
                                 match bytes_regex_captures_at(
                                     bytes_re,
-                                    &wtf8_bytes,
+                                    regex_input.wtf8(),
                                     last_index_byte,
                                 ) {
                                     Some(c) => c,
@@ -7650,7 +8997,11 @@ impl Interpreter {
                                 unreachable!()
                             }
                         } else {
-                            match regex_captures_at(&cached.compiled, input, last_index_byte) {
+                            match regex_captures_at(
+                                &cached.compiled,
+                                regex_input.as_str(unicode),
+                                last_index_byte,
+                            ) {
                                 Some(c) => c,
                                 None => break,
                             }
@@ -7662,36 +9013,31 @@ impl Interpreter {
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
                         reset_quantifier_inner_captures(&mut caps, &source);
+                        ensure_capture_slots(&mut caps, cached.total_groups);
 
                         let full_match = caps.get(0).unwrap();
-                        let matched = &full_match.text;
-                        let match_start_utf16 = if is_bytes_mode {
-                            wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.start)
-                        } else {
-                            byte_offset_to_utf16(input, full_match.start)
-                        };
-                        let match_end_utf16 = if is_bytes_mode {
-                            wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
-                        } else {
-                            byte_offset_to_utf16(input, full_match.end)
-                        };
-                        let match_length_utf16 =
-                            regex_output_to_js_string(matched).code_units.len();
+                        let match_start_utf16 =
+                            regex_input.byte_offset_to_utf16(view, full_match.start);
+                        let match_end_utf16 =
+                            regex_input.byte_offset_to_utf16(view, full_match.end);
+                        let match_length_utf16 = match_end_utf16 - match_start_utf16;
                         let position_utf16 = match_start_utf16;
-                        let position = utf16_to_byte_offset(&s_slice, position_utf16).min(length_s);
+                        let matched =
+                            regex_input.subject_slice(view, full_match.start, full_match.end);
 
                         // Build captures as JsValues for get_substitution
                         let mut capture_vals: Vec<JsValue> = Vec::new();
                         for i in 1..caps.len() {
                             match caps.get(i) {
-                                Some(m) => capture_vals
-                                    .push(JsValue::String(regex_output_to_js_string(&m.text))),
-                                None => capture_vals.push(JsValue::Undefined),
+                                Some(m) => capture_vals.push(JsValue::string(
+                                    regex_input.subject_slice(view, m.start, m.end),
+                                )),
+                                None => capture_vals.push(JsValue::UNDEFINED),
                             }
                         }
 
                         // Named captures
-                        let has_named = caps.names.iter().any(|n| n.is_some());
+                        let has_named = !cached.name_order.is_empty();
                         let named_captures_obj = if has_named {
                             let groups_obj_id = interp.create_object_id();
                             interp
@@ -7700,7 +9046,7 @@ impl Interpreter {
                                 .prototype_id = None;
                             for orig_name in &cached.name_order {
                                 if let Some(variants) = cached.dup_map.get(orig_name as &str) {
-                                    let mut matched_val = JsValue::Undefined;
+                                    let mut matched_val = JsValue::UNDEFINED;
                                     for (internal_name, _) in variants {
                                         let sanitized = sanitize_group_name(internal_name);
                                         for (i, name_opt) in caps.names.iter().enumerate() {
@@ -7708,13 +9054,13 @@ impl Interpreter {
                                                 && *n == sanitized
                                                 && let Some(m) = caps.get(i)
                                             {
-                                                matched_val = JsValue::String(
-                                                    regex_output_to_js_string(&m.text),
+                                                matched_val = JsValue::string(
+                                                    regex_input.subject_slice(view, m.start, m.end),
                                                 );
                                                 break;
                                             }
                                         }
-                                        if !matches!(matched_val, JsValue::Undefined) {
+                                        if !matched_val.is_undefined() {
                                             break;
                                         }
                                     }
@@ -7724,16 +9070,16 @@ impl Interpreter {
                                         .insert_value(orig_name.clone(), matched_val);
                                 } else {
                                     let sanitized = sanitize_group_name(orig_name);
-                                    let mut val = JsValue::Undefined;
+                                    let mut val = JsValue::UNDEFINED;
                                     for (i, name_opt) in caps.names.iter().enumerate() {
                                         if let Some(n) = name_opt
                                             && *n == sanitized
                                         {
                                             val = match caps.get(i) {
-                                                Some(m) => JsValue::String(
-                                                    regex_output_to_js_string(&m.text),
+                                                Some(m) => JsValue::string(
+                                                    regex_input.subject_slice(view, m.start, m.end),
                                                 ),
-                                                None => JsValue::Undefined,
+                                                None => JsValue::UNDEFINED,
                                             };
                                             break;
                                         }
@@ -7745,48 +9091,48 @@ impl Interpreter {
                                 }
                             }
                             let groups_id = groups_obj_id;
-                            JsValue::Object(crate::types::JsObject { id: groups_id })
+                            JsValue::object(groups_id)
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
 
                         let named_captures_for_sub = if !named_captures_obj.is_undefined() {
                             match interp.to_object(&named_captures_obj) {
                                 Completion::Normal(v) => v,
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
-                        let tail_pos = utf16_to_byte_offset(
-                            &s_slice,
-                            (position_utf16 + match_length_utf16).min(s_utf16_len),
-                        );
+                        let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         let replacement = match get_substitution(
                             interp,
-                            matched,
-                            &s_slice,
-                            position,
+                            &matched.code_units,
+                            &regex_input.subject.code_units,
+                            position_utf16,
                             tail_pos,
                             &capture_vals,
                             &named_captures_for_sub,
-                            template,
+                            &template.code_units,
                         ) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         };
 
-                        if position >= next_source_position {
-                            accumulated_result.push_str(&s_slice[next_source_position..position]);
-                            accumulated_result.push_str(&replacement);
+                        if position_utf16 >= next_source_position {
+                            accumulated_result.extend_from_slice(
+                                &regex_input.subject.code_units
+                                    [next_source_position..position_utf16],
+                            );
+                            accumulated_result.extend_from_slice(&replacement);
                             next_source_position = tail_pos;
                         }
 
                         // Advance past match — AdvanceStringIndex per spec operates on the
                         // original S, not the possibly-preprocessed `input`.
-                        if matched.is_empty() {
+                        if full_match.start == full_match.end {
                             last_index_utf16 =
-                                advance_string_index(&s, match_start_utf16, full_unicode);
+                                advance_string_index(&regex_input, match_start_utf16, full_unicode);
                         } else {
                             last_index_utf16 = match_end_utf16;
                         }
@@ -7795,11 +9141,13 @@ impl Interpreter {
                     if let Err(e) = set_last_index_strict(interp, rx_id, 0.0) {
                         return Completion::Throw(e);
                     }
-                    if next_source_position < length_s {
-                        accumulated_result.push_str(&s_slice[next_source_position..]);
+                    if next_source_position < s_utf16_len {
+                        accumulated_result.extend_from_slice(
+                            &regex_input.subject.code_units[next_source_position..],
+                        );
                     }
-                    return Completion::Normal(JsValue::String(regex_output_to_js_string(
-                        &accumulated_result,
+                    return Completion::Normal(JsValue::string(JsString::from_vec(
+                        accumulated_result,
                     )));
                 }
 
@@ -7808,15 +9156,13 @@ impl Interpreter {
                 let gc_root_start = interp.gc_temp_roots.len();
                 loop {
                     // 11a. Let result be ? RegExpExec(rx, S).
-                    let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
+                    let result = regexp_exec_abstract(interp, rx_id, &regex_input);
                     match result {
-                        Completion::Normal(JsValue::Null) => break,
-                        Completion::Normal(ref result_val)
-                            if matches!(result_val, JsValue::Object(_)) =>
-                        {
+                        Completion::Normal(ref v) if v.is_null() => break,
+                        Completion::Normal(ref result_val) if result_val.is_object() => {
                             let result_obj = result_val.clone();
-                            if let JsValue::Object(ref o) = result_obj {
-                                interp.gc_temp_roots.push(o.id);
+                            if let Some(res_id) = result_obj.as_object_id() {
+                                interp.gc_temp_roots.push(res_id);
                             }
                             results.push(result_obj.clone());
 
@@ -7825,8 +9171,8 @@ impl Interpreter {
                             }
 
                             // For global: check if match is empty and advance
-                            let result_id = if let JsValue::Object(ref o) = result_obj {
-                                o.id
+                            let result_id = if let Some(id) = result_obj.as_object_id() {
+                                id
                             } else {
                                 unreachable!()
                             };
@@ -7847,7 +9193,7 @@ impl Interpreter {
                             };
                             if match_str.is_empty() {
                                 // a. Let thisIndex be ? ToLength(? Get(rx, "lastIndex")).
-                                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                                let rx_val = JsValue::object(rx_id);
                                 let li_val =
                                     match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
                                         Completion::Normal(v) => v,
@@ -7871,7 +9217,8 @@ impl Interpreter {
                                     };
                                     n as usize
                                 };
-                                let next_index = advance_string_index(&s, this_index, full_unicode);
+                                let next_index =
+                                    advance_string_index(&regex_input, this_index, full_unicode);
                                 match set_last_index_strict(interp, rx_id, next_index as f64) {
                                     Ok(()) => {}
                                     Err(e) => {
@@ -7890,12 +9237,12 @@ impl Interpreter {
                 }
 
                 // 14. For each element result of results, do
-                let mut accumulated_result = String::new();
+                let mut accumulated_result = Vec::new();
                 let mut next_source_position: usize = 0;
 
                 for result_val in &results {
-                    let result_id = if let JsValue::Object(o) = result_val {
-                        o.id
+                    let result_id = if let Some(id) = result_val.as_object_id() {
+                        id
                     } else {
                         continue;
                     };
@@ -7935,18 +9282,15 @@ impl Interpreter {
                             return other;
                         }
                     };
-                    let matched = match interp.to_string_value(&matched_val) {
+                    let matched_js = match interp.to_js_string(&matched_val) {
                         Ok(s) => s,
                         Err(e) => {
                             interp.gc_temp_roots.truncate(gc_root_start);
                             return Completion::Throw(e);
                         }
                     };
-                    // Compute matchLength in UTF-16 code units for tail_pos calculation
-                    let match_length_utf16 = match &matched_val {
-                        JsValue::String(js) => js.code_units.len(),
-                        _ => matched.encode_utf16().count(),
-                    };
+                    // Compute matchLength in UTF-16 code units for tail_pos calculation.
+                    let match_length_utf16 = matched_js.code_units.len();
 
                     // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
                     let index_val = match interp.get_object_property(result_id, "index", result_val)
@@ -7957,9 +9301,7 @@ impl Interpreter {
                             return other;
                         }
                     };
-                    // Keep UTF-16 position for passing to replacement function;
-                    // convert to byte offset for string slicing in PUA-mapped string.
-                    let (position_utf16, position) = {
+                    let position_utf16 = {
                         let n = match interp.to_number_value(&index_val) {
                             Ok(n) => n,
                             Err(e) => {
@@ -7968,11 +9310,7 @@ impl Interpreter {
                             }
                         };
                         let int = to_integer_or_infinity(n);
-                        let utf16_pos = int.max(0.0) as usize;
-                        (
-                            utf16_pos,
-                            utf16_to_byte_offset(&s_slice, utf16_pos).min(length_s),
-                        )
+                        (int.max(0.0) as usize).min(s_utf16_len)
                     };
 
                     // g-i. Get captures
@@ -7988,16 +9326,16 @@ impl Interpreter {
                                 }
                             };
                         if !cap_n.is_undefined() {
-                            let cap_str = match interp.to_string_value(&cap_n) {
+                            let cap_str = match interp.to_js_string(&cap_n) {
                                 Ok(s) => s,
                                 Err(e) => {
                                     interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
                                 }
                             };
-                            captures.push(JsValue::String(JsString::from_str(&cap_str)));
+                            captures.push(JsValue::string(cap_str));
                         } else {
-                            captures.push(JsValue::Undefined);
+                            captures.push(JsValue::UNDEFINED);
                         }
                     }
 
@@ -8014,24 +9352,25 @@ impl Interpreter {
                     let replacement = if functional_replace {
                         // k. If functionalReplace is true, then
                         let mut replacer_args: Vec<JsValue> = Vec::new();
-                        replacer_args.push(JsValue::String(JsString::from_str(&matched)));
+                        replacer_args.push(JsValue::string(matched_js));
                         for cap in &captures {
                             replacer_args.push(cap.clone());
                         }
-                        // Pass UTF-16 position and the primitive string S (non-PUA)
-                        replacer_args.push(JsValue::Number(position_utf16 as f64));
-                        replacer_args.push(JsValue::String(regex_output_to_js_string(&s_slice)));
+                        // Pass UTF-16 position and the primitive string S itself,
+                        // rather than re-decoding the PUA view once per match.
+                        replacer_args.push(JsValue::number(position_utf16 as f64));
+                        replacer_args.push(JsValue::string(regex_input.subject.clone()));
                         if !named_captures.is_undefined() {
                             replacer_args.push(named_captures.clone());
                         }
                         let repl_val = interp.call_function(
                             &replace_value,
-                            &JsValue::Undefined,
+                            &JsValue::UNDEFINED,
                             &replacer_args,
                         );
                         match repl_val {
-                            Completion::Normal(v) => match interp.to_string_value(&v) {
-                                Ok(s) => s,
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
+                                Ok(s) => s.code_units.to_vec(),
                                 Err(e) => {
                                     interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
@@ -8053,24 +9392,21 @@ impl Interpreter {
                                     interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
                                 }
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
-                        let tail_pos = utf16_to_byte_offset(
-                            &s_slice,
-                            (position_utf16 + match_length_utf16).min(s_utf16_len),
-                        );
+                        let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         match get_substitution(
                             interp,
-                            &matched,
-                            &s_slice,
-                            position,
+                            &matched_js.code_units,
+                            &regex_input.subject.code_units,
+                            position_utf16,
                             tail_pos,
                             &captures,
                             &named_captures_obj,
-                            template,
+                            &template.code_units,
                         ) {
                             Ok(s) => s,
                             Err(e) => {
@@ -8081,13 +9417,12 @@ impl Interpreter {
                     };
 
                     // p. If position >= nextSourcePosition, then
-                    let tail_pos_final = utf16_to_byte_offset(
-                        &s_slice,
-                        (position_utf16 + match_length_utf16).min(s_utf16_len),
-                    );
-                    if position >= next_source_position {
-                        accumulated_result.push_str(&s_slice[next_source_position..position]);
-                        accumulated_result.push_str(&replacement);
+                    let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
+                    if position_utf16 >= next_source_position {
+                        accumulated_result.extend_from_slice(
+                            &regex_input.subject.code_units[next_source_position..position_utf16],
+                        );
+                        accumulated_result.extend_from_slice(&replacement);
                         next_source_position = tail_pos_final;
                     }
                 }
@@ -8095,12 +9430,11 @@ impl Interpreter {
                 interp.gc_temp_roots.truncate(gc_root_start);
 
                 // 15. Return accumulatedResult + remainder of S.
-                if next_source_position < length_s {
-                    accumulated_result.push_str(&s_slice[next_source_position..]);
+                if next_source_position < s_utf16_len {
+                    accumulated_result
+                        .extend_from_slice(&regex_input.subject.code_units[next_source_position..]);
                 }
-                Completion::Normal(JsValue::String(regex_output_to_js_string(
-                    &accumulated_result,
-                )))
+                Completion::Normal(JsValue::string(JsString::from_vec(accumulated_result)))
             },
         ));
         if let Some(key) = get_symbol_key(self, "replace") {
@@ -8115,26 +9449,25 @@ impl Interpreter {
             2,
             |interp, this_val, args| {
                 // 1. Let rx be the this value.
-                let rx_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let rx_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype[@@split] requires that 'this' be an Object",
                         ));
                     }
                 };
                 // 2. Let S be ? ToString(string).
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (s, s_cu) = match to_regex_input_with_units(interp, &arg) {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-
                 // 3. Let C be ? SpeciesConstructor(rx, %RegExp%).
-                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                let rx_val = JsValue::object(rx_id);
                 let regexp_ctor = interp
                     .get_global_var("RegExp")
-                    .unwrap_or(JsValue::Undefined);
+                    .unwrap_or(JsValue::UNDEFINED);
                 let c = match interp.species_constructor(&rx_val, &regexp_ctor) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -8165,17 +9498,17 @@ impl Interpreter {
                     &c,
                     &[
                         rx_val.clone(),
-                        JsValue::String(JsString::from_str(&new_flags)),
+                        JsValue::string(JsString::from_str(&new_flags)),
                     ],
                     c.clone(),
                 ) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
-                let splitter_id = match &splitter_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let splitter_id = match splitter_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(
                             interp.create_type_error("splitter is not an object"),
                         );
@@ -8188,8 +9521,8 @@ impl Interpreter {
                 let mut length_a: u32 = 0;
 
                 // 10. Let lim = limit is undefined ? 2^32-1 : ToUint32(limit).
-                let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let lim: u32 = if matches!(limit, JsValue::Undefined) {
+                let limit = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                let lim: u32 = if limit.is_undefined() {
                     0xFFFFFFFF
                 } else {
                     match interp.to_number_value(&limit) {
@@ -8203,15 +9536,15 @@ impl Interpreter {
                     return Completion::Normal(interp.create_array(a));
                 }
 
-                let size = pua_aware_utf16_len(&s);
+                let size = regex_input.subject.len();
 
                 // 12. If size = 0, then
                 if size == 0 {
                     // a. Let z be ? RegExpExec(splitter, S).
-                    let z = regexp_exec_abstract(interp, splitter_id, &s, &s_cu);
+                    let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
                     match z {
-                        Completion::Normal(ref v) if matches!(v, JsValue::Null) => {
-                            a.push(JsValue::String(regex_output_to_js_string(&s)));
+                        Completion::Normal(ref v) if v.is_null() => {
+                            a.push(JsValue::string(regex_input.subject.clone()));
                         }
                         Completion::Normal(_) => {}
                         other => return other,
@@ -8231,28 +9564,28 @@ impl Interpreter {
                         interp,
                         splitter_id,
                         "lastIndex",
-                        JsValue::Number(q as f64),
+                        JsValue::number(q as f64),
                         true,
                     ) {
                         return Completion::Throw(e);
                     }
 
                     // b. Let z be ? RegExpExec(splitter, S).
-                    let z = regexp_exec_abstract(interp, splitter_id, &s, &s_cu);
+                    let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
                     let z_val = match z {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
 
                     // c. If z is null, set q to AdvanceStringIndex(S, q, unicodeMatching).
-                    if matches!(z_val, JsValue::Null) {
-                        q = advance_string_index(&s, q, unicode_matching);
+                    if z_val.is_null() {
+                        q = advance_string_index(&regex_input, q, unicode_matching);
                         continue;
                     }
 
                     // d. Else,
                     //   i. Let e be ℝ(? ToLength(? Get(splitter, "lastIndex"))).
-                    let splitter_val2 = JsValue::Object(crate::types::JsObject { id: splitter_id });
+                    let splitter_val2 = JsValue::object(splitter_id);
                     let e_val = match interp.get_object_property(
                         splitter_id,
                         "lastIndex",
@@ -8273,16 +9606,15 @@ impl Interpreter {
 
                     //   ii. If e = p, set q to AdvanceStringIndex(S, q, unicodeMatching).
                     if e_length == p {
-                        q = advance_string_index(&s, q, unicode_matching);
+                        q = advance_string_index(&regex_input, q, unicode_matching);
                         continue;
                     }
 
                     //   iii. Else,
-                    // Push substring from p to q (convert UTF-16 positions to byte offsets)
-                    let p_byte = utf16_to_byte_offset(&s, p);
-                    let q_byte = utf16_to_byte_offset(&s, q);
-                    let t = &s[p_byte..q_byte];
-                    a.push(JsValue::String(regex_output_to_js_string(t)));
+                    // Push the substring of the original S from p to q.
+                    a.push(JsValue::string(JsString::from_vec(
+                        regex_input.subject.code_units[p..q].to_vec(),
+                    )));
                     length_a += 1;
                     if length_a == lim {
                         return Completion::Normal(interp.create_array(a));
@@ -8292,10 +9624,10 @@ impl Interpreter {
                     p = e_length;
 
                     // Get captures from z
-                    let z_id = match &z_val {
-                        JsValue::Object(o) => o.id,
-                        _ => {
-                            q = advance_string_index(&s, q, unicode_matching);
+                    let z_id = match z_val.as_object_id() {
+                        Some(id) => id,
+                        None => {
+                            q = advance_string_index(&regex_input, q, unicode_matching);
                             continue;
                         }
                     };
@@ -8335,9 +9667,9 @@ impl Interpreter {
                 }
 
                 // 16. Push remaining substring
-                let p_byte = utf16_to_byte_offset(&s, p);
-                let t = &s[p_byte..];
-                a.push(JsValue::String(regex_output_to_js_string(t)));
+                a.push(JsValue::string(JsString::from_vec(
+                    regex_input.subject.code_units[p..].to_vec(),
+                )));
                 Completion::Normal(interp.create_array(a))
             },
         ));
@@ -8353,26 +9685,26 @@ impl Interpreter {
             1,
             |interp, this_val, args| {
                 // 1. Let R be the this value.
-                let rx_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let rx_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype[@@matchAll] requires that 'this' be an Object",
                         ));
                     }
                 };
                 // 2. Let S be ? ToString(string).
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (s, _s_cu) = match to_regex_input_with_units(interp, &arg) {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let regex_input = match regex_input_for_value(interp, &arg) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
 
                 // 3. Let C be ? SpeciesConstructor(R, %RegExp%).
-                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                let rx_val = JsValue::object(rx_id);
                 let regexp_ctor = interp
                     .get_global_var("RegExp")
-                    .unwrap_or(JsValue::Undefined);
+                    .unwrap_or(JsValue::UNDEFINED);
                 let c = match interp.species_constructor(&rx_val, &regexp_ctor) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -8393,16 +9725,16 @@ impl Interpreter {
                 // 5. Let matcher be ? Construct(C, « R, flags »).
                 let matcher_val = match interp.construct_with_new_target(
                     &c,
-                    &[rx_val.clone(), JsValue::String(JsString::from_str(&flags))],
+                    &[rx_val.clone(), JsValue::string(JsString::from_str(&flags))],
                     c.clone(),
                 ) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
-                let matcher_id = match &matcher_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
+                let matcher_id = match matcher_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(
                             interp.create_type_error("matcher is not an object"),
                         );
@@ -8429,7 +9761,7 @@ impl Interpreter {
                     interp,
                     matcher_id,
                     "lastIndex",
-                    JsValue::Number(last_index),
+                    JsValue::number(last_index),
                     true,
                 ) {
                     return Completion::Throw(e);
@@ -8467,14 +9799,14 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_value(
                         "__matcher__".to_string(),
-                        JsValue::Number(matcher_id as f64),
+                        JsValue::number(matcher_id as f64),
                     );
                 interp
                     .get_object_cell_expect(iter_obj_id)
                     .borrow_mut()
                     .insert_value(
                         "__full_unicode__".to_string(),
-                        JsValue::Boolean(full_unicode),
+                        JsValue::boolean(full_unicode),
                     );
 
                 interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
@@ -8482,7 +9814,7 @@ impl Interpreter {
                         IteratorState::RegExpStringIterator {
                             source: m_source,
                             flags: m_flags,
-                            string: s,
+                            string: regex_input.subject.clone(),
                             global,
                             last_index: last_index as usize,
                             done: false,
@@ -8490,7 +9822,7 @@ impl Interpreter {
                     );
 
                 let id = iter_obj_id;
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
         if let Some(key) = get_symbol_key(self, "matchAll") {
@@ -8518,15 +9850,15 @@ impl Interpreter {
             "next".to_string(),
             0,
             |interp, this_val, _args| {
-                let o = match this_val {
-                    JsValue::Object(o) => o,
-                    _ => {
+                let o_id = match this_val.as_object_id() {
+                    Some(id) => id,
+                    None => {
                         return Completion::Throw(interp.create_type_error(
                             "%RegExpStringIteratorPrototype%.next requires that 'this' be an Object",
                         ));
                     }
                 };
-                let obj = match interp.get_object_cell(o.id) {
+                let obj = match interp.get_object_cell(o_id) {
                     Some(obj) => obj,
                     None => {
                         return Completion::Throw(interp.create_type_error(
@@ -8535,9 +9867,9 @@ impl Interpreter {
                     }
                 };
                 let state = obj.borrow().iterator_state().cloned();
-                let matcher_id_val = interp.get_property_on_id(o.id, "__matcher__");
-                let full_unicode_val = interp.get_property_on_id(o.id, "__full_unicode__");
-                let full_unicode = matches!(full_unicode_val, JsValue::Boolean(true));
+                let matcher_id_val = interp.get_property_on_id(o_id, "__matcher__");
+                let full_unicode_val = interp.get_property_on_id(o_id, "__full_unicode__");
+                let full_unicode = full_unicode_val.as_boolean() == Some(true);
 
                 let (source, flags, string, global, last_index, done) =
                     if let Some(IteratorState::RegExpStringIterator {
@@ -8565,34 +9897,36 @@ impl Interpreter {
 
                 if done {
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 }
 
+                let regex_input = regex_input_for_subject(interp, string.clone());
+                let regex_string = regex_input.as_str(true);
+
                 // If we have a matcher object, use RegExpExec
-                if let JsValue::Number(mid) = matcher_id_val {
+                if let Some(mid) = matcher_id_val.as_number() {
                     let mid = mid as u64;
-                    let string_cu = regex_output_to_js_string(&string).code_units;
-                    let result = regexp_exec_abstract(interp, mid, &string, &string_cu);
+                    let result = regexp_exec_abstract(interp, mid, &regex_input);
                     let result_val = match result {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
 
-                    if matches!(result_val, JsValue::Null) {
-                        if let Some(obj2) = interp.get_object_cell(o.id) {
+                    if result_val.is_null() {
+                        if let Some(obj2) = interp.get_object_cell(o_id) {
                             obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
                         }
                         return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::Undefined, true),
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                         );
                     }
 
                     if !global {
-                        if let Some(obj2) = interp.get_object_cell(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o_id) {
                             obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
@@ -8604,10 +9938,10 @@ impl Interpreter {
                     }
 
                     // Global: check for empty match, advance if needed
-                    let result_id = if let JsValue::Object(ro) = &result_val {
-                        ro.id
+                    let result_id = if let Some(ro_id) = result_val.as_object_id() {
+                        ro_id
                     } else {
-                        if let Some(obj2) = interp.get_object_cell(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o_id) {
                             obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
@@ -8629,7 +9963,7 @@ impl Interpreter {
                     };
                     if match_str.is_empty() {
                         let matcher_val2 =
-                            JsValue::Object(crate::types::JsObject { id: mid });
+                            JsValue::object(mid);
                         let li_val = match interp.get_object_property(
                             mid, "lastIndex", &matcher_val2,
                         ) {
@@ -8646,16 +9980,16 @@ impl Interpreter {
                             li_num.min(9007199254740991.0).floor() as usize
                         };
                         let next_index =
-                            advance_string_index(&string, this_index, full_unicode);
+                            advance_string_index(&regex_input, this_index, full_unicode);
                         if let Err(e) = spec_set(
                             interp, mid, "lastIndex",
-                            JsValue::Number(next_index as f64), true,
+                            JsValue::number(next_index as f64), true,
                         ) {
                             return Completion::Throw(e);
                         }
                     }
 
-                    if let Some(obj2) = interp.get_object_cell(o.id) {
+                    if let Some(obj2) = interp.get_object_cell(o_id) {
                         obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
                                 last_index, done: false,
@@ -8670,84 +10004,92 @@ impl Interpreter {
                 let re = match build_regex(&source, &flags) {
                     Ok(r) => r,
                     Err(_) => {
-                        if let Some(obj2) = interp.get_object_cell(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o_id) {
                             obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
                         }
                         return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::Undefined, true),
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                         );
                     }
                 };
 
                 if last_index > string.len() {
-                    if let Some(obj2) = interp.get_object_cell(o.id) {
+                    if let Some(obj2) = interp.get_object_cell(o_id) {
                         obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
                                 last_index, done: true,
                             });
                     }
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 }
 
-                match regex_captures(&re, &string[last_index..]) {
+                match regex_captures(&re, &regex_string[last_index..]) {
                     None => {
-                        if let Some(obj2) = interp.get_object_cell(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o_id) {
                             obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
                         }
                         Completion::Normal(
-                            interp.create_iter_result_object(JsValue::Undefined, true),
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                         )
                     }
-                    Some(caps) => {
+                    Some(mut caps) => {
+                        ensure_capture_slots(&mut caps, count_capture_groups(&source));
                         let full = caps.get(0).unwrap();
                         let match_start = last_index + full.start;
                         let match_end = last_index + full.end;
 
                         let mut elements: Vec<JsValue> = Vec::new();
-                        elements.push(JsValue::String(JsString::from_str(&full.text)));
+                        elements.push(JsValue::string(JsString::from_str(
+                            &regex_string[match_start..match_end],
+                        )));
                         for i in 1..caps.len() {
                             match caps.get(i) {
-                                Some(m) => elements.push(JsValue::String(
-                                    JsString::from_str(&m.text),
-                                )),
-                                None => elements.push(JsValue::Undefined),
+                                Some(m) => elements.push(JsValue::string(JsString::from_str(
+                                    &regex_string
+                                        [last_index + m.start..last_index + m.end],
+                                ))),
+                                None => elements.push(JsValue::UNDEFINED),
                             }
                         }
 
                         let result_arr = interp.create_array(elements);
-                        if let JsValue::Object(ref ro) = result_arr
-                            && let Some(robj) = interp.get_object_cell(ro.id)
+                        if let Some(ro_id) = result_arr.as_object_id()
+                            && let Some(robj) = interp.get_object_cell(ro_id)
                         {
                             robj.borrow_mut().insert_value(
                                 "index".to_string(),
-                                JsValue::Number(match_start as f64),
+                                JsValue::number(match_start as f64),
                             );
                             robj.borrow_mut().insert_value(
                                 "input".to_string(),
-                                JsValue::String(JsString::from_str(&string)),
+                                JsValue::string(string.clone()),
                             );
                             robj.borrow_mut().insert_value(
                                 "groups".to_string(),
-                                JsValue::Undefined,
+                                JsValue::UNDEFINED,
                             );
                         }
 
                         let new_last_index = if global {
-                            if full.text.is_empty() { match_end + 1 } else { match_end }
+                            if full.start == full.end {
+                                match_end + 1
+                            } else {
+                                match_end
+                            }
                         } else {
                             last_index
                         };
                         let new_done = !global;
 
-                        if let Some(obj2) = interp.get_object_cell(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o_id) {
                             obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index: new_last_index,
@@ -8776,7 +10118,7 @@ impl Interpreter {
                 .insert_property(
                     key,
                     PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str("RegExp String Iterator")),
+                        JsValue::string(JsString::from_str("RegExp String Iterator")),
                         false,
                         false,
                         true,
@@ -8788,9 +10130,9 @@ impl Interpreter {
 
         // RegExp.prototype.flags getter (§22.2.5.3)
         self.define_getter(regexp_proto_id, "flags", |interp, this_val, _args| {
-            let obj_id = match this_val {
-                JsValue::Object(o) => o.id,
-                _ => {
+            let obj_id = match this_val.as_object_id() {
+                Some(id) => id,
+                None => {
                     let err = interp.create_type_error(
                         "RegExp.prototype.flags requires that 'this' be an Object",
                     );
@@ -8822,7 +10164,7 @@ impl Interpreter {
                     result.push(*ch);
                 }
             }
-            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+            Completion::Normal(JsValue::string(JsString::from_str(&result)))
         });
 
         // Flag property getters on prototype (§22.2.5.x)
@@ -8843,9 +10185,9 @@ impl Interpreter {
                 format!("get {}", name),
                 0,
                 move |interp, this_val, _args| {
-                    let obj_ref = match this_val {
-                        JsValue::Object(o) => o,
-                        _ => {
+                    let obj_ref_id = match this_val.as_object_id() {
+                        Some(id) => id,
+                        None => {
                             return Completion::Throw(interp.create_error_in_realm(
                                 my_realm_id,
                                 "TypeError",
@@ -8856,13 +10198,13 @@ impl Interpreter {
                             ));
                         }
                     };
-                    let obj = match interp.get_object_cell(obj_ref.id) {
+                    let obj = match interp.get_object_cell(obj_ref_id) {
                         Some(o) => o,
-                        None => return Completion::Normal(JsValue::Undefined),
+                        None => return Completion::Normal(JsValue::UNDEFINED),
                     };
                     if obj.borrow().class_name != "RegExp" {
-                        if obj_ref.id == regexp_proto_id {
-                            return Completion::Normal(JsValue::Undefined);
+                        if obj_ref_id == regexp_proto_id {
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         return Completion::Throw(interp.create_error_in_realm(
                             my_realm_id,
@@ -8875,9 +10217,9 @@ impl Interpreter {
                     }
                     let flags_opt = obj.borrow().regexp().map(|r| r.flags.clone());
                     if let Some(s) = flags_opt {
-                        Completion::Normal(JsValue::Boolean(s.to_rust_string().contains(flag_char)))
+                        Completion::Normal(JsValue::boolean(s.to_rust_string().contains(flag_char)))
                     } else {
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     }
                 },
             ));
@@ -8898,9 +10240,9 @@ impl Interpreter {
 
         // source getter (§22.2.5.10)
         self.define_getter(regexp_proto_id, "source", move |interp, this_val, _args| {
-            let obj_ref = match this_val {
-                JsValue::Object(o) => o,
-                _ => {
+            let obj_ref_id = match this_val.as_object_id() {
+                Some(id) => id,
+                None => {
                     return Completion::Throw(interp.create_error_in_realm(
                         my_realm_id,
                         "TypeError",
@@ -8908,13 +10250,13 @@ impl Interpreter {
                     ));
                 }
             };
-            let obj = match interp.get_object_cell(obj_ref.id) {
+            let obj = match interp.get_object_cell(obj_ref_id) {
                 Some(o) => o,
-                None => return Completion::Normal(JsValue::Undefined),
+                None => return Completion::Normal(JsValue::UNDEFINED),
             };
             if obj.borrow().class_name != "RegExp" {
-                if obj_ref.id == regexp_proto_id {
-                    return Completion::Normal(JsValue::String(JsString::from_str("(?:)")));
+                if obj_ref_id == regexp_proto_id {
+                    return Completion::Normal(JsValue::string(JsString::from_str("(?:)")));
                 }
                 return Completion::Throw(interp.create_error_in_realm(
                     my_realm_id,
@@ -8925,9 +10267,9 @@ impl Interpreter {
             let source_opt = obj.borrow().regexp().map(|r| r.source.clone());
             if let Some(ref s) = source_opt {
                 let escaped = escape_regexp_pattern_code_units(&s.code_units);
-                Completion::Normal(JsValue::String(escaped))
+                Completion::Normal(JsValue::string(escaped))
             } else {
-                Completion::Normal(JsValue::String(JsString::from_str("(?:)")))
+                Completion::Normal(JsValue::string(JsString::from_str("(?:)")))
             }
         });
 
@@ -8938,29 +10280,29 @@ impl Interpreter {
             "RegExp".to_string(),
             2,
             move |interp, _this, args| {
-                let pattern_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let flags_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let pattern_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let flags_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // IsRegExp check per §7.2.8
-                let is_regexp_obj = if let JsValue::Object(ref o) = pattern_arg {
+                let is_regexp_obj = if let Some(pat_id) = pattern_arg.as_object_id() {
                     let match_key = get_symbol_key(interp, "match");
                     if let Some(key) = match_key {
-                        let matcher = match interp.get_object_property(o.id, &key, &pattern_arg) {
+                        let matcher = match interp.get_object_property(pat_id, &key, &pattern_arg) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
-                        if !matches!(matcher, JsValue::Undefined) {
+                        if !matcher.is_undefined() {
                             interp.to_boolean_val(&matcher)
                         } else {
                             // Symbol.match is undefined, check [[RegExpMatcher]]
-                            if let Some(obj) = interp.get_object_cell(o.id) {
+                            if let Some(obj) = interp.get_object_cell(pat_id) {
                                 obj.borrow().class_name == "RegExp"
                             } else {
                                 false
                             }
                         }
-                    } else if let Some(obj) = interp.get_object_cell(o.id) {
+                    } else if let Some(obj) = interp.get_object_cell(pat_id) {
                         obj.borrow().class_name == "RegExp"
                     } else {
                         false
@@ -8972,19 +10314,20 @@ impl Interpreter {
                 // §22.2.3.1 step 2: If NewTarget is undefined (called as function, not new)
                 if interp.new_target.is_none()
                     && is_regexp_obj
-                    && matches!(flags_arg, JsValue::Undefined)
-                    && let JsValue::Object(ref o) = pattern_arg
+                    && flags_arg.is_undefined()
+                    && let Some(pat_id) = pattern_arg.as_object_id()
                 {
                     // Get pattern.constructor
-                    let ctor = match interp.get_object_property(o.id, "constructor", &pattern_arg) {
+                    let ctor = match interp.get_object_property(pat_id, "constructor", &pattern_arg)
+                    {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     // Get the active function object (RegExp constructor)
                     let regexp_fn = interp
                         .get_global_var("RegExp")
-                        .unwrap_or(JsValue::Undefined);
+                        .unwrap_or(JsValue::UNDEFINED);
                     if same_value(&regexp_fn, &ctor) {
                         return Completion::Normal(pattern_arg.clone());
                     }
@@ -8993,9 +10336,9 @@ impl Interpreter {
                 // §22.2.3.1 steps 3-4: Extract P and F from arguments.
                 // Source is extracted fully (freezing it before prototype lookup),
                 // but flags ToString is deferred until after RegExpAlloc (step 5).
-                let has_regexp_matcher = if let JsValue::Object(ref o) = pattern_arg {
+                let has_regexp_matcher = if let Some(pat_id) = pattern_arg.as_object_id() {
                     interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(pat_id)
                         .is_some_and(|obj| obj.borrow().class_name == "RegExp")
                 } else {
                     false
@@ -9006,27 +10349,26 @@ impl Interpreter {
                     Resolved(String),
                     NeedsToString(JsValue),
                 }
-                let (pattern_js, pattern_str, raw_flags) = if has_regexp_matcher
-                    && let JsValue::Object(ref o) = pattern_arg
+                let (pattern_js, raw_flags) = if has_regexp_matcher
+                    && let Some(pat_id) = pattern_arg.as_object_id()
                 {
                     let src_js = interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(pat_id)
                         .and_then(|obj| obj.borrow().regexp().map(|r| r.source.clone()))
                         .unwrap_or_else(|| JsString::from_str(""));
-                    let src = js_string_to_regex_input(&src_js.code_units);
-                    let flg = if matches!(flags_arg, JsValue::Undefined) {
+                    let flg = if flags_arg.is_undefined() {
                         RawFlags::Resolved(
                             interp
-                                .get_object_cell(o.id)
+                                .get_object_cell(pat_id)
                                 .and_then(|obj| obj.borrow().regexp().map(|r| r.flags.to_string()))
                                 .unwrap_or_default(),
                         )
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (src_js, src, flg)
-                } else if is_regexp_obj && let JsValue::Object(ref o) = pattern_arg {
-                    let src = match interp.get_object_property(o.id, "source", &pattern_arg) {
+                    (src_js, flg)
+                } else if is_regexp_obj && let Some(pat_id) = pattern_arg.as_object_id() {
+                    let src = match interp.get_object_property(pat_id, "source", &pattern_arg) {
                         Completion::Normal(v) => match interp.to_js_string(&v) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
@@ -9034,20 +10376,19 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => JsString::from_str(""),
                     };
-                    let src_str = js_string_to_regex_input(&src.code_units);
-                    let flg = if matches!(flags_arg, JsValue::Undefined) {
-                        let f = match interp.get_object_property(o.id, "flags", &pattern_arg) {
+                    let flg = if flags_arg.is_undefined() {
+                        let f = match interp.get_object_property(pat_id, "flags", &pattern_arg) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         RawFlags::NeedsToString(f)
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (src, src_str, flg)
+                    (src, flg)
                 } else {
-                    let p_js = if matches!(pattern_arg, JsValue::Undefined) {
+                    let p_js = if pattern_arg.is_undefined() {
                         JsString::from_str("")
                     } else {
                         match interp.to_js_string(&pattern_arg) {
@@ -9055,13 +10396,12 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let p_str = js_string_to_regex_input(&p_js.code_units);
-                    let flg = if matches!(flags_arg, JsValue::Undefined) {
+                    let flg = if flags_arg.is_undefined() {
                         RawFlags::Resolved(String::new())
                     } else {
                         RawFlags::NeedsToString(flags_arg.clone())
                     };
-                    (p_js, p_str, flg)
+                    (p_js, flg)
                 };
 
                 // §22.2.3.1 step 5: RegExpAlloc — get prototype from new target
@@ -9109,6 +10449,8 @@ impl Interpreter {
                     ));
                 }
 
+                let pattern_str = js_string_to_regex_pattern(&pattern_js.code_units, &flags_str);
+
                 // Validate the pattern
                 if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
@@ -9133,10 +10475,10 @@ impl Interpreter {
                 );
                 obj.insert_property(
                     "lastIndex".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
+                    PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
                 );
                 let id = interp.alloc_object(obj);
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
         // RegExp.escape (§22.2.5.1)
@@ -9144,10 +10486,10 @@ impl Interpreter {
             "escape".to_string(),
             1,
             |interp, _this, args| {
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code_units = match &arg {
-                    JsValue::String(s) => s.code_units.clone(),
-                    _ => {
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let code_units = match arg.as_string() {
+                    Some(s) => s.code_units,
+                    None => {
                         let err =
                             interp.create_type_error("RegExp.escape requires a string argument");
                         return Completion::Throw(err);
@@ -9195,20 +10537,16 @@ impl Interpreter {
                     }
                     is_first = false;
                 }
-                Completion::Normal(JsValue::String(JsString::from_vec(result_units)))
+                Completion::Normal(JsValue::string(JsString::from_vec(result_units)))
             },
         ));
 
-        if let JsValue::Object(ref o) = regexp_ctor
-            && let Some(obj) = self.get_object(o.id)
+        if let Some(ctor_obj_id) = regexp_ctor.as_object_id()
+            && let Some(obj) = self.get_object(ctor_obj_id)
         {
             obj.borrow_mut().deferred_construct = true;
-            obj.borrow_mut().insert_builtin(
-                "prototype".to_string(),
-                JsValue::Object(crate::types::JsObject {
-                    id: regexp_proto_id,
-                }),
-            );
+            obj.borrow_mut()
+                .insert_builtin("prototype".to_string(), JsValue::object(regexp_proto_id));
             obj.borrow_mut()
                 .insert_builtin("escape".to_string(), escape_fn);
 
@@ -9219,7 +10557,7 @@ impl Interpreter {
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
             obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
+                JsPropertyKey::well_known_symbol("species"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -9231,7 +10569,7 @@ impl Interpreter {
             );
 
             // Annex B legacy static accessor properties (B.2.4)
-            let ctor_id = o.id;
+            let ctor_id = ctor_obj_id;
             self.regexp_legacy.constructor_id = Some(ctor_id);
 
             // Helper macro for legacy accessor property getters/setters
@@ -9243,14 +10581,15 @@ impl Interpreter {
                         format!("get ${}", idx),
                         0,
                         move |interp, this_val, _args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
+                            match this_val.as_object_id() {
+                                Some(id) if id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            let val = interp.regexp_legacy.parens[(idx - 1) as usize].clone();
-                            Completion::Normal(JsValue::String(JsString::from_str(&val)))
+                            Completion::Normal(JsValue::string(
+                                interp.regexp_legacy.parens[(idx - 1) as usize].clone(),
+                            ))
                         },
                     ));
                 obj.borrow_mut().insert_property(
@@ -9274,15 +10613,13 @@ impl Interpreter {
                         format!("get {}", pn),
                         0,
                         move |interp, this_val, _args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
+                            match this_val.as_object_id() {
+                                Some(id) if id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy.input,
-                            )))
+                            Completion::Normal(JsValue::string(interp.regexp_legacy.input.clone()))
                         },
                     ));
                 let setter =
@@ -9290,19 +10627,19 @@ impl Interpreter {
                         format!("set {}", pn),
                         1,
                         move |interp, this_val, args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
+                            match this_val.as_object_id() {
+                                Some(id) if id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            let s = match interp.to_string_value(&val) {
+                            let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                            let s = match interp.to_js_string(&val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
                             interp.regexp_legacy.input = s;
-                            Completion::Normal(JsValue::Undefined)
+                            Completion::Normal(JsValue::UNDEFINED)
                         },
                     ));
                 obj.borrow_mut().insert_property(
@@ -9321,22 +10658,21 @@ impl Interpreter {
             // lastMatch / $& — get-only
             for prop_name in &["lastMatch", "$&"] {
                 let pn = prop_name.to_string();
-                let getter =
-                    self.create_function(JsFunction::native(
-                        format!("get {}", pn),
-                        0,
-                        move |interp, this_val, _args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
-                                _ => return Completion::Throw(interp.create_type_error(
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    move |interp, this_val, _args| {
+                        match this_val.as_object_id() {
+                            Some(id) if id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
-                                )),
+                                ));
                             }
-                            Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy.last_match,
-                            )))
-                        },
-                    ));
+                        }
+                        Completion::Normal(JsValue::string(interp.regexp_legacy.last_match.clone()))
+                    },
+                ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -9353,22 +10689,21 @@ impl Interpreter {
             // lastParen / $+ — get-only
             for prop_name in &["lastParen", "$+"] {
                 let pn = prop_name.to_string();
-                let getter =
-                    self.create_function(JsFunction::native(
-                        format!("get {}", pn),
-                        0,
-                        move |interp, this_val, _args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
-                                _ => return Completion::Throw(interp.create_type_error(
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    move |interp, this_val, _args| {
+                        match this_val.as_object_id() {
+                            Some(id) if id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
-                                )),
+                                ));
                             }
-                            Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy.last_paren,
-                            )))
-                        },
-                    ));
+                        }
+                        Completion::Normal(JsValue::string(interp.regexp_legacy.last_paren.clone()))
+                    },
+                ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -9390,14 +10725,18 @@ impl Interpreter {
                         format!("get {}", pn),
                         0,
                         move |interp, this_val, _args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
+                            match this_val.as_object_id() {
+                                Some(id) if id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy.left_context,
+                            let legacy = &interp.regexp_legacy;
+                            let end = legacy
+                                .left_context_end
+                                .min(legacy.context_input.code_units.len());
+                            Completion::Normal(JsValue::string(JsString::from_vec(
+                                legacy.context_input.code_units[..end].to_vec(),
                             )))
                         },
                     ));
@@ -9422,14 +10761,18 @@ impl Interpreter {
                         format!("get {}", pn),
                         0,
                         move |interp, this_val, _args| {
-                            match this_val {
-                                JsValue::Object(o) if o.id == ctor_id => {}
+                            match this_val.as_object_id() {
+                                Some(id) if id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy.right_context,
+                            let legacy = &interp.regexp_legacy;
+                            let start = legacy
+                                .right_context_start
+                                .min(legacy.context_input.code_units.len());
+                            Completion::Normal(JsValue::string(JsString::from_vec(
+                                legacy.context_input.code_units[start..].to_vec(),
                             )))
                         },
                     ));
@@ -9460,7 +10803,71 @@ impl Interpreter {
         self.realm_mut().regexp_prototype = Some(regexp_proto_id);
     }
 
-    pub(crate) fn get_symbol_key(&self, name: &str) -> Option<String> {
+    pub(crate) fn get_symbol_key(&self, name: &str) -> Option<JsPropertyKey> {
         get_symbol_key(self, name)
+    }
+}
+
+#[cfg(test)]
+mod nullable_quantifier_rewrite_tests {
+    use super::fix_nullable_quantifiers;
+
+    #[test]
+    fn bounded_min_zero_preserves_inner_laziness() {
+        assert_eq!(fix_nullable_quantifiers("(a*?)?", true).source, "(a+?)?");
+        assert_eq!(
+            fix_nullable_quantifiers("(a*?){0,2}", true).source,
+            "(a+?){0,2}"
+        );
+    }
+
+    #[test]
+    fn backreferenced_inner_captures_bypass_sentinels() {
+        let with_backreference = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)\\2", true);
+        assert!(with_backreference.sentinel_names.is_empty());
+
+        let capture_only = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)", true);
+        assert!(!capture_only.sentinel_names.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod regex_input_cache_tests {
+    use super::{Interpreter, JsString, JsValue, Rc, RegexInput, RegexView, regex_input_for_value};
+
+    #[test]
+    fn reuses_conversion_for_the_same_js_string_identity() {
+        let mut interp = Interpreter::new();
+        let subject = JsValue::string(JsString::from_str(&"a".repeat(1024)));
+
+        let first = regex_input_for_value(&mut interp, &subject).unwrap();
+        let second = regex_input_for_value(&mut interp, &subject.clone()).unwrap();
+        assert!(Rc::ptr_eq(&first, &second));
+
+        let equal_but_distinct = JsValue::string(JsString::from_str(&"a".repeat(1024)));
+        let third = regex_input_for_value(&mut interp, &equal_but_distinct).unwrap();
+        assert!(!Rc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn maps_unicode_offsets_from_the_original_utf16_subject() {
+        let input = RegexInput::new(JsString::from_vec(vec![0xDB80, 0xDC00, b'x' as u16]));
+
+        assert_eq!(input.utf16_to_byte_offset(RegexView::Unicode, 0), 0);
+        assert_eq!(input.utf16_to_byte_offset(RegexView::Unicode, 1), 0);
+        assert_eq!(input.utf16_to_byte_offset(RegexView::Unicode, 2), 4);
+        assert_eq!(input.byte_offset_to_utf16(RegexView::Unicode, 4), 2);
+        assert_eq!(input.byte_offset_to_utf16(RegexView::Unicode, 5), 3);
+
+        let mixed = RegexInput::new(JsString::from_vec(vec![
+            0xD800,
+            0xDB80,
+            0xDC00,
+            b'x' as u16,
+        ]));
+        assert_eq!(mixed.utf16_to_byte_offset(RegexView::Unicode, 2), 4);
+        assert_eq!(mixed.utf16_to_byte_offset(RegexView::Unicode, 3), 8);
+        assert_eq!(mixed.byte_offset_to_utf16(RegexView::Unicode, 8), 3);
+        assert_eq!(mixed.byte_offset_to_utf16(RegexView::Unicode, 9), 4);
     }
 }

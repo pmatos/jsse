@@ -1,13 +1,14 @@
-// Tests eval() scoping behavior.
+// Tests eval() scoping behavior that holds identically in sloppy and
+// strict mode: `let` declared inside an eval never leaks regardless of
+// mode, reading an outer binding through a direct eval works in both,
+// indirect eval always targets the global scope in both, and eval's
+// return value / `this` binding are mode-independent. The var/function-
+// declaration leakage assertions that are sloppy-mode-only live in
+// Eval-scoping-sloppy-leakage.js instead — a direct eval called from
+// strict-mode code gets its own fresh VariableEnvironment
+// (EvalDeclarationInstantiation) and never leaks a `var` or function
+// declaration outward, so those assertions cannot hold here.
 // Spec: ECMAScript 2024, sec-eval-x
-
-// eval var scoping — var in eval leaks to enclosing function scope
-(function() {
-  eval("var evalVar = 42;");
-  if (evalVar !== 42) {
-    throw new Test262Error('eval var should leak to function scope, got: ' + typeof evalVar);
-  }
-})();
 
 // eval let scoping — let in eval stays in eval scope
 (function() {
@@ -19,16 +20,6 @@
     if (!(e instanceof ReferenceError)) {
       throw new Test262Error('accessing eval let should throw ReferenceError, got: ' + e);
     }
-  }
-})();
-
-// eval var in block scope still leaks to function scope
-(function() {
-  {
-    eval("var blockEvalVar = 10;");
-  }
-  if (blockEvalVar !== 10) {
-    throw new Test262Error('eval var in block should leak to function scope');
   }
 })();
 
@@ -58,14 +49,6 @@ var globalForEval = 500;
   var result2 = indirectEval("globalForEval");
   if (result2 !== 500) {
     throw new Test262Error('indirect eval should access global scope, got: ' + result2);
-  }
-})();
-
-// eval function declarations in sloppy mode
-(function() {
-  eval("function evalFunc() { return 'hello'; }");
-  if (evalFunc() !== "hello") {
-    throw new Test262Error('eval function declaration should be accessible');
   }
 })();
 

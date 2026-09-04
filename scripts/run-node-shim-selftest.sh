@@ -32,7 +32,7 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-FINAL="$TMP/selftest.bundle.js"
+FINAL="$TMP/selftest.bundle.cjs"
 cat "$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-shim.selftest.js" > "$FINAL"
 
 run_engine() {  # <label> <cmd...> → writes $TMP/<label>.out, sets RC
@@ -81,7 +81,7 @@ fi
 # run. Expected on both engines: exit code 3, no "UNREACHABLE" on stdout.
 echo ""
 echo "== process.exit probe =="
-EXIT_PROBE="$TMP/exit-probe.js"
+EXIT_PROBE="$TMP/exit-probe.cjs"
 cat "$SCRIPT_DIR/node-shim.js" > "$EXIT_PROBE"
 cat >> "$EXIT_PROBE" <<'PROBE'
 try { process.exit(3); } catch (e) {}
@@ -109,16 +109,45 @@ command -v node >/dev/null 2>&1 && check_exit node node
 # ---- no-host fallback probe -----------------------------------------------
 # The library harness always passes --node, but node-shim.js documents a
 # degraded pure-JS fallback for plain jsse runs. Cover that path directly so the
-# fallback stream never recurses through the shimmed console methods.
+# fallback stream never recurses through the shimmed console methods, and so the
+# array extra-property fallback (which, without the host floor, cannot unwrap a
+# Proxy first) stays non-throwing for both the ownKeys enumeration and the
+# per-key descriptor reads that follow it.
 echo ""
 echo "== jsse fallback without --node =="
-FALLBACK_PROBE="$TMP/fallback-probe.js"
+FALLBACK_PROBE="$TMP/fallback-probe.cjs"
 cat "$SCRIPT_DIR/node-shim.js" > "$FALLBACK_PROBE"
 cat >> "$FALLBACK_PROBE" <<'PROBE'
 process.stdout.write("fallback stdout\n");
 process.stderr.write("fallback stderr\n");
 console.log("fallback console");
 console.error("fallback error");
+var fallbackArray = [1];
+fallbackArray.z = 2;
+console.log(util.inspect(fallbackArray));
+var fallbackProxy = new Proxy([1, 2], {
+  ownKeys: function () {
+    throw new Error("ownKeys trap called");
+  },
+});
+console.log(util.inspect(fallbackProxy));
+var fallbackGopdCalls = 0;
+var fallbackTarget = [1, 2];
+Object.defineProperty(fallbackTarget, "w", {
+  value: 5,
+  enumerable: true,
+  configurable: true,
+});
+var fallbackDescProxy = new Proxy(fallbackTarget, {
+  getOwnPropertyDescriptor: function (t, k) {
+    if (k === "w") {
+      fallbackGopdCalls++;
+      if (fallbackGopdCalls > 1) throw new Error("descriptor trap called");
+    }
+    return Reflect.getOwnPropertyDescriptor(t, k);
+  },
+});
+console.log(util.inspect(fallbackDescProxy));
 process.stdout.write("partial");
 process.exit(0);
 PROBE
@@ -135,6 +164,9 @@ fallback stdout
 fallback stderr
 fallback console
 fallback error
+[ 1, z: 2 ]
+[ 1, 2 ]
+[ 1, 2 ]
 partial
 EXPECTED
     echo "FAIL: jsse fallback without --node output differed:" >&2

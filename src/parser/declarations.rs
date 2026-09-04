@@ -196,7 +196,7 @@ impl<'a> Parser<'a> {
                 Ok(PropertyKey::Identifier(name))
             }
             Token::StringLiteral(s) => {
-                let s = String::from_utf16_lossy(s);
+                let s = s.clone();
                 self.advance()?;
                 Ok(PropertyKey::String(s))
             }
@@ -237,7 +237,7 @@ impl<'a> Parser<'a> {
             Token::BigIntLiteral(s) => {
                 let name = bigint_literal_to_decimal(s);
                 self.advance()?;
-                Ok(PropertyKey::String(name))
+                Ok(PropertyKey::String(name.encode_utf16().collect()))
             }
             _ => Err(self.error("Expected property name in object pattern")),
         }
@@ -538,11 +538,11 @@ impl<'a> Parser<'a> {
     }
 
     fn key_is_constructor(key: &PropertyKey) -> bool {
-        matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "constructor")
+        key.matches_name("constructor")
     }
 
     fn key_is_prototype(key: &PropertyKey) -> bool {
-        matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "prototype")
+        key.matches_name("prototype")
     }
 
     pub(super) fn check_no_direct_super_in_constructor(
@@ -646,7 +646,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_has_direct_super)),
-            Expression::Object(props) => props.iter().any(|p| {
+            Expression::Object(props, _) => props.iter().any(|p| {
                 Self::expr_has_direct_super(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_has_direct_super(e))
             }),
@@ -811,7 +811,7 @@ impl<'a> Parser<'a> {
                 self.in_static_block = prev_in_static_block;
                 self.in_block_or_function = prev_block;
                 self.in_switch_case = prev_sc;
-                if Self::stmts_contain_arguments(&stmts) {
+                if crate::ast::stmts_contain_matching(&stmts, &crate::ast::is_arguments_reference) {
                     return Err(self.error("'arguments' is not allowed in class static blocks"));
                 }
                 self.eat(&Token::RightBrace)?;
@@ -913,7 +913,10 @@ impl<'a> Parser<'a> {
                 let value = if self.current == Token::Assign {
                     self.advance()?;
                     let expr = self.parse_field_initializer_value()?;
-                    if Self::contains_arguments(&expr) {
+                    if crate::ast::expr_contains_matching(
+                        &expr,
+                        &crate::ast::is_arguments_reference,
+                    ) {
                         return Err(
                             self.error("Class field initializer cannot reference 'arguments'")
                         );
@@ -947,7 +950,7 @@ impl<'a> Parser<'a> {
             let value = if self.current == Token::Assign {
                 self.advance()?;
                 let expr = self.parse_field_initializer_value()?;
-                if Self::contains_arguments(&expr) {
+                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
                     return Err(self.error("Class field initializer cannot reference 'arguments'"));
                 }
                 Some(expr)
@@ -1070,7 +1073,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let expr = self.parse_field_initializer_value()?;
                 // Class field initializers cannot contain 'arguments'
-                if Self::contains_arguments(&expr) {
+                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
                     return Err(self.error("Class field initializer cannot reference 'arguments'"));
                 }
                 Some(expr)
@@ -1121,7 +1124,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Identifier(name), false))
         } else if let Token::StringLiteral(s) = &self.current {
-            let s = String::from_utf16_lossy(s);
+            let s = s.clone();
             self.advance()?;
             Ok((PropertyKey::String(s), false))
         } else if let Token::NumericLiteral(n)
@@ -1141,7 +1144,7 @@ impl<'a> Parser<'a> {
         } else if let Token::BigIntLiteral(ref s) = self.current {
             let name = bigint_literal_to_decimal(s);
             self.advance()?;
-            Ok((PropertyKey::String(name), false))
+            Ok((PropertyKey::String(name.encode_utf16().collect()), false))
         } else if let Token::Keyword(kw) = &self.current {
             // Keywords can be property names
             let name = kw.to_string();

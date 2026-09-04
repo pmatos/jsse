@@ -9,6 +9,7 @@ pub(crate) mod plain_year_month;
 pub(crate) mod zoned_date_time;
 
 use super::*;
+use crate::types::ValueKind;
 
 /// Check if options object has a style that conflicts with the temporal type.
 /// In toLocaleString, each style must overlap with the type's data model:
@@ -22,19 +23,19 @@ pub(crate) fn check_locale_string_style_conflict(
     has_date: bool,
     has_time: bool,
 ) -> Result<(), JsValue> {
-    if let JsValue::Object(o) = options {
-        let ds = match interp.get_object_property(o.id, "dateStyle", options) {
+    if let Some(o) = options.as_object_id() {
+        let ds = match interp.get_object_property(o, "dateStyle", options) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
-        let ts = match interp.get_object_property(o.id, "timeStyle", options) {
+        let ts = match interp.get_object_property(o, "timeStyle", options) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
-        let has_ds = !matches!(ds, JsValue::Undefined);
-        let has_ts = !matches!(ts, JsValue::Undefined);
+        let has_ds = !ds.is_undefined();
+        let has_ts = !ts.is_undefined();
         if has_ds && !has_date {
             return Err(
                 interp.create_type_error("dateStyle does not overlap with this Temporal type")
@@ -60,32 +61,31 @@ pub(crate) fn check_calendar_mismatch(
     if allow_iso && temporal_calendar == "iso8601" {
         return Ok(());
     }
-    if let JsValue::Object(dtf_obj) = dtf_instance {
-        let resolved_fn =
-            match interp.get_object_property(dtf_obj.id, "resolvedOptions", dtf_instance) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Ok(()),
-            };
+    if let Some(dtf_obj) = dtf_instance.as_object_id() {
+        let resolved_fn = match interp.get_object_property(dtf_obj, "resolvedOptions", dtf_instance)
+        {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(()),
+        };
         let resolved = match interp.call_function(&resolved_fn, dtf_instance, &[]) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
             _ => return Ok(()),
         };
-        if let JsValue::Object(ro) = &resolved {
-            let dtf_cal = match interp.get_object_property(ro.id, "calendar", &resolved) {
+        if let Some(ro) = resolved.as_object_id() {
+            let dtf_cal = match interp.get_object_property(ro, "calendar", &resolved) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::String(ref s) = dtf_cal {
-                let dtf_cal_str = s.to_string();
-                if dtf_cal_str != temporal_calendar {
-                    return Err(interp.create_range_error(&format!(
-                        "calendar mismatch: Temporal object uses '{}' but locale uses '{}'",
-                        temporal_calendar, dtf_cal_str
-                    )));
-                }
+            if let Some(dtf_cal_str) = dtf_cal.as_string().map(|s| s.to_string())
+                && dtf_cal_str != temporal_calendar
+            {
+                return Err(interp.create_range_error(&format!(
+                    "calendar mismatch: Temporal object uses '{}' but locale uses '{}'",
+                    temporal_calendar, dtf_cal_str
+                )));
             }
         }
     }
@@ -98,11 +98,11 @@ pub(crate) fn temporal_format_with_dtf(
     dtf_instance: &JsValue,
     temporal_this: &JsValue,
 ) -> Completion {
-    if let JsValue::Object(dtf_obj) = dtf_instance {
-        let format_val = match interp.get_object_property(dtf_obj.id, "format", dtf_instance) {
+    if let Some(dtf_obj) = dtf_instance.as_object_id() {
+        let format_val = match interp.get_object_property(dtf_obj, "format", dtf_instance) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         match interp.call_function(
             &format_val,
@@ -111,10 +111,10 @@ pub(crate) fn temporal_format_with_dtf(
         ) {
             Completion::Normal(v) => Completion::Normal(v),
             Completion::Throw(e) => Completion::Throw(e),
-            _ => Completion::Normal(JsValue::Undefined),
+            _ => Completion::Normal(JsValue::UNDEFINED),
         }
     } else {
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(JsValue::UNDEFINED)
     }
 }
 
@@ -1290,52 +1290,52 @@ pub(crate) fn to_temporal_calendar_slot_value(
     interp: &mut Interpreter,
     val: &JsValue,
 ) -> Result<String, Completion> {
-    match val {
-        JsValue::Undefined => Ok("iso8601".to_string()),
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id) {
-                let data = obj.borrow();
-                match data.temporal_data() {
-                    Some(TemporalData::PlainDate { calendar, .. })
-                    | Some(TemporalData::PlainDateTime { calendar, .. })
-                    | Some(TemporalData::PlainYearMonth { calendar, .. })
-                    | Some(TemporalData::PlainMonthDay { calendar, .. })
-                    | Some(TemporalData::ZonedDateTime { calendar, .. }) => {
-                        return Ok(calendar.clone());
-                    }
-                    _ => {}
-                }
-            }
-            Err(Completion::Throw(interp.create_type_error(
-                "Invalid calendar value: expected a string or Temporal object",
-            )))
-        }
-        JsValue::String(s) => {
-            let raw = s.to_rust_string();
-            match validate_calendar(&raw) {
-                Some(c) => Ok(c),
-                None => Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid calendar: {raw}")),
-                )),
-            }
-        }
-        _ => Err(Completion::Throw(interp.create_type_error(
-            "Invalid calendar value: expected a string or Temporal object",
-        ))),
+    if val.is_undefined() {
+        return Ok("iso8601".to_string());
     }
+    if let Some(o) = val.as_object_id() {
+        if let Some(obj) = interp.get_object_cell(o) {
+            let data = obj.borrow();
+            match data.temporal_data() {
+                Some(TemporalData::PlainDate { calendar, .. })
+                | Some(TemporalData::PlainDateTime { calendar, .. })
+                | Some(TemporalData::PlainYearMonth { calendar, .. })
+                | Some(TemporalData::PlainMonthDay { calendar, .. })
+                | Some(TemporalData::ZonedDateTime { calendar, .. }) => {
+                    return Ok(calendar.clone());
+                }
+                _ => {}
+            }
+        }
+        return Err(Completion::Throw(interp.create_type_error(
+            "Invalid calendar value: expected a string or Temporal object",
+        )));
+    }
+    if let Some(s) = val.as_string() {
+        let raw = s.to_rust_string();
+        return match validate_calendar(&raw) {
+            Some(c) => Ok(c),
+            None => Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid calendar: {raw}")),
+            )),
+        };
+    }
+    Err(Completion::Throw(interp.create_type_error(
+        "Invalid calendar value: expected a string or Temporal object",
+    )))
 }
 
-// Helper: get a property from a JsValue::Object, returning Completion
+// Helper: get a property from a JsValue-Object, returning Completion
 pub(crate) fn get_prop(interp: &mut Interpreter, obj: &JsValue, key: &str) -> Completion {
-    match obj {
-        JsValue::Object(o) => interp.get_object_property(o.id, key, obj),
-        _ => Completion::Normal(JsValue::Undefined),
+    match obj.as_object_id() {
+        Some(o) => interp.get_object_property(o, key, obj),
+        None => Completion::Normal(JsValue::UNDEFINED),
     }
 }
 
 // Helper: check if JsValue is undefined
 pub(crate) fn is_undefined(v: &JsValue) -> bool {
-    matches!(v, JsValue::Undefined)
+    v.is_undefined()
 }
 /// Check if monthCode string has valid syntax: /^M\d{2}L?$/
 /// Returns true if syntax is valid (even if the value is not valid for ISO 8601).
@@ -1363,16 +1363,16 @@ pub(crate) fn is_partial_temporal_object(
     interp: &mut Interpreter,
     value: &JsValue,
 ) -> Result<(), Completion> {
-    let obj_ref = match value {
-        JsValue::Object(o) => o,
-        _ => {
+    let obj_ref = match value.as_object_id() {
+        Some(o) => o,
+        None => {
             return Err(Completion::Throw(
                 interp.create_type_error("with requires an object argument"),
             ));
         }
     };
 
-    if let Some(obj) = interp.get_object_cell(obj_ref.id) {
+    if let Some(obj) = interp.get_object_cell(obj_ref) {
         let td = obj.borrow().temporal_data().cloned();
         if let Some(
             TemporalData::PlainDate { .. }
@@ -1501,10 +1501,10 @@ pub(crate) fn get_options_object(
     interp: &mut Interpreter,
     options: &JsValue,
 ) -> Result<bool, Completion> {
-    if matches!(options, JsValue::Undefined) {
+    if options.is_undefined() {
         return Ok(false);
     }
-    if matches!(options, JsValue::Object(_)) {
+    if options.is_object() {
         return Ok(true);
     }
     Err(Completion::Throw(interp.create_type_error(
@@ -1617,25 +1617,7 @@ impl Interpreter {
         let temporal_id = temporal_obj_id;
 
         // @@toStringTag = "Temporal"
-        {
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Temporal"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(temporal_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(temporal_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(temporal_obj_id, "Temporal");
 
         self.setup_temporal_duration(temporal_obj_id);
         self.setup_temporal_instant(temporal_obj_id);
@@ -1648,7 +1630,7 @@ impl Interpreter {
         self.setup_temporal_now(temporal_obj_id);
 
         // Register Temporal as global (writable, not enumerable, configurable)
-        let temporal_val = JsValue::Object(crate::types::JsObject { id: temporal_id });
+        let temporal_val = JsValue::object(temporal_id);
         self.realm()
             .global_env
             .borrow_mut()
@@ -2787,21 +2769,20 @@ pub(super) fn validate_timezone_identifier_strict(
     interp: &mut Interpreter,
     arg: &JsValue,
 ) -> Result<String, Completion> {
-    match arg {
-        JsValue::String(s) => {
-            let s_str = s.to_string();
-            if let Some(offset) = parse_utc_offset_timezone(&s_str) {
-                Ok(offset)
-            } else if is_iana_timezone(&s_str) {
-                Ok(normalize_iana_timezone(&s_str))
-            } else {
-                Err(Completion::Throw(interp.create_range_error(&format!(
-                    "Invalid time zone: {}",
-                    s_str
-                ))))
-            }
+    if let Some(s) = arg.as_string() {
+        let s_str = s.to_string();
+        if let Some(offset) = parse_utc_offset_timezone(&s_str) {
+            Ok(offset)
+        } else if is_iana_timezone(&s_str) {
+            Ok(normalize_iana_timezone(&s_str))
+        } else {
+            Err(Completion::Throw(interp.create_range_error(&format!(
+                "Invalid time zone: {}",
+                s_str
+            ))))
         }
-        _ => to_temporal_time_zone_identifier(interp, arg),
+    } else {
+        to_temporal_time_zone_identifier(interp, arg)
     }
 }
 
@@ -2810,31 +2791,31 @@ pub(super) fn validate_calendar_strict(
     interp: &mut Interpreter,
     val: &JsValue,
 ) -> Result<String, Completion> {
-    match val {
-        JsValue::Undefined => Ok("iso8601".to_string()),
-        JsValue::String(s) => {
-            let raw = s.to_rust_string();
-            if raw.is_empty() {
-                return Err(Completion::Throw(
-                    interp.create_range_error("Invalid calendar: empty string"),
-                ));
-            }
-            if !raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-                return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid calendar: {raw}")),
-                ));
-            }
-            let normalized = canonicalize_temporal_calendar(&raw);
-            if is_supported_temporal_calendar(&normalized) {
-                Ok(normalized)
-            } else {
-                Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid calendar: {raw}")),
-                ))
-            }
-        }
-        _ => to_temporal_calendar_slot_value(interp, val),
+    if val.is_undefined() {
+        return Ok("iso8601".to_string());
     }
+    if let Some(s) = val.as_string() {
+        let raw = s.to_rust_string();
+        if raw.is_empty() {
+            return Err(Completion::Throw(
+                interp.create_range_error("Invalid calendar: empty string"),
+            ));
+        }
+        if !raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid calendar: {raw}")),
+            ));
+        }
+        let normalized = canonicalize_temporal_calendar(&raw);
+        return if is_supported_temporal_calendar(&normalized) {
+            Ok(normalized)
+        } else {
+            Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid calendar: {raw}")),
+            ))
+        };
+    }
+    to_temporal_calendar_slot_value(interp, val)
 }
 
 /// ToTemporalTimeZoneIdentifier — validates and returns a timezone string, or throws
@@ -2842,12 +2823,10 @@ pub(super) fn to_temporal_time_zone_identifier(
     interp: &mut Interpreter,
     arg: &JsValue,
 ) -> Result<String, Completion> {
-    match arg {
-        JsValue::Undefined => {
-            Ok(iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string()))
-        }
-        JsValue::String(s) => {
-            let s_str = s.to_string();
+    match arg.kind() {
+        ValueKind::Undefined => Ok(canonicalize_iana_tz(&system_time_zone_identifier())),
+        ValueKind::String => {
+            let s_str = arg.as_string().expect("checked String kind").to_string();
             match parse_temporal_time_zone_string(&s_str) {
                 Some(tz) => Ok(tz),
                 None => Err(Completion::Throw(
@@ -2855,9 +2834,10 @@ pub(super) fn to_temporal_time_zone_identifier(
                 )),
             }
         }
-        JsValue::Object(o) => {
+        ValueKind::Object => {
             // If it's a Temporal.ZonedDateTime, extract timeZoneId
-            if let Some(obj) = interp.get_object_cell(o.id) {
+            let o = arg.as_object_id().expect("checked Object kind");
+            if let Some(obj) = interp.get_object_cell(o) {
                 let td = obj.borrow().temporal_data().cloned();
                 if let Some(TemporalData::ZonedDateTime { time_zone, .. }) = td {
                     return Ok(time_zone);
@@ -2867,13 +2847,13 @@ pub(super) fn to_temporal_time_zone_identifier(
                 interp.create_type_error("Expected a string for time zone"),
             ))
         }
-        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) => Err(Completion::Throw(
+        ValueKind::Null | ValueKind::Boolean | ValueKind::Number => Err(Completion::Throw(
             interp.create_type_error("Expected a string for time zone"),
         )),
-        JsValue::Symbol(_) => Err(Completion::Throw(
+        ValueKind::Symbol => Err(Completion::Throw(
             interp.create_type_error("Cannot convert a Symbol value to a string"),
         )),
-        JsValue::BigInt(_) => Err(Completion::Throw(
+        ValueKind::BigInt => Err(Completion::Throw(
             interp.create_type_error("Cannot convert a BigInt value to a string"),
         )),
     }
@@ -4016,9 +3996,9 @@ pub(crate) fn to_primitive_and_require_string(
     let primitive = interp
         .to_primitive(val, "string")
         .map_err(Completion::Throw)?;
-    match primitive {
-        JsValue::String(s) => Ok(s.to_rust_string()),
-        _ => Err(Completion::Throw(
+    match primitive.as_string() {
+        Some(s) => Ok(s.to_rust_string()),
+        None => Err(Completion::Throw(
             interp.create_type_error(&format!("{field_name} must be a string")),
         )),
     }

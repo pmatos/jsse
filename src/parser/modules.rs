@@ -262,9 +262,13 @@ impl<'a> Parser<'a> {
             };
             self.eat_from()?;
             let source = self.parse_module_specifier()?;
-            self.parse_import_attributes()?;
+            let attributes = self.parse_import_attributes()?;
             self.eat_semicolon()?;
-            return Ok(ExportDeclaration::All { exported, source });
+            return Ok(ExportDeclaration::All {
+                exported,
+                source,
+                attributes,
+            });
         }
 
         // export { named }
@@ -274,11 +278,11 @@ impl<'a> Parser<'a> {
             let (specifiers, has_string_local) = self.parse_export_specifiers_with_info()?;
             self.eat(&Token::RightBrace)?;
 
-            let source = if self.is_from_keyword() {
+            let (source, attributes) = if self.is_from_keyword() {
                 self.advance()?;
                 let s = self.parse_module_specifier()?;
-                self.parse_import_attributes()?;
-                Some(s)
+                let attributes = self.parse_import_attributes()?;
+                (Some(s), attributes)
             } else {
                 // §16.2.3: without `from`, string literal local names are SyntaxError
                 if has_string_local {
@@ -286,12 +290,13 @@ impl<'a> Parser<'a> {
                         "A string literal cannot be used as an exported local name without 'from'",
                     ));
                 }
-                None
+                (None, vec![])
             };
             self.eat_semicolon()?;
             return Ok(ExportDeclaration::Named {
                 specifiers,
                 source,
+                attributes,
                 declaration: None,
             });
         }
@@ -301,6 +306,7 @@ impl<'a> Parser<'a> {
         Ok(ExportDeclaration::Named {
             specifiers: vec![],
             source: None,
+            attributes: vec![],
             declaration: Some(Box::new(declaration)),
         })
     }

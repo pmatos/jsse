@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::Chars;
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Token {
+pub(crate) enum Token {
     // Identifiers and keywords
     Identifier(String),
     IdentifierWithEscape(String), // identifier containing Unicode escapes
@@ -95,7 +95,7 @@ pub enum Token {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Keyword {
+pub(crate) enum Keyword {
     Async,
     Await,
     Break,
@@ -233,13 +233,13 @@ impl fmt::Display for Keyword {
 }
 
 #[derive(Clone, Debug)]
-pub struct SourceLocation {
+pub(crate) struct SourceLocation {
     pub line: u32,
     pub column: u32,
 }
 
 #[derive(Clone, Debug)]
-pub struct LexError {
+pub(crate) struct LexError {
     pub message: String,
     pub location: SourceLocation,
 }
@@ -254,7 +254,7 @@ impl fmt::Display for LexError {
     }
 }
 
-pub struct Lexer<'a> {
+pub(crate) struct Lexer<'a> {
     source: &'a str,
     chars: Chars<'a>,
     current: Option<char>,
@@ -267,10 +267,19 @@ pub struct Lexer<'a> {
     pub last_string_has_escape: bool,
     pub last_string_has_legacy_octal: bool,
     had_line_terminator: bool,
+    pua_undo: bool,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(source: &'a str) -> Self {
+    pub(crate) fn new(source: &'a str) -> Self {
+        Self::new_with_pua_undo(source, false)
+    }
+
+    pub(crate) fn new_for_eval(source: &'a str) -> Self {
+        Self::new_with_pua_undo(source, true)
+    }
+
+    fn new_with_pua_undo(source: &'a str, pua_undo: bool) -> Self {
         let mut chars = source.chars();
         let current = chars.next();
         Self {
@@ -286,6 +295,7 @@ impl<'a> Lexer<'a> {
             last_string_has_escape: false,
             last_string_has_legacy_octal: false,
             had_line_terminator: true,
+            pua_undo,
         }
     }
 
@@ -413,9 +423,15 @@ impl<'a> Lexer<'a> {
                     self.read_string_escape_into(&mut code_units, &mut has_legacy_octal)?;
                 }
                 Some(ch) => {
-                    let mut buf = [0u16; 2];
-                    for cu in ch.encode_utf16(&mut buf).iter() {
-                        code_units.push(*cu);
+                    if self.pua_undo
+                        && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
+                    {
+                        code_units.push(surrogate);
+                    } else {
+                        let mut buf = [0u16; 2];
+                        for cu in ch.encode_utf16(&mut buf).iter() {
+                            code_units.push(*cu);
+                        }
                     }
                 }
             }
@@ -506,9 +522,15 @@ impl<'a> Lexer<'a> {
                 Ok(())
             }
             Some(ch) => {
-                let mut buf = [0u16; 2];
-                for cu in ch.encode_utf16(&mut buf).iter() {
-                    out.push(*cu);
+                if self.pua_undo
+                    && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
+                {
+                    out.push(surrogate);
+                } else {
+                    let mut buf = [0u16; 2];
+                    for cu in ch.encode_utf16(&mut buf).iter() {
+                        out.push(*cu);
+                    }
                 }
                 Ok(())
             }
@@ -984,7 +1006,7 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    pub fn lex_regex(&mut self) -> Result<Token, LexError> {
+    pub(crate) fn lex_regex(&mut self) -> Result<Token, LexError> {
         let mut pattern = String::new();
         let mut in_class = false;
         loop {
@@ -1037,15 +1059,15 @@ impl<'a> Lexer<'a> {
         Ok(Token::RegExpLiteral { pattern, flags })
     }
 
-    pub fn token_start(&self) -> usize {
+    pub(crate) fn token_start(&self) -> usize {
         self.token_start
     }
 
-    pub fn offset(&self) -> usize {
+    pub(crate) fn offset(&self) -> usize {
         self.offset
     }
 
-    pub fn save_state(&self) -> (usize, Option<char>, u32, u32, usize, bool) {
+    pub(crate) fn save_state(&self) -> (usize, Option<char>, u32, u32, usize, bool) {
         (
             self.offset,
             self.current,
@@ -1056,7 +1078,7 @@ impl<'a> Lexer<'a> {
         )
     }
 
-    pub fn restore_state(&mut self, state: (usize, Option<char>, u32, u32, usize, bool)) {
+    pub(crate) fn restore_state(&mut self, state: (usize, Option<char>, u32, u32, usize, bool)) {
         self.offset = state.0;
         self.current = state.1;
         self.line = state.2;
@@ -1068,7 +1090,7 @@ impl<'a> Lexer<'a> {
         self.chars = self.source[self.offset + skip..].chars();
     }
 
-    pub fn next_token(&mut self) -> Result<Token, LexError> {
+    pub(crate) fn next_token(&mut self) -> Result<Token, LexError> {
         loop {
             self.skip_whitespace();
             self.token_start = self.offset;
@@ -1304,7 +1326,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn read_template_continuation(&mut self) -> Result<Token, LexError> {
+    pub(crate) fn read_template_continuation(&mut self) -> Result<Token, LexError> {
         let (cooked, raw, is_tail) = self.read_template_chars()?;
         if is_tail {
             Ok(Token::TemplateTail(cooked, raw))

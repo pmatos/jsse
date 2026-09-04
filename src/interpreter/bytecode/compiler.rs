@@ -1,6 +1,10 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
-use crate::ast::{AssignOp, BinaryOp, Expression, Literal, LogicalOp, Statement, UnaryOp};
+use crate::ast::{
+    AssignOp, BinaryOp, CallSiteId, Expression, ForInit, Literal, LogicalOp, MemberProperty,
+    Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
+};
+use crate::types::JsString;
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
@@ -12,12 +16,22 @@ pub(crate) enum CompileError {
     Unsupported(&'static str),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompileGoal {
+    Function,
+    Script,
+}
+
 struct Compiler {
+    goal: CompileGoal,
     code: Vec<u8>,
     constants: Vec<Constant>,
     names: Vec<std::rc::Rc<str>>,
+    var_names: Vec<u16>,
     current_stack: u16,
     max_stack: u16,
+    current_refs: u16,
+    max_refs: u16,
     /// Highest byte offset targeted by any patched forward jump. When this
     /// equals the final code length, some branch falls through to the very end
     /// of the chunk, so `finish` must append a trailing `ReturnUndefined` even
@@ -28,13 +42,17 @@ struct Compiler {
 }
 
 impl Compiler {
-    fn new() -> Self {
+    fn new(goal: CompileGoal) -> Self {
         Self {
+            goal,
             code: Vec::new(),
             constants: Vec::new(),
             names: Vec::new(),
+            var_names: Vec::new(),
             current_stack: 0,
             max_stack: 0,
+            current_refs: 0,
+            max_refs: 0,
             max_jump_target: 0,
         }
     }
@@ -69,6 +87,10 @@ impl Compiler {
         self.code.push((n >> 8) as u8);
     }
 
+    fn emit_u32(&mut self, n: u32) {
+        self.code.extend_from_slice(&n.to_le_bytes());
+    }
+
     /// Emit a forward jump with a placeholder offset; returns the patch site
     /// (offset of the first operand byte). Caller must invoke `patch_jump`
     /// once the target instruction has been emitted.
@@ -78,6 +100,17 @@ impl Compiler {
         self.code.push(0);
         self.code.push(0);
         patch
+    }
+
+    fn emit_jump_to(&mut self, op: Op, target: usize) -> Result<(), CompileError> {
+        self.emit(op);
+        let from = self.code.len() + 2;
+        let delta = target as isize - from as isize;
+        if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
+            return Err(CompileError::Unsupported("jump offset overflow"));
+        }
+        self.emit_u16(delta as i16 as u16);
+        Ok(())
     }
 
     fn patch_jump(&mut self, patch: usize) -> Result<(), CompileError> {
@@ -107,16 +140,114 @@ impl Compiler {
         self.current_stack -= n;
     }
 
+    fn push_ref(&mut self) {
+        self.current_refs += 1;
+        self.max_refs = self.max_refs.max(self.current_refs);
+    }
+
+    fn pop_ref(&mut self) {
+        debug_assert!(
+            self.current_refs > 0,
+            "reference stack underflow during compile"
+        );
+        self.current_refs -= 1;
+    }
+
+    fn emit_resolve_name(&mut self, name_idx: u16) {
+        self.emit(Op::ResolveName);
+        self.emit_u16(name_idx);
+        self.push_ref();
+    }
+
+    fn emit_store_resolved_name(&mut self, name_idx: u16) {
+        self.emit(Op::StoreResolvedName);
+        self.emit_u16(name_idx);
+        self.pop_ref();
+    }
+
+    fn emit_load_name(&mut self, name_idx: u16) {
+        self.emit(Op::LoadName);
+        self.emit_u16(name_idx);
+        self.push_n(1);
+    }
+
+    fn compile_load_name(&mut self, name: &str) -> Result<(), CompileError> {
+        let idx = self.add_name(name)?;
+        self.emit_load_name(idx);
+        Ok(())
+    }
+
+    fn reset_script_completion(&mut self) {
+        if self.goal == CompileGoal::Script {
+            self.emit(Op::LoadUndefined);
+            self.push_n(1);
+            self.emit(Op::SetCompletion);
+            self.pop_n(1);
+        }
+    }
+
+    fn add_var_name(&mut self, name: &str) -> Result<u16, CompileError> {
+        let idx = self.add_name(name)?;
+        if !self.var_names.contains(&idx) {
+            self.var_names.push(idx);
+        }
+        Ok(idx)
+    }
+
+    fn binary_op(op: BinaryOp) -> Result<Op, CompileError> {
+        match op {
+            BinaryOp::Add => Ok(Op::Add),
+            BinaryOp::Sub => Ok(Op::Sub),
+            BinaryOp::Mul => Ok(Op::Mul),
+            BinaryOp::Div => Ok(Op::Div),
+            BinaryOp::Mod => Ok(Op::Mod),
+            BinaryOp::Exp => Ok(Op::Pow),
+            BinaryOp::Eq => Ok(Op::Eq),
+            BinaryOp::NotEq => Ok(Op::NotEq),
+            BinaryOp::StrictEq => Ok(Op::StrictEq),
+            BinaryOp::StrictNotEq => Ok(Op::StrictNotEq),
+            BinaryOp::Lt => Ok(Op::Lt),
+            BinaryOp::Gt => Ok(Op::Gt),
+            BinaryOp::LtEq => Ok(Op::LtEq),
+            BinaryOp::GtEq => Ok(Op::GtEq),
+            BinaryOp::BitAnd => Ok(Op::BitAnd),
+            BinaryOp::BitOr => Ok(Op::BitOr),
+            BinaryOp::BitXor => Ok(Op::BitXor),
+            BinaryOp::LShift => Ok(Op::Shl),
+            BinaryOp::RShift => Ok(Op::Shr),
+            BinaryOp::URShift => Ok(Op::UShr),
+            _ => Err(CompileError::Unsupported("binary op")),
+        }
+    }
+
+    fn compound_binary_op(op: AssignOp) -> Result<Op, CompileError> {
+        let binary = match op {
+            AssignOp::AddAssign => BinaryOp::Add,
+            AssignOp::SubAssign => BinaryOp::Sub,
+            AssignOp::MulAssign => BinaryOp::Mul,
+            AssignOp::DivAssign => BinaryOp::Div,
+            AssignOp::ModAssign => BinaryOp::Mod,
+            AssignOp::ExpAssign => BinaryOp::Exp,
+            AssignOp::LShiftAssign => BinaryOp::LShift,
+            AssignOp::RShiftAssign => BinaryOp::RShift,
+            AssignOp::URShiftAssign => BinaryOp::URShift,
+            AssignOp::BitAndAssign => BinaryOp::BitAnd,
+            AssignOp::BitOrAssign => BinaryOp::BitOr,
+            AssignOp::BitXorAssign => BinaryOp::BitXor,
+            _ => return Err(CompileError::Unsupported("assignment op")),
+        };
+        Self::binary_op(binary)
+    }
+
     fn compile_expr(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
             Expression::Literal(lit) => self.compile_literal(lit),
-            Expression::Identifier(name) => {
-                let idx = self.add_name(name)?;
-                self.emit(Op::LoadName);
-                self.emit_u16(idx);
+            Expression::This => {
+                self.emit(Op::LoadThis);
                 self.push_n(1);
                 Ok(())
             }
+            Expression::Identifier(name) => self.compile_load_name(name),
             Expression::Unary(op, operand) => {
                 self.compile_expr(operand)?;
                 let bop = match op {
@@ -143,15 +274,63 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Expression::Assign(AssignOp::Assign, target, value) => {
+            Expression::Assign(op, target, value) => match target.as_ref() {
+                Expression::Identifier(name) => {
+                    let idx = self.add_name(name)?;
+                    self.emit_resolve_name(idx);
+                    if *op == AssignOp::Assign {
+                        self.compile_expr(value)?;
+                    } else {
+                        self.emit(Op::LoadResolvedName);
+                        self.emit_u16(idx);
+                        self.push_n(1);
+                        self.compile_expr(value)?;
+                        self.emit(Self::compound_binary_op(*op)?);
+                        self.pop_n(2);
+                        self.push_n(1);
+                    }
+                    self.emit_store_resolved_name(idx);
+                    Ok(())
+                }
+                Expression::Member(obj, prop, _) if *op == AssignOp::Assign => match prop {
+                    MemberProperty::Dot(name) => {
+                        self.compile_expr(obj)?;
+                        let idx = self.add_name(name)?;
+                        self.compile_expr(value)?;
+                        self.emit(Op::SetProp);
+                        self.emit_u16(idx);
+                        self.pop_n(2);
+                        self.push_n(1);
+                        Ok(())
+                    }
+                    MemberProperty::Computed(key) => {
+                        self.compile_expr(obj)?;
+                        self.compile_expr(key)?;
+                        self.compile_expr(value)?;
+                        self.emit(Op::SetElement);
+                        self.pop_n(3);
+                        self.push_n(1);
+                        Ok(())
+                    }
+                    MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
+                },
+                _ => Err(CompileError::Unsupported("assign target")),
+            },
+            Expression::Update(op, prefix, target) => {
                 let Expression::Identifier(name) = target.as_ref() else {
-                    return Err(CompileError::Unsupported("assign target"));
+                    return Err(CompileError::Unsupported("update target"));
                 };
                 let idx = self.add_name(name)?;
-                self.compile_expr(value)?;
-                self.emit(Op::StoreName);
+                self.emit(Op::UpdateName);
                 self.emit_u16(idx);
-                // Stack height unchanged: value remains on stack.
+                let mode = match (op, prefix) {
+                    (UpdateOp::Increment, false) => 0,
+                    (UpdateOp::Increment, true) => 1,
+                    (UpdateOp::Decrement, false) => 2,
+                    (UpdateOp::Decrement, true) => 3,
+                };
+                self.code.push(mode);
+                self.push_n(1);
                 Ok(())
             }
             Expression::Logical(op, lhs, rhs) => {
@@ -198,36 +377,100 @@ impl Compiler {
             Expression::Binary(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
                 self.compile_expr(rhs)?;
-                let bytecode_op = match op {
-                    BinaryOp::Add => Op::Add,
-                    BinaryOp::Sub => Op::Sub,
-                    BinaryOp::Mul => Op::Mul,
-                    BinaryOp::Div => Op::Div,
-                    BinaryOp::Mod => Op::Mod,
-                    BinaryOp::Exp => Op::Pow,
-                    BinaryOp::Eq => Op::Eq,
-                    BinaryOp::NotEq => Op::NotEq,
-                    BinaryOp::StrictEq => Op::StrictEq,
-                    BinaryOp::StrictNotEq => Op::StrictNotEq,
-                    BinaryOp::Lt => Op::Lt,
-                    BinaryOp::Gt => Op::Gt,
-                    BinaryOp::LtEq => Op::LtEq,
-                    BinaryOp::GtEq => Op::GtEq,
-                    BinaryOp::BitAnd => Op::BitAnd,
-                    BinaryOp::BitOr => Op::BitOr,
-                    BinaryOp::BitXor => Op::BitXor,
-                    BinaryOp::LShift => Op::Shl,
-                    BinaryOp::RShift => Op::Shr,
-                    BinaryOp::URShift => Op::UShr,
-                    _ => return Err(CompileError::Unsupported("binary op")),
-                };
-                self.emit(bytecode_op);
+                self.emit(Self::binary_op(*op)?);
                 self.pop_n(2);
                 self.push_n(1);
                 Ok(())
             }
-            _ => Err(CompileError::Unsupported("expression")),
+            Expression::Member(obj, prop, _site_id) => match prop {
+                MemberProperty::Dot(name) => {
+                    self.compile_expr(obj)?;
+                    let idx = self.add_name(name)?;
+                    self.emit(Op::GetProp);
+                    self.emit_u16(idx);
+                    // Stack height unchanged: pop base, push value.
+                    Ok(())
+                }
+                MemberProperty::Computed(key) => {
+                    self.compile_expr(obj)?;
+                    self.compile_expr(key)?;
+                    self.emit(Op::GetElement);
+                    self.pop_n(2);
+                    self.push_n(1);
+                    Ok(())
+                }
+                MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
+            },
+            Expression::Call(callee, args, site_id) => {
+                self.compile_call(callee, args, Op::Call, *site_id)
+            }
+            _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
+    }
+
+    fn compile_call(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        op: Op,
+        site_id: CallSiteId,
+    ) -> Result<(), CompileError> {
+        let Expression::Identifier(name) = callee else {
+            return Err(CompileError::Unsupported("call callee"));
+        };
+        // A bare `eval` may resolve to the realm's intrinsic eval at runtime,
+        // in which case it needs the caller's lexical environment. Keep the
+        // whole Body on the tree-walker rather than changing direct-eval
+        // semantics.
+        if name == "eval" {
+            return Err(CompileError::Unsupported("direct eval call"));
+        }
+        if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
+            return Err(CompileError::Unsupported("spread call argument"));
+        }
+        let argc = u16::try_from(args.len())
+            .map_err(|_| CompileError::Unsupported("call argument count overflow"))?;
+        if usize::from(self.current_stack) + args.len() + 2 > usize::from(u16::MAX) {
+            return Err(CompileError::Unsupported("operand stack overflow"));
+        }
+
+        let name_idx = self.add_name(name)?;
+        self.emit(Op::LoadCalleeName);
+        self.emit_u16(name_idx);
+        // Stack layout consumed by Call/ReturnCall:
+        //   [..., callee, this, arg0, ..., argN]
+        self.push_n(2);
+        for arg in args {
+            self.compile_expr(arg)?;
+        }
+        self.emit(op);
+        self.emit_u16(argc);
+        self.emit_u32(site_id.0);
+        self.pop_n(argc + 2);
+        if matches!(op, Op::Call | Op::ReturnCall) {
+            self.push_n(1);
+        }
+        Ok(())
+    }
+
+    fn compile_var_declaration(&mut self, decl: &VariableDeclaration) -> Result<(), CompileError> {
+        if decl.kind != VarKind::Var {
+            return Err(CompileError::Unsupported("lexical declaration"));
+        }
+        for declarator in &decl.declarations {
+            let Pattern::Identifier(name) = &declarator.pattern else {
+                return Err(CompileError::Unsupported("var binding pattern"));
+            };
+            let idx = self.add_var_name(name)?;
+            if let Some(init) = &declarator.init {
+                self.emit_resolve_name(idx);
+                self.compile_expr(init)?;
+                self.emit_store_resolved_name(idx);
+                self.emit(Op::Pop);
+                self.pop_n(1);
+            }
+        }
+        Ok(())
     }
 
     fn compile_literal(&mut self, lit: &Literal) -> Result<(), CompileError> {
@@ -240,8 +483,7 @@ impl Compiler {
                 Ok(())
             }
             Literal::String(units) => {
-                let s = String::from_utf16_lossy(units);
-                let idx = self.add_constant(Constant::String(s.into()))?;
+                let idx = self.add_constant(Constant::String(JsString::from_vec(units.clone())))?;
                 self.emit(Op::LoadConst);
                 self.emit_u16(idx);
                 self.push_n(1);
@@ -271,7 +513,11 @@ impl Compiler {
             Statement::Empty => Ok(()),
             Statement::Expression(expr) => {
                 self.compile_expr(expr)?;
-                self.emit(Op::Pop);
+                self.emit(if self.goal == CompileGoal::Script {
+                    Op::SetCompletion
+                } else {
+                    Op::Pop
+                });
                 self.pop_n(1);
                 Ok(())
             }
@@ -284,7 +530,12 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Statement::Variable(decl) => self.compile_var_declaration(decl),
             Statement::If(if_stmt) => {
+                // IfStatement always produces a value: an empty selected arm
+                // is updated to undefined, and a missing else on the false
+                // path returns undefined. A value-producing arm replaces it.
+                self.reset_script_completion();
                 // Lowering (mirrors `Conditional`'s JumpIfFalse discipline):
                 //   <test>
                 //   JumpIfFalse else_target   ; JumpIfFalse POPS the test value
@@ -309,35 +560,122 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Statement::While(while_stmt) => {
+                // WhileLoopEvaluation starts its local V at undefined and
+                // updates it only when the body produces a non-empty value.
+                self.reset_script_completion();
+                let loop_start = self.code.len();
+                self.compile_expr(&while_stmt.test)?;
+                self.pop_n(1);
+                let exit = self.emit_jump(Op::JumpIfFalse);
+                self.compile_statement(&while_stmt.body)?;
+                debug_assert_eq!(self.current_stack, 0);
+                debug_assert_eq!(self.current_refs, 0);
+                self.emit_jump_to(Op::Jump, loop_start)?;
+                self.patch_jump(exit)?;
+                Ok(())
+            }
+            Statement::For(for_stmt) => {
+                // ForBodyEvaluation has the same V accumulator semantics as
+                // while. Reset once before the initializer, not at the loop
+                // backedge, so later empty iterations retain the prior V.
+                self.reset_script_completion();
+                if let Some(init) = &for_stmt.init {
+                    match init {
+                        ForInit::Variable(decl) => self.compile_var_declaration(decl)?,
+                        ForInit::Expression(expr) => {
+                            self.compile_expr(expr)?;
+                            self.emit(Op::Pop);
+                            self.pop_n(1);
+                        }
+                    }
+                }
+                let loop_start = self.code.len();
+                let exit = if let Some(test) = &for_stmt.test {
+                    self.compile_expr(test)?;
+                    self.pop_n(1);
+                    Some(self.emit_jump(Op::JumpIfFalse))
+                } else {
+                    None
+                };
+                self.compile_statement(&for_stmt.body)?;
+                if let Some(update) = &for_stmt.update {
+                    self.compile_expr(update)?;
+                    self.emit(Op::Pop);
+                    self.pop_n(1);
+                }
+                debug_assert_eq!(self.current_stack, 0);
+                debug_assert_eq!(self.current_refs, 0);
+                self.emit_jump_to(Op::Jump, loop_start)?;
+                if let Some(exit) = exit {
+                    self.patch_jump(exit)?;
+                }
+                Ok(())
+            }
+            Statement::Return(_) if self.goal == CompileGoal::Script => {
+                Err(CompileError::Unsupported("return in script"))
+            }
             Statement::Return(None) => {
                 self.emit(Op::ReturnUndefined);
                 Ok(())
             }
+            Statement::Return(Some(Expression::Call(callee, args, site_id))) => {
+                self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
+                self.emit(Op::Return);
+                self.pop_n(1);
+                Ok(())
+            }
             Statement::Return(Some(expr)) => {
+                if contains_tail_call(expr) {
+                    return Err(CompileError::Unsupported("nested tail call"));
+                }
                 self.compile_expr(expr)?;
                 self.emit(Op::Return);
                 self.pop_n(1);
                 Ok(())
             }
-            _ => Err(CompileError::Unsupported("statement")),
+            _ => Err(CompileError::Unsupported(statement_kind(stmt))),
         }
     }
 
     fn finish(mut self) -> Chunk {
-        // Emit a trailing `ReturnUndefined` unless the chunk already ends in a
-        // return AND no branch falls through to the end. A forward jump whose
-        // target is the end of the chunk (e.g. the false arm of a one-armed
-        // `if` whose consequent ends in `return`) would otherwise run `pc` past
-        // the last byte of `code` and panic in the VM dispatch loop.
-        if !ends_with_return(&self.code) || self.max_jump_target >= self.code.len() {
-            self.emit(Op::ReturnUndefined);
+        if self.goal == CompileGoal::Script {
+            // ScriptEvaluation exposes the StatementList's last non-empty
+            // completion. Expression statements and the supported structured
+            // statements maintain that accumulator via SetCompletion.
+            self.emit(Op::ReturnCompletion);
+        } else {
+            // Emit a trailing `ReturnUndefined` unless the chunk already ends in a
+            // return AND no branch falls through to the end. A forward jump whose
+            // target is the end of the chunk (e.g. the false arm of a one-armed
+            // `if` whose consequent ends in `return`) would otherwise run `pc` past
+            // the last byte of `code` and panic in the VM dispatch loop.
+            if !ends_with_return(&self.code) || self.max_jump_target >= self.code.len() {
+                self.emit(Op::ReturnUndefined);
+            }
         }
         Chunk {
             code: self.code,
             constants: self.constants,
             names: self.names,
+            var_names: self.var_names,
             max_stack: self.max_stack,
+            max_refs: self.max_refs,
         }
+    }
+}
+
+fn contains_tail_call(expr: &Expression) -> bool {
+    match expr {
+        Expression::Call(..) => true,
+        Expression::Conditional(_, consequent, alternate) => {
+            contains_tail_call(consequent) || contains_tail_call(alternate)
+        }
+        Expression::Logical(_, _, rhs) => contains_tail_call(rhs),
+        Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+            exprs.last().is_some_and(contains_tail_call)
+        }
+        _ => false,
     }
 }
 
@@ -348,8 +686,88 @@ fn ends_with_return(code: &[u8]) -> bool {
     )
 }
 
+/// Names the statement kind a bail was blamed on. A label reading only
+/// "statement" cannot tell an eligibility expansion which construct to reach
+/// for next (issue #524), so the catch-all arm names the variant. Exhaustive on
+/// purpose: a new AST variant fails to compile here until it is classified.
+fn statement_kind(node: &Statement) -> &'static str {
+    match node {
+        Statement::Empty => "statement:Empty",
+        Statement::Expression { .. } => "statement:Expression",
+        Statement::Block { .. } => "statement:Block",
+        Statement::Variable { .. } => "statement:Variable",
+        Statement::If { .. } => "statement:If",
+        Statement::While { .. } => "statement:While",
+        Statement::DoWhile { .. } => "statement:DoWhile",
+        Statement::For { .. } => "statement:For",
+        Statement::ForIn { .. } => "statement:ForIn",
+        Statement::ForOf { .. } => "statement:ForOf",
+        Statement::Return { .. } => "statement:Return",
+        Statement::Break { .. } => "statement:Break",
+        Statement::Continue { .. } => "statement:Continue",
+        Statement::Throw { .. } => "statement:Throw",
+        Statement::Try { .. } => "statement:Try",
+        Statement::Switch { .. } => "statement:Switch",
+        Statement::Labeled { .. } => "statement:Labeled",
+        Statement::With { .. } => "statement:With",
+        Statement::Debugger => "statement:Debugger",
+        Statement::FunctionDeclaration { .. } => "statement:FunctionDeclaration",
+        Statement::ClassDeclaration { .. } => "statement:ClassDeclaration",
+    }
+}
+
+/// The expression counterpart of [`statement_kind`], and exhaustive for the
+/// same reason.
+fn expression_kind(node: &Expression) -> &'static str {
+    match node {
+        Expression::Literal { .. } => "expression:Literal",
+        Expression::Identifier { .. } => "expression:Identifier",
+        Expression::This => "expression:This",
+        Expression::Super => "expression:Super",
+        Expression::Array { .. } => "expression:Array",
+        Expression::Object { .. } => "expression:Object",
+        Expression::Function { .. } => "expression:Function",
+        Expression::ArrowFunction { .. } => "expression:ArrowFunction",
+        Expression::Class { .. } => "expression:Class",
+        Expression::Unary { .. } => "expression:Unary",
+        Expression::Binary { .. } => "expression:Binary",
+        Expression::Logical { .. } => "expression:Logical",
+        Expression::Update { .. } => "expression:Update",
+        Expression::Assign { .. } => "expression:Assign",
+        Expression::Conditional { .. } => "expression:Conditional",
+        Expression::Call { .. } => "expression:Call",
+        Expression::New { .. } => "expression:New",
+        Expression::Member { .. } => "expression:Member",
+        Expression::OptionalChain { .. } => "expression:OptionalChain",
+        Expression::Comma { .. } => "expression:Comma",
+        Expression::Spread { .. } => "expression:Spread",
+        Expression::Yield { .. } => "expression:Yield",
+        Expression::Await { .. } => "expression:Await",
+        Expression::TaggedTemplate { .. } => "expression:TaggedTemplate",
+        Expression::Template { .. } => "expression:Template",
+        Expression::Typeof { .. } => "expression:Typeof",
+        Expression::Void { .. } => "expression:Void",
+        Expression::Delete { .. } => "expression:Delete",
+        Expression::Sequence { .. } => "expression:Sequence",
+        Expression::Import { .. } => "expression:Import",
+        Expression::ImportDefer { .. } => "expression:ImportDefer",
+        Expression::ImportSource { .. } => "expression:ImportSource",
+        Expression::ImportMeta => "expression:ImportMeta",
+        Expression::NewTarget => "expression:NewTarget",
+        Expression::PrivateIdentifier { .. } => "expression:PrivateIdentifier",
+    }
+}
+
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
-    let mut c = Compiler::new();
+    let mut c = Compiler::new(CompileGoal::Function);
+    for stmt in body {
+        c.compile_statement(stmt)?;
+    }
+    Ok(c.finish())
+}
+
+pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileError> {
+    let mut c = Compiler::new(CompileGoal::Script);
     for stmt in body {
         c.compile_statement(stmt)?;
     }

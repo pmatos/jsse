@@ -7,7 +7,7 @@ impl Interpreter {
         &mut self,
         binding_name: &str,
         env: &crate::interpreter::types::EnvRef,
-        module_path: Option<&std::path::Path>,
+        module_path: Option<&ModuleKey>,
         original_key: &str,
     ) -> Result<JsValue, JsValue> {
         self.resolve_module_export_value_inner(
@@ -23,12 +23,12 @@ impl Interpreter {
         &mut self,
         binding_name: &str,
         env: &crate::interpreter::types::EnvRef,
-        module_path: Option<&std::path::Path>,
+        module_path: Option<&ModuleKey>,
         original_key: &str,
-        visited: &mut HashSet<(std::path::PathBuf, String)>,
+        visited: &mut HashSet<(ModuleKey, String)>,
     ) -> Result<JsValue, JsValue> {
         if let Some(mp) = module_path {
-            let key = (mp.to_path_buf(), binding_name.to_string());
+            let key = (mp.clone(), binding_name.to_string());
             if visited.contains(&key) {
                 return Err(self.create_reference_error(&format!(
                     "Cannot access '{}' before initialization",
@@ -49,7 +49,7 @@ impl Interpreter {
             {
                 return Ok(val.clone());
             }
-            return Ok(JsValue::Undefined);
+            return Ok(JsValue::UNDEFINED);
         }
 
         // Handle *reexport:source:name — follow the chain recursively
@@ -58,8 +58,9 @@ impl Interpreter {
                 let source = &rest[..colon_idx];
                 let export_name = &rest[colon_idx + 1..];
                 if let Some(mp) = module_path
-                    && let Ok(resolved) = self.resolve_module_specifier(source, Some(mp))
-                    && let Ok(source_mod) = self.load_module(&resolved)
+                    && let Ok(resolved) = self.resolve_module_specifier(source, mp.file_path())
+                    && let Ok(source_mod) =
+                        self.load_module_for_type(&resolved, None, super::ModuleLoadMode::Evaluate)
                 {
                     let source_ref = source_mod.borrow();
                     let source_env = source_ref.env.clone();
@@ -89,7 +90,7 @@ impl Interpreter {
                     }
                 }
             }
-            return Ok(JsValue::Undefined);
+            return Ok(JsValue::UNDEFINED);
         }
 
         // Local binding: look up in the provided environment
@@ -103,14 +104,18 @@ impl Interpreter {
             return Ok(val);
         }
 
-        Ok(JsValue::Undefined)
+        Ok(JsValue::UNDEFINED)
     }
 
     /// Check if accessing `key` on a module namespace object would hit TDZ.
     /// Returns Err(ReferenceError) if the binding is uninitialized.
     /// Returns Ok(()) if the key is safe to access or the object is not a namespace.
-    pub(crate) fn check_namespace_tdz(&mut self, obj_id: u64, key: &str) -> Result<(), JsValue> {
-        if key.starts_with("Symbol(") {
+    pub(crate) fn check_namespace_tdz<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+    ) -> Result<(), JsValue> {
+        if key.to_js_property_key().is_symbol() {
             return Ok(());
         }
         let ns_data = if let Some(obj) = self.get_object_cell(obj_id) {
@@ -123,7 +128,9 @@ impl Interpreter {
             if ns_data.deferred && !Self::is_symbol_like_namespace_key(key, true) {
                 self.ensure_deferred_namespace_evaluation(obj_id)?;
             }
-            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
+            {
                 if binding_name.starts_with("*ns:") {
                     return Ok(());
                 }
@@ -134,19 +141,23 @@ impl Interpreter {
                         let export_name = &rest[colon_idx + 1..];
                         if let Some(ref module_path) = ns_data.module_path
                             && let Ok(resolved) =
-                                self.resolve_module_specifier(source, Some(module_path))
-                            && let Ok(source_mod) = self.load_module(&resolved)
+                                self.resolve_module_specifier(source, module_path.file_path())
+                            && let Ok(source_mod) = self.load_module_for_type(
+                                &resolved,
+                                None,
+                                super::ModuleLoadMode::Evaluate,
+                            )
                         {
                             let source_ref = source_mod.borrow();
                             if let Some(binding) = source_ref.export_bindings.get(export_name) {
                                 if source_ref.env.borrow().is_in_tdz(binding) {
                                     return Err(self.create_reference_error(&format!(
-                                        "Cannot access '{key}' before initialization"
+                                        "Cannot access '{key_str}' before initialization"
                                     )));
                                 }
                             } else if source_ref.env.borrow().is_in_tdz(export_name) {
                                 return Err(self.create_reference_error(&format!(
-                                    "Cannot access '{key}' before initialization"
+                                    "Cannot access '{key_str}' before initialization"
                                 )));
                             }
                         }
@@ -155,7 +166,7 @@ impl Interpreter {
                 }
                 if ns_data.env.borrow().is_in_tdz(binding_name) {
                     return Err(self.create_reference_error(&format!(
-                        "Cannot access '{key}' before initialization"
+                        "Cannot access '{key_str}' before initialization"
                     )));
                 }
             }
@@ -164,8 +175,12 @@ impl Interpreter {
     }
 
     /// IsSymbolLikeNamespaceKey(P, O): true if P is a Symbol, or deferred + "then"
-    pub fn is_symbol_like_namespace_key(key: &str, deferred: bool) -> bool {
-        key.starts_with("Symbol(") || (deferred && key == "then")
+    pub(crate) fn is_symbol_like_namespace_key<K: PropertyKeyLike + ?Sized>(
+        key: &K,
+        deferred: bool,
+    ) -> bool {
+        let key = key.to_js_property_key();
+        key.is_symbol() || (deferred && key.eq_str("then"))
     }
 
     /// Trigger evaluation of a deferred module namespace when a non-symbol-like key is accessed.
@@ -261,15 +276,18 @@ impl Interpreter {
         name: &str,
     ) -> Result<bool, JsValue> {
         let unscopables_val = {
-            let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
-            let key = "Symbol(Symbol.unscopables)";
-            match self.get_object_property(obj_id, key, &this_val) {
+            let this_val = JsValue::object(obj_id);
+            let key = JsPropertyKey::well_known_symbol("unscopables");
+            match self.get_object_property(obj_id, &key, &this_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
         };
-        if let JsValue::Object(u_ref) = &unscopables_val {
+        if let Some(u_ref) = unscopables_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let u_this = unscopables_val.clone();
             match self.get_object_property(u_ref.id, name, &u_this) {
                 Completion::Normal(v) => Ok(self.to_boolean_val(&v)),
@@ -330,7 +348,7 @@ impl Interpreter {
     ) -> Completion {
         match self.proxy_has_property(obj_id, name) {
             Ok(true) => {
-                let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+                let this_val = JsValue::object(obj_id);
                 self.get_object_property(obj_id, name, &this_val)
             }
             Ok(false) => {
@@ -339,7 +357,7 @@ impl Interpreter {
                         self.create_reference_error(&format!("{name} is not defined")),
                     )
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
             Err(e) => Completion::Throw(e),
@@ -357,7 +375,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         match self.proxy_has_property(obj_id, name) {
             Ok(true) => {
-                let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
+                let receiver = JsValue::object(obj_id);
                 let success = self.proxy_set(obj_id, name, value, &receiver)?;
                 if !success && strict {
                     return Err(self.create_type_error(&format!(
@@ -370,7 +388,7 @@ impl Interpreter {
                 if strict {
                     Err(self.create_reference_error(&format!("{name} is not defined")))
                 } else {
-                    let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
+                    let receiver = JsValue::object(obj_id);
                     self.proxy_set(obj_id, name, value, &receiver)?;
                     Ok(())
                 }
@@ -384,20 +402,22 @@ impl Interpreter {
         specifier: &str,
         import_type: Option<super::ImportModuleType>,
     ) -> Completion {
-        let resolved =
-            match self.resolve_module_specifier(specifier, self.current_module_path.as_deref()) {
-                Ok(p) => p,
-                Err(e) => {
-                    return self.create_rejected_promise(e);
-                }
-            };
+        let resolved = match self.resolve_module_specifier(
+            specifier,
+            self.current_module_path
+                .as_ref()
+                .and_then(ModuleKey::file_path),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                return self.create_rejected_promise(e);
+            }
+        };
 
-        // Text/bytes synthetic modules: load and resolve immediately
-        if let Some(ref itype) = import_type {
-            let module = match itype {
-                super::ImportModuleType::Text => self.load_text_module(&resolved),
-                super::ImportModuleType::Bytes => self.load_bytes_module(&resolved),
-            };
+        // Typed synthetic modules load and resolve immediately.
+        if import_type.is_some() {
+            let module =
+                self.load_module_for_type(&resolved, import_type, super::ModuleLoadMode::Evaluate);
             return match module {
                 Ok(m) => {
                     let ns = self.create_module_namespace(&m);
@@ -409,13 +429,14 @@ impl Interpreter {
 
         // If we're NOT inside a static module load, load synchronously
         if self.static_module_load_depth == 0 {
-            let module = match self.load_module(&resolved) {
-                Ok(m) => m,
-                Err(e) => {
-                    return self.create_rejected_promise(e);
-                }
-            };
-            let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+            let module =
+                match self.load_module_for_type(&resolved, None, super::ModuleLoadMode::Evaluate) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return self.create_rejected_promise(e);
+                    }
+                };
+            let resolved_canon = resolved.canonicalize();
             let mut stack = vec![];
             if let Err(ref e) = self.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
                 for m_path in &stack {
@@ -446,11 +467,13 @@ impl Interpreter {
         self.scheduler.enqueue_microtask((
             vec![promise_root, resolve_root.clone(), reject_root.clone()],
             Box::new(move |interp: &mut Interpreter| {
-                match interp.load_module(&resolved_path) {
+                match interp.load_module_for_type(
+                    &resolved_path,
+                    None,
+                    super::ModuleLoadMode::Evaluate,
+                ) {
                     Ok(m) => {
-                        let resolved_canon = resolved_path
-                            .canonicalize()
-                            .unwrap_or(resolved_path.clone());
+                        let resolved_canon = resolved_path.canonicalize();
                         let mut stack = vec![];
                         if let Err(ref e) =
                             interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
@@ -467,10 +490,10 @@ impl Interpreter {
                             }
                             let _ = interp.call_function(
                                 &reject_root,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 std::slice::from_ref(e),
                             );
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         let _ = interp.settle_dynamic_import_promise(
                             &m,
@@ -480,10 +503,10 @@ impl Interpreter {
                         );
                     }
                     Err(e) => {
-                        let _ = interp.call_function(&reject_root, &JsValue::Undefined, &[e]);
+                        let _ = interp.call_function(&reject_root, &JsValue::UNDEFINED, &[e]);
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }),
         ));
 
@@ -498,14 +521,14 @@ impl Interpreter {
         reject: JsValue,
     ) -> Completion {
         if let Some(err) = module.borrow().error.clone() {
-            let _ = self.call_function(&reject, &JsValue::Undefined, &[err]);
+            let _ = self.call_function(&reject, &JsValue::UNDEFINED, &[err]);
             return Completion::Normal(promise);
         }
 
         let evaluation_promise = match self.ensure_module_evaluation_promise(module) {
             Ok(promise) => promise,
             Err(err) => {
-                let _ = self.call_function(&reject, &JsValue::Undefined, &[err]);
+                let _ = self.call_function(&reject, &JsValue::UNDEFINED, &[err]);
                 return Completion::Normal(promise);
             }
         };
@@ -522,7 +545,7 @@ impl Interpreter {
             return self.perform_promise_then(
                 &eval_promise,
                 &on_fulfilled,
-                &JsValue::Undefined,
+                &JsValue::UNDEFINED,
                 promise,
                 resolve,
                 reject,
@@ -530,7 +553,7 @@ impl Interpreter {
         }
 
         let ns = self.create_module_namespace(module);
-        let _ = self.call_function(&resolve, &JsValue::Undefined, &[ns]);
+        let _ = self.call_function(&resolve, &JsValue::UNDEFINED, &[ns]);
         Completion::Normal(promise)
     }
 
@@ -542,7 +565,7 @@ impl Interpreter {
             let m = module.borrow();
             m.cycle_root
                 .clone()
-                .unwrap_or_else(|| m.path.canonicalize().unwrap_or_else(|_| m.path.clone()))
+                .unwrap_or_else(|| m.path.canonicalize())
         };
         let root_module = self
             .module_registry_get(&root_path)
@@ -584,25 +607,17 @@ impl Interpreter {
         caller_realm_id: usize,
         value: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        match value {
-            JsValue::Undefined
-            | JsValue::Null
-            | JsValue::Boolean(_)
-            | JsValue::Number(_)
-            | JsValue::String(_)
-            | JsValue::Symbol(_)
-            | JsValue::BigInt(_) => Ok(value.clone()),
-            JsValue::Object(_) => {
-                if !self.is_callable(value) {
-                    return Err(self.create_error_in_realm(
-                        caller_realm_id,
-                        "TypeError",
-                        "ShadowRealm can only pass callable and primitive values across realm boundaries",
-                    ));
-                }
-                self.wrapped_function_create(caller_realm_id, value)
-            }
+        if !value.is_object() {
+            return Ok(value.clone());
         }
+        if !self.is_callable(value) {
+            return Err(self.create_error_in_realm(
+                caller_realm_id,
+                "TypeError",
+                "ShadowRealm can only pass callable and primitive values across realm boundaries",
+            ));
+        }
+        self.wrapped_function_create(caller_realm_id, value)
     }
 
     pub(crate) fn wrapped_function_create(
@@ -621,9 +636,12 @@ impl Interpreter {
             o.prototype_id = fp_id;
             o.class_name = "Function".to_string();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }));
-            if let JsValue::Object(tf) = target_func {
+            if let Some(tf) = (target_func)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 o.kind = crate::interpreter::types::ObjectKind::WrappedFunction(
                     crate::interpreter::types::WrappedFunctionData {
                         target_id: tf.id,
@@ -637,10 +655,13 @@ impl Interpreter {
         self.current_realm_id = old_realm;
 
         // CopyNameAndLength (spec §10.4.2.4) — any error becomes TypeError from callerRealm
-        let length_val = if let JsValue::Object(tf) = target_func {
+        let length_val = if let Some(tf) = (target_func)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             // HasOwnProperty via [[GetOwnProperty]] (invokes proxy trap if proxy)
             let has_own_length = match self.proxy_get_own_property_descriptor(tf.id, "length") {
-                Ok(JsValue::Undefined) => false,
+                Ok(v) if v.is_undefined() => false,
                 Ok(_) => true,
                 Err(_) => {
                     return Err(self.create_error_in_realm(
@@ -660,17 +681,17 @@ impl Interpreter {
                             "WrappedFunctionCreate: error getting length",
                         ));
                     }
-                    _ => JsValue::Number(0.0),
+                    _ => JsValue::number(0.0),
                 }
             } else {
-                JsValue::Number(0.0)
+                JsValue::number(0.0)
             }
         } else {
-            JsValue::Number(0.0)
+            JsValue::number(0.0)
         };
 
-        let computed_length = match length_val {
-            JsValue::Number(n) => {
+        let computed_length = match length_val.as_number() {
+            Some(n) => {
                 if n == f64::INFINITY {
                     f64::INFINITY
                 } else if n == f64::NEG_INFINITY || n < 0.0 {
@@ -679,13 +700,15 @@ impl Interpreter {
                     n.trunc().max(0.0)
                 }
             }
-            _ => 0.0,
+            None => 0.0,
         };
 
-        let name_str = if let JsValue::Object(tf) = target_func {
+        let name_str = if let Some(tf) = (target_func)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             match self.get_object_property(tf.id, "name", target_func) {
-                Completion::Normal(JsValue::String(s)) => s.to_string(),
-                Completion::Normal(_) => String::new(),
+                Completion::Normal(v) => v.as_string().map_or_else(String::new, |s| s.to_string()),
                 Completion::Throw(_) => {
                     return Err(self.create_error_in_realm(
                         caller_realm_id,
@@ -702,12 +725,12 @@ impl Interpreter {
         if let Some(obj) = self.get_object_cell(func_id) {
             obj.borrow_mut().insert_property(
                 "length".to_string(),
-                PropertyDescriptor::data(JsValue::Number(computed_length), false, false, true),
+                PropertyDescriptor::data(JsValue::number(computed_length), false, false, true),
             );
             obj.borrow_mut().insert_property(
                 "name".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::String(crate::types::JsString::from_str(&name_str)),
+                    JsValue::string(crate::types::JsString::from_str(&name_str)),
                     false,
                     false,
                     true,
@@ -715,7 +738,7 @@ impl Interpreter {
             );
         }
 
-        Ok(JsValue::Object(crate::types::JsObject { id: func_id }))
+        Ok(JsValue::object(func_id))
     }
 
     pub(crate) fn call_wrapped_function(
@@ -739,10 +762,7 @@ impl Interpreter {
                     self.create_type_error("WrappedFunction: missing target"),
                 );
             };
-            (
-                JsValue::Object(crate::types::JsObject { id: w.target_id }),
-                w.caller_realm_id,
-            )
+            (JsValue::object(w.target_id), w.caller_realm_id)
         };
 
         let target_realm_id = match self.get_function_realm(&target) {
@@ -768,12 +788,12 @@ impl Interpreter {
         // Call target in its realm
         let old_realm = self.current_realm_id;
         self.current_realm_id = target_realm_id;
-        let result = self.call_function(&target, &JsValue::Undefined, &wrapped_args);
+        let result = self.call_function(&target, &JsValue::UNDEFINED, &wrapped_args);
         self.current_realm_id = old_realm;
 
         let result_val = match result {
             Completion::Normal(v) => v,
-            Completion::Empty => JsValue::Undefined,
+            Completion::Empty => JsValue::UNDEFINED,
             _ => {
                 return Completion::Throw(self.create_error_in_realm(
                     caller_realm_id,
@@ -864,7 +884,7 @@ impl Interpreter {
 
         let result_val = match result {
             Completion::Normal(v) => v,
-            Completion::Empty => JsValue::Undefined,
+            Completion::Empty => JsValue::UNDEFINED,
             _ => {
                 return Completion::Throw(self.create_error_in_realm(
                     caller_realm_id,

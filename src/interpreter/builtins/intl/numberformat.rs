@@ -12,9 +12,9 @@ use icu::locale::Locale as IcuLocale;
 /// %Intl%.[[FallbackSymbol]] via the ordinary [[Get]] (so Proxy traps fire)
 /// and require the result to carry the slot; otherwise throw a TypeError.
 fn unwrap_nf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValue> {
-    if let JsValue::Object(o) = this {
+    if let Some(o) = this.as_object_id() {
         let has_slot = interp
-            .get_object_cell(o.id)
+            .get_object_cell(o)
             .map(|c| matches!(c.borrow().intl_data(), Some(IntlData::NumberFormat { .. })))
             .unwrap_or(false);
         if has_slot {
@@ -23,23 +23,23 @@ fn unwrap_nf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValu
         if let Some(ctor) = interp.realm().intl_number_format_ctor.clone() {
             // ? OrdinaryHasInstance(%NumberFormat%, this) — propagate abrupt completions.
             let is_instance = match interp.ordinary_has_instance(&ctor, this) {
-                Completion::Normal(JsValue::Boolean(b)) => b,
+                Completion::Normal(v) => v.as_boolean().unwrap_or(false),
                 Completion::Throw(e) => return Err(e),
                 _ => false,
             };
             if is_instance {
-                let key = match interp.intl_fallback_symbol() {
-                    JsValue::Symbol(s) => s.to_property_key(),
-                    _ => unreachable!(),
+                let key = match interp.intl_fallback_symbol().as_symbol() {
+                    Some(s) => s.to_property_key(),
+                    None => unreachable!(),
                 };
-                let fb = match interp.get_object_property(o.id, &key, this) {
+                let fb = match interp.get_object_property(o, &key, this) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
-                if let JsValue::Object(fo) = &fb {
+                if let Some(fo) = fb.as_object_id() {
                     let fb_has_slot = interp
-                        .get_object_cell(fo.id)
+                        .get_object_cell(fo)
                         .map(|c| {
                             matches!(c.borrow().intl_data(), Some(IntlData::NumberFormat { .. }))
                         })
@@ -1190,16 +1190,14 @@ fn wrap_style(
 }
 
 fn intl_to_number(interp: &mut Interpreter, val: &JsValue) -> Result<f64, JsValue> {
-    match val {
-        JsValue::BigInt(bi) => {
-            let s = bi.value.to_string();
-            Ok(s.parse::<f64>().unwrap_or(if s.starts_with('-') {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            }))
-        }
-        _ => interp.to_number_value(val),
+    if let Some(s) = val.with_bigint(|b| b.to_string()) {
+        Ok(s.parse::<f64>().unwrap_or(if s.starts_with('-') {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        }))
+    } else {
+        interp.to_number_value(val)
     }
 }
 
@@ -2964,19 +2962,7 @@ impl Interpreter {
             .class_name = "Intl.NumberFormat".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.NumberFormat"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.NumberFormat");
 
         // format getter
         let format_getter = self.create_function(JsFunction::native(
@@ -2988,14 +2974,14 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this {
+                if let Some(o) = this.as_object_id() {
                     enum Probe {
                         NotNf,
                         Cached(JsValue),
                         Uncached,
                     }
                     let probe = interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(o)
                         .map(|cell| {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::NumberFormat { .. })) {
@@ -3022,7 +3008,7 @@ impl Interpreter {
                     }
 
                     let nf_data = {
-                        if let Some(obj) = interp.get_object_cell(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o) {
                             let b = obj.borrow();
                             b.intl_data().cloned()
                         } else {
@@ -3058,22 +3044,24 @@ impl Interpreter {
                             "".to_string(),
                             1,
                             move |interp2, _this2, args2| {
-                                let val = args2.first().cloned().unwrap_or(JsValue::Undefined);
+                                let val = args2.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
-                                let use_string_decimal = if let JsValue::BigInt(bi) = &val {
-                                    let abs_str = bi.value.to_string().trim_start_matches('-').to_string();
+                                let use_string_decimal = if let Some(bi_str) = val.with_bigint(|b| b.to_string()) {
+                                    let abs_str = bi_str.trim_start_matches('-').to_string();
                                     abs_str.len() > 15
-                                } else if let JsValue::String(s) = &val {
+                                } else if let Some(s) = val.as_string() {
                                     string_needs_decimal_precision(&s.to_string())
                                 } else {
                                     false
                                 };
 
                                 let result = if use_string_decimal {
-                                    let s = match &val {
-                                        JsValue::BigInt(bi) => bi.value.to_string(),
-                                        JsValue::String(s) => s.to_string(),
-                                        _ => unreachable!(),
+                                    let s = if let Some(bi_str) = val.with_bigint(|b| b.to_string()) {
+                                        bi_str
+                                    } else if let Some(s) = val.as_string() {
+                                        s.to_string()
+                                    } else {
+                                        unreachable!()
                                     };
                                     format_number_from_string_decimal(
                                         &s, &locale, &style, &currency, &currency_display,
@@ -3097,11 +3085,11 @@ impl Interpreter {
                                     )
                                 };
 
-                                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                                Completion::Normal(JsValue::from_str(&result))
                             },
                         ));
 
-                        if let Some(obj) = interp.get_object_cell(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o) {
                             obj.borrow_mut().properties.insert(
                                 crate::interpreter::key_intern::intern_key("[[BoundFormat]]"),
                                 PropertyDescriptor::data(format_fn.clone(), false, false, false),
@@ -3133,9 +3121,9 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this {
+                if let Some(o) = this.as_object_id() {
                     let nf_data = {
-                        if let Some(obj) = interp.get_object_cell(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o) {
                             let b = obj.borrow();
                             b.intl_data().cloned()
                         } else {
@@ -3167,7 +3155,7 @@ impl Interpreter {
                         trailing_zero_display,
                     }) = nf_data
                     {
-                        let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let num = match intl_to_number(interp, &val) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
@@ -3214,7 +3202,7 @@ impl Interpreter {
                                     .insert_property(
                                         "type".to_string(),
                                         PropertyDescriptor::data(
-                                            JsValue::String(JsString::from_str(&typ)),
+                                            JsValue::from_str(&typ),
                                             true,
                                             true,
                                             true,
@@ -3226,14 +3214,13 @@ impl Interpreter {
                                     .insert_property(
                                         "value".to_string(),
                                         PropertyDescriptor::data(
-                                            JsValue::String(JsString::from_str(&val)),
+                                            JsValue::from_str(&val),
                                             true,
                                             true,
                                             true,
                                         ),
                                     );
-                                let id = part_obj_id;
-                                JsValue::Object(crate::types::JsObject { id })
+                                JsValue::object(part_obj_id)
                             })
                             .collect();
 
@@ -3259,25 +3246,24 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this {
-                    let nf_present = interp.get_object_cell(o.id).is_some_and(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let nf_present = interp.get_object_cell(o).is_some_and(|cell| {
                         matches!(
                             cell.borrow().intl_data(),
                             Some(IntlData::NumberFormat { .. })
                         )
                     });
                     if nf_present {
-                        let start = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        let start = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                        let end = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                        if matches!(start, JsValue::Undefined) || matches!(end, JsValue::Undefined)
-                        {
+                        if start.is_undefined() || end.is_undefined() {
                             return Completion::Throw(
                                 interp.create_type_error("start and end must not be undefined"),
                             );
                         }
 
-                        let start_str = if let JsValue::String(s) = &start {
+                        let start_str = if let Some(s) = start.as_string() {
                             let sv = s.to_string();
                             if string_needs_decimal_precision(&sv) {
                                 Some(sv)
@@ -3287,7 +3273,7 @@ impl Interpreter {
                         } else {
                             None
                         };
-                        let end_str = if let JsValue::String(s) = &end {
+                        let end_str = if let Some(s) = end.as_string() {
                             let sv = s.to_string();
                             if string_needs_decimal_precision(&sv) {
                                 Some(sv)
@@ -3314,7 +3300,7 @@ impl Interpreter {
                         }
 
                         let nf_data = interp
-                            .get_object_cell(o.id)
+                            .get_object_cell(o)
                             .and_then(|cell| cell.borrow().intl_data().cloned());
 
                         if let Some(IntlData::NumberFormat {
@@ -3437,9 +3423,7 @@ impl Interpreter {
                                 &currency_display,
                                 &sign_display,
                             );
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                &result,
-                            )));
+                            return Completion::Normal(JsValue::from_str(&result));
                         }
                     }
                 }
@@ -3462,15 +3446,15 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this {
+                if let Some(o) = this.as_object_id() {
                     let nf_present = interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(o)
                         .is_some_and(|cell| matches!(cell.borrow().intl_data(), Some(IntlData::NumberFormat { .. })));
                     if nf_present {
-                        let start = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        let start = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                        let end = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                        if matches!(start, JsValue::Undefined) || matches!(end, JsValue::Undefined) {
+                        if start.is_undefined() || end.is_undefined() {
                             return Completion::Throw(interp.create_type_error(
                                 "start and end must not be undefined",
                             ));
@@ -3492,7 +3476,7 @@ impl Interpreter {
                         }
 
                         let nf_data = interp
-                            .get_object_cell(o.id)
+                            .get_object_cell(o)
                             .and_then(|cell| cell.borrow().intl_data().cloned());
 
                         if let Some(IntlData::NumberFormat {
@@ -3547,18 +3531,17 @@ impl Interpreter {
                                 }
                                 interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "type".to_string(),
-                                    PropertyDescriptor::data(JsValue::String(JsString::from_str(typ)), true, true, true),
+                                    PropertyDescriptor::data(JsValue::from_str(typ), true, true, true),
                                 );
                                 interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "value".to_string(),
-                                    PropertyDescriptor::data(JsValue::String(JsString::from_str(val)), true, true, true),
+                                    PropertyDescriptor::data(JsValue::from_str(val), true, true, true),
                                 );
                                 interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "source".to_string(),
-                                    PropertyDescriptor::data(JsValue::String(JsString::from_str(source)), true, true, true),
+                                    PropertyDescriptor::data(JsValue::from_str(source), true, true, true),
                                 );
-                                let id = part_id;
-                                JsValue::Object(crate::types::JsObject { id })
+                                JsValue::object(part_id)
                             };
 
                             let mut result_parts = Vec::new();
@@ -3631,8 +3614,8 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                if let Some(o) = this.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -3671,103 +3654,82 @@ impl Interpreter {
                         }
 
                         let mut props: Vec<(&str, JsValue)> = vec![
-                            ("locale", JsValue::String(JsString::from_str(&locale))),
-                            (
-                                "numberingSystem",
-                                JsValue::String(JsString::from_str(&numbering_system)),
-                            ),
-                            ("style", JsValue::String(JsString::from_str(&style))),
+                            ("locale", JsValue::from_str(&locale)),
+                            ("numberingSystem", JsValue::from_str(&numbering_system)),
+                            ("style", JsValue::from_str(&style)),
                         ];
 
                         if style == "currency" {
                             if let Some(ref c) = currency {
-                                props.push(("currency", JsValue::String(JsString::from_str(c))));
+                                props.push(("currency", JsValue::from_str(c)));
                             }
                             if let Some(ref cd) = currency_display {
-                                props.push((
-                                    "currencyDisplay",
-                                    JsValue::String(JsString::from_str(cd)),
-                                ));
+                                props.push(("currencyDisplay", JsValue::from_str(cd)));
                             }
                             if let Some(ref cs) = currency_sign {
-                                props.push((
-                                    "currencySign",
-                                    JsValue::String(JsString::from_str(cs)),
-                                ));
+                                props.push(("currencySign", JsValue::from_str(cs)));
                             }
                         }
 
                         if style == "unit" {
                             if let Some(ref u) = unit {
-                                props.push(("unit", JsValue::String(JsString::from_str(u))));
+                                props.push(("unit", JsValue::from_str(u)));
                             }
                             if let Some(ref ud) = unit_display {
-                                props
-                                    .push(("unitDisplay", JsValue::String(JsString::from_str(ud))));
+                                props.push(("unitDisplay", JsValue::from_str(ud)));
                             }
                         }
 
                         props.push((
                             "minimumIntegerDigits",
-                            JsValue::Number(minimum_integer_digits as f64),
+                            JsValue::number(minimum_integer_digits as f64),
                         ));
                         props.push((
                             "minimumFractionDigits",
-                            JsValue::Number(minimum_fraction_digits as f64),
+                            JsValue::number(minimum_fraction_digits as f64),
                         ));
                         props.push((
                             "maximumFractionDigits",
-                            JsValue::Number(maximum_fraction_digits as f64),
+                            JsValue::number(maximum_fraction_digits as f64),
                         ));
 
                         if let Some(min_sd) = minimum_significant_digits {
                             props
-                                .push(("minimumSignificantDigits", JsValue::Number(min_sd as f64)));
+                                .push(("minimumSignificantDigits", JsValue::number(min_sd as f64)));
                         }
                         if let Some(max_sd) = maximum_significant_digits {
                             props
-                                .push(("maximumSignificantDigits", JsValue::Number(max_sd as f64)));
+                                .push(("maximumSignificantDigits", JsValue::number(max_sd as f64)));
                         }
 
                         // useGrouping: spec says return a string or boolean
                         let ug_val = match use_grouping.as_str() {
-                            "true" => JsValue::String(JsString::from_str("auto")),
-                            "false" => JsValue::Boolean(false),
-                            "auto" | "always" | "min2" => {
-                                JsValue::String(JsString::from_str(&use_grouping))
-                            }
-                            _ => JsValue::String(JsString::from_str(&use_grouping)),
+                            "true" => JsValue::from_str("auto"),
+                            "false" => JsValue::FALSE,
+                            "auto" | "always" | "min2" => JsValue::from_str(&use_grouping),
+                            _ => JsValue::from_str(&use_grouping),
                         };
                         props.push(("useGrouping", ug_val));
 
-                        props.push(("notation", JsValue::String(JsString::from_str(&notation))));
+                        props.push(("notation", JsValue::from_str(&notation)));
 
                         if notation == "compact"
                             && let Some(ref cd) = compact_display
                         {
-                            props.push(("compactDisplay", JsValue::String(JsString::from_str(cd))));
+                            props.push(("compactDisplay", JsValue::from_str(cd)));
                         }
 
-                        props.push((
-                            "signDisplay",
-                            JsValue::String(JsString::from_str(&sign_display)),
-                        ));
+                        props.push(("signDisplay", JsValue::from_str(&sign_display)));
 
                         props.push((
                             "roundingIncrement",
-                            JsValue::Number(rounding_increment as f64),
+                            JsValue::number(rounding_increment as f64),
                         ));
-                        props.push((
-                            "roundingMode",
-                            JsValue::String(JsString::from_str(&rounding_mode)),
-                        ));
-                        props.push((
-                            "roundingPriority",
-                            JsValue::String(JsString::from_str(&rounding_priority)),
-                        ));
+                        props.push(("roundingMode", JsValue::from_str(&rounding_mode)));
+                        props.push(("roundingPriority", JsValue::from_str(&rounding_priority)));
                         props.push((
                             "trailingZeroDisplay",
-                            JsValue::String(JsString::from_str(&trailing_zero_display)),
+                            JsValue::from_str(&trailing_zero_display),
                         ));
 
                         for (key, val) in props {
@@ -3780,9 +3742,7 @@ impl Interpreter {
                                 );
                         }
 
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: result_id,
-                        }));
+                        return Completion::Normal(JsValue::object(result_id));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -3797,15 +3757,15 @@ impl Interpreter {
         self.realm_mut().intl_number_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let nf_ctor = self.create_function(JsFunction::constructor(
             "NumberFormat".to_string(),
             0,
             move |interp, _this, args| {
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -4035,10 +3995,10 @@ impl Interpreter {
                 };
 
                 // Read raw options to detect presence
-                let raw_min_fd = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "minimumFractionDigits", &options) {
+                let raw_min_fd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "minimumFractionDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -4051,10 +4011,10 @@ impl Interpreter {
                     None
                 };
 
-                let raw_max_fd = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "maximumFractionDigits", &options) {
+                let raw_max_fd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "maximumFractionDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -4067,10 +4027,10 @@ impl Interpreter {
                     None
                 };
 
-                let raw_min_sd = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "minimumSignificantDigits", &options) {
+                let raw_min_sd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "minimumSignificantDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -4083,10 +4043,10 @@ impl Interpreter {
                     None
                 };
 
-                let raw_max_sd = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "maximumSignificantDigits", &options) {
+                let raw_max_sd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "maximumSignificantDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -4103,10 +4063,10 @@ impl Interpreter {
                 let has_fd = raw_min_fd.is_some() || raw_max_fd.is_some();
 
                 // Read roundingIncrement raw value (read in spec order)
-                let raw_rounding_increment = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "roundingIncrement", &options) {
+                let raw_rounding_increment = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "roundingIncrement", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -4415,45 +4375,48 @@ impl Interpreter {
                 // useGrouping: GetStringOrBooleanOption per spec
                 let use_grouping_default = if notation == "compact" { "min2" } else { "auto" };
                 let use_grouping = {
-                    let ug_val = if let JsValue::Object(o) = &options {
-                        match interp.get_object_property(o.id, "useGrouping", &options) {
+                    let ug_val = if let Some(o) = options.as_object_id() {
+                        match interp.get_object_property(o, "useGrouping", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
 
-                    match &ug_val {
-                        JsValue::Undefined => use_grouping_default.to_string(),
-                        JsValue::Boolean(true) => "always".to_string(),
-                        _ => {
-                            // Step 4-5: ToBoolean(value) - if false, return false
-                            let val_bool = match &ug_val {
-                                JsValue::Boolean(false) | JsValue::Null => false,
-                                JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
-                                JsValue::String(s) => !s.to_rust_string().is_empty(),
-                                _ => true,
+                    if ug_val.is_undefined() {
+                        use_grouping_default.to_string()
+                    } else if ug_val.as_boolean() == Some(true) {
+                        "always".to_string()
+                    } else {
+                        // Step 4-5: ToBoolean(value) - if false, return false
+                        let val_bool = if ug_val.as_boolean() == Some(false) || ug_val.is_null() {
+                            false
+                        } else if let Some(n) = ug_val.as_number() {
+                            n != 0.0 && !n.is_nan()
+                        } else if let Some(s) = ug_val.as_string() {
+                            !s.to_rust_string().is_empty()
+                        } else {
+                            true
+                        };
+                        if !val_bool {
+                            "false".to_string()
+                        } else {
+                            // Step 6: ToString(value)
+                            let sv = match interp.to_string_value(&ug_val) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
                             };
-                            if !val_bool {
-                                "false".to_string()
+                            // Step 7: "true"/"false" strings -> fallback
+                            if sv == "true" || sv == "false" {
+                                use_grouping_default.to_string()
+                            } else if sv == "auto" || sv == "always" || sv == "min2" {
+                                sv
                             } else {
-                                // Step 6: ToString(value)
-                                let sv = match interp.to_string_value(&ug_val) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                // Step 7: "true"/"false" strings -> fallback
-                                if sv == "true" || sv == "false" {
-                                    use_grouping_default.to_string()
-                                } else if sv == "auto" || sv == "always" || sv == "min2" {
-                                    sv
-                                } else {
-                                    return Completion::Throw(interp.create_range_error(
-                                        "Invalid useGrouping value",
-                                    ));
-                                }
+                                return Completion::Throw(interp.create_range_error(
+                                    "Invalid useGrouping value",
+                                ));
                             }
                         }
                     }
@@ -4528,71 +4491,68 @@ impl Interpreter {
                 // freshly-initialized formatter under %Intl%.[[FallbackSymbol]]
                 // and return the receiver instead of a fresh object.
                 if interp.new_target.is_none()
-                    && let JsValue::Object(recv) = _this
+                    && let Some(recv_id) = _this.as_object_id()
+                    && let Some(ctor) = interp.realm().intl_number_format_ctor.clone()
                 {
-                    let recv_id = recv.id;
-                    if let Some(ctor) = interp.realm().intl_number_format_ctor.clone() {
-                        // ? OrdinaryHasInstance(%NumberFormat%, this) — an abrupt
-                        // completion (e.g. revoked Proxy / throwing getPrototypeOf
-                        // trap) must propagate, not fall through to a fresh object.
-                        let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
-                            Completion::Normal(JsValue::Boolean(b)) => b,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => false,
+                    // ? OrdinaryHasInstance(%NumberFormat%, this) — an abrupt
+                    // completion (e.g. revoked Proxy / throwing getPrototypeOf
+                    // trap) must propagate, not fall through to a fresh object.
+                    let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
+                        Completion::Normal(v) => v.as_boolean().unwrap_or(false),
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => false,
+                    };
+                    if is_instance {
+                        let key = match interp.intl_fallback_symbol().as_symbol() {
+                            Some(s) => s.to_property_key(),
+                            None => unreachable!(),
                         };
-                        if is_instance {
-                            let key = match interp.intl_fallback_symbol() {
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => unreachable!(),
-                            };
-                            let desc = crate::interpreter::types::PropertyDescriptor::data(
-                                JsValue::Object(crate::types::JsObject { id: obj_id }),
-                                false,
-                                false,
-                                false,
-                            );
-                            // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
-                            // route through the receiver's [[DefineOwnProperty]] so a
-                            // Proxy's defineProperty trap fires and a later [[Get]] in
-                            // Unwrap can observe the chained formatter.
-                            let is_proxy = interp
-                                .get_object_cell(recv_id)
-                                .map(|c| {
-                                    let b = c.borrow();
-                                    b.is_proxy() || b.is_proxy_revoked()
-                                })
-                                .unwrap_or(false);
-                            let defined = if is_proxy {
-                                let desc_val = interp.from_property_descriptor(&desc);
-                                match interp.proxy_define_own_property(recv_id, key, &desc_val) {
-                                    Ok(b) => b,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            } else {
-                                interp
-                                    .get_object_cell_expect(recv_id)
-                                    .borrow_mut()
-                                    .define_own_property(key, desc)
-                            };
-                            if !defined {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Cannot define [[FallbackSymbol]] property on receiver",
-                                ));
+                        let desc = crate::interpreter::types::PropertyDescriptor::data(
+                            JsValue::object(obj_id),
+                            false,
+                            false,
+                            false,
+                        );
+                        // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
+                        // route through the receiver's [[DefineOwnProperty]] so a
+                        // Proxy's defineProperty trap fires and a later [[Get]] in
+                        // Unwrap can observe the chained formatter.
+                        let is_proxy = interp
+                            .get_object_cell(recv_id)
+                            .map(|c| {
+                                let b = c.borrow();
+                                b.is_proxy() || b.is_proxy_revoked()
+                            })
+                            .unwrap_or(false);
+                        let defined = if is_proxy {
+                            let desc_val = interp.from_property_descriptor(&desc);
+                            match interp.proxy_define_own_property(recv_id, key, &desc_val) {
+                                Ok(b) => b,
+                                Err(e) => return Completion::Throw(e),
                             }
-                            return Completion::Normal(_this.clone());
+                        } else {
+                            interp
+                                .get_object_cell_expect(recv_id)
+                                .borrow_mut()
+                                .define_own_property(key, desc)
+                        };
+                        if !defined {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot define [[FallbackSymbol]] property on receiver",
+                            ));
                         }
+                        return Completion::Normal(_this.clone());
                     }
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set NumberFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &nf_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = nf_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -4605,8 +4565,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

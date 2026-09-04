@@ -8,7 +8,7 @@
 // tests, expect() planning, raises, and — via one deliberately failing
 // assertion — that failures are detected and counted (not just passes).
 //
-// Expected summary: PASS: 20  FAIL: 1  TOTAL: 21
+// Expected summary: PASS: 24  FAIL: 1  TOTAL: 25
 
 QUnit.module("primitives");
 QUnit.test("equality asserts", function (assert) {
@@ -23,8 +23,9 @@ QUnit.test("equality asserts", function (assert) {
 
 QUnit.module("deepEqual");
 QUnit.test("structural equality edge cases", function (assert) {
-  assert.expect(8);
+  assert.expect(9);
   assert.deepEqual({ a: [1, 2], b: { c: 3 } }, { a: [1, 2], b: { c: 3 } }, "nested");
+  assert.deepEqual([, "x"], [undefined, "x"], "QUnit ignores sparse hole ownership");
   assert.deepEqual([NaN], [NaN], "NaN equals NaN structurally");
   assert.deepEqual(new Date(0), new Date(0), "Date by value");
   assert.deepEqual(/x/gi, /x/gi, "RegExp by source+flags");
@@ -60,6 +61,98 @@ QUnit.test("a failing assertion is counted as FAIL", function (assert) {
   assert.expect(2);
   assert.ok(true, "this passes");
   assert.strictEqual(1, 2, "this deliberately fails");
+});
+
+var nestedOrder = [];
+QUnit.module("nested parent", function (hooks) {
+  hooks.before(function () {
+    nestedOrder.push("parent before");
+  });
+  hooks.beforeEach(function () {
+    nestedOrder.push("parent beforeEach");
+  });
+  hooks.afterEach(function () {
+    nestedOrder.push("parent afterEach");
+  });
+  hooks.after(function () {
+    nestedOrder.push("parent after");
+  });
+
+  QUnit.test("parent test before child", function (assert) {
+    nestedOrder.push("parent test before child");
+    assert.deepEqual(
+      nestedOrder,
+      ["parent before", "parent beforeEach", "parent test before child"],
+      "parent hooks start at the first test"
+    );
+  });
+
+  QUnit.module("nested child", function (childHooks) {
+    childHooks.before(function () {
+      nestedOrder.push("child before");
+    });
+    childHooks.beforeEach(function () {
+      nestedOrder.push("child beforeEach");
+    });
+    childHooks.afterEach(function () {
+      nestedOrder.push("child afterEach");
+    });
+    childHooks.after(function () {
+      nestedOrder.push("child after");
+    });
+
+    QUnit.test("child inherits parent per-test hooks", function (assert) {
+      nestedOrder.push("child test");
+      assert.deepEqual(
+        nestedOrder.slice(-4),
+        [
+          "child before",
+          "parent beforeEach",
+          "child beforeEach",
+          "child test",
+        ],
+        "beforeEach hooks run outermost to innermost"
+      );
+    });
+  });
+
+  QUnit.test("parent test after child", function (assert) {
+    nestedOrder.push("parent test after child");
+    assert.deepEqual(
+      nestedOrder.slice(-5),
+      [
+        "child afterEach",
+        "parent afterEach",
+        "child after",
+        "parent beforeEach",
+        "parent test after child",
+      ],
+      "child hooks close before execution returns to the parent"
+    );
+  });
+});
+
+QUnit.done(function () {
+  var expected = [
+    "parent before",
+    "parent beforeEach",
+    "parent test before child",
+    "parent afterEach",
+    "child before",
+    "parent beforeEach",
+    "child beforeEach",
+    "child test",
+    "child afterEach",
+    "parent afterEach",
+    "child after",
+    "parent beforeEach",
+    "parent test after child",
+    "parent afterEach",
+    "parent after",
+  ];
+  if (nestedOrder.join("|") !== expected.join("|")) {
+    throw new Error("nested QUnit hook order wrong: " + nestedOrder.join(","));
+  }
 });
 
 QUnit.config.noglobals = true;

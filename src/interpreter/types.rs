@@ -1,16 +1,17 @@
 use crate::ast::*;
 use crate::interpreter::PropertyMap;
-use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
-use crate::interpreter::helpers::same_value;
-use crate::interpreter::key_intern::intern_key;
-use crate::types::{JsString, JsValue, number_ops};
+use crate::interpreter::generator_transform::{
+    GeneratorStateMachine, LoopControlTarget, SentValueBinding,
+};
+use crate::interpreter::helpers::{same_value, to_number};
+use crate::interpreter::key_intern::intern_js_key;
+use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Process-global monotonic counter for `JsObjectData.shape_id`. Starts at 1;
 /// `0` is reserved as an invalid sentinel. Mirrors the existing
@@ -26,18 +27,37 @@ pub(crate) fn fresh_shape_id() -> u64 {
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
-pub fn next_sab_id() -> u64 {
+pub(crate) fn next_sab_id() -> u64 {
     NEXT_SAB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-pub struct SharedBufferInner {
+const SPLITMIX64_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+const MATH_RANDOM_FALLBACK_SEED: u64 = 0xA076_1D64_78BD_642F;
+static MATH_RANDOM_PROCESS_SEED: OnceLock<u64> = OnceLock::new();
+static NEXT_MATH_RANDOM_REALM: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn splitmix64_mix(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn new_math_random_state() -> u64 {
+    let process_seed = *MATH_RANDOM_PROCESS_SEED
+        .get_or_init(|| getrandom::u64().unwrap_or(MATH_RANDOM_FALLBACK_SEED));
+    let realm_index = NEXT_MATH_RANDOM_REALM.fetch_add(1, Ordering::Relaxed);
+    process_seed ^ splitmix64_mix(realm_index)
+}
+
+pub(crate) struct SharedBufferInner {
     words: RwLock<Vec<u64>>,
     len: AtomicUsize,
     pub id: u64,
 }
 
 impl SharedBufferInner {
-    pub fn new(data: Vec<u8>, id: u64) -> Self {
+    pub(crate) fn new(data: Vec<u8>, id: u64) -> Self {
         let len = data.len();
         let mut words = vec![0u64; len.div_ceil(8)];
         for (idx, byte) in data.into_iter().enumerate() {
@@ -52,12 +72,9 @@ impl SharedBufferInner {
         }
     }
 
-    pub fn len(&self) -> usize {
+    #[allow(clippy::len_without_is_empty)]
+    pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn byte_slice(words: &[u64], len: usize) -> &[u8] {
@@ -73,19 +90,19 @@ impl SharedBufferInner {
         &mut bytes[..len]
     }
 
-    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+    pub(crate) fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         let len = self.len();
         let guard = self.words.read().unwrap();
         f(Self::byte_slice(&guard, len))
     }
 
-    pub fn with_write<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+    pub(crate) fn with_write<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> R {
         let len = self.len();
         let mut guard = self.words.write().unwrap();
         f(Self::byte_slice_mut(&mut guard, len))
     }
 
-    pub fn resize(&self, new_len: usize, value: u8) {
+    pub(crate) fn resize(&self, new_len: usize, value: u8) {
         let old_len = self.len();
         let mut guard = self.words.write().unwrap();
         let new_words_len = new_len.div_ceil(8);
@@ -113,7 +130,7 @@ impl SharedBufferInner {
         self.len.store(new_len, Ordering::SeqCst);
     }
 
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
         self.with_read(|bytes| bytes.to_vec())
     }
 
@@ -142,21 +159,18 @@ impl std::fmt::Debug for SharedBufferInner {
 }
 
 #[derive(Debug)]
-pub enum BufferData {
+pub(crate) enum BufferData {
     Owned(Vec<u8>),
     Shared(Arc<SharedBufferInner>),
 }
 
 impl BufferData {
-    pub fn len(&self) -> usize {
+    #[allow(clippy::len_without_is_empty)]
+    pub(crate) fn len(&self) -> usize {
         match self {
             BufferData::Owned(v) => v.len(),
             BufferData::Shared(s) => s.len(),
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn resize(&mut self, new_len: usize, value: u8) {
@@ -166,7 +180,7 @@ impl BufferData {
         }
     }
 
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
         match self {
             BufferData::Owned(v) => v.clone(),
             BufferData::Shared(s) => s.to_vec(),
@@ -174,26 +188,26 @@ impl BufferData {
     }
 
     #[allow(dead_code)]
-    pub fn is_shared(&self) -> bool {
+    pub(crate) fn is_shared(&self) -> bool {
         matches!(self, BufferData::Shared(_))
     }
 
     #[allow(dead_code)]
-    pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
+    pub(crate) fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
         match self {
             BufferData::Shared(s) => Some(s),
             _ => None,
         }
     }
 
-    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+    pub(crate) fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         match self {
             BufferData::Owned(v) => f(v),
             BufferData::Shared(s) => s.with_read(f),
         }
     }
 
-    pub fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+    pub(crate) fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
         match self {
             BufferData::Owned(v) => f(v),
             BufferData::Shared(s) => s.with_write(f),
@@ -208,7 +222,7 @@ impl Clone for BufferData {
 }
 
 #[derive(Debug)]
-pub enum Completion {
+pub(crate) enum Completion {
     Normal(JsValue),
     Return(JsValue),
     Throw(JsValue),
@@ -267,7 +281,7 @@ pub(crate) struct GeneratorContext {
 }
 
 #[derive(Debug, Clone)]
-pub enum GeneratorExecutionState {
+pub(crate) enum GeneratorExecutionState {
     #[allow(dead_code)]
     SuspendedStart,
     SuspendedYield {
@@ -280,7 +294,7 @@ pub enum GeneratorExecutionState {
 }
 
 #[derive(Debug, Clone)]
-pub enum StateMachineExecutionState {
+pub(crate) enum StateMachineExecutionState {
     SuspendedStart,
     SuspendedAtState { state_id: usize },
     Executing,
@@ -288,7 +302,7 @@ pub enum StateMachineExecutionState {
 }
 
 #[derive(Debug, Clone)]
-pub struct TryContextInfo {
+pub(crate) struct TryContextInfo {
     pub catch_state: Option<usize>,
     pub finally_state: Option<usize>,
     pub _after_state: usize,
@@ -296,7 +310,15 @@ pub struct TryContextInfo {
     pub entered_finally: bool,
 }
 
-pub struct AsyncFunctionState {
+#[derive(Debug, Clone)]
+pub(crate) struct PendingForOfUnwind {
+    /// State reached when the intervening handler completes normally. Until
+    /// then, a replacement abrupt completion must keep unwinding retained
+    /// enclosing loops.
+    pub clear_at_state: Option<usize>,
+}
+
+pub(crate) struct AsyncFunctionState {
     pub state_machine: Rc<GeneratorStateMachine>,
     pub func_env: EnvRef,
     pub is_strict: bool,
@@ -304,27 +326,59 @@ pub struct AsyncFunctionState {
     pub try_stack: Vec<TryContextInfo>,
     pub pending_binding: Option<SentValueBinding>,
     pub pending_return: Option<JsValue>,
+    pub pending_loop_control: Option<LoopControlTarget>,
     pub saved_finally_exception: Option<JsValue>,
+    pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
-    pub for_of_stack: Vec<(String, usize, usize)>,
-    pub for_of_iter_env: Option<EnvRef>,
-    pub module_path: Option<std::path::PathBuf>,
+    pub for_of_stack: Vec<ForOfLoopState>,
+    pub module_path: Option<super::ModuleKey>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ForOfLoopState {
+    pub(crate) iter_var: String,
+    /// The labels attached to this iteration statement. `LoopContinues` uses
+    /// this set to decide whether a labelled continue begins its next iteration.
+    pub(crate) label_set: Vec<String>,
+    pub(crate) head_state: usize,
+    pub(crate) after_state: usize,
+    /// Depth of the driver's try stack when the loop began, so an abrupt
+    /// completion can tell a `finally` lexically inside the loop (which runs
+    /// before IteratorClose) from one outside it (which runs after).
+    /// The async-function and generator drivers use the same boundary while
+    /// unwinding their saved loop state.
+    pub(crate) try_depth: usize,
+    /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
+    pub(crate) outer_env: EnvRef,
+    /// The current lexical head's per-iteration environment, when any.
+    pub(crate) iteration_env: Option<EnvRef>,
+}
+
+impl ForOfLoopState {
+    pub(crate) fn effective_env(&self) -> &EnvRef {
+        self.iteration_env.as_ref().unwrap_or(&self.outer_env)
+    }
+
+    pub(crate) fn matches_continue_target(&self, target: Option<&str>) -> bool {
+        target.is_none_or(|target| self.label_set.iter().any(|label| label == target))
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct DelegatedIteratorInfo {
+pub(crate) struct DelegatedIteratorInfo {
     pub iterator: JsValue,
     pub next_method: JsValue,
     pub resume_state: usize,
     pub sent_value_binding: Option<SentValueBinding>,
 }
 
-pub type EnvRef = Rc<RefCell<Environment>>;
+pub(crate) type EnvRef = Rc<RefCell<Environment>>;
 
 #[allow(clippy::type_complexity)]
-pub struct Realm {
+pub(crate) struct Realm {
     pub(crate) global_env: EnvRef,
+    math_random_state: u64,
     pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
     pub(crate) template_cache: FxHashMap<u64, u64>,
@@ -428,6 +482,7 @@ impl Realm {
     pub(crate) fn new(global_env: EnvRef) -> Self {
         Self {
             global_env,
+            math_random_state: new_math_random_state(),
             global_object: None,
             throw_type_error: None,
             template_cache: FxHashMap::default(),
@@ -523,8 +578,14 @@ impl Realm {
         }
     }
 
-    pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>) {
-        super::Interpreter::collect_env_roots(&self.global_env, worklist);
+    pub(crate) fn math_random(&mut self) -> f64 {
+        self.math_random_state = self.math_random_state.wrapping_add(SPLITMIX64_GAMMA);
+        let random_bits = splitmix64_mix(self.math_random_state) >> 11;
+        random_bits as f64 / 9_007_199_254_740_992.0
+    }
+
+    pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>, seen_envs: &mut HashSet<usize>) {
+        super::Interpreter::collect_env_roots(&self.global_env, worklist, seen_envs);
         if let Some(id) = self.global_object {
             worklist.push(id);
         }
@@ -620,21 +681,37 @@ impl Realm {
             &self.typed_array_constructor,
             &self.abstract_module_source_ctor,
         ] {
-            if let Some(JsValue::Object(o)) = ctor {
-                worklist.push(o.id);
+            if let Some(id) = ctor.as_ref().and_then(JsValue::as_object_id) {
+                worklist.push(id);
             }
         }
-        if let Some(JsValue::Object(o)) = &self.throw_type_error {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .throw_type_error
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
-        if let Some(JsValue::Object(o)) = &self.object_prototype_tostring {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .object_prototype_tostring
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
-        if let Some(JsValue::Object(o)) = &self.sloppy_caller_getter {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .sloppy_caller_getter
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
-        if let Some(JsValue::Object(o)) = &self.sloppy_arguments_getter {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .sloppy_arguments_getter
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
         for &obj_id in self.template_cache.values() {
             worklist.push(obj_id);
@@ -642,7 +719,9 @@ impl Realm {
     }
 }
 
-pub struct Environment {
+pub(crate) struct Environment {
+    // Binding names come from script source. Keep randomized hashing here so
+    // deterministic collision sets cannot flood declaration and lookup paths.
     pub(crate) bindings: HashMap<String, Binding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
@@ -666,13 +745,25 @@ pub struct Environment {
     // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
     pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
     // Module path for import.meta resolution (§16.2.1.5.2 GetActiveScriptOrModule)
-    pub(crate) module_path: Option<std::path::PathBuf>,
+    pub(crate) module_path: Option<super::ModuleKey>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DisposeHint {
     Sync,
     Async,
+}
+
+impl DisposeHint {
+    /// The hint a `using` / `await using` declaration disposes its resources
+    /// with. Non-`using` kinds never reach this.
+    pub(crate) fn for_var_kind(kind: VarKind) -> Self {
+        if kind == VarKind::AwaitUsing {
+            Self::Async
+        } else {
+            Self::Sync
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -705,7 +796,7 @@ pub(crate) struct Binding {
 }
 
 impl Binding {
-    pub fn new(value: JsValue, kind: BindingKind, initialized: bool) -> Self {
+    pub(crate) fn new(value: JsValue, kind: BindingKind, initialized: bool) -> Self {
         Self {
             value,
             kind,
@@ -727,7 +818,7 @@ pub(crate) enum BindingKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SetBindingCheck {
+pub(crate) enum SetBindingCheck {
     Ok,
     ConstAssign,
     FunctionNameAssign,
@@ -736,7 +827,7 @@ pub enum SetBindingCheck {
 }
 
 impl Environment {
-    pub fn new(parent: Option<EnvRef>) -> EnvRef {
+    pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
@@ -760,10 +851,17 @@ impl Environment {
         }))
     }
 
-    pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
+    pub(crate) fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
+        Self::new_function_scope_with_capacity(parent, 0)
+    }
+
+    pub(crate) fn new_function_scope_with_capacity(
+        parent: Option<EnvRef>,
+        binding_capacity: usize,
+    ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::with_capacity(binding_capacity),
             parent,
             strict,
             is_function_scope: true,
@@ -784,7 +882,30 @@ impl Environment {
         }))
     }
 
-    pub fn find_module_path(env: &EnvRef) -> Option<std::path::PathBuf> {
+    pub(crate) fn reset_function_scope(&mut self, parent: Option<EnvRef>, binding_capacity: usize) {
+        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
+        self.bindings.clear();
+        self.bindings.reserve(binding_capacity);
+        self.parent = parent;
+        self.strict = strict;
+        self.is_function_scope = true;
+        self.is_arrow_scope = false;
+        self.with_object = None;
+        self.dispose_stack = None;
+        self.global_object_id = None;
+        self.annexb_function_names = None;
+        self.class_private_names = None;
+        self.is_field_initializer = false;
+        self.arguments_immutable = false;
+        self.has_parameter_expressions = false;
+        self.has_simple_params = true;
+        self.is_simple_catch_scope = false;
+        self.is_derived_constructor_scope = false;
+        self.indirect_bindings = None;
+        self.module_path = None;
+    }
+
+    pub(crate) fn find_module_path(env: &EnvRef) -> Option<super::ModuleKey> {
         if let Some(ref mp) = env.borrow().module_path {
             return Some(mp.clone());
         }
@@ -796,7 +917,7 @@ impl Environment {
 
     /// Find the nearest function scope (for var hoisting).
     /// Returns self if this is a function scope, otherwise traverses up.
-    pub fn find_var_scope(env: &EnvRef) -> EnvRef {
+    pub(crate) fn find_var_scope(env: &EnvRef) -> EnvRef {
         if env.borrow().is_function_scope || env.borrow().global_object_id.is_some() {
             return env.clone();
         }
@@ -810,7 +931,7 @@ impl Environment {
         self.bindings.insert(
             name.to_string(),
             Binding {
-                value: JsValue::Undefined,
+                value: JsValue::UNDEFINED,
                 kind,
                 initialized: kind == BindingKind::Var,
                 deletable: false,
@@ -819,7 +940,7 @@ impl Environment {
     }
 
     /// §9.1.1.1.4 InitializeBinding — sets value and marks initialized (no TDZ check)
-    pub fn initialize_binding(&mut self, name: &str, value: JsValue) {
+    pub(crate) fn initialize_binding(&mut self, name: &str, value: JsValue) {
         if let Some(binding) = self.bindings.get_mut(name) {
             binding.value = value;
             binding.initialized = true;
@@ -828,18 +949,18 @@ impl Environment {
 
     /// §9.1.1.5.5 CreateImportBinding(N, M, N2)
     /// Creates an immutable indirect binding that references another module's environment.
-    pub fn create_import_binding(
+    pub(crate) fn create_import_binding(
         &mut self,
         local_name: &str,
         source_env: EnvRef,
         source_name: String,
     ) {
-        let map = self.indirect_bindings.get_or_insert_with(HashMap::default);
+        let map = self.indirect_bindings.get_or_insert_with(HashMap::new);
         map.insert(local_name.to_string(), (source_env, source_name));
     }
 
     /// Resolve an indirect binding, returning the current value from the source environment.
-    pub fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
+    pub(crate) fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
         if let Some(ref indirect) = self.indirect_bindings
             && let Some((source_env, source_name)) = indirect.get(name)
         {
@@ -868,7 +989,7 @@ impl Environment {
     }
 
     /// Check if name is an indirect binding.
-    pub fn is_indirect_binding(&self, name: &str) -> bool {
+    pub(crate) fn is_indirect_binding(&self, name: &str) -> bool {
         self.indirect_bindings
             .as_ref()
             .is_some_and(|m| m.contains_key(name))
@@ -878,7 +999,7 @@ impl Environment {
         self.bindings.insert(
             name.to_string(),
             Binding {
-                value: JsValue::Undefined,
+                value: JsValue::UNDEFINED,
                 kind,
                 initialized: kind == BindingKind::Var,
                 deletable: true,
@@ -889,7 +1010,7 @@ impl Environment {
     /// Bindings-only fallback for `Interpreter::env_declare_global_var` (used
     /// when the env has no `global_object_id`). The wrapper handles the
     /// global-object property side via the slab.
-    pub fn declare_global_var(&mut self, name: &str) {
+    pub(crate) fn declare_global_var(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
             self.declare(name, BindingKind::Var);
         }
@@ -897,7 +1018,7 @@ impl Environment {
 
     /// Bindings-only fallback for
     /// `Interpreter::env_declare_global_var_configurable`.
-    pub fn declare_global_var_configurable(&mut self, name: &str) {
+    pub(crate) fn declare_global_var_configurable(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
             self.declare(name, BindingKind::Var);
         }
@@ -906,7 +1027,7 @@ impl Environment {
     /// Bindings-only fallback for
     /// `Interpreter::env_declare_global_function_binding`. The wrapper sets the
     /// value mirror on the global object via the slab.
-    pub fn declare_global_function_binding(
+    pub(crate) fn declare_global_function_binding(
         &mut self,
         name: &str,
         value: JsValue,
@@ -921,34 +1042,28 @@ impl Environment {
 
     /// Bindings-only set. Mirroring to the realm's global object lives in
     /// `Interpreter::env_set`. External callers should always use that wrapper.
-    pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
+    pub(crate) fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
         // Indirect bindings (module imports) are immutable
         if self.is_indirect_binding(name) {
-            return Err(JsValue::String(JsString::from_str(
-                "Assignment to constant variable.",
-            )));
+            return Err(JsValue::from_str("Assignment to constant variable."));
         }
         if let Some(binding) = self.bindings.get_mut(name) {
             // TDZ: let/const bindings that haven't been initialized yet
             if !binding.initialized && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
             {
-                return Err(JsValue::String(JsString::from_str(&format!(
+                return Err(JsValue::from_str(&format!(
                     "Cannot access '{name}' before initialization"
-                ))));
+                )));
             }
             if binding.kind == BindingKind::Const && binding.initialized {
-                return Err(JsValue::String(JsString::from_str(
-                    "Assignment to constant variable.",
-                )));
+                return Err(JsValue::from_str("Assignment to constant variable."));
             }
             if (binding.kind == BindingKind::FunctionName
                 || binding.kind == BindingKind::ImmutableValue)
                 && binding.initialized
             {
                 if self.strict {
-                    return Err(JsValue::String(JsString::from_str(
-                        "Assignment to constant variable.",
-                    )));
+                    return Err(JsValue::from_str("Assignment to constant variable."));
                 }
                 return Ok(());
             }
@@ -969,7 +1084,7 @@ impl Environment {
     /// Bindings-only get. Falls through to `None` at the chain root; the
     /// global-object fall-through lives in `Interpreter::env_get` /
     /// `env_get_ref`.
-    pub fn get(&self, name: &str) -> Option<JsValue> {
+    pub(crate) fn get(&self, name: &str) -> Option<JsValue> {
         // Check indirect bindings first (module imports)
         if let Some(resolved) = self.resolve_indirect_binding(name) {
             return resolved; // None = TDZ, Some(v) = value
@@ -988,7 +1103,7 @@ impl Environment {
 
     /// Check if a binding exists but is uninitialized (in TDZ).
     /// Only checks the current environment, not parents.
-    pub fn is_in_tdz(&self, name: &str) -> bool {
+    pub(crate) fn is_in_tdz(&self, name: &str) -> bool {
         // Check indirect bindings first
         if let Some(resolved) = self.resolve_indirect_binding(name) {
             return resolved.is_none(); // None means TDZ
@@ -1002,7 +1117,7 @@ impl Environment {
 
     /// Bindings-only `has`. Global-object fall-through lives in
     /// `Interpreter::env_has`.
-    pub fn has(&self, name: &str) -> bool {
+    pub(crate) fn has(&self, name: &str) -> bool {
         if self.is_indirect_binding(name) || self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {
@@ -1012,7 +1127,7 @@ impl Environment {
         }
     }
 
-    pub fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
+    pub(crate) fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
         let e = env.borrow();
         if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
             return Some(env.clone());
@@ -1029,7 +1144,7 @@ impl Environment {
     }
 }
 
-pub enum JsFunction {
+pub(crate) enum JsFunction {
     User {
         name: Option<String>,
         params: Rc<Vec<Pattern>>,
@@ -1057,7 +1172,7 @@ pub enum JsFunction {
 }
 
 impl JsFunction {
-    pub fn native(
+    pub(crate) fn native(
         name: String,
         arity: usize,
         f: impl Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
@@ -1065,7 +1180,7 @@ impl JsFunction {
         JsFunction::Native(name, arity, Rc::new(f), false)
     }
 
-    pub fn constructor(
+    pub(crate) fn constructor(
         name: String,
         arity: usize,
         f: impl Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
@@ -1125,7 +1240,7 @@ impl std::fmt::Debug for JsFunction {
 }
 
 #[derive(Debug, Clone)]
-pub struct PropertyDescriptor {
+pub(crate) struct PropertyDescriptor {
     pub value: Option<JsValue>,
     pub writable: Option<bool>,
     pub get: Option<JsValue>,
@@ -1135,7 +1250,12 @@ pub struct PropertyDescriptor {
 }
 
 impl PropertyDescriptor {
-    pub fn data(value: JsValue, writable: bool, enumerable: bool, configurable: bool) -> Self {
+    pub(crate) fn data(
+        value: JsValue,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) -> Self {
         Self {
             value: Some(value),
             writable: Some(writable),
@@ -1146,11 +1266,11 @@ impl PropertyDescriptor {
         }
     }
 
-    pub fn data_default(value: JsValue) -> Self {
+    pub(crate) fn data_default(value: JsValue) -> Self {
         Self::data(value, true, true, true)
     }
 
-    pub fn accessor(
+    pub(crate) fn accessor(
         get: Option<JsValue>,
         set: Option<JsValue>,
         enumerable: bool,
@@ -1166,17 +1286,17 @@ impl PropertyDescriptor {
         }
     }
 
-    pub fn is_data_descriptor(&self) -> bool {
+    pub(crate) fn is_data_descriptor(&self) -> bool {
         self.value.is_some() || self.writable.is_some()
     }
 
-    pub fn is_accessor_descriptor(&self) -> bool {
+    pub(crate) fn is_accessor_descriptor(&self) -> bool {
         self.get.is_some() || self.set.is_some()
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum PrivateFieldDef {
+pub(crate) enum PrivateFieldDef {
     Field {
         name: String,
         initializer: Option<Expression>,
@@ -1194,15 +1314,15 @@ pub enum PrivateFieldDef {
 
 /// Unified ordered instance field definition (private or public), preserving source order.
 #[derive(Debug, Clone)]
-pub enum InstanceFieldDef {
+pub(crate) enum InstanceFieldDef {
     Private(PrivateFieldDef),
-    Public(String, Option<Expression>),
+    Public(JsPropertyKey, Option<Expression>),
     /// Auto accessor backing storage initialization: (storage_slot_name, initializer)
     AutoAccessorStorage(String, Option<Expression>),
 }
 
 #[derive(Debug, Clone)]
-pub enum PrivateElement {
+pub(crate) enum PrivateElement {
     Field(JsValue),
     Method(JsValue),
     Accessor {
@@ -1212,14 +1332,14 @@ pub enum PrivateElement {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum IteratorKind {
+pub(crate) enum IteratorKind {
     Key,
     Value,
     KeyValue,
 }
 
 #[derive(Debug, Clone)]
-pub enum IteratorState {
+pub(crate) enum IteratorState {
     ArrayIterator {
         array_id: u64,
         index: usize,
@@ -1282,7 +1402,7 @@ pub enum IteratorState {
     RegExpStringIterator {
         source: String,
         flags: String,
-        string: String,
+        string: JsString,
         global: bool,
         last_index: usize,
         done: bool,
@@ -1301,8 +1421,145 @@ pub enum IteratorState {
     },
 }
 
+impl IteratorState {
+    /// The completed (fully drained) terminal state of a **sync** state-machine
+    /// generator. Every resumption field is fixed at its completed default —
+    /// `execution_state = Completed`, `_sent_value = UNDEFINED`, an empty
+    /// `try_stack`, and every `pending_*`/`delegated_iterator` set to `None` —
+    /// so a caller supplies only the three fields a finished generator still
+    /// owns. Replaces the byte-identical 10-field literal previously inlined at
+    /// every completion site.
+    pub(crate) fn completed_state_machine_generator(
+        state_machine: Rc<GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+    ) -> IteratorState {
+        IteratorState::StateMachineGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            execution_state: StateMachineExecutionState::Completed,
+            _sent_value: JsValue::UNDEFINED,
+            try_stack: Vec::new(),
+            pending_binding: None,
+            delegated_iterator: None,
+            pending_exception: None,
+            pending_return: None,
+        }
+    }
+
+    /// The completed terminal state of an **async** state-machine generator;
+    /// identical field defaults to [`Self::completed_state_machine_generator`],
+    /// distinguished only by the variant tag.
+    pub(crate) fn completed_state_machine_async_generator(
+        state_machine: Rc<GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+    ) -> IteratorState {
+        IteratorState::StateMachineAsyncGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            execution_state: StateMachineExecutionState::Completed,
+            _sent_value: JsValue::UNDEFINED,
+            try_stack: Vec::new(),
+            pending_binding: None,
+            delegated_iterator: None,
+            pending_exception: None,
+            pending_return: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod completed_state_machine_generator_tests {
+    use super::*;
+
+    fn empty_state_machine() -> Rc<GeneratorStateMachine> {
+        Rc::new(GeneratorStateMachine {
+            states: Vec::new(),
+            local_vars: Vec::new(),
+            params: Vec::new(),
+            num_yields: 0,
+            temp_vars: Vec::new(),
+            #[cfg(feature = "perf-counters")]
+            perf_key: None,
+        })
+    }
+
+    #[test]
+    fn completed_sync_generator_clears_every_pending_field() {
+        let state = IteratorState::completed_state_machine_generator(
+            empty_state_machine(),
+            Environment::new(None),
+            true,
+        );
+        match state {
+            IteratorState::StateMachineGenerator {
+                is_strict,
+                execution_state,
+                _sent_value,
+                try_stack,
+                pending_binding,
+                delegated_iterator,
+                pending_exception,
+                pending_return,
+                ..
+            } => {
+                assert!(is_strict);
+                assert!(matches!(
+                    execution_state,
+                    StateMachineExecutionState::Completed
+                ));
+                assert!(_sent_value.is_undefined());
+                assert!(try_stack.is_empty());
+                assert!(pending_binding.is_none());
+                assert!(delegated_iterator.is_none());
+                assert!(pending_exception.is_none());
+                assert!(pending_return.is_none());
+            }
+            _ => panic!("expected a StateMachineGenerator"),
+        }
+    }
+
+    #[test]
+    fn completed_async_generator_clears_every_pending_field() {
+        let state = IteratorState::completed_state_machine_async_generator(
+            empty_state_machine(),
+            Environment::new(None),
+            false,
+        );
+        match state {
+            IteratorState::StateMachineAsyncGenerator {
+                is_strict,
+                execution_state,
+                _sent_value,
+                try_stack,
+                pending_binding,
+                delegated_iterator,
+                pending_exception,
+                pending_return,
+                ..
+            } => {
+                assert!(!is_strict);
+                assert!(matches!(
+                    execution_state,
+                    StateMachineExecutionState::Completed
+                ));
+                assert!(_sent_value.is_undefined());
+                assert!(try_stack.is_empty());
+                assert!(pending_binding.is_none());
+                assert!(delegated_iterator.is_none());
+                assert!(pending_exception.is_none());
+                assert!(pending_return.is_none());
+            }
+            _ => panic!("expected a StateMachineAsyncGenerator"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TypedArrayKind {
+pub(crate) enum TypedArrayKind {
     Int8,
     Uint8,
     Uint8Clamped,
@@ -1318,7 +1575,7 @@ pub enum TypedArrayKind {
 }
 
 impl TypedArrayKind {
-    pub fn bytes_per_element(&self) -> usize {
+    pub(crate) fn bytes_per_element(&self) -> usize {
         match self {
             TypedArrayKind::Int8 | TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => 1,
             TypedArrayKind::Int16 | TypedArrayKind::Uint16 | TypedArrayKind::Float16 => 2,
@@ -1327,7 +1584,7 @@ impl TypedArrayKind {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             TypedArrayKind::Int8 => "Int8Array",
             TypedArrayKind::Uint8 => "Uint8Array",
@@ -1344,13 +1601,13 @@ impl TypedArrayKind {
         }
     }
 
-    pub fn is_bigint(&self) -> bool {
+    pub(crate) fn is_bigint(&self) -> bool {
         matches!(self, TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedArrayInfo {
+pub(crate) struct TypedArrayInfo {
     pub kind: TypedArrayKind,
     pub buffer: Rc<RefCell<BufferData>>,
     pub byte_offset: usize,
@@ -1364,7 +1621,7 @@ pub struct TypedArrayInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct DataViewInfo {
+pub(crate) struct DataViewInfo {
     pub buffer: Rc<RefCell<BufferData>>,
     pub byte_offset: usize,
     pub byte_length: usize,
@@ -1573,12 +1830,12 @@ pub(crate) enum TemporalData {
     },
 }
 
-pub struct JsObjectData {
+pub(crate) struct JsObjectData {
     /// Slab index of this object. Set exactly once by
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
     pub id: Option<u64>,
     pub properties: PropertyMap,
-    pub property_order: Vec<Rc<str>>,
+    pub property_order: Vec<JsPropertyKey>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub class_name: String,
@@ -1615,7 +1872,7 @@ pub(crate) struct ModuleNamespaceData {
     pub env: EnvRef,
     pub export_names: Vec<String>,
     pub export_to_binding: HashMap<String, String>,
-    pub module_path: Option<std::path::PathBuf>,
+    pub module_path: Option<super::ModuleKey>,
     pub deferred: bool,
 }
 
@@ -1648,7 +1905,7 @@ pub(crate) struct ArrayBufferData {
 /// expressible only by convention — e.g. `default && !derived` was nonsense
 /// but compiled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConstructorKind {
+pub(crate) enum ConstructorKind {
     /// A regular function — or the constructor slot is unused.
     Function,
     /// A base class constructor (`class C { ... }` without `extends`).
@@ -1660,6 +1917,28 @@ pub enum ConstructorKind {
     /// the synthetic body to avoid Symbol.iterator on the rest parameter
     /// (spec §15.7.14).
     DefaultDerivedClass,
+}
+
+/// Array-exotic internal data.
+///
+/// `extra_string_property_order` mirrors only the subset of
+/// `JsObjectData::property_order` needed by the Node-compatible inspector.
+/// Maintaining that subset as properties change lets inspection find named
+/// Array properties without scanning descriptor-backed element indices.
+#[derive(Clone, Default)]
+pub(crate) struct ArrayData {
+    elements: Vec<JsValue>,
+    extra_string_property_order: Vec<JsPropertyKey>,
+}
+
+impl ArrayData {
+    #[cfg(test)]
+    pub(crate) fn new(elements: Vec<JsValue>) -> Self {
+        Self {
+            elements,
+            extra_string_property_order: Vec::new(),
+        }
+    }
 }
 
 /// Discriminator for the kind-specific data attached to a JsObjectData.
@@ -1705,8 +1984,8 @@ pub(crate) enum ObjectKind {
     Iterator(IteratorState),
     /// `parameter_map` for an Arguments exotic object.
     Arguments(HashMap<String, (EnvRef, String)>),
-    /// `array_elements` for the Array exotic object.
-    Array(Vec<JsValue>),
+    /// Element storage and bounded named-property metadata for an Array exotic object.
+    Array(ArrayData),
     /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
     PrimitiveWrapper(JsValue),
     ModuleNamespace(ModuleNamespaceData),
@@ -1872,7 +2151,7 @@ impl JsObjectData {
     kind_accessor!(iterator_state, iterator_state_mut, Iterator, IteratorState);
     kind_accessor!(promise_data, promise_data_mut, Promise, PromiseData);
     kind_accessor!(parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
-    kind_accessor!(array_elements, array_elements_mut, Array, Vec<JsValue>);
+    kind_accessor!(array_data, array_data_mut, Array, ArrayData);
     kind_accessor!(map_data, map_data_mut, Map, Vec<Option<(JsValue, JsValue)>>);
     kind_accessor!(set_data, set_data_mut, Set, Vec<Option<JsValue>>);
     kind_accessor!(temporal_data, Temporal, TemporalData);
@@ -1893,28 +2172,54 @@ impl JsObjectData {
         DisposableStackData
     );
 
+    pub(crate) fn array_elements(&self) -> Option<&Vec<JsValue>> {
+        self.array_data().map(|data| &data.elements)
+    }
+
+    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
+        self.array_data_mut().map(|data| &mut data.elements)
+    }
+
+    pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
+        self.array_data()
+            .map(|data| data.extra_string_property_order.as_slice())
+    }
+
+    fn record_property_creation(&mut self, key: &JsPropertyKey) {
+        self.property_order.push(key.clone());
+        // `length` is permanently non-enumerable on Arrays and can never be
+        // returned by the host hook. Excluding it keeps this Vec allocation-free
+        // for Arrays that never receive an actual extra String property.
+        if key.is_symbol() || key.eq_str("length") || is_array_index_property_key(key) {
+            return;
+        }
+        if let Some(data) = self.array_data_mut() {
+            data.extra_string_property_order.push(key.clone());
+        }
+    }
+
     /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
-    pub fn is_proxy(&self) -> bool {
+    pub(crate) fn is_proxy(&self) -> bool {
         self.proxy().is_some_and(|p| !p.revoked)
     }
 
     /// True iff this object has been revoked.
-    pub fn is_proxy_revoked(&self) -> bool {
+    pub(crate) fn is_proxy_revoked(&self) -> bool {
         self.proxy().is_some_and(|p| p.revoked)
     }
 
     /// Target id for an active proxy, `None` otherwise (including revoked).
-    pub fn proxy_target_id(&self) -> Option<u64> {
+    pub(crate) fn proxy_target_id(&self) -> Option<u64> {
         self.proxy().and_then(|p| p.target_id)
     }
 
     /// True iff this object is a class constructor of any flavor.
-    pub fn is_class_constructor(&self) -> bool {
+    pub(crate) fn is_class_constructor(&self) -> bool {
         !matches!(self.constructor_kind, ConstructorKind::Function)
     }
 
     /// True iff this object is a derived class constructor (explicit or default).
-    pub fn is_derived_class_constructor(&self) -> bool {
+    pub(crate) fn is_derived_class_constructor(&self) -> bool {
         matches!(
             self.constructor_kind,
             ConstructorKind::DerivedClass | ConstructorKind::DefaultDerivedClass
@@ -1922,7 +2227,7 @@ impl JsObjectData {
     }
 
     /// True iff this is a synthesized default derived constructor.
-    pub fn is_default_derived_constructor(&self) -> bool {
+    pub(crate) fn is_default_derived_constructor(&self) -> bool {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
     }
 
@@ -1969,27 +2274,27 @@ impl JsObjectData {
     }
 
     /// Backing bytes for an ArrayBuffer / SharedArrayBuffer.
-    pub fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
+    pub(crate) fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
         self.arraybuffer().map(|b| &b.data)
     }
 
     /// Detached cell for a regular ArrayBuffer. `None` for SAB or non-buffers.
-    pub fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
+    pub(crate) fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
         self.arraybuffer().and_then(|b| b.detached.as_ref())
     }
 
     /// Max byte length for a resizable / growable AB; `None` for non-resizable.
-    pub fn arraybuffer_max_byte_length(&self) -> Option<usize> {
+    pub(crate) fn arraybuffer_max_byte_length(&self) -> Option<usize> {
         self.arraybuffer().and_then(|b| b.max_byte_length)
     }
 
     /// True iff this is a SharedArrayBuffer.
-    pub fn arraybuffer_is_shared(&self) -> bool {
+    pub(crate) fn arraybuffer_is_shared(&self) -> bool {
         self.arraybuffer().is_some_and(|b| b.is_shared)
     }
 
     /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).
-    pub fn arraybuffer_is_immutable(&self) -> bool {
+    pub(crate) fn arraybuffer_is_immutable(&self) -> bool {
         self.arraybuffer().is_some_and(|b| b.is_immutable)
     }
 
@@ -2003,31 +2308,30 @@ impl JsObjectData {
     }
 
     /// SAB shared inner state. `Some` iff this is a SharedArrayBuffer.
-    pub fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
+    pub(crate) fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
         self.arraybuffer().and_then(|b| b.sab_shared.as_ref())
     }
 
     /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,
     /// pulled from whichever kind slot is populated. `None` for non-view objects.
-    pub fn view_buffer_object_id(&self) -> Option<u64> {
+    pub(crate) fn view_buffer_object_id(&self) -> Option<u64> {
         self.typed_array_info()
             .as_ref()
             .and_then(|ta| ta.buffer_object_id)
             .or_else(|| self.data_view_info().and_then(|dv| dv.buffer_object_id))
     }
 
-    fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+    fn string_exotic_value<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
+        let key = key.as_property_key_str()?;
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = &s.code_units;
             if key == "length" {
-                return Some(JsValue::Number(units.len() as f64));
+                return Some(JsValue::number(units.len() as f64));
             }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
-                return Some(JsValue::String(crate::types::JsString::from_vec(vec![
+            if let Some(idx) = string_exotic_index(key, units.len()) {
+                return Some(JsValue::string(crate::types::JsString::from_vec(vec![
                     units[idx],
                 ])));
             }
@@ -2042,21 +2346,26 @@ impl JsObjectData {
 
     // Like get_property_descriptor but without prototype chain walk.
     // Includes parameter_map and array_elements handling.
-    pub fn get_own_property_full(&self, key: &str) -> Option<PropertyDescriptor> {
+    pub(crate) fn get_own_property_full<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key)
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(map) = self.parameter_map()
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
             }
             return Some(d);
         }
-        if let Some(elems) = self.array_elements()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elems) = self.array_elements()
+            && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
+            && !elems[idx].is_undefined()
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx].clone()),
@@ -2082,13 +2391,13 @@ impl JsObjectData {
             }
             return None;
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = &s.code_units;
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::Number(units.len() as f64)),
+                    value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
                     enumerable: Some(false),
                     configurable: Some(false),
@@ -2096,11 +2405,9 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                    value: Some(JsValue::string(crate::types::JsString::from_vec(vec![
                         units[idx],
                     ]))),
                     writable: Some(false),
@@ -2114,20 +2421,23 @@ impl JsObjectData {
         None
     }
 
-    pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
+    pub(crate) fn get_own_property<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(ns_data) = self.module_namespace()
-            && !key.starts_with("Symbol(")
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(ns_data) = self.module_namespace()
         {
-            if ns_data.export_names.contains(&key.to_string()) {
-                let val = if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+            if ns_data.export_names.contains(&key_str.to_string()) {
+                let val = if let Some(binding_name) = ns_data.export_to_binding.get(key_str) {
                     ns_data
                         .env
                         .borrow()
                         .get(binding_name)
-                        .unwrap_or(JsValue::Undefined)
+                        .unwrap_or(JsValue::UNDEFINED)
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 };
                 return Some(PropertyDescriptor {
                     value: Some(val),
@@ -2145,8 +2455,9 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
-            if let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key)
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(map) = self.parameter_map()
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
@@ -2154,10 +2465,10 @@ impl JsObjectData {
             // OrdinaryGetOwnProperty: complete accessor descriptors
             if d.is_accessor_descriptor() {
                 if d.get.is_none() {
-                    d.get = Some(JsValue::Undefined);
+                    d.get = Some(JsValue::UNDEFINED);
                 }
                 if d.set.is_none() {
-                    d.set = Some(JsValue::Undefined);
+                    d.set = Some(JsValue::UNDEFINED);
                 }
             }
             return Some(d);
@@ -2165,7 +2476,7 @@ impl JsObjectData {
         if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
-            && !matches!(elems[idx as usize], JsValue::Undefined)
+            && !elems[idx as usize].is_undefined()
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx as usize].clone()),
@@ -2193,22 +2504,20 @@ impl JsObjectData {
             return None;
         }
         // String exotic: §10.4.3.1
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor::data(
-                    JsValue::Number(s.code_units.len() as f64),
+                    JsValue::number(s.code_units.len() as f64),
                     false,
                     false,
                     false,
                 ));
             }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < s.code_units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, s.code_units.len()) {
                 return Some(PropertyDescriptor::data(
-                    JsValue::String(JsString::from_vec(vec![s.code_units[idx]])),
+                    JsValue::string(JsString::from_vec(vec![s.code_units[idx]])),
                     false,
                     true,
                     false,
@@ -2218,12 +2527,12 @@ impl JsObjectData {
         None
     }
 
-    pub fn has_own_property(&self, key: &str) -> bool {
+    pub(crate) fn has_own_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(ns_data) = self.module_namespace()
-            && !key.starts_with("Symbol(")
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(ns_data) = self.module_namespace()
         {
-            return ns_data.export_names.contains(&key.to_string());
+            return ns_data.export_names.contains(&key_str.to_string());
         }
         if self.properties.contains_key(key) {
             return true;
@@ -2231,7 +2540,7 @@ impl JsObjectData {
         if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
-            && !matches!(elems[idx as usize], JsValue::Undefined)
+            && !elems[idx as usize].is_undefined()
         {
             return true;
         }
@@ -2241,15 +2550,13 @@ impl JsObjectData {
         {
             return is_valid_integer_index(ta, index);
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return true;
             }
-            if let Ok(idx) = key.parse::<usize>() {
-                return idx < s.code_units.len();
-            }
+            return string_exotic_index(key, s.code_units.len()).is_some();
         }
         false
     }
@@ -2259,12 +2566,16 @@ impl JsObjectData {
     // `Interpreter::has_property_on_id`. Own-only variants live as
     // `own_enumerable_keys_with_shadow` / `own_has_property` on this impl.
 
-    pub fn define_own_property(&mut self, key: String, mut desc: PropertyDescriptor) -> bool {
+    pub(crate) fn define_own_property<K: Into<JsPropertyKey>>(
+        &mut self,
+        key: K,
+        mut desc: PropertyDescriptor,
+    ) -> bool {
+        let key = intern_js_key(key.into());
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
-            && let Some(JsValue::String(ref s)) = self.primitive_value
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < s.code_units.len()
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(idx) = string_exotic_index(&key, s.code_units.len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
             // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
@@ -2282,7 +2593,7 @@ impl JsObjectData {
             }
             if let Some(ref v) = desc.value {
                 let char_val =
-                    JsValue::String(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
+                    JsValue::string(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
                 if !same_value(v, &char_val) {
                     return false;
                 }
@@ -2431,13 +2742,13 @@ impl JsObjectData {
                 } else if current_is_accessor {
                     // Non-configurable accessor property
                     if let Some(ref new_get) = desc.get {
-                        let cur_get = current.get.as_ref().unwrap_or(&JsValue::Undefined);
+                        let cur_get = current.get.as_ref().unwrap_or(JsValue::undefined_ref());
                         if !same_value(new_get, cur_get) {
                             return false;
                         }
                     }
                     if let Some(ref new_set) = desc.set {
-                        let cur_set = current.set.as_ref().unwrap_or(&JsValue::Undefined);
+                        let cur_set = current.set.as_ref().unwrap_or(JsValue::undefined_ref());
                         if !same_value(new_set, cur_set) {
                             return false;
                         }
@@ -2459,8 +2770,9 @@ impl JsObjectData {
                 && !desc_is_accessor
                 && desc_writable == Some(false)
                 && !desc_has_value
+                && let Some(key_str) = key.as_str()
                 && let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(&key)
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(live_val) = env_ref.borrow().get(param_name)
             {
                 desc.value = Some(live_val);
@@ -2484,7 +2796,7 @@ impl JsObjectData {
             {
                 // Changing from accessor to data
                 PropertyDescriptor {
-                    value: desc.value.or(Some(JsValue::Undefined)),
+                    value: desc.value.or(Some(JsValue::UNDEFINED)),
                     writable: desc.writable.or(Some(false)),
                     get: None,
                     set: None,
@@ -2496,8 +2808,8 @@ impl JsObjectData {
                 PropertyDescriptor {
                     value: None,
                     writable: None,
-                    get: desc.get.or(Some(JsValue::Undefined)),
-                    set: desc.set.or(Some(JsValue::Undefined)),
+                    get: desc.get.or(Some(JsValue::UNDEFINED)),
+                    set: desc.set.or(Some(JsValue::UNDEFINED)),
                     enumerable: desc.enumerable.or(current.enumerable),
                     configurable: desc.configurable.or(current.configurable),
                 }
@@ -2532,24 +2844,20 @@ impl JsObjectData {
                 }
             };
 
-            // Intern once; the same Rc<str> is shared between property_order and
+            // Intern once; the same backing bytes are shared between property_order and
             // the property map so the two stored copies share one allocation.
             // Compare by value (not pointer): integer-index keys are not interned
-            // and get a fresh Rc each time, so ptr_eq would miss existing entries.
-            let ikey = intern_key(&key);
-            if !self
-                .property_order
-                .iter()
-                .any(|k| k.as_ref() == ikey.as_ref())
-            {
-                self.property_order.push(Rc::clone(&ikey));
+            // and get fresh storage each time, so pointer equality would miss existing entries.
+            let ikey = key.clone();
+            if !self.property_order.iter().any(|k| k == &ikey) {
+                self.record_property_creation(&ikey);
             }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
             let key_for_step7 = if self.parameter_map().is_some() {
-                Some(key)
+                key.as_str().map(str::to_string)
             } else {
                 None
             };
@@ -2583,22 +2891,23 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(map) = self.parameter_map_mut()
-                && map.contains_key(&key)
+            if let Some(key_str) = key.as_str()
+                && let Some(map) = self.parameter_map_mut()
+                && map.contains_key(key_str)
                 && let Some(ref val) = desc.value
-                && let Some((env_ref, param_name)) = map.get(&key)
+                && let Some((env_ref, param_name)) = map.get(key_str)
             {
                 let _ = env_ref.borrow_mut().set(param_name, val.clone());
             }
-            // New property: intern once and share the Rc<str> between
+            // New property: intern once and share the backing bytes between
             // property_order and the property map (one allocation, not two).
-            let ikey = intern_key(&key);
-            self.property_order.push(Rc::clone(&ikey));
+            let ikey = key;
+            self.record_property_creation(&ikey);
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
                 value: desc.value.or(if !is_accessor {
-                    Some(JsValue::Undefined)
+                    Some(JsValue::UNDEFINED)
                 } else {
                     None
                 }),
@@ -2622,7 +2931,11 @@ impl JsObjectData {
         true
     }
 
-    pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
+    pub(crate) fn set_property_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        key: &K,
+        value: JsValue,
+    ) -> bool {
         if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
@@ -2633,7 +2946,7 @@ impl JsObjectData {
             return false;
         }
         // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
-        if self.class_name == "Array" && key == "length" {
+        if self.class_name == "Array" && key.as_property_key_str() == Some("length") {
             // Check if length is writable before allowing set
             let len_writable = self
                 .properties
@@ -2643,9 +2956,9 @@ impl JsObjectData {
             if !len_writable {
                 return false;
             }
-            if let JsValue::Number(new_len_f) = &value {
-                let new_len_u32 = *new_len_f as u32;
-                if (new_len_u32 as f64) != *new_len_f {
+            if let Some(new_len_f) = value.as_number() {
+                let new_len_u32 = new_len_f as u32;
+                if (new_len_u32 as f64) != new_len_f {
                     // ArraySetLength §10.4.2.4 step 5: invalid length
                     return false;
                 }
@@ -2654,13 +2967,8 @@ impl JsObjectData {
                     .properties
                     .get("length")
                     .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    });
+                    .and_then(JsValue::as_number)
+                    .map(|n| n as u32);
                 if let Some(old_len) = old_len
                     && new_len_u32 < old_len
                 {
@@ -2670,7 +2978,7 @@ impl JsObjectData {
                         .filter_map(|k| {
                             k.parse::<u64>()
                                 .ok()
-                                .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == **k)
+                                .filter(|&idx| idx <= 0xFFFF_FFFE && k.eq_str(&idx.to_string()))
                                 .map(|idx| idx as u32)
                                 .filter(|&idx| idx >= new_len_u32)
                                 .map(|idx| (idx, k.to_string()))
@@ -2706,18 +3014,19 @@ impl JsObjectData {
                     }
                 }
                 if let Some(desc) = self.properties.get_mut("length") {
-                    desc.value = Some(JsValue::Number(actual_new_len as f64));
+                    desc.value = Some(JsValue::number(actual_new_len as f64));
                     return true;
                 }
             }
         }
-        if let Some(map) = self.parameter_map()
-            && let Some((env_ref, param_name)) = map.get(key)
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(map) = self.parameter_map()
+            && let Some((env_ref, param_name)) = map.get(key_str)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
         }
         if self.class_name == "Array"
-            && !matches!(value, JsValue::Undefined)
+            && !value.is_undefined()
             && !self.properties.contains_key(key)
             && let Some(idx_u32) = parse_array_index(key)
             && self.array_elements().is_some()
@@ -2727,13 +3036,8 @@ impl JsObjectData {
                 .properties
                 .get("length")
                 .and_then(|d| d.value.as_ref())
-                .and_then(|v| {
-                    if let JsValue::Number(n) = v {
-                        Some(*n as u32)
-                    } else {
-                        None
-                    }
-                })
+                .and_then(JsValue::as_number)
+                .map(|n| n as u32)
                 .unwrap_or(0);
             let length_writable = self
                 .properties
@@ -2743,7 +3047,7 @@ impl JsObjectData {
             let extensible = self.extensible;
             let elements = self.array_elements_mut().unwrap();
             if idx <= elements.len() + 1024 {
-                let existed = idx < elements.len() && !matches!(elements[idx], JsValue::Undefined);
+                let existed = idx < elements.len() && !elements[idx].is_undefined();
                 if !existed && !extensible {
                     return false;
                 }
@@ -2754,14 +3058,14 @@ impl JsObjectData {
                     elements[idx] = value;
                 } else {
                     while elements.len() < idx {
-                        elements.push(JsValue::Undefined);
+                        elements.push(JsValue::UNDEFINED);
                     }
                     elements.push(value);
                 }
                 if idx_u32 >= old_len
                     && let Some(len_desc) = self.properties.get_mut("length")
                 {
-                    len_desc.value = Some(JsValue::Number((idx_u32 + 1) as f64));
+                    len_desc.value = Some(JsValue::number((idx_u32 + 1) as f64));
                 }
                 if !existed {
                     self.shape_id = fresh_shape_id();
@@ -2770,8 +3074,9 @@ impl JsObjectData {
             }
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(elements) = self.array_elements_mut()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elements) = self.array_elements_mut()
+            && let Ok(idx) = key_str.parse::<usize>()
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
             if idx < elements.len() {
@@ -2779,7 +3084,7 @@ impl JsObjectData {
             } else if idx < 0xFFFF_FFFF && idx <= elements.len() + 1024 {
                 // Extend for small gaps and valid array indices only
                 while elements.len() < idx {
-                    elements.push(JsValue::Undefined);
+                    elements.push(JsValue::UNDEFINED);
                 }
                 elements.push(value.clone());
                 // Issue #71 (Step 5): array_elements grew — structural mutation.
@@ -2787,19 +3092,19 @@ impl JsObjectData {
                 // Only update length if idx+1 exceeds the current property length
                 let new_idx_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
-                    && let Some(JsValue::Number(cur_len)) = &len_desc.value
-                    && new_idx_len > *cur_len
+                    && let Some(cur_len) = len_desc.value.as_ref().and_then(JsValue::as_number)
+                    && new_idx_len > cur_len
                 {
-                    len_desc.value = Some(JsValue::Number(new_idx_len));
+                    len_desc.value = Some(JsValue::number(new_idx_len));
                 }
             } else if idx < 0xFFFF_FFFF {
                 // Valid array index but too sparse for array_elements — update length
                 let new_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
-                    && let Some(JsValue::Number(cur_len)) = &len_desc.value
-                    && new_len > *cur_len
+                    && let Some(cur_len) = len_desc.value.as_ref().and_then(JsValue::as_number)
+                    && new_len > cur_len
                 {
-                    len_desc.value = Some(JsValue::Number(new_len));
+                    len_desc.value = Some(JsValue::number(new_len));
                 }
             }
             // idx >= 0xFFFFFFFF: not a valid array index, stored as named property
@@ -2812,17 +3117,18 @@ impl JsObjectData {
             true
         } else {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
-            if let Some(JsValue::String(ref s)) = self.primitive_value
-                && self.class_name == "String"
-                && (key == "length" || (key.parse::<usize>().is_ok_and(|i| i < s.code_units.len())))
+            if self.class_name == "String"
+                && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+                && (key.as_property_key_str() == Some("length")
+                    || string_exotic_index(key, s.code_units.len()).is_some())
             {
                 return false;
             }
             if !self.extensible {
                 return false;
             }
-            let ikey = intern_key(key);
-            self.property_order.push(Rc::clone(&ikey));
+            let ikey = intern_js_key(key.to_js_property_key());
+            self.record_property_creation(&ikey);
             self.properties
                 .insert(ikey, PropertyDescriptor::data_default(value));
             // Issue #71 (Step 5): new own property added — structural mutation.
@@ -2833,28 +3139,32 @@ impl JsObjectData {
         }
     }
 
-    pub fn insert_value(&mut self, key: String, value: JsValue) {
-        let key = intern_key(&key);
+    pub(crate) fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
+        let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(Rc::clone(&key));
+            self.record_property_creation(&key);
         }
         self.properties
             .insert(key, PropertyDescriptor::data_default(value));
     }
 
-    pub fn insert_builtin(&mut self, key: String, value: JsValue) {
-        let key = intern_key(&key);
+    pub(crate) fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
+        let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(Rc::clone(&key));
+            self.record_property_creation(&key);
         }
         self.properties
             .insert(key, PropertyDescriptor::data(value, true, false, true));
     }
 
-    pub fn insert_property(&mut self, key: String, desc: PropertyDescriptor) {
-        let key = intern_key(&key);
+    pub(crate) fn insert_property<K: Into<JsPropertyKey>>(
+        &mut self,
+        key: K,
+        desc: PropertyDescriptor,
+    ) {
+        let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(Rc::clone(&key));
+            self.record_property_creation(&key);
         }
         self.properties.insert(key, desc);
     }
@@ -2864,15 +3174,26 @@ impl JsObjectData {
     /// together, and this is the single place that guarantees it. Returns the
     /// removed descriptor, or `None` if the key was absent (in which case the
     /// order list is left untouched).
-    pub fn remove_property(&mut self, key: &str) -> Option<PropertyDescriptor> {
+    pub(crate) fn remove_property<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         let removed = self.properties.remove(key);
         if removed.is_some() {
-            self.property_order.retain(|k| &**k != key);
+            self.property_order
+                .retain(|k| k.as_bytes() != key.as_property_key_bytes());
+            if let Some(data) = self.array_data_mut() {
+                data.extra_string_property_order
+                    .retain(|k| k.as_bytes() != key.as_property_key_bytes());
+            }
         }
         removed
     }
 
-    pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
+    pub(crate) fn get_property_value<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
     }
 
@@ -2881,20 +3202,25 @@ impl JsObjectData {
     /// module-namespace live bindings, parameter_map, array_elements, typed_array
     /// canonical numeric indices, and string exotic indices). Returns `None` if
     /// the caller should continue walking the prototype chain.
-    pub fn own_property_lookup(&self, key: &str) -> Option<JsValue> {
-        if let Some(ns_data) = self.module_namespace()
-            && let Some(binding_name) = ns_data.export_to_binding.get(key)
+    pub(crate) fn own_property_lookup<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<JsValue> {
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(ns_data) = self.module_namespace()
+            && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
         {
             return Some(
                 ns_data
                     .env
                     .borrow()
                     .get(binding_name)
-                    .unwrap_or(JsValue::Undefined),
+                    .unwrap_or(JsValue::UNDEFINED),
             );
         }
-        if let Some(map) = self.parameter_map()
-            && let Some((env_ref, param_name)) = map.get(key)
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(map) = self.parameter_map()
+            && let Some((env_ref, param_name)) = map.get(key_str)
             && let Some(val) = env_ref.borrow().get(param_name)
         {
             return Some(val);
@@ -2903,12 +3229,13 @@ impl JsObjectData {
             if let Some(ref val) = desc.value {
                 return Some(val.clone());
             }
-            return Some(JsValue::Undefined);
+            return Some(JsValue::UNDEFINED);
         }
-        if let Some(elems) = self.array_elements()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elems) = self.array_elements()
+            && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
+            && !elems[idx].is_undefined()
         {
             return Some(elems[idx].clone());
         }
@@ -2918,7 +3245,7 @@ impl JsObjectData {
             if is_valid_integer_index(ta, index) {
                 return Some(typed_array_get_index(ta, index as usize));
             }
-            return Some(JsValue::Undefined);
+            return Some(JsValue::UNDEFINED);
         }
         if let Some(val) = self.string_exotic_value(key) {
             return Some(val);
@@ -2930,29 +3257,34 @@ impl JsObjectData {
     /// Mirrors the pre-chain-walk branches of that method exactly (including
     /// OrdinaryGetOwnProperty accessor completion and TypedArray canonical index
     /// with `configurable: false` per §10.4.5.2).
-    pub fn own_property_descriptor_lookup(&self, key: &str) -> Option<PropertyDescriptor> {
+    pub(crate) fn own_property_descriptor_lookup<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key)
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(map) = self.parameter_map()
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
             }
             if d.is_accessor_descriptor() {
                 if d.get.is_none() {
-                    d.get = Some(JsValue::Undefined);
+                    d.get = Some(JsValue::UNDEFINED);
                 }
                 if d.set.is_none() {
-                    d.set = Some(JsValue::Undefined);
+                    d.set = Some(JsValue::UNDEFINED);
                 }
             }
             return Some(d);
         }
-        if let Some(elems) = self.array_elements()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elems) = self.array_elements()
+            && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
+            && !elems[idx].is_undefined()
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx].clone()),
@@ -2978,13 +3310,13 @@ impl JsObjectData {
             }
             return None;
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = &s.code_units;
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::Number(units.len() as f64)),
+                    value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
                     enumerable: Some(false),
                     configurable: Some(false),
@@ -2992,11 +3324,9 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                    value: Some(JsValue::string(crate::types::JsString::from_vec(vec![
                         units[idx],
                     ]))),
                     writable: Some(false),
@@ -3015,7 +3345,7 @@ impl JsObjectData {
     /// canonical-numeric-index on a typed array that's out of range (per
     /// §10.4.5.2, typed arrays never consult the prototype for these),
     /// and `None` to continue walking the chain.
-    pub fn own_has_property(&self, key: &str) -> Option<bool> {
+    pub(crate) fn own_has_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<bool> {
         if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
@@ -3032,17 +3362,19 @@ impl JsObjectData {
     /// keys in insertion order) and the full shadow set of all own keys
     /// (enumerable + non-enumerable) so the caller can suppress inherited
     /// properties with matching names.
-    pub fn own_enumerable_keys_with_shadow(&self) -> (Vec<String>, HashSet<String>) {
+    pub(crate) fn own_enumerable_keys_with_shadow(
+        &self,
+    ) -> (Vec<JsPropertyKey>, HashSet<JsPropertyKey>) {
         let mut seen = HashSet::default();
-        let mut index_keys: Vec<(u32, String)> = Vec::new();
-        let mut string_keys: Vec<String> = Vec::new();
+        let mut index_keys: Vec<(u32, JsPropertyKey)> = Vec::new();
+        let mut string_keys: Vec<JsPropertyKey> = Vec::new();
 
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let utf16_len = s.code_units.len();
             for i in 0..utf16_len {
-                let k = i.to_string();
+                let k = JsPropertyKey::from(i.to_string());
                 if seen.insert(k.clone()) {
                     index_keys.push((i as u32, k));
                 }
@@ -3052,7 +3384,7 @@ impl JsObjectData {
         if let Some(ta) = self.typed_array_info() {
             let len = ta.array_length;
             for i in 0..len {
-                let k = i.to_string();
+                let k = JsPropertyKey::from(i.to_string());
                 if seen.insert(k.clone()) {
                     index_keys.push((i as u32, k));
                 }
@@ -3061,10 +3393,10 @@ impl JsObjectData {
 
         if let Some(elems) = self.array_elements() {
             for (i, value) in elems.iter().enumerate() {
-                if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                if value.is_undefined() || i > 0xFFFF_FFFE {
                     continue;
                 }
-                let k = i.to_string();
+                let k = JsPropertyKey::from(i.to_string());
                 if self.properties.contains_key(&k) {
                     continue;
                 }
@@ -3075,23 +3407,23 @@ impl JsObjectData {
         }
 
         for k in &self.property_order {
-            if k.starts_with("Symbol(") {
+            if k.is_symbol() {
                 continue;
             }
             if let Some(desc) = self.properties.get(k) {
                 let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.to_string()) && is_enumerable {
+                if seen.insert(k.clone()) && is_enumerable {
                     if let Some(idx) = parse_array_index(k) {
-                        index_keys.push((idx, k.to_string()));
+                        index_keys.push((idx, k.clone()));
                     } else {
-                        string_keys.push(k.to_string());
+                        string_keys.push(k.clone());
                     }
                 }
             }
         }
 
         index_keys.sort_by_key(|(idx, _)| *idx);
-        let mut keys: Vec<String> = index_keys.into_iter().map(|(_, k)| k).collect();
+        let mut keys: Vec<JsPropertyKey> = index_keys.into_iter().map(|(_, k)| k).collect();
         keys.extend(string_keys);
 
         (keys, seen)
@@ -3100,7 +3432,8 @@ impl JsObjectData {
 
 // §7.1.4.1 CanonicalNumericIndexString
 /// Check if a string is an array index (non-negative integer < 2^32-1).
-pub(crate) fn parse_array_index(key: &str) -> Option<u32> {
+pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: &K) -> Option<u32> {
+    let key = key.as_property_key_str()?;
     if key.is_empty() {
         return None;
     }
@@ -3116,7 +3449,24 @@ pub(crate) fn parse_array_index(key: &str) -> Option<u32> {
     Some(n)
 }
 
-pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
+/// Exact Array-index predicate for internal property-key bookkeeping.
+///
+/// `parse_array_index` currently accepts Rust's leading-`+` integer spelling;
+/// ECMAScript does not. Canonical Array indices always begin with an ASCII
+/// digit, so keep that guard at the narrow call sites that require exactness.
+pub(crate) fn is_array_index_property_key<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+) -> bool {
+    key.as_property_key_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_digit)
+        && parse_array_index(key).is_some()
+}
+
+pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+) -> Option<f64> {
+    let key = key.as_property_key_str()?;
     if key == "-0" {
         return Some(-0.0_f64);
     }
@@ -3126,6 +3476,40 @@ pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
     } else {
         None
     }
+}
+
+/// §10.4.3 String-exotic own indexed-property test (the index branch of
+/// StringGetOwnProperty).
+///
+/// Returns `Some(i)` when `key` is the CanonicalNumericIndexString of an
+/// integral index `i` with `0 <= i < len` — i.e. `key` names an own indexed
+/// character property of a String value whose UTF-16 length is `len`. Returns
+/// `None` for non-canonical spellings (`"01"`, `"+1"`, `"1.0"`), `-0`,
+/// negative, non-integral, or non-finite indices, and indices `>= len`.
+///
+/// This concentrates the one canonical predicate so every String-exotic MOP
+/// operation ([[Get]], [[GetOwnProperty]], [[HasProperty]],
+/// [[DefineOwnProperty]], [[Set]], [[Delete]]) agrees, instead of each caller
+/// reaching for `str::parse::<usize>()`, which wrongly accepts a leading `+`
+/// and leading zeros. `len` must be the string's UTF-16 code-unit length.
+pub(crate) fn string_exotic_index<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+    len: usize,
+) -> Option<usize> {
+    let n = canonical_numeric_index_string(key)?;
+    // IsIntegralNumber(index) is false, or index is -0𝔽 -> not an own index.
+    if !n.is_finite() || n.fract() != 0.0 {
+        return None;
+    }
+    if n == 0.0 && n.is_sign_negative() {
+        return None;
+    }
+    // index < 0 or len <= index -> not an own index. Range-check before the
+    // cast so a huge finite index can never saturate into a valid `usize`.
+    if n < 0.0 || n >= len as f64 {
+        return None;
+    }
+    Some(n as usize)
 }
 
 pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
@@ -3202,194 +3586,155 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
     true
 }
 
-fn typed_array_get_index_shared(
-    kind: TypedArrayKind,
-    sab: &SharedBufferInner,
-    offset: usize,
-) -> JsValue {
+/// Decode one typed-array element of `kind` from `buf` at byte `offset`.
+///
+/// The single source of truth for the byte->JsValue mapping shared by every
+/// buffer flavour (shared and non-shared). Returns `undefined` when the element
+/// would read past the end of `buf`, matching the out-of-bounds behaviour the
+/// exotic `[[Get]]` requires.
+fn decode_ta_element(kind: TypedArrayKind, buf: &[u8], offset: usize) -> JsValue {
+    if offset + kind.bytes_per_element() > buf.len() {
+        return JsValue::UNDEFINED;
+    }
     match kind {
-        TypedArrayKind::Int8 => sab.with_read(|buf| {
-            if offset + 1 > buf.len() {
-                return JsValue::Undefined;
-            }
-            JsValue::Number(buf[offset] as i8 as f64)
-        }),
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => sab.with_read(|buf| {
-            if offset + 1 > buf.len() {
-                return JsValue::Undefined;
-            }
-            JsValue::Number(buf[offset] as f64)
-        }),
-        TypedArrayKind::Int16 => sab.with_read(|buf| {
-            if offset + 2 > buf.len() {
-                return JsValue::Undefined;
-            }
+        TypedArrayKind::Int8 => JsValue::number(buf[offset] as i8 as f64),
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::number(buf[offset] as f64),
+        TypedArrayKind::Int16 => {
             let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(v as f64)
-        }),
-        TypedArrayKind::Uint16 => sab.with_read(|buf| {
-            if offset + 2 > buf.len() {
-                return JsValue::Undefined;
-            }
+            JsValue::number(v as f64)
+        }
+        TypedArrayKind::Uint16 => {
             let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(v as f64)
-        }),
-        TypedArrayKind::Int32 => sab.with_read(|buf| {
-            if offset + 4 > buf.len() {
-                return JsValue::Undefined;
-            }
+            JsValue::number(v as f64)
+        }
+        TypedArrayKind::Int32 => {
             let v = i32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
                 buf[offset + 2],
                 buf[offset + 3],
             ]);
-            JsValue::Number(v as f64)
-        }),
-        TypedArrayKind::Uint32 => sab.with_read(|buf| {
-            if offset + 4 > buf.len() {
-                return JsValue::Undefined;
-            }
+            JsValue::number(v as f64)
+        }
+        TypedArrayKind::Uint32 => {
             let v = u32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
                 buf[offset + 2],
                 buf[offset + 3],
             ]);
-            JsValue::Number(v as f64)
-        }),
-        TypedArrayKind::BigInt64 => sab.with_read(|buf| {
-            if offset + 8 > buf.len() {
-                return JsValue::Undefined;
-            }
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
-            })
-        }),
-        TypedArrayKind::BigUint64 => sab.with_read(|buf| {
-            if offset + 8 > buf.len() {
-                return JsValue::Undefined;
-            }
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
-            })
-        }),
-        TypedArrayKind::Float16 => sab.with_read(|buf| {
-            if offset + 2 > buf.len() {
-                return JsValue::Undefined;
-            }
-            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
-                bits,
-            ))
-        }),
-        TypedArrayKind::Float32 => sab.with_read(|buf| {
-            if offset + 4 > buf.len() {
-                return JsValue::Undefined;
-            }
+            JsValue::number(v as f64)
+        }
+        TypedArrayKind::Float32 => {
             let v = f32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
                 buf[offset + 2],
                 buf[offset + 3],
             ]);
-            JsValue::Number(v as f64)
-        }),
-        TypedArrayKind::Float64 => sab.with_read(|buf| {
-            if offset + 8 > buf.len() {
-                return JsValue::Undefined;
-            }
+            JsValue::number(v as f64)
+        }
+        TypedArrayKind::Float64 => {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::Number(f64::from_ne_bytes(bytes))
-        }),
+            JsValue::number(f64::from_ne_bytes(bytes))
+        }
+        TypedArrayKind::BigInt64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                i64::from_ne_bytes(bytes),
+            )))
+        }
+        TypedArrayKind::BigUint64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                u64::from_ne_bytes(bytes),
+            )))
+        }
+        TypedArrayKind::Float16 => {
+            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                bits,
+            ))
+        }
     }
+}
+
+/// Encode `value` as one typed-array element of `kind` into `buf` at byte
+/// `offset`, applying the element's numeric coercion (ToInt8 .. ToNumber).
+///
+/// The mirror of [`decode_ta_element`]: the single source of truth for the
+/// JsValue->byte mapping shared by every buffer flavour. Returns `false`
+/// (writing nothing) when the element would write past the end of `buf`.
+fn encode_ta_element(kind: TypedArrayKind, buf: &mut [u8], offset: usize, value: &JsValue) -> bool {
+    if offset + kind.bytes_per_element() > buf.len() {
+        return false;
+    }
+    match kind {
+        TypedArrayKind::Int8 => {
+            buf[offset] = to_int8(value) as u8;
+        }
+        TypedArrayKind::Uint8 => {
+            buf[offset] = to_uint8(value);
+        }
+        TypedArrayKind::Uint8Clamped => {
+            buf[offset] = to_uint8_clamped(value);
+        }
+        TypedArrayKind::Int16 => {
+            buf[offset..offset + 2].copy_from_slice(&to_int16(value).to_ne_bytes());
+        }
+        TypedArrayKind::Uint16 => {
+            buf[offset..offset + 2].copy_from_slice(&to_uint16(value).to_ne_bytes());
+        }
+        TypedArrayKind::Int32 => {
+            buf[offset..offset + 4].copy_from_slice(&to_int32(value).to_ne_bytes());
+        }
+        TypedArrayKind::Uint32 => {
+            buf[offset..offset + 4].copy_from_slice(&to_uint32(value).to_ne_bytes());
+        }
+        TypedArrayKind::Float32 => {
+            let n = to_number(value);
+            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
+        }
+        TypedArrayKind::Float64 => {
+            let n = to_number(value);
+            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+        }
+        TypedArrayKind::BigInt64 => {
+            buf[offset..offset + 8].copy_from_slice(&to_bigint64(value).to_ne_bytes());
+        }
+        TypedArrayKind::BigUint64 => {
+            buf[offset..offset + 8].copy_from_slice(&to_biguint64(value).to_ne_bytes());
+        }
+        TypedArrayKind::Float16 => {
+            let n = to_number(value);
+            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
+            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
+        }
+    }
+    true
+}
+
+fn typed_array_get_index_shared(
+    kind: TypedArrayKind,
+    sab: &SharedBufferInner,
+    offset: usize,
+) -> JsValue {
+    sab.with_read(|buf| decode_ta_element(kind, buf, offset))
 }
 
 pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
     if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-        return JsValue::Undefined;
+        return JsValue::UNDEFINED;
     }
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
     let buf_borrow = ta.buffer.borrow();
     if let BufferData::Shared(sab) = &*buf_borrow {
         return typed_array_get_index_shared(ta.kind, sab, offset);
     }
-    buf_borrow.with_read(|buf| {
-        if offset + ta.kind.bytes_per_element() > buf.len() {
-            return JsValue::Undefined;
-        }
-        match ta.kind {
-            TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
-            TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
-                JsValue::Number(buf[offset] as f64)
-            }
-            TypedArrayKind::Int16 => {
-                let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::Number(v as f64)
-            }
-            TypedArrayKind::Uint16 => {
-                let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::Number(v as f64)
-            }
-            TypedArrayKind::Int32 => {
-                let v = i32::from_ne_bytes([
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                ]);
-                JsValue::Number(v as f64)
-            }
-            TypedArrayKind::Uint32 => {
-                let v = u32::from_ne_bytes([
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                ]);
-                JsValue::Number(v as f64)
-            }
-            TypedArrayKind::Float32 => {
-                let v = f32::from_ne_bytes([
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                ]);
-                JsValue::Number(v as f64)
-            }
-            TypedArrayKind::Float64 => {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::Number(f64::from_ne_bytes(bytes))
-            }
-            TypedArrayKind::BigInt64 => {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::BigInt(crate::types::JsBigInt {
-                    value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
-                })
-            }
-            TypedArrayKind::BigUint64 => {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::BigInt(crate::types::JsBigInt {
-                    value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
-                })
-            }
-            TypedArrayKind::Float16 => {
-                let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
-                    bits,
-                ))
-            }
-        }
-    })
+    buf_borrow.with_read(|buf| decode_ta_element(ta.kind, buf, offset))
 }
 
 fn typed_array_set_index_shared(
@@ -3398,105 +3743,7 @@ fn typed_array_set_index_shared(
     offset: usize,
     value: &JsValue,
 ) -> bool {
-    match kind {
-        TypedArrayKind::Int8 => sab.with_write(|buf| {
-            if offset + 1 > buf.len() {
-                return false;
-            }
-            let v = to_int8(value);
-            buf[offset] = v as u8;
-            true
-        }),
-        TypedArrayKind::Uint8 => sab.with_write(|buf| {
-            if offset + 1 > buf.len() {
-                return false;
-            }
-            let v = to_uint8(value);
-            buf[offset] = v;
-            true
-        }),
-        TypedArrayKind::Uint8Clamped => sab.with_write(|buf| {
-            if offset + 1 > buf.len() {
-                return false;
-            }
-            let v = to_uint8_clamped(value);
-            buf[offset] = v;
-            true
-        }),
-        TypedArrayKind::Int16 => sab.with_write(|buf| {
-            if offset + 2 > buf.len() {
-                return false;
-            }
-            let v = to_int16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Uint16 => sab.with_write(|buf| {
-            if offset + 2 > buf.len() {
-                return false;
-            }
-            let v = to_uint16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Int32 => sab.with_write(|buf| {
-            if offset + 4 > buf.len() {
-                return false;
-            }
-            let v = to_int32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Uint32 => sab.with_write(|buf| {
-            if offset + 4 > buf.len() {
-                return false;
-            }
-            let v = to_uint32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::BigInt64 => sab.with_write(|buf| {
-            if offset + 8 > buf.len() {
-                return false;
-            }
-            let v = to_bigint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::BigUint64 => sab.with_write(|buf| {
-            if offset + 8 > buf.len() {
-                return false;
-            }
-            let v = to_biguint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Float16 => sab.with_write(|buf| {
-            if offset + 2 > buf.len() {
-                return false;
-            }
-            let n = to_number(value);
-            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
-            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Float32 => sab.with_write(|buf| {
-            if offset + 4 > buf.len() {
-                return false;
-            }
-            let n = to_number(value);
-            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
-            true
-        }),
-        TypedArrayKind::Float64 => sab.with_write(|buf| {
-            if offset + 8 > buf.len() {
-                return false;
-            }
-            let n = to_number(value);
-            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
-            true
-        }),
-    }
+    sab.with_write(|buf| encode_ta_element(kind, buf, offset, value))
 }
 
 pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
@@ -3506,76 +3753,15 @@ pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsV
         return typed_array_set_index_shared(ta.kind, sab, offset, value);
     }
     drop(buf_borrow);
-    (*ta.buffer.borrow_mut()).with_write(|buf| {
-        if offset + ta.kind.bytes_per_element() > buf.len() {
-            return false;
-        }
-        match ta.kind {
-            TypedArrayKind::Int8 => {
-                let v = to_int8(value);
-                buf[offset] = v as u8;
-            }
-            TypedArrayKind::Uint8 => {
-                let v = to_uint8(value);
-                buf[offset] = v;
-            }
-            TypedArrayKind::Uint8Clamped => {
-                let v = to_uint8_clamped(value);
-                buf[offset] = v;
-            }
-            TypedArrayKind::Int16 => {
-                let v = to_int16(value);
-                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Uint16 => {
-                let v = to_uint16(value);
-                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Int32 => {
-                let v = to_int32(value);
-                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Uint32 => {
-                let v = to_uint32(value);
-                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Float32 => {
-                let n = to_number(value);
-                buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
-            }
-            TypedArrayKind::Float64 => {
-                let n = to_number(value);
-                buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
-            }
-            TypedArrayKind::BigInt64 => {
-                let v = to_bigint64(value);
-                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::BigUint64 => {
-                let v = to_biguint64(value);
-                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-            }
-            TypedArrayKind::Float16 => {
-                let n = to_number(value);
-                let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
-                buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
-            }
-        }
-        true
-    })
+    (*ta.buffer.borrow_mut()).with_write(|buf| encode_ta_element(ta.kind, buf, offset, value))
 }
 
-fn to_number(v: &JsValue) -> f64 {
-    match v {
-        JsValue::Number(n) => *n,
-        JsValue::Boolean(true) => 1.0,
-        JsValue::Boolean(false) | JsValue::Null => 0.0,
-        JsValue::Undefined => f64::NAN,
-        JsValue::String(s) => s.to_string().parse::<f64>().unwrap_or(f64::NAN),
-        _ => f64::NAN,
-    }
-}
-
+// Typed-array element writes coerce their value with the single canonical
+// ToNumber (§7.1.4) in `helpers`; these encoders (ToInt8 … Float branches) apply
+// ToInt32/ToUint32 etc. on top of it. `to_bigint64`/`to_biguint64` below still
+// only read an already-`BigInt` value — a raw non-BigInt reaching them yields 0
+// rather than running the throwing ToBigInt, a pre-existing gap that requires an
+// error-propagating set-index signature to close and is out of scope here.
 fn to_int8(v: &JsValue) -> i8 {
     number_ops::to_int32(to_number(v)) as i8
 }
@@ -3615,29 +3801,27 @@ fn to_uint32(v: &JsValue) -> u32 {
     number_ops::to_uint32(to_number(v))
 }
 fn to_bigint64(v: &JsValue) -> i64 {
-    match v {
-        JsValue::BigInt(b) => {
-            i64::try_from(&b.value).unwrap_or_else(|_| {
-                // Truncate to 64 bits
-                let bytes = b.value.to_signed_bytes_le();
-                let mut result = [0u8; 8];
-                let len = bytes.len().min(8);
-                result[..len].copy_from_slice(&bytes[..len]);
-                if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
-                    for byte in result.iter_mut().skip(len) {
-                        *byte = 0xFF;
-                    }
+    v.with_bigint(|b| {
+        i64::try_from(b).unwrap_or_else(|_| {
+            // Truncate to 64 bits
+            let bytes = b.to_signed_bytes_le();
+            let mut result = [0u8; 8];
+            let len = bytes.len().min(8);
+            result[..len].copy_from_slice(&bytes[..len]);
+            if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
+                for byte in result.iter_mut().skip(len) {
+                    *byte = 0xFF;
                 }
-                i64::from_le_bytes(result)
-            })
-        }
-        _ => 0,
-    }
+            }
+            i64::from_le_bytes(result)
+        })
+    })
+    .unwrap_or(0)
 }
 fn to_biguint64(v: &JsValue) -> u64 {
-    match v {
-        JsValue::BigInt(b) => u64::try_from(&b.value).unwrap_or_else(|_| {
-            let bytes = b.value.to_signed_bytes_le();
+    v.with_bigint(|b| {
+        u64::try_from(b).unwrap_or_else(|_| {
+            let bytes = b.to_signed_bytes_le();
             let mut result = [0u8; 8];
             let len = bytes.len().min(8);
             result[..len].copy_from_slice(&bytes[..len]);
@@ -3648,26 +3832,26 @@ fn to_biguint64(v: &JsValue) -> u64 {
                 }
             }
             u64::from_le_bytes(result)
-        }),
-        _ => 0,
-    }
+        })
+    })
+    .unwrap_or(0)
 }
 
 #[derive(Debug, Clone)]
-pub enum PromiseState {
+pub(crate) enum PromiseState {
     Pending,
     Fulfilled(JsValue),
     Rejected(JsValue),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PromiseReactionType {
+pub(crate) enum PromiseReactionType {
     Fulfill,
     Reject,
 }
 
 #[derive(Debug, Clone)]
-pub struct PromiseReaction {
+pub(crate) struct PromiseReaction {
     pub handler: Option<JsValue>,
     pub promise_id: Option<u64>,
     pub resolve: JsValue,
@@ -3676,17 +3860,22 @@ pub struct PromiseReaction {
 }
 
 #[derive(Debug, Clone)]
-pub struct PromiseData {
+pub(crate) struct PromiseData {
     pub state: PromiseState,
+    /// Resolver pairs created for this promise while it is pending. Native
+    /// closures capture these values outside the traced Rust object graph, so
+    /// the promise owns the reverse edges until settlement.
+    pub resolving_functions: Vec<(JsValue, JsValue)>,
     pub fulfill_reactions: Vec<PromiseReaction>,
     pub reject_reactions: Vec<PromiseReaction>,
     pub is_handled: bool,
 }
 
 impl PromiseData {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: PromiseState::Pending,
+            resolving_functions: Vec::new(),
             fulfill_reactions: Vec::new(),
             reject_reactions: Vec::new(),
             is_handled: false,
@@ -3700,16 +3889,49 @@ impl Default for PromiseData {
     }
 }
 
-pub(crate) const GC_THRESHOLD: usize = 4096;
 pub(crate) const GC_INITIAL_THRESHOLD_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const GC_MIN_THRESHOLD_BYTES: usize = 256 * 1024;
+pub(crate) const GC_NURSERY_THRESHOLD_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const GC_MAJOR_MIN_THRESHOLD_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const GC_GROWTH_FACTOR: usize = 2;
 pub(crate) const GC_OBJECT_OVERHEAD: usize = 512;
+pub(crate) const GC_PROMOTION_AGE: u8 = 2;
 
 pub(crate) struct SetRecord {
     pub(crate) has: JsValue,
     pub(crate) keys: JsValue,
     pub(crate) size: f64,
+}
+
+#[cfg(test)]
+mod shared_buffer_tests {
+    use super::SharedBufferInner;
+
+    #[test]
+    fn shared_buffer_byte_views_survive_mutation_and_resize() {
+        let buffer = SharedBufferInner::new((0..10).collect(), 1);
+        assert_eq!(buffer.to_vec(), (0..10).collect::<Vec<_>>());
+
+        buffer.with_write(|bytes| {
+            bytes[0] = 10;
+            bytes[9] = 19;
+        });
+        assert_eq!(buffer.to_vec(), vec![10, 1, 2, 3, 4, 5, 6, 7, 8, 19]);
+
+        buffer.resize(13, 0xaa);
+        assert_eq!(
+            buffer.to_vec(),
+            vec![10, 1, 2, 3, 4, 5, 6, 7, 8, 19, 0xaa, 0xaa, 0xaa]
+        );
+
+        buffer.resize(3, 0);
+        assert_eq!(buffer.to_vec(), vec![10, 1, 2]);
+
+        buffer.resize(10, 0xbb);
+        assert_eq!(
+            buffer.to_vec(),
+            vec![10, 1, 2, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3726,7 +3948,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn array_elements_some_for_array_kind() {
-        let obj = obj_with_kind(ObjectKind::Array(vec![JsValue::Undefined]));
+        let obj = obj_with_kind(ObjectKind::Array(ArrayData::new(vec![JsValue::UNDEFINED])));
         assert!(obj.array_elements().is_some());
         assert_eq!(obj.array_elements().unwrap().len(), 1);
     }
@@ -3739,25 +3961,67 @@ mod kind_accessor_tests {
 
     #[test]
     fn array_elements_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Array(Vec::new()));
-        obj.array_elements_mut()
-            .unwrap()
-            .push(JsValue::Boolean(true));
+        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        obj.array_elements_mut().unwrap().push(JsValue::TRUE);
         assert_eq!(obj.array_elements().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn array_named_property_order_excludes_indices_and_symbols() {
+        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        obj.insert_property(
+            "length",
+            PropertyDescriptor::data(JsValue::number(1024.0), true, false, false),
+        );
+        for index in 0..1024 {
+            obj.insert_value(index.to_string(), JsValue::number(index as f64));
+        }
+        assert_eq!(
+            obj.array_data()
+                .unwrap()
+                .extra_string_property_order
+                .capacity(),
+            0
+        );
+        obj.insert_value("+1", JsValue::number(1.0));
+        obj.insert_value("z", JsValue::number(2.0));
+        obj.insert_value(
+            JsPropertyKey::well_known_symbol("iterator"),
+            JsValue::number(3.0),
+        );
+
+        let keys = obj
+            .array_extra_string_property_order()
+            .unwrap()
+            .iter()
+            .map(JsPropertyKey::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["+1", "z"]);
+        assert_eq!(obj.property_order.len(), 1028);
+
+        obj.remove_property("+1");
+        obj.insert_value("+1", JsValue::number(4.0));
+        let keys = obj
+            .array_extra_string_property_order()
+            .unwrap()
+            .iter()
+            .map(JsPropertyKey::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["z", "+1"]);
     }
 
     // --- set_data / set_data_mut ---
 
     #[test]
     fn set_data_some_for_set_kind() {
-        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::Number(1.0))]));
+        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::number(1.0))]));
         assert!(obj.set_data().is_some());
         assert_eq!(obj.set_data().unwrap().len(), 1);
     }
 
     #[test]
     fn set_data_none_for_non_set_kind() {
-        let obj = obj_with_kind(ObjectKind::Array(Vec::new()));
+        let obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
         assert!(obj.set_data().is_none());
     }
 
@@ -3772,7 +4036,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn map_data_some_for_map_kind() {
-        let entry = Some((JsValue::Number(1.0), JsValue::Boolean(false)));
+        let entry = Some((JsValue::number(1.0), JsValue::FALSE));
         let obj = obj_with_kind(ObjectKind::Map(vec![entry]));
         assert!(obj.map_data().is_some());
         assert_eq!(obj.map_data().unwrap().len(), 1);
@@ -3789,7 +4053,7 @@ mod kind_accessor_tests {
         let mut obj = obj_with_kind(ObjectKind::Map(Vec::new()));
         obj.map_data_mut()
             .unwrap()
-            .push(Some((JsValue::Number(0.0), JsValue::Undefined)));
+            .push(Some((JsValue::number(0.0), JsValue::UNDEFINED)));
         assert_eq!(obj.map_data().unwrap().len(), 1);
     }
 
@@ -3798,8 +4062,8 @@ mod kind_accessor_tests {
     #[test]
     fn bound_some_for_bound_function_kind() {
         let data = BoundFunctionData {
-            target: JsValue::Undefined,
-            this: JsValue::Undefined,
+            target: JsValue::UNDEFINED,
+            this: JsValue::UNDEFINED,
             args: vec![],
         };
         let obj = obj_with_kind(ObjectKind::BoundFunction(data));
@@ -3872,14 +4136,8 @@ mod property_bag_tests {
     #[test]
     fn remove_property_clears_both_map_and_order() {
         let mut obj = JsObjectData::new();
-        obj.insert_property(
-            "a".into(),
-            PropertyDescriptor::data_default(JsValue::Number(1.0)),
-        );
-        obj.insert_property(
-            "b".into(),
-            PropertyDescriptor::data_default(JsValue::Number(2.0)),
-        );
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::number(1.0)));
+        obj.insert_property("b", PropertyDescriptor::data_default(JsValue::number(2.0)));
 
         let removed = obj.remove_property("a");
 
@@ -3892,10 +4150,7 @@ mod property_bag_tests {
     fn remove_property_preserves_order_of_survivors() {
         let mut obj = JsObjectData::new();
         for k in ["a", "b", "c", "d"] {
-            obj.insert_property(
-                k.into(),
-                PropertyDescriptor::data_default(JsValue::Undefined),
-            );
+            obj.insert_property(k, PropertyDescriptor::data_default(JsValue::UNDEFINED));
         }
 
         obj.remove_property("b");
@@ -3909,13 +4164,16 @@ mod property_bag_tests {
     fn remove_property_returns_the_stored_descriptor() {
         let mut obj = JsObjectData::new();
         obj.insert_property(
-            "x".into(),
-            PropertyDescriptor::data(JsValue::Number(42.0), false, true, false),
+            "x",
+            PropertyDescriptor::data(JsValue::number(42.0), false, true, false),
         );
 
         let removed = obj.remove_property("x").expect("descriptor returned");
 
-        assert!(matches!(removed.value, Some(JsValue::Number(n)) if n == 42.0));
+        assert_eq!(
+            removed.value.and_then(|value| value.as_number()),
+            Some(42.0)
+        );
         assert_eq!(removed.writable, Some(false));
         assert_eq!(removed.enumerable, Some(true));
         assert_eq!(removed.configurable, Some(false));
@@ -3924,10 +4182,7 @@ mod property_bag_tests {
     #[test]
     fn remove_absent_key_is_a_noop() {
         let mut obj = JsObjectData::new();
-        obj.insert_property(
-            "a".into(),
-            PropertyDescriptor::data_default(JsValue::Undefined),
-        );
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::UNDEFINED));
 
         assert!(obj.remove_property("missing").is_none());
         assert_eq!(keys(&obj), vec!["a"], "order untouched");
@@ -3937,13 +4192,374 @@ mod property_bag_tests {
     #[test]
     fn second_remove_returns_none() {
         let mut obj = JsObjectData::new();
-        obj.insert_property(
-            "a".into(),
-            PropertyDescriptor::data_default(JsValue::Undefined),
-        );
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::UNDEFINED));
 
         assert!(obj.remove_property("a").is_some());
         assert!(obj.remove_property("a").is_none());
         assert!(keys(&obj).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod string_exotic_index_tests {
+    use super::string_exotic_index;
+
+    // §10.4.3 StringGetOwnProperty own-index predicate. Expected values are the
+    // ECMAScript truth table (CanonicalNumericIndexString + IsIntegralNumber +
+    // -0 + range), cross-checked against node.
+    #[test]
+    fn canonical_in_range_indices_resolve() {
+        assert_eq!(string_exotic_index("0", 3), Some(0));
+        assert_eq!(string_exotic_index("1", 3), Some(1));
+        assert_eq!(string_exotic_index("2", 3), Some(2));
+    }
+
+    #[test]
+    fn out_of_range_is_none() {
+        assert_eq!(string_exotic_index("3", 3), None);
+        assert_eq!(string_exotic_index("0", 0), None);
+        assert_eq!(string_exotic_index("9999999999", 3), None);
+    }
+
+    #[test]
+    fn non_canonical_spellings_are_none() {
+        // Round-trippable ToString(ToNumber(key)) != key -> not a canonical index.
+        assert_eq!(string_exotic_index("01", 3), None);
+        assert_eq!(string_exotic_index("00", 3), None);
+        assert_eq!(string_exotic_index("+1", 3), None);
+        assert_eq!(string_exotic_index("1.0", 3), None);
+        assert_eq!(string_exotic_index(" 1", 3), None);
+        assert_eq!(string_exotic_index("1 ", 3), None);
+        assert_eq!(string_exotic_index("1e0", 3), None);
+        assert_eq!(string_exotic_index("0x1", 3), None);
+        assert_eq!(string_exotic_index("", 3), None);
+    }
+
+    #[test]
+    fn non_integral_canonical_numbers_are_none() {
+        assert_eq!(string_exotic_index("1.5", 3), None);
+        assert_eq!(string_exotic_index("0.5", 3), None);
+    }
+
+    #[test]
+    fn negative_and_negative_zero_are_none() {
+        assert_eq!(string_exotic_index("-1", 3), None);
+        // CanonicalNumericIndexString("-0") is -0f; StringGetOwnProperty rejects it.
+        assert_eq!(string_exotic_index("-0", 3), None);
+    }
+
+    #[test]
+    fn non_finite_canonical_words_are_none() {
+        // "Infinity"/"NaN" round-trip through ToString but are not integral indices.
+        assert_eq!(string_exotic_index("Infinity", 3), None);
+        assert_eq!(string_exotic_index("-Infinity", 3), None);
+        assert_eq!(string_exotic_index("NaN", 3), None);
+    }
+
+    #[test]
+    fn length_word_is_not_an_index() {
+        assert_eq!(string_exotic_index("length", 3), None);
+    }
+}
+
+#[cfg(test)]
+mod typed_array_codec_tests {
+    //! Behavioural tests for the shared element codec used by every typed-array
+    //! `[[Get]]`/`[[Set]]`. Expected values are drawn from independent sources of
+    //! truth: two's-complement / IEEE-754 byte layouts, the spec's ToInt/ToUint
+    //! wrapping rules (§7.1.x), and known half-float bit patterns — never
+    //! recomputed the way the codec computes them.
+    use super::{TypedArrayKind, decode_ta_element, encode_ta_element};
+    use crate::types::{JsBigInt, JsValue};
+
+    fn num(v: &JsValue) -> f64 {
+        v.as_number().expect("expected a number JsValue")
+    }
+
+    // --- decode: integers ---
+
+    #[test]
+    fn decode_int8_reads_twos_complement() {
+        // 0xFF as a signed byte is -1.
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Int8, &[0xFF], 0)),
+            -1.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Int8, &[0x80], 0)),
+            -128.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Int8, &[0x7F], 0)),
+            127.0
+        );
+    }
+
+    #[test]
+    fn decode_uint8_variants_read_raw_byte() {
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Uint8, &[0xFF], 0)),
+            255.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Uint8Clamped, &[0xFF], 0)),
+            255.0
+        );
+    }
+
+    #[test]
+    fn decode_multibyte_ints_round_trip_native_encoding() {
+        // Build inputs with std's encoder (independent of our from_ne_bytes decode).
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Int16,
+                &(-2i16).to_ne_bytes(),
+                0
+            )),
+            -2.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Uint16,
+                &(0xBEEFu16).to_ne_bytes(),
+                0
+            )),
+            48879.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Int32,
+                &(-2i32).to_ne_bytes(),
+                0
+            )),
+            -2.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Uint32,
+                &(0xDEADBEEFu32).to_ne_bytes(),
+                0
+            )),
+            3_735_928_559.0
+        );
+    }
+
+    #[test]
+    fn decode_reads_at_nonzero_offset() {
+        let mut buf = vec![0u8; 8];
+        buf[4..8].copy_from_slice(&(0x0102_0304u32).to_ne_bytes());
+        assert_eq!(
+            num(&decode_ta_element(TypedArrayKind::Uint32, &buf, 4)),
+            16_909_060.0
+        );
+    }
+
+    // --- decode: floats ---
+
+    #[test]
+    fn decode_float32_and_float64_round_trip() {
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float32,
+                &1.5f32.to_ne_bytes(),
+                0
+            )),
+            1.5
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float64,
+                &6.5f64.to_ne_bytes(),
+                0
+            )),
+            6.5
+        );
+    }
+
+    #[test]
+    fn decode_float16_known_bit_patterns() {
+        // IEEE-754 half: 0x3C00 == 1.0, 0xC000 == -2.0.
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float16,
+                &0x3C00u16.to_ne_bytes(),
+                0
+            )),
+            1.0
+        );
+        assert_eq!(
+            num(&decode_ta_element(
+                TypedArrayKind::Float16,
+                &0xC000u16.to_ne_bytes(),
+                0
+            )),
+            -2.0
+        );
+    }
+
+    // --- decode: bigint ---
+
+    #[test]
+    fn decode_bigint64_sign_extends() {
+        let v = decode_ta_element(TypedArrayKind::BigInt64, &(-5i64).to_ne_bytes(), 0);
+        let got = v.with_bigint(|b| b.clone()).expect("expected a bigint");
+        assert_eq!(got, num_bigint::BigInt::from(-5i64));
+    }
+
+    #[test]
+    fn decode_biguint64_is_unsigned() {
+        let v = decode_ta_element(TypedArrayKind::BigUint64, &u64::MAX.to_ne_bytes(), 0);
+        let got = v.with_bigint(|b| b.clone()).expect("expected a bigint");
+        assert_eq!(got, num_bigint::BigInt::from(u64::MAX));
+    }
+
+    // --- decode: bounds ---
+
+    #[test]
+    fn decode_past_end_is_undefined() {
+        // Int32 needs 4 bytes; a 3-byte buffer cannot supply one at offset 0.
+        assert!(decode_ta_element(TypedArrayKind::Int32, &[0, 0, 0], 0).is_undefined());
+        // Exactly-fits succeeds; one past the last full element does not.
+        let buf = [0u8; 4];
+        assert!(!decode_ta_element(TypedArrayKind::Int16, &buf, 2).is_undefined());
+        assert!(decode_ta_element(TypedArrayKind::Int16, &buf, 3).is_undefined());
+    }
+
+    // --- encode: integer coercion (spec ToInt/ToUint wrapping) ---
+
+    #[test]
+    fn encode_int8_wraps_modulo_256() {
+        // ToInt8(300) = 300 - 256 = 44.
+        let mut buf = [0u8; 1];
+        assert!(encode_ta_element(
+            TypedArrayKind::Int8,
+            &mut buf,
+            0,
+            &JsValue::number(300.0)
+        ));
+        assert_eq!(buf[0] as i8, 44);
+        // ToInt8(-1) = -1 == 0xFF.
+        assert!(encode_ta_element(
+            TypedArrayKind::Int8,
+            &mut buf,
+            0,
+            &JsValue::number(-1.0)
+        ));
+        assert_eq!(buf[0], 0xFF);
+    }
+
+    #[test]
+    fn encode_uint8_clamped_rounds_half_to_even() {
+        let mut buf = [0u8; 1];
+        // 2.5 -> 2 (round half to even), 3.5 -> 4, 256 -> 255 (clamp), -1 -> 0.
+        for (input, expected) in [(2.5, 2u8), (3.5, 4), (256.0, 255), (-1.0, 0)] {
+            assert!(encode_ta_element(
+                TypedArrayKind::Uint8Clamped,
+                &mut buf,
+                0,
+                &JsValue::number(input)
+            ));
+            assert_eq!(buf[0], expected, "clamp({input})");
+        }
+    }
+
+    #[test]
+    fn encode_int32_matches_native_encoding() {
+        let mut buf = [0u8; 4];
+        assert!(encode_ta_element(
+            TypedArrayKind::Int32,
+            &mut buf,
+            0,
+            &JsValue::number(-2.0)
+        ));
+        assert_eq!(buf, (-2i32).to_ne_bytes());
+    }
+
+    // --- encode: floats ---
+
+    #[test]
+    fn encode_float64_matches_native_encoding() {
+        let mut buf = [0u8; 8];
+        assert!(encode_ta_element(
+            TypedArrayKind::Float64,
+            &mut buf,
+            0,
+            &JsValue::number(6.5)
+        ));
+        assert_eq!(buf, 6.5f64.to_ne_bytes());
+    }
+
+    #[test]
+    fn encode_float32_narrows_then_encodes() {
+        let mut buf = [0u8; 4];
+        assert!(encode_ta_element(
+            TypedArrayKind::Float32,
+            &mut buf,
+            0,
+            &JsValue::number(1.5)
+        ));
+        assert_eq!(buf, 1.5f32.to_ne_bytes());
+    }
+
+    // --- encode: bigint ---
+
+    #[test]
+    fn encode_bigint64_matches_native_encoding() {
+        let mut buf = [0u8; 8];
+        let value = JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(-5i64)));
+        assert!(encode_ta_element(
+            TypedArrayKind::BigInt64,
+            &mut buf,
+            0,
+            &value
+        ));
+        assert_eq!(buf, (-5i64).to_ne_bytes());
+    }
+
+    // --- encode: bounds ---
+
+    #[test]
+    fn encode_past_end_returns_false_and_writes_nothing() {
+        let mut buf = [0u8; 3];
+        assert!(!encode_ta_element(
+            TypedArrayKind::Int32,
+            &mut buf,
+            0,
+            &JsValue::number(1.0)
+        ));
+        assert_eq!(
+            buf, [0u8; 3],
+            "buffer must be untouched on out-of-bounds write"
+        );
+    }
+
+    // --- round-trip: encode then decode is identity ---
+
+    #[test]
+    fn encode_decode_round_trips_per_kind() {
+        let cases: &[(TypedArrayKind, f64)] = &[
+            (TypedArrayKind::Int8, -3.0),
+            (TypedArrayKind::Uint8, 200.0),
+            (TypedArrayKind::Int16, -1234.0),
+            (TypedArrayKind::Uint16, 40000.0),
+            (TypedArrayKind::Int32, -70000.0),
+            (TypedArrayKind::Uint32, 3_000_000_000.0),
+            (TypedArrayKind::Float32, 1.5),
+            (TypedArrayKind::Float64, -9.5),
+        ];
+        for &(kind, value) in cases {
+            let mut buf = vec![0u8; kind.bytes_per_element()];
+            assert!(
+                encode_ta_element(kind, &mut buf, 0, &JsValue::number(value)),
+                "encode {}",
+                kind.name()
+            );
+            assert_eq!(
+                num(&decode_ta_element(kind, &buf, 0)),
+                value,
+                "round-trip {}",
+                kind.name()
+            );
+        }
     }
 }

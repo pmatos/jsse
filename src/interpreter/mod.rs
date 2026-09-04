@@ -1,6 +1,8 @@
 use crate::ast::*;
 use crate::parser;
-use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
+use crate::types::{
+    JsBigInt, JsPropertyKey, JsString, JsValue, PropertyKeyLike, bigint_ops, number_ops,
+};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -8,17 +10,17 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-pub struct AgentBroadcastMsg {
+pub(crate) struct AgentBroadcastMsg {
     pub sab_shared: Arc<types::SharedBufferInner>,
 }
 
 mod types;
-pub use types::*;
+pub(crate) use types::*;
 
 mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
-pub(crate) use builtins::regexp::validate_js_pattern;
+pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
 mod env_helpers;
 mod eval;
@@ -26,10 +28,16 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+mod hoist_cache;
+pub(crate) use hoist_cache::{HoistAnalysis, HoistCache};
+mod hoisting;
 pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
 mod object_arena;
+#[cfg(feature = "perf-counters")]
+pub(crate) mod perf_counters;
+pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
@@ -37,45 +45,193 @@ mod scheduler;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ImportModuleType {
+    Json,
     Text,
     Bytes,
 }
 
-fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
-    for (key, value) in attrs {
-        if key == "type" {
-            return match value.as_str() {
-                "text" => Some(ImportModuleType::Text),
-                "bytes" => Some(ImportModuleType::Bytes),
-                _ => None,
-            };
+impl ImportModuleType {
+    fn from_attr_value(value: &str) -> Option<Self> {
+        match value {
+            "json" => Some(Self::Json),
+            "text" => Some(Self::Text),
+            "bytes" => Some(Self::Bytes),
+            _ => None,
         }
     }
-    None
+
+    fn attr_value(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+        }
+    }
 }
 
-/// Cached output of the var/Annex-B hoisting *name collection* for a single
-/// function body, keyed by the body's `Rc` pointer identity (#72).
+enum ImportAttributeError {
+    UnsupportedKey(String),
+    UnsupportedType(String),
+}
+
+impl ImportAttributeError {
+    /// The message text, written once. The *constructor* still varies per
+    /// import form (see `dynamic_import_module_type` and
+    /// `static_import_module_type`), the wording does not.
+    fn message(&self) -> String {
+        match self {
+            Self::UnsupportedKey(key) => format!("Unsupported import attribute '{key}'"),
+            Self::UnsupportedType(value) => format!("Unsupported module type '{value}'"),
+        }
+    }
+}
+
+fn validated_import_module_type(
+    attrs: &[(String, String)],
+) -> Result<Option<ImportModuleType>, ImportAttributeError> {
+    // AllImportAttributesSupported checks the complete key list before the
+    // host sees any values. Keep this as a separate pass so an earlier invalid
+    // `type` value cannot hide a later unsupported key.
+    for (key, _) in attrs {
+        if key != "type" {
+            return Err(ImportAttributeError::UnsupportedKey(key.clone()));
+        }
+    }
+
+    attrs
+        .iter()
+        .find(|(key, _)| key == "type")
+        .map(|(_, value)| {
+            ImportModuleType::from_attr_value(value)
+                .ok_or_else(|| ImportAttributeError::UnsupportedType(value.clone()))
+        })
+        .transpose()
+}
+
+/// The module type selected by *already-validated* attributes.
 ///
-/// Only the raw name collection is cached. The Annex-B post-processing that
-/// inspects live env/parameter/lexical state still runs per call, and function
-/// declarations are never cached as values (fresh closures are built per call).
-/// The body `Rc` is pinned to prevent pointer (ABA) reuse from aliasing a
-/// freed body onto a fresh one with the same address.
-pub(crate) struct HoistAnalysis {
-    /// Deduped output of `collect_var_names_from_stmts`.
-    pub(crate) var_names: Vec<String>,
-    /// Raw `names` output of `collect_annexb_function_names`. (The companion
-    /// `blocked` accumulator is internal to the walk and discarded afterwards
-    /// by the original code, so it is intentionally not cached.)
-    pub(crate) annexb_names: Vec<String>,
-    /// Pins the body so its `Rc::as_ptr` key cannot be reused for another body.
-    _body: Rc<Vec<Statement>>,
+/// Every static path reaches this only after the enclosing program's
+/// `validate_and_resolve_static_module_request` pass, so the error case is
+/// unreachable.
+/// Called out of that order it would silently downgrade an unsupported key or
+/// unknown `type` to "ordinary source module" — which is exactly the bug
+/// jsse#475 was about — so the ordering is asserted rather than remembered.
+fn prevalidated_import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    let validated = validated_import_module_type(attrs);
+    debug_assert!(
+        validated.is_ok(),
+        "import attributes must be validated before selecting a module type"
+    );
+    validated.ok().flatten()
 }
 
-pub struct Interpreter {
+/// One module item's request for *another* module: everything the graph and
+/// pre-load passes need in order to act on it. `None` for items that name no
+/// module (a local declaration, `export { x }` with no `from`, a statement).
+///
+/// `is_source_phase` is reported as data rather than acted on here because the
+/// loading seam resolves those requests shallowly, while graph traversal still
+/// needs to recognize the request itself.
+struct ModuleItemRequest<'a> {
+    specifier: &'a str,
+    attributes: &'a [(String, String)],
+    is_deferred: bool,
+    is_source_phase: bool,
+}
+
+impl ModuleItemRequest<'_> {
+    fn import_type(&self) -> Option<ImportModuleType> {
+        prevalidated_import_module_type(self.attributes)
+    }
+}
+
+fn module_item_request(item: &ModuleItem) -> Option<ModuleItemRequest<'_>> {
+    match item {
+        ModuleItem::ImportDeclaration(import) => Some(ModuleItemRequest {
+            specifier: import.source.as_str(),
+            attributes: &import.attributes,
+            is_deferred: import
+                .specifiers
+                .iter()
+                .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_))),
+            is_source_phase: Interpreter::is_source_phase_import(import),
+        }),
+        ModuleItem::ExportDeclaration(ExportDeclaration::All {
+            source, attributes, ..
+        })
+        | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+            source: Some(source),
+            attributes,
+            ..
+        }) => Some(ModuleItemRequest {
+            specifier: source.as_str(),
+            attributes,
+            is_deferred: false,
+            is_source_phase: false,
+        }),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModuleLoadMode {
+    Evaluate,
+    Defer,
+}
+
+/// Canonical host identity for a resolved module.
+///
+/// Most keys name files, but the host-provided `<module source>` record does
+/// not. Deliberately do not implement `Deref<Target = Path>`: callers must
+/// prove that a key is file-backed before crossing into filesystem code.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ModuleKey(PathBuf);
+
+impl ModuleKey {
+    fn for_file(path: PathBuf) -> Self {
+        Self(path).canonicalize()
+    }
+
+    fn module_source() -> Self {
+        Self(PathBuf::from(MODULE_SOURCE_SPECIFIER))
+    }
+
+    fn is_module_source(&self) -> bool {
+        self.0 == Path::new(MODULE_SOURCE_SPECIFIER)
+    }
+
+    /// Return the backing file path, or `None` for a host-provided module.
+    fn file_path(&self) -> Option<&Path> {
+        (!self.is_module_source()).then_some(self.0.as_path())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.as_os_str().is_empty()
+    }
+
+    fn display(&self) -> std::path::Display<'_> {
+        self.0.display()
+    }
+
+    /// Canonicalize every Module Key without interpreting a host key as a
+    /// filesystem path. Missing files retain their resolved fallback spelling.
+    fn canonicalize(&self) -> Self {
+        if self.is_module_source() || self.0.as_os_str().is_empty() {
+            return self.clone();
+        }
+        Self(self.0.canonicalize().unwrap_or_else(|_| self.0.clone()))
+    }
+}
+
+impl std::fmt::Display for ModuleKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.display().fmt(f)
+    }
+}
+
+pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
     objects: object_arena::ObjectArena,
@@ -90,20 +246,29 @@ pub struct Interpreter {
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
+    /// Object IDs whose `Array.prototype.join` calls are currently converting
+    /// elements. Re-entering `join` for the same receiver through element
+    /// stringification contributes an empty string instead of recursing until
+    /// the native-stack guard fires.
+    pub(crate) active_array_joins: Vec<u64>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
+    pub(crate) generator_for_of_stacks: FxHashMap<u64, Vec<ForOfLoopState>>,
     pub(crate) scheduler: scheduler::JobScheduler,
-    cached_has_instance_key: Option<String>,
-    module_registry: HashMap<(usize, PathBuf), Rc<RefCell<LoadedModule>>>,
-    synthetic_module_registry: HashMap<(PathBuf, ImportModuleType), Rc<RefCell<LoadedModule>>>,
-    current_module_path: Option<PathBuf>,
+    cached_has_instance_key: Option<JsPropertyKey>,
+    module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
+    synthetic_module_registry:
+        HashMap<(usize, ModuleKey, ImportModuleType), Rc<RefCell<LoadedModule>>>,
+    current_module_path: Option<ModuleKey>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     calling_as_construct: bool,
+    function_env_pool: Vec<EnvRef>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
+    pub(crate) gc_bytecode_roots: Vec<u64>,
     // microtask roots are stored inline alongside their jobs in JobScheduler
     pub(crate) class_private_names: Vec<HashMap<String, String>>,
     next_class_brand_id: u64,
@@ -131,7 +296,7 @@ pub struct Interpreter {
     pub(crate) pending_async_dispose_await: bool,
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
-    module_async_info: FxHashMap<u64, PathBuf>,
+    module_async_info: FxHashMap<u64, ModuleKey>,
     pub(crate) with_scope_depth: u32,
     pub(crate) has_ever_entered_with: bool,
     /// IC hit counter for Phase-2 telemetry/tests. Issue #71. Cell so the
@@ -150,6 +315,17 @@ pub struct Interpreter {
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
     pub bytecode_enabled: bool,
     pub(crate) bytecode_chunks_executed: usize,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) perf: perf_counters::PerfCounters,
+    #[cfg(feature = "perf-counters")]
+    perf_name_cache: rustc_hash::FxHashMap<u64, (std::rc::Rc<str>, u64)>,
+    /// Monotonic body identity. `ObjectArena` recycles logical ids, so keying
+    /// attribution on an id lets a later same-named function collide with a
+    /// dead one's retained `ast_body_units` entry. This never repeats, and the
+    /// cache entry holding it is dropped in `free_gc_object`, so a recycled id
+    /// always draws a fresh one (#537 review, fourth pass).
+    #[cfg(feature = "perf-counters")]
+    perf_next_body_seq: u64,
     /// Node host-compat "syscall floor" gate (issue #229). When false (the
     /// default, and always the case under test262), no `__host_*` globals are
     /// installed and every host-floor check below is inert — the global
@@ -163,14 +339,17 @@ pub struct Interpreter {
     /// or module top-level await — and is read by `main`/`run` to set the
     /// process exit status. Always `None` when `node_host_enabled` is false.
     pub pending_exit: Option<i32>,
+    /// True while a timer callback is running. Timer callbacks are tasks and
+    /// must not re-enter one another, so a nested interpreter run started from
+    /// inside one neither fires timers nor stays alive waiting for them.
+    dispatching_timers: bool,
     /// Monotonic clock anchor for `__host_hrtime`. Set when the host floor is
     /// enabled so elapsed nanoseconds are measured from a stable origin.
     pub(crate) host_clock_start: Option<std::time::Instant>,
     /// Per-function-body hoisting-analysis cache keyed by body `Rc` identity
-    /// (#72). The key `*const Vec<Statement>` is used purely as an identity —
-    /// never dereferenced. Cannot go stale: ASTs are immutable post-parse and
-    /// the keyed body is pinned in the value.
-    pub(crate) hoist_cache: FxHashMap<*const Vec<Statement>, Rc<HoistAnalysis>>,
+    /// (#72), bounded so body-churning workloads cannot retain every body they
+    /// ever ran (#165). See `hoist_cache`.
+    pub(crate) hoist_cache: HoistCache,
     /// Per-body inline-cache store. Bodies are keyed by the `Rc` pointer to
     /// their statement vector so closures of the same function body share the
     /// same cache. See `docs/adr/0001-inline-cache-ast-seam.md`.
@@ -179,7 +358,7 @@ pub struct Interpreter {
     /// or leave a function body (or the top-level program). The evaluator uses
     /// this handle to read and write per-body IC slots without threading it
     /// through every recursive call.
-    pub(crate) current_ic_handle: ic_store::BodyStoreHandle,
+    pub(crate) current_ic_handle: Option<ic_store::BodyStoreHandle>,
     /// Current JS call nesting depth. Incremented on entry to every function
     /// invocation (`call_function_inner`) and decremented as the stack unwinds.
     /// When it crosses the depth limits a catchable `RangeError` is thrown
@@ -240,9 +419,68 @@ pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
 /// leaving ample headroom for the error object's own construction.
 pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
 
+/// Maximum number of Proxy forwarding seams one prototype-chain operation may
+/// cross before reporting stack exhaustion. Ordinary-only chains are not
+/// counted: `OrdinarySetPrototypeOf` prevents them from cycling, and their hot
+/// iterative/tail-recursive paths already handle very deep acyclic chains.
+///
+/// A Proxy can legally hide a cycle from `OrdinarySetPrototypeOf`. Keeping this
+/// below the JS call-depth ceiling leaves enough native stack to construct and
+/// throw a catchable `RangeError` instead of reaching SIGABRT first.
+pub(crate) const PROXY_CHAIN_DEPTH_LIMIT: usize = 4_000;
+
+const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
+const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
+
+/// test262's host specifier for a Module Source. `test262/INTERPRETING.md`
+/// requires implementers to "resolve the specifier `<module source>` to a module
+/// that provides a valid Module Source" — a module record, not a source-phase-only
+/// stand-in. jsse has no concrete Module Source kind (no WebAssembly), so it
+/// resolves to a synthetic module, the only one whose `[[ModuleSource]]` is
+/// non-empty; see `Interpreter::get_or_create_module_source_module`.
+///
+/// `HostLoadImportedModule` must hand back the same Module Record for a given
+/// (referrer, specifier) pair regardless of the request's phase.
+///
+/// It is intercepted before any filesystem resolution and doubles as the module
+/// registry key, so it never reaches a real file of the same name.
+pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
+
+pub(crate) struct DeferredCallArguments {
+    first: Option<JsValue>,
+    rest: Vec<JsValue>,
+}
+
+impl DeferredCallArguments {
+    pub(crate) fn new(args: &[JsValue]) -> Self {
+        Self {
+            first: args.first().cloned(),
+            rest: args.get(1..).unwrap_or(&[]).to_vec(),
+        }
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &JsValue> {
+        self.first.iter().chain(self.rest.iter())
+    }
+
+    fn to_vec(&self) -> Vec<JsValue> {
+        self.values().cloned().collect()
+    }
+}
+
+pub(crate) enum CallFrameArguments {
+    None,
+    Materialized(JsValue),
+    Deferred {
+        args: DeferredCallArguments,
+        func_env: EnvRef,
+        mapped: bool,
+    },
+}
+
 pub(crate) struct CallFrame {
     pub func_obj_id: u64,
-    pub arguments_obj: JsValue,
+    pub arguments: CallFrameArguments,
     pub is_eval: bool,
 }
 
@@ -262,17 +500,34 @@ pub(crate) enum AsyncGenRequestKind {
     Throw,
 }
 
-pub struct LoadedModule {
-    pub path: PathBuf,
+pub(crate) struct LoadedModule {
+    pub path: ModuleKey,
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
-    pub export_bindings: HashMap<String, String>, // export_name -> binding_name
+    /// export_name -> binding_name. Binding names use several encodings, which
+    /// differ in how a consumer turns one back into a value:
+    ///
+    /// - a plain local name, or `*default*` — resolved by env lookup.
+    /// - `*ns:{specifier}` and `*reexport:{specifier}:{name}` — *re-parsed* to
+    ///   recover the specifier and walk to the source module (see
+    ///   `eval/modules.rs` and `resolve_export_binding`).
+    /// - `*synthetic-ns:{name}*` — opaque: materialized eagerly for typed
+    ///   (json/text/bytes) namespace requests and resolved by plain env lookup,
+    ///   because re-resolving the specifier would reload the resource without
+    ///   the request's type.
+    /// - `*ambiguous*` — a sentinel for a name exported by two `export *`
+    ///   sources; not resolvable, and never overwritten once set.
+    pub export_bindings: HashMap<String, String>,
     pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
     pub cached_deferred_namespace: Option<JsValue>, // cached deferred namespace (separate from eager)
     pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
     pub error: Option<JsValue>,                     // if module evaluation threw, the error
-    pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
-    pub source_imports: HashMap<String, PathBuf>, // local_name -> source-phase target path (for `import source X`)
+    pub namespace_imports: HashMap<String, ModuleKey>, // local_name -> source module (for `import * as ns`)
+    /// Internal namespace binding -> typed target. Namespace values are
+    /// materialized locally, but ResolveExport must retain the synthetic
+    /// module's identity when comparing star-export resolutions.
+    synthetic_namespace_imports: HashMap<String, (ModuleKey, ImportModuleType)>,
+    pub source_imports: HashMap<String, ModuleKey>, // local_name -> source-phase target (for `import source X`)
     pub module_source: Option<JsValue>, // [[ModuleSource]]: source-phase representation (empty for Source Text Modules)
     pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
     pub evaluated: bool,
@@ -280,10 +535,13 @@ pub struct LoadedModule {
     pub has_tla: bool,
     pub deferred_only: bool, // loaded via load_module_no_eval, not yet fully loaded
     pub program_ast: Option<crate::ast::Program>,
+    /// The module's permanent [[RequestedModules]] graph, retained after its
+    /// executable AST is released following synchronous evaluation.
+    pub requested_modules: Vec<(String, bool)>,
     pub async_evaluation_order: Option<u64>,
     pub pending_async_dependencies: u32,
-    pub async_parent_modules: Vec<PathBuf>,
-    pub cycle_root: Option<PathBuf>,
+    pub async_parent_modules: Vec<ModuleKey>,
+    pub cycle_root: Option<ModuleKey>,
     pub top_level_capability: Option<(JsValue, JsValue, JsValue)>,
     pub dfs_index: Option<u32>,
     pub dfs_ancestor_index: Option<u32>,
@@ -296,15 +554,15 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let global = Environment::new(None);
 
         {
             let mut env = global.borrow_mut();
             for (name, value) in [
-                ("undefined", JsValue::Undefined),
-                ("NaN", JsValue::Number(f64::NAN)),
-                ("Infinity", JsValue::Number(f64::INFINITY)),
+                ("undefined", JsValue::UNDEFINED),
+                ("NaN", JsValue::number(f64::NAN)),
+                ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
                     name.to_string(),
@@ -333,7 +591,9 @@ impl Interpreter {
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
+            active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
+            generator_for_of_stacks: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
@@ -344,9 +604,11 @@ impl Interpreter {
             last_call_this_value: None,
             constructing_derived: false,
             calling_as_construct: false,
+            function_env_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
+            gc_bytecode_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
             next_auto_accessor_id: 0,
@@ -383,12 +645,19 @@ impl Interpreter {
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
             bytecode_enabled: false,
             bytecode_chunks_executed: 0,
+            #[cfg(feature = "perf-counters")]
+            perf: perf_counters::PerfCounters::default(),
+            #[cfg(feature = "perf-counters")]
+            perf_name_cache: rustc_hash::FxHashMap::default(),
+            #[cfg(feature = "perf-counters")]
+            perf_next_body_seq: 0,
             node_host_enabled: false,
             pending_exit: None,
+            dispatching_timers: false,
             host_clock_start: None,
-            hoist_cache: FxHashMap::default(),
+            hoist_cache: HoistCache::new(),
             ic_store: ic_store::IcStore::new(),
-            current_ic_handle: ic_store::BodyStoreHandle(0),
+            current_ic_handle: None,
             call_depth: 0,
             overflow_armed: true,
             tco_suppress_depth: 0,
@@ -414,9 +683,9 @@ impl Interpreter {
         {
             let mut env = new_global_env.borrow_mut();
             for (name, value) in [
-                ("undefined", JsValue::Undefined),
-                ("NaN", JsValue::Number(f64::NAN)),
-                ("Infinity", JsValue::Number(f64::INFINITY)),
+                ("undefined", JsValue::UNDEFINED),
+                ("NaN", JsValue::number(f64::NAN)),
+                ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
                     name.to_string(),
@@ -447,7 +716,7 @@ impl Interpreter {
             "detachArrayBuffer".to_string(),
             1,
             |interp, _this, args| {
-                let buf = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let buf = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.detach_arraybuffer(&buf)
             },
         ));
@@ -462,7 +731,7 @@ impl Interpreter {
             |interp, _this, _args| {
                 interp.gc.request();
                 interp.gc_safepoint();
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(dollar_262_id)
@@ -474,10 +743,7 @@ impl Interpreter {
         if let Some(go_id) = global_env.borrow().global_object_id {
             self.get_object_cell_expect(dollar_262_id)
                 .borrow_mut()
-                .insert_builtin(
-                    "global".to_string(),
-                    JsValue::Object(crate::types::JsObject { id: go_id }),
-                );
+                .insert_builtin("global".to_string(), JsValue::object(go_id));
         }
 
         // $262.createRealm
@@ -500,8 +766,8 @@ impl Interpreter {
             "evalScript".to_string(),
             1,
             move |interp, _this, args| {
-                let code_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code = if let JsValue::String(ref s) = code_val {
+                let code_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let code = if let Some(s) = (code_val).as_string() {
                     crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
                 } else {
                     match interp.to_string_value(&code_val) {
@@ -509,7 +775,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                let mut p = match crate::parser::Parser::new(&code) {
+                let mut p = match crate::parser::Parser::new_for_eval(&code) {
                     Ok(p) => p,
                     Err(_) => {
                         return Completion::Throw(
@@ -531,7 +797,7 @@ impl Interpreter {
                 interp.current_realm_id = old_realm;
                 match result {
                     Completion::Normal(v) => Completion::Normal(v),
-                    Completion::Empty => Completion::Normal(JsValue::Undefined),
+                    Completion::Empty => Completion::Normal(JsValue::UNDEFINED),
                     other => other,
                 }
             },
@@ -547,12 +813,12 @@ impl Interpreter {
             .callable = Some(JsFunction::native(
             "".to_string(),
             0,
-            |_interp, _this, _args| Completion::Normal(JsValue::Null),
+            |_interp, _this, _args| Completion::Normal(JsValue::NULL),
         ));
         self.get_object_cell_expect(htmldda_obj_id)
             .borrow_mut()
             .is_htmldda = true;
-        let htmldda_val = JsValue::Object(crate::types::JsObject { id: htmldda_obj_id });
+        let htmldda_val = JsValue::object(htmldda_obj_id);
         self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
@@ -566,7 +832,7 @@ impl Interpreter {
             "start".to_string(),
             1,
             move |interp, _this, args| {
-                let script_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let script_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let script = match interp.to_string_value(&script_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
@@ -599,7 +865,7 @@ impl Interpreter {
                 });
                 interp.agent_handles.push(handle);
 
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -611,8 +877,10 @@ impl Interpreter {
             "broadcast".to_string(),
             1,
             |interp, _this, args| {
-                let sab_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(o) = &sab_val
+                let sab_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if let Some(o) = sab_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(cell) = interp.get_object_cell(o.id)
                 {
                     let sab_shared = cell.borrow().sab_shared().cloned();
@@ -624,7 +892,7 @@ impl Interpreter {
                         }
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -639,9 +907,9 @@ impl Interpreter {
                 let (ref reports_lock, _) = *interp.agent_reports;
                 let mut reports = reports_lock.lock().unwrap();
                 if let Some(report) = reports.pop_front() {
-                    Completion::Normal(JsValue::String(JsString::from_str(&report)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&report)))
                 } else {
-                    Completion::Normal(JsValue::Null)
+                    Completion::Normal(JsValue::NULL)
                 }
             },
         ));
@@ -655,16 +923,14 @@ impl Interpreter {
             0,
             |interp, _this, _args| {
                 let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
-                interp.gc_root_value(&resolve_fn);
 
                 let immediate_report = {
                     let (ref reports_lock, _) = *interp.agent_reports;
                     reports_lock.lock().unwrap().pop_front()
                 };
                 if let Some(report) = immediate_report {
-                    let report_val = JsValue::String(JsString::from_str(&report));
-                    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[report_val]);
-                    interp.gc_unroot_value(&resolve_fn);
+                    let report_val = JsValue::string(JsString::from_str(&report));
+                    let _ = interp.call_function(&resolve_fn, &JsValue::UNDEFINED, &[report_val]);
                     return Completion::Normal(promise_val);
                 }
 
@@ -674,7 +940,10 @@ impl Interpreter {
                 let pending = interp.agent_async_completions.clone();
                 let pending_jobs = interp.scheduler.pending_async_jobs_handle();
                 let pending_promise_ids = interp.scheduler.pending_async_promise_ids_handle();
-                let promise_id = if let JsValue::Object(ref o) = promise_val {
+                let promise_id = if let Some(o) = (promise_val)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     o.id
                 } else {
                     0
@@ -694,14 +963,13 @@ impl Interpreter {
                             queue = reports_cvar.wait(queue).unwrap();
                         }
                     };
-                    let report_val = JsValue::String(JsString::from_str(&report));
+                    let report_val = JsValue::string(JsString::from_str(&report));
                     let (ref mtx, ref completion_cvar) = *pending;
                     mtx.lock()
                         .unwrap()
                         .push(Box::new(move |interp: &mut Interpreter| {
                             let _ =
-                                interp.call_function(&resolve, &JsValue::Undefined, &[report_val]);
-                            interp.gc_unroot_value(&resolve);
+                                interp.call_function(&resolve, &JsValue::UNDEFINED, &[report_val]);
                             if promise_id != 0 {
                                 pending_promise_ids.lock().unwrap().remove(&promise_id);
                             }
@@ -722,13 +990,13 @@ impl Interpreter {
             "sleep".to_string(),
             1,
             |interp, _this, args| {
-                let ms_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let ms_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let ms = match interp.to_number_value(&ms_val) {
                     Ok(n) => n.max(0.0) as u64,
                     Err(e) => return Completion::Throw(e),
                 };
                 std::thread::sleep(std::time::Duration::from_millis(ms));
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -742,7 +1010,7 @@ impl Interpreter {
             0,
             move |_interp, _this, _args| {
                 let elapsed = start_time.elapsed().as_millis() as f64;
-                Completion::Normal(JsValue::Number(elapsed))
+                Completion::Normal(JsValue::number(elapsed))
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -753,13 +1021,13 @@ impl Interpreter {
         let leaving_fn = self.create_function(JsFunction::native(
             "leaving".to_string(),
             0,
-            |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+            |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
         ));
         self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("leaving".to_string(), leaving_fn);
 
-        let agent_val = JsValue::Object(crate::types::JsObject { id: agent_obj_id });
+        let agent_val = JsValue::object(agent_obj_id);
         self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("agent".to_string(), agent_val);
@@ -770,7 +1038,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
 
-        JsValue::Object(crate::types::JsObject { id: dollar_262_id })
+        JsValue::object(dollar_262_id)
     }
 
     /// Get (or lazily mint) the per-realm %AbstractModuleSource% constructor.
@@ -790,7 +1058,10 @@ impl Interpreter {
                 )
             },
         ));
-        let ams_fn_id = if let JsValue::Object(o) = &ams_fn {
+        let ams_fn_id = if let Some(o) = ams_fn
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             o.id
         } else {
             unreachable!()
@@ -807,16 +1078,16 @@ impl Interpreter {
             "get [Symbol.toStringTag]".to_string(),
             0,
             |_interp, this_val, _args| {
-                if let JsValue::Object(_) = this_val {
-                    return Completion::Normal(JsValue::Undefined);
+                if (this_val).is_object() {
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(ams_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -826,7 +1097,7 @@ impl Interpreter {
                     configurable: Some(true),
                 },
             );
-        let ams_proto_val = JsValue::Object(crate::types::JsObject { id: ams_proto_id });
+        let ams_proto_val = JsValue::object(ams_proto_id);
 
         // Wire prototype on the constructor: {writable: false, enumerable: false, configurable: false}
         if let Some(obj) = self.get_object_cell(ams_fn_id) {
@@ -844,20 +1115,25 @@ impl Interpreter {
     /// objects — i.e. `%AbstractModuleSource.prototype%` in the current realm.
     fn abstract_module_source_prototype_id(&mut self) -> Option<u64> {
         let ctor = self.abstract_module_source_constructor(self.current_realm_id);
-        if let JsValue::Object(o) = ctor
-            && let JsValue::Object(p) = self.get_property_on_id(o.id, "prototype")
+        if let Some(o) = (ctor)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+            && let Some(p) = (self.get_property_on_id(o.id, "prototype"))
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
         {
             return Some(p.id);
         }
         None
     }
 
-    /// Get (or lazily create) the host module that the `<module source>`
-    /// test262 specifier resolves to. Its `[[ModuleSource]]` is a fresh
-    /// %AbstractModuleSource% instance; it exposes no bindings.
-    fn get_or_create_module_source_module(&mut self) -> Rc<RefCell<LoadedModule>> {
-        let sentinel = PathBuf::from("<module source>");
-        if let Some(existing) = self.module_registry_get(&sentinel) {
+    /// Get (or lazily create) the host module that test262's
+    /// `MODULE_SOURCE_SPECIFIER` resolves to, in every import phase. Its
+    /// `[[ModuleSource]]` is a fresh %AbstractModuleSource% instance; it exposes
+    /// no bindings.
+    fn get_or_create_module_source_module(&mut self, key: &ModuleKey) -> Rc<RefCell<LoadedModule>> {
+        debug_assert!(key.is_module_source());
+        if let Some(existing) = self.module_registry_get(key) {
             return existing;
         }
 
@@ -870,12 +1146,12 @@ impl Interpreter {
             obj.prototype_id = proto_id;
             obj.class_name = "AbstractModuleSource".to_string();
         }
-        let source_val = JsValue::Object(crate::types::JsObject { id: source_id });
+        let source_val = JsValue::object(source_id);
 
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         let module = Rc::new(RefCell::new(LoadedModule {
-            path: sentinel.clone(),
+            path: key.clone(),
             env: module_env,
             exports: HashMap::new(),
             export_bindings: HashMap::new(),
@@ -884,6 +1160,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: Some(source_val),
             star_export_sources: Vec::new(),
@@ -892,6 +1169,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -900,7 +1178,7 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }));
-        self.module_registry_insert(sentinel, module.clone());
+        self.module_registry_insert(key.clone(), module.clone());
         module
     }
 
@@ -909,33 +1187,142 @@ impl Interpreter {
     /// resolved path and the source object (`None` when the target has no
     /// source-phase representation, which the caller turns into a SyntaxError).
     ///
-    /// The test262 `<module source>` host specifier maps to a synthetic host
-    /// module whose `[[ModuleSource]]` is populated. For any other specifier,
-    /// source-phase loading is *shallow*: it resolves the requested specifier
-    /// (a genuine host-resolution failure of that specifier surfaces here as a
-    /// non-SyntaxError) but must NOT load, link, or evaluate the target — the
-    /// source phase never triggers host loads for the target's transitive
-    /// dependencies, nor consults `[[EvaluationError]]`. jsse has no concrete
-    /// Module Source kind, so every resolvable file is an ordinary Source Text
-    /// Module with an empty `[[ModuleSource]]`; returning `None` here lets the
-    /// caller reject with the source-phase SyntaxError without exposing the
-    /// target's dependency-resolution, link, or cached evaluation errors.
+    /// Host resolution runs through the shared `resolve_module_specifier`, so the
+    /// phase never changes *which* module a specifier names — only what is read
+    /// off the resulting record. `MODULE_SOURCE_SPECIFIER` resolves to the
+    /// synthetic host module whose `[[ModuleSource]]` is populated.
+    ///
+    /// For any other specifier, source-phase loading is *shallow*: it resolves
+    /// the requested specifier (a genuine host-resolution failure of that
+    /// specifier surfaces here as a non-SyntaxError) but must NOT load, link, or
+    /// evaluate the target — the source phase never triggers host loads for the
+    /// target's transitive dependencies, nor consults `[[EvaluationError]]`.
+    /// jsse has no concrete Module Source kind, so every resolvable file is an
+    /// ordinary Source Text Module with an empty `[[ModuleSource]]`; returning
+    /// `None` here lets the caller reject with the source-phase SyntaxError
+    /// without exposing the target's dependency-resolution, link, or cached
+    /// evaluation errors.
     fn resolve_source_phase_target(
         &mut self,
         specifier: &str,
         referrer: Option<&Path>,
-    ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
-        if specifier == "<module source>" {
-            let module = self.get_or_create_module_source_module();
-            let module_source = module.borrow().module_source.clone();
-            return Ok((PathBuf::from("<module source>"), module_source));
-        }
+        import_type: Option<ImportModuleType>,
+    ) -> Result<(ModuleKey, Option<JsValue>), JsValue> {
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
+        if resolved.is_module_source() {
+            let module =
+                self.load_module_for_type(&resolved, import_type, ModuleLoadMode::Evaluate)?;
+            let module_source = module.borrow().module_source.clone();
+            return Ok((resolved, module_source));
+        }
         Ok((resolved, None))
     }
 
+    /// The host has no JSON, text, or bytes to hand back for a Module Source
+    /// module, in any import phase. Built in one place so the source phase and the
+    /// evaluation phase cannot report an unsatisfiable request differently.
+    fn module_source_type_error(&mut self, itype: ImportModuleType) -> JsValue {
+        self.create_type_error(&format!(
+            "Module '{MODULE_SOURCE_SPECIFIER}' has no {} representation",
+            itype.attr_value()
+        ))
+    }
+
+    fn dynamic_import_module_type(
+        &mut self,
+        attrs: &[(String, String)],
+    ) -> Result<Option<ImportModuleType>, JsValue> {
+        validated_import_module_type(attrs)
+            .map_err(|error| self.create_type_error(&error.message()))
+    }
+
+    fn static_import_module_type(
+        &mut self,
+        attrs: &[(String, String)],
+    ) -> Result<Option<ImportModuleType>, JsValue> {
+        validated_import_module_type(attrs).map_err(|error| {
+            let message = error.message();
+            match error {
+                // InnerModuleLoading turns a failed
+                // AllImportAttributesSupported check into SyntaxError.
+                ImportAttributeError::UnsupportedKey(_) => {
+                    self.create_error("SyntaxError", &message)
+                }
+                // The `type` key is supported, so an unsupported value is a
+                // host-loading failure rather than the key-list check.
+                ImportAttributeError::UnsupportedType(_) => self.create_type_error(&message),
+            }
+        })
+    }
+
+    /// Apply AllImportAttributesSupported and host resolution to one static
+    /// ModuleRequest. Callers do this in source order before linking any loaded
+    /// dependency, because jsse's `load_module` also links/evaluates and could
+    /// otherwise expose an earlier dependency's link error before a later
+    /// sibling's host-resolution error.
+    fn validate_and_resolve_static_module_request(
+        &mut self,
+        req: ModuleItemRequest<'_>,
+        referrer: Option<&Path>,
+    ) -> Result<(), JsValue> {
+        self.static_import_module_type(req.attributes)?;
+        self.resolve_module_specifier(req.specifier, referrer)?;
+        Ok(())
+    }
+
+    /// Load one static ModuleRequest after the source-order validation and
+    /// resolution pass. Source-phase requests load shallowly; all other
+    /// requests load the representation selected by their attributes.
+    fn load_prevalidated_static_module_request(
+        &mut self,
+        req: ModuleItemRequest<'_>,
+        referrer: Option<&Path>,
+        defer_all_untyped: bool,
+    ) -> Result<(), JsValue> {
+        let import_type = prevalidated_import_module_type(req.attributes);
+
+        if req.is_source_phase {
+            self.resolve_source_phase_target(req.specifier, referrer, import_type)?;
+            return Ok(());
+        }
+
+        let resolved = self.resolve_module_specifier(req.specifier, referrer)?;
+        let mode = if defer_all_untyped || req.is_deferred {
+            ModuleLoadMode::Defer
+        } else {
+            ModuleLoadMode::Evaluate
+        };
+        self.load_module_for_type(&resolved, import_type, mode)?;
+        Ok(())
+    }
+
+    /// Load a resolved module request through the one host/type/mode dispatch
+    /// seam. File-only loaders sit behind this method, so the host-provided
+    /// `<module source>` key can never reach a filesystem read.
+    fn load_module_for_type(
+        &mut self,
+        key: &ModuleKey,
+        import_type: Option<ImportModuleType>,
+        mode: ModuleLoadMode,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let Some(path) = key.file_path() else {
+            return match import_type {
+                Some(itype) => Err(self.module_source_type_error(itype)),
+                None => Ok(self.get_or_create_module_source_module(key)),
+            };
+        };
+
+        match import_type {
+            Some(itype) => self.load_typed_module(key, path, itype),
+            None => match mode {
+                ModuleLoadMode::Evaluate => self.load_module(key, path),
+                ModuleLoadMode::Defer => self.load_module_no_eval(key, path),
+            },
+        }
+    }
+
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val {
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
             self.gc_temp_roots.push(o.id);
         }
     }
@@ -953,8 +1340,30 @@ impl Interpreter {
         self.gc_temp_roots.truncate(frame);
     }
 
+    /// Run `body` inside a fresh GC temp-root scope: capture the current
+    /// temp-root depth, run the body, then bulk-unroot everything the body
+    /// pushed. The truncate happens on every exit path of `body` — the tail,
+    /// each early `return`, and each `?` — so a caller roots values *inside*
+    /// the body via the passed `&mut Self` and returns normally, without
+    /// threading a `gc_unroot_frame` onto every branch by hand.
+    ///
+    /// Mirrors `with_tail_position_suppressed` (save state, run, restore); the
+    /// body's returned value is *not* rooted after the scope closes (identical
+    /// to the hand-written `gc_unroot_frame(frame); return v;` tail), so a
+    /// caller that needs the result to survive a later GC re-roots it outside.
+    /// Not restored on a Rust panic (neither was the manual idiom); JS errors
+    /// travel as `Completion::Throw` values returned normally, so every
+    /// JS-level exit truncates.
+    #[inline]
+    pub(crate) fn with_gc_root_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let frame = self.gc_root_frame();
+        let result = body(self);
+        self.gc_unroot_frame(frame);
+        result
+    }
+
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)
         {
             self.gc_temp_roots.remove(pos);
@@ -981,19 +1390,23 @@ impl Interpreter {
     }
 
     pub(crate) fn can_be_held_weakly(&self, val: &JsValue) -> bool {
-        match val {
-            JsValue::Object(_) => true,
-            JsValue::Symbol(sym) => !self
+        if val.is_object() {
+            true
+        } else if let Some(sym) = val.as_symbol() {
+            !self
                 .global_symbol_registry
                 .values()
-                .any(|reg| reg.id == sym.id),
-            _ => false,
+                .any(|reg| reg.id() == sym.id())
+        } else {
+            false
         }
     }
 
     // GetFunctionRealm — §10.2.4
     pub(crate) fn get_function_realm(&mut self, func_val: &JsValue) -> Result<usize, JsValue> {
-        if let JsValue::Object(o) = func_val
+        if let Some(o) = (func_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
@@ -1010,9 +1423,7 @@ impl Interpreter {
             }
             if let Some(target_id) = obj_ref.proxy_target_id() {
                 drop(obj_ref);
-                return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
-                    id: target_id,
-                }));
+                return self.get_function_realm(&JsValue::object(target_id));
             }
             drop(obj_ref);
             // Check function_realm_map
@@ -1037,17 +1448,20 @@ impl Interpreter {
                 return Ok(get_realm_proto(&self.realms[self.current_realm_id]));
             }
         };
-        if let JsValue::Object(nt_o) = &nt {
+        if let Some(nt_o) = nt.as_object_id().map(|id| crate::types::JsObject { id }) {
             let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::Object(po) = proto_val {
+            if let Some(po) = (proto_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 return Ok(Some(po.id));
             }
             // proto is not an object: use realm of newTarget
-            let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()))?;
+            let nt_realm_id = self.get_function_realm(&JsValue::object(nt_o.id))?;
             return Ok(get_realm_proto(&self.realms[nt_realm_id]));
         }
         Ok(get_realm_proto(&self.realms[self.current_realm_id]))
@@ -1065,7 +1479,7 @@ impl Interpreter {
         &mut self,
         val: &JsValue,
     ) -> Result<PropertyDescriptor, Option<JsValue>> {
-        if let JsValue::Object(d) = val {
+        if let Some(d) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
             let obj_id = d.id;
             let mut desc = PropertyDescriptor {
                 value: None,
@@ -1107,9 +1521,11 @@ impl Interpreter {
 
             // Validate: get must be callable or undefined
             if let Some(ref getter) = desc.get
-                && !matches!(getter, JsValue::Undefined)
+                && !(getter).is_undefined()
             {
-                let is_callable = if let JsValue::Object(o) = getter
+                let is_callable = if let Some(o) = (getter)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
@@ -1121,9 +1537,11 @@ impl Interpreter {
                 }
             }
             if let Some(ref setter) = desc.set
-                && !matches!(setter, JsValue::Undefined)
+                && !(setter).is_undefined()
             {
-                let is_callable = if let JsValue::Object(o) = setter
+                let is_callable = if let Some(o) = (setter)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
@@ -1168,7 +1586,7 @@ impl Interpreter {
                 r.insert_value("value".to_string(), val.clone());
             }
             if let Some(w) = desc.writable {
-                r.insert_value("writable".to_string(), JsValue::Boolean(w));
+                r.insert_value("writable".to_string(), JsValue::boolean(w));
             }
             if let Some(ref getter) = desc.get {
                 r.insert_value("get".to_string(), getter.clone());
@@ -1177,18 +1595,18 @@ impl Interpreter {
                 r.insert_value("set".to_string(), setter.clone());
             }
             if let Some(e) = desc.enumerable {
-                r.insert_value("enumerable".to_string(), JsValue::Boolean(e));
+                r.insert_value("enumerable".to_string(), JsValue::boolean(e));
             }
             if let Some(c) = desc.configurable {
-                r.insert_value("configurable".to_string(), JsValue::Boolean(c));
+                r.insert_value("configurable".to_string(), JsValue::boolean(c));
             }
         }
         let id = result_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
         {
@@ -1290,12 +1708,12 @@ impl Interpreter {
         };
         obj_data.insert_property(
             "length".to_string(),
-            PropertyDescriptor::data(JsValue::Number(fn_length as f64), false, false, true),
+            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
         );
         obj_data.insert_property(
             "name".to_string(),
             PropertyDescriptor::data(
-                JsValue::String(JsString::from_str(&fn_name)),
+                JsValue::string(JsString::from_str(&fn_name)),
                 false,
                 false,
                 true,
@@ -1323,7 +1741,7 @@ impl Interpreter {
             } else {
                 obj_data.insert_property(
                     "caller".to_string(),
-                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
                 );
             }
             if let Some(ref getter) = self.realm().sloppy_arguments_getter.clone() {
@@ -1334,7 +1752,7 @@ impl Interpreter {
             } else {
                 obj_data.insert_property(
                     "arguments".to_string(),
-                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
                 );
             }
         }
@@ -1363,7 +1781,7 @@ impl Interpreter {
                     .borrow_mut()
                     .prototype_id = self.realm().generator_prototype;
             }
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj_data.insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), true, false, false),
@@ -1372,15 +1790,17 @@ impl Interpreter {
         let func_id = self.alloc_object(obj_data);
         self.function_realm_map
             .insert(func_id, self.current_realm_id);
-        let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
+        let func_val = JsValue::object(func_id);
         // Set prototype.constructor = func (not for generators)
         if is_constructable
             && !is_gen
-            && let Some(JsValue::Object(proto_ref)) = self
+            && let Some(proto_id) = self
                 .get_object_cell_expect(func_id)
                 .borrow()
                 .get_property_value("prototype")
-            && let Some(proto_obj) = self.get_object_cell(proto_ref.id)
+                .as_ref()
+                .and_then(JsValue::as_object_id)
+            && let Some(proto_obj) = self.get_object_cell(proto_id)
         {
             proto_obj
                 .borrow_mut()
@@ -1433,14 +1853,44 @@ impl Interpreter {
         getter
     }
 
-    /// Get a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
+    /// Install the `@@toStringTag` data property that gives `Object.prototype.
+    /// toString` (and the spec's `[Symbol.toStringTag]` lookups) their brand:
+    /// `{ [[Value]]: tag, [[Writable]]: false, [[Enumerable]]: false,
+    /// [[Configurable]]: true }` — the shape every builtin prototype's tag has.
+    /// Companion to `define_method` / `define_getter`; concentrates the
+    /// `@@toStringTag` install "dance" that was otherwise open-coded at ~45
+    /// builtin sites as a six-field `PropertyDescriptor` literal (some of which
+    /// bypassed `insert_property` with a raw `property_order.push` +
+    /// `properties.insert` pair). Routing through `insert_property` keeps
+    /// `property_order` and `properties` in sync in one place.
+    ///
+    /// This is the *data*-property tag only. The handful of prototypes whose
+    /// `@@toStringTag` is an accessor (`%TypedArray%.prototype`,
+    /// `Iterator.prototype`) or is non-configurable (Module Namespace exotics)
+    /// keep their bespoke installs.
+    pub(crate) fn define_to_string_tag(&mut self, target_id: u64, tag: &str) {
+        self.get_object_cell_expect(target_id)
+            .borrow_mut()
+            .insert_property(
+                JsPropertyKey::well_known_symbol("toStringTag"),
+                PropertyDescriptor::data(
+                    JsValue::string(JsString::from_str(tag)),
+                    false,
+                    false,
+                    true,
+                ),
+            );
+    }
+
+    /// Get a fresh owned clone of the slot's object handle if live.
     /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
-    /// (returns `&RefCell<…>`) to avoid the per-call `Rc::clone`; this
+    /// (returns `&RefCell<…>`) to avoid the per-call handle refcount change; this
     /// function remains for the (large) set of legacy callers that
     /// pattern-match `if let Some(obj) = interp.get_object(id) { obj.borrow*() }`
     /// and need a value-type binding outliving any inner `&mut self`
     /// callback (proxy traps, getter dispatch, error allocation).
-    pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
+    #[inline(always)]
+    pub(crate) fn get_object(&self, id: u64) -> Option<ObjectHandle> {
         self.objects.get(id)
     }
 
@@ -1456,6 +1906,13 @@ impl Interpreter {
     #[allow(dead_code)]
     pub(crate) fn ic_slow_path_count(&self) -> u64 {
         self.ic_slow_path_count.get()
+    }
+
+    /// Renders the opt-in execution counters (issue #526) as one
+    /// tab-separated line per metric.
+    #[cfg(feature = "perf-counters")]
+    pub(crate) fn perf_counters_report(&self) -> String {
+        self.perf.report()
     }
 
     /// Total call-IC hits since interpreter construction. Phase 3.
@@ -1506,19 +1963,19 @@ impl Interpreter {
         result
     }
 
-    /// Borrow the slot's `RefCell` if live, else `None`. Lifetime tied
-    /// to `&self`; drop the borrow before any `&mut self` call.
+    /// Borrow the slot's object handle if live, else `None`. Lifetime tied to
+    /// `&self`; drop the payload borrow before any `&mut self` call.
     #[allow(dead_code)] // get_object_cell isn't yet hot; get_object_cell_expect is
-    pub(crate) fn get_object_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
+    pub(crate) fn get_object_cell(&self, id: u64) -> Option<&ObjectHandle> {
         self.objects.get_cell(id)
     }
 
-    pub(crate) fn get_object_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
+    pub(crate) fn get_object_cell_expect(&self, id: u64) -> &ObjectHandle {
         self.objects.get_cell_expect(id)
     }
 
-    pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
-        if let JsValue::Object(o) = val
+    pub(crate) fn set_function_name<K: PropertyKeyLike + ?Sized>(&self, val: &JsValue, name: &K) {
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
@@ -1528,8 +1985,8 @@ impl Interpreter {
             if let Some(prop) = obj_ref.properties.get("name")
                 && let Some(ref v) = prop.value
             {
-                if let JsValue::String(s) = v {
-                    if !s.to_string().is_empty() {
+                if let Some(s) = (v).as_string() {
+                    if !s.code_units.is_empty() {
                         return;
                     }
                 } else {
@@ -1540,13 +1997,85 @@ impl Interpreter {
             obj.borrow_mut().insert_property(
                 "name".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str(name)),
+                    JsValue::string(name.to_js_property_key().to_js_string()),
                     false,
                     false,
                     true,
                 ),
             );
         }
+    }
+
+    pub(crate) fn acquire_function_environment(
+        &mut self,
+        parent: EnvRef,
+        binding_capacity: usize,
+    ) -> EnvRef {
+        if let Some(env) = self.function_env_pool.pop() {
+            debug_assert_eq!(Rc::strong_count(&env), 1);
+            env.borrow_mut()
+                .reset_function_scope(Some(parent), binding_capacity);
+            env
+        } else {
+            Environment::new_function_scope_with_capacity(Some(parent), binding_capacity)
+        }
+    }
+
+    pub(crate) fn recycle_function_environment(&mut self, env: EnvRef) {
+        if self.function_env_pool.len() >= MAX_POOLED_FUNCTION_ENVIRONMENTS
+            || Rc::strong_count(&env) != 1
+            || env.borrow().bindings.capacity() > MAX_POOLED_FUNCTION_BINDING_CAPACITY
+        {
+            return;
+        }
+        env.borrow_mut().reset_function_scope(None, 0);
+        self.function_env_pool.push(env);
+    }
+
+    pub(crate) fn materialize_call_frame_arguments(&mut self, frame_index: usize) -> JsValue {
+        let frame = &self.call_stack_frames[frame_index];
+        let (args, func_env, mapped, func_obj_id) = match &frame.arguments {
+            CallFrameArguments::None => return JsValue::NULL,
+            CallFrameArguments::Materialized(arguments) => return arguments.clone(),
+            CallFrameArguments::Deferred {
+                args,
+                func_env,
+                mapped,
+            } => (args.to_vec(), func_env.clone(), *mapped, frame.func_obj_id),
+        };
+
+        let param_names = if mapped {
+            self.get_object_cell(func_obj_id)
+                .and_then(|obj| {
+                    let obj = obj.borrow();
+                    match &obj.callable {
+                        Some(JsFunction::User { params, .. }) => Some(
+                            params
+                                .iter()
+                                .filter_map(|param| match param {
+                                    Pattern::Identifier(name) => Some(name.clone()),
+                                    _ => None,
+                                })
+                                .collect(),
+                        ),
+                        _ => None,
+                    }
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let callee = JsValue::object(func_obj_id);
+        let arguments = self.create_arguments_object(
+            &args,
+            callee,
+            false,
+            mapped.then_some(&func_env),
+            &param_names,
+        );
+        self.call_stack_frames[frame_index].arguments =
+            CallFrameArguments::Materialized(arguments.clone());
+        arguments
     }
 
     fn create_arguments_object(
@@ -1566,7 +2095,7 @@ impl Interpreter {
             o.define_own_property(
                 "length".to_string(),
                 PropertyDescriptor {
-                    value: Some(JsValue::Number(args.len() as f64)),
+                    value: Some(JsValue::number(args.len() as f64)),
                     writable: Some(true),
                     enumerable: Some(false),
                     configurable: Some(true),
@@ -1623,7 +2152,7 @@ impl Interpreter {
         }
 
         let result_id = obj_id;
-        let result = JsValue::Object(crate::types::JsObject { id: result_id });
+        let result = JsValue::object(result_id);
 
         // Unmapped (strict OR non-simple params): callee is a throw accessor
         if func_env.is_none() {
@@ -1632,7 +2161,9 @@ impl Interpreter {
                 .throw_type_error
                 .clone()
                 .unwrap_or_else(|| self.create_thrower_function());
-            if let JsValue::Object(ref o) = result
+            if let Some(o) = (result)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc.borrow_mut().define_own_property(
@@ -1657,8 +2188,10 @@ impl Interpreter {
                 .array_prototype
                 .map(|id| self.get_property_on_id(id, &key));
             if let Some(iter_fn) = array_iter_fn
-                && !matches!(iter_fn, JsValue::Undefined)
-                && let JsValue::Object(ref o) = result
+                && !(iter_fn).is_undefined()
+                && let Some(o) = (result)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                 && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc
@@ -1670,21 +2203,22 @@ impl Interpreter {
         result
     }
 
-    /// Convert a symbol property key string (e.g. "Symbol(Symbol.toStringTag)" or "Symbol(desc)#42")
-    /// back to a JsValue::Symbol.
-    pub(crate) fn symbol_key_to_jsvalue(&mut self, key: &str) -> JsValue {
-        // Well-known symbols: "Symbol(Symbol.xyz)" — look up from Symbol constructor
+    /// Convert an internal property key back to its ECMAScript String or Symbol value.
+    pub(crate) fn symbol_key_to_jsvalue<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        property_key: &K,
+    ) -> JsValue {
+        let exact_key = property_key.to_js_property_key();
+        let Some(key) = exact_key.symbol_encoding() else {
+            return JsValue::string(exact_key.to_js_string());
+        };
+        // Well-known symbols: "Symbol(Symbol.xyz)" — recover the intrinsic Symbol value.
         if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
             // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
             let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
             let name = &inner[7..]; // "toStringTag"
-            if let Some(sym_val) = self.get_global_var("Symbol")
-                && let JsValue::Object(so) = sym_val
-            {
-                let val = self.get_property_on_id(so.id, name);
-                if let JsValue::Symbol(s) = val {
-                    return JsValue::Symbol(s);
-                }
+            if let Some(symbol) = self.well_known_symbols.get(name) {
+                return JsValue::symbol(symbol.clone());
             }
         }
         // User symbols with id: "Symbol(desc)#id" or "Symbol()#id"
@@ -1704,20 +2238,17 @@ impl Interpreter {
             };
             // Check global_symbol_registry for Symbol.for() symbols
             for sym in self.global_symbol_registry.values() {
-                if sym.id == id {
-                    return JsValue::Symbol(sym.clone());
+                if sym.id() == id {
+                    return JsValue::symbol(sym.clone());
                 }
             }
-            return JsValue::Symbol(crate::types::JsSymbol {
-                id,
-                description: desc,
-            });
+            return JsValue::symbol(crate::types::JsSymbol::new(id, desc));
         }
         // Fallback: return as string
-        JsValue::String(JsString::from_str(key))
+        JsValue::string(exact_key.to_js_string())
     }
 
-    pub fn run(&mut self, program: &Program) -> Completion {
+    pub(crate) fn run(&mut self, program: &Program) -> Completion {
         self.gc_safepoint();
         let result = match program.source_type {
             SourceType::Script => {
@@ -1725,7 +2256,7 @@ impl Interpreter {
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                self.exec_body(&program.body, &global)
+                self.exec_script_body(&program.body, &global)
             }
             SourceType::Module => self.run_module(program, None),
         };
@@ -1739,17 +2270,17 @@ impl Interpreter {
         result
     }
 
-    pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
+    pub(crate) fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
-                self.current_module_path = Some(path.to_path_buf());
+                self.current_module_path = Some(ModuleKey::for_file(path.to_path_buf()));
                 let global = self.realm().global_env.clone();
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                let r = self.exec_body(&program.body, &global);
+                let r = self.exec_script_body(&program.body, &global);
                 // A top-level `__host_exit` (issue #242) latches its code (read
                 // by `main`) so draining is skipped.
                 if let Completion::Exit(code) = &r {
@@ -1761,13 +2292,14 @@ impl Interpreter {
                 r
             }
             SourceType::Module => {
-                let r = self.run_module(program, Some(path.to_path_buf()));
+                let module_key = ModuleKey::for_file(path.to_path_buf());
+                let r = self.run_module(program, Some(module_key.clone()));
                 if let Completion::Exit(code) = &r {
                     self.pending_exit = Some(*code);
                 }
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 let prev = self.current_module_path.take();
-                self.current_module_path = Some(path.to_path_buf());
+                self.current_module_path = Some(module_key);
                 self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
                 r
@@ -1775,18 +2307,18 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn module_registry_get(&self, path: &Path) -> Option<Rc<RefCell<LoadedModule>>> {
+    pub(crate) fn module_registry_get(&self, key: &ModuleKey) -> Option<Rc<RefCell<LoadedModule>>> {
         self.module_registry
-            .get(&(self.current_realm_id, path.to_path_buf()))
+            .get(&(self.current_realm_id, key.clone()))
             .cloned()
     }
 
-    fn module_registry_insert(&mut self, path: PathBuf, module: Rc<RefCell<LoadedModule>>) {
+    fn module_registry_insert(&mut self, key: ModuleKey, module: Rc<RefCell<LoadedModule>>) {
         self.module_registry
-            .insert((self.current_realm_id, path), module);
+            .insert((self.current_realm_id, key), module);
     }
 
-    fn run_module(&mut self, program: &Program, module_path: Option<PathBuf>) -> Completion {
+    fn run_module(&mut self, program: &Program, module_path: Option<ModuleKey>) -> Completion {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
 
@@ -1799,9 +2331,8 @@ impl Interpreter {
 
         // Register entry-point module in registry to handle self-imports
         let canon_path_entry = module_path
-            .as_ref()
-            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
-            .unwrap_or_default();
+            .clone()
+            .unwrap_or_else(|| ModuleKey::for_file(PathBuf::new()));
         let has_tla_entry = Self::module_has_tla(program);
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path_entry.clone(),
@@ -1813,6 +2344,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -1821,6 +2353,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: has_tla_entry,
             program_ast: Some(program.clone()),
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -1829,9 +2362,8 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }));
-        if let Some(ref path) = module_path {
-            let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-            self.module_registry_insert(canon_path, loaded_module.clone());
+        if let Some(ref key) = module_path {
+            self.module_registry_insert(key.clone(), loaded_module.clone());
         }
         // Note: is_evaluating is managed by inner_module_evaluation
 
@@ -1843,7 +2375,7 @@ impl Interpreter {
                     loaded_module
                         .borrow_mut()
                         .exports
-                        .insert(export_name.clone(), JsValue::Undefined);
+                        .insert(export_name.clone(), JsValue::UNDEFINED);
                     loaded_module
                         .borrow_mut()
                         .export_bindings
@@ -1852,6 +2384,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -1875,80 +2408,82 @@ impl Interpreter {
             }
         }
 
-        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
+        // Validate and host-resolve every request in source order before
+        // `load_module` can expose a dependency's link-phase error.
+        for item in &program.module_items {
+            let Some(req) = module_item_request(item) else {
+                continue;
+            };
+            let module_path = self.current_module_path.clone();
+            if let Err(e) = self.validate_and_resolve_static_module_request(
+                req,
+                module_path.as_ref().and_then(ModuleKey::file_path),
+            ) {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
+            }
+        }
+        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(program);
+
+        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6).
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
-            let (specifier, is_deferred, import_type) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, false, None)
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (
-                        Some(import.source.as_str()),
-                        is_defer,
-                        import_module_type(&import.attributes),
-                    )
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false, None)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), false, None),
-                _ => (None, false, None),
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    match import_type {
-                        Some(ImportModuleType::Text) => {
-                            if let Err(e) = self.load_text_module(&resolved) {
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                        Some(ImportModuleType::Bytes) => {
-                            if let Err(e) = self.load_bytes_module(&resolved) {
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                        None if is_deferred => {
-                            if let Err(e) = self.load_module_no_eval(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                        None => {
-                            if let Err(e) = self.load_module(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                    }
+            let module_path = self.current_module_path.clone();
+            let should_cache_error = req.import_type().is_none();
+            if let Err(e) = self.load_prevalidated_static_module_request(
+                req,
+                module_path.as_ref().and_then(ModuleKey::file_path),
+                false,
+            ) {
+                if should_cache_error {
+                    Self::cache_module_error(&loaded_module, &e);
                 }
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
             }
         }
 
         // Second pass: process re-exports (export * from) — before imports
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
+            }
+        }
+
+        // Named re-exports run before imports; see validate_named_reexports.
+        if let Some(ref canon_path) = module_path {
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    attributes,
+                    ..
+                }) = item
+                    && let Err(e) =
+                        self.validate_named_reexports(canon_path, source, attributes, specifiers)
+                {
+                    Self::cache_module_error(&loaded_module, &e);
+                    self.current_module_path = prev_module_path;
+                    return Completion::Throw(e);
+                }
             }
         }
 
@@ -1960,23 +2495,6 @@ impl Interpreter {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
-            }
-        }
-
-        // Validate named re-exports (export { x } from './mod')
-        if let Some(ref canon_path) = module_path {
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    ..
-                }) = item
-                    && let Err(e) = self.validate_named_reexports(canon_path, source, specifiers)
-                {
-                    Self::cache_module_error(&loaded_module, &e);
-                    self.current_module_path = prev_module_path;
-                    return Completion::Throw(e);
-                }
             }
         }
 
@@ -2011,7 +2529,7 @@ impl Interpreter {
         }
 
         self.current_module_path = prev_module_path;
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(JsValue::UNDEFINED)
     }
 
     fn process_import(&mut self, import: &ImportDeclaration, env: &EnvRef) -> Result<(), JsValue> {
@@ -2019,49 +2537,66 @@ impl Interpreter {
 
         // Source-phase import (`import source X from '...'`) — a source-phase
         // ImportDeclaration has exactly one SourcePhase specifier. Handle it
-        // before the generic specifier resolution, which cannot resolve the
-        // host `<module source>` specifier.
+        // before the generic path, which binds a namespace and loads the target
+        // graph; the source phase binds `[[ModuleSource]]` and stays shallow.
         if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
-            return self.process_source_phase_import(local, &import.source, env);
+            let itype = prevalidated_import_module_type(&import.attributes);
+            return self.process_source_phase_import(local, &import.source, itype, env);
         }
 
-        let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
+        let resolved = self.resolve_module_specifier(
+            &import.source,
+            module_path.as_ref().and_then(ModuleKey::file_path),
+        )?;
 
-        let itype = import_module_type(&import.attributes);
+        let itype = prevalidated_import_module_type(&import.attributes);
 
-        // Text/bytes imports use synthetic module registry
-        if let Some(ref it) = itype {
-            let canon = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
-            let key = (canon, it.clone());
-            let loaded = self
-                .synthetic_module_registry
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| {
-                    JsValue::String(JsString::from_str(&format!(
-                        "Synthetic module not found for '{}'",
-                        import.source
-                    )))
-                })?;
+        // Typed imports are served by the synthetic module registry, which
+        // `load_typed_module` owns and memoizes.
+        if itype.is_some() {
+            let loaded = self.load_module_for_type(&resolved, itype, ModuleLoadMode::Evaluate)?;
             for spec in &import.specifiers {
-                match spec {
+                let (local, value) = match spec {
                     ImportSpecifier::Default(local) => {
                         let val = loaded
                             .borrow()
                             .exports
                             .get("default")
                             .cloned()
-                            .unwrap_or(JsValue::Undefined);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, val);
+                            .unwrap_or(JsValue::UNDEFINED);
+                        (local, val)
                     }
                     ImportSpecifier::Namespace(local) => {
-                        let ns = self.create_module_namespace(&loaded);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, ns);
+                        (local, self.create_module_namespace(&loaded))
                     }
-                    _ => {}
-                }
+                    ImportSpecifier::Named { imported, local } => {
+                        let Some(val) = loaded.borrow().exports.get(imported).cloned() else {
+                            return Err(self.create_error(
+                                "SyntaxError",
+                                &format!(
+                                    "Module '{}' has no export named '{}'",
+                                    loaded.borrow().path.display(),
+                                    imported
+                                ),
+                            ));
+                        };
+                        (local, val)
+                    }
+                    ImportSpecifier::DeferredNamespace(local) => {
+                        (local, self.create_deferred_module_namespace(&loaded))
+                    }
+                    // A source-phase ImportDeclaration is handled above; reaching
+                    // here means the declaration mixes phases, which has no
+                    // synthetic-module meaning.
+                    ImportSpecifier::SourcePhase(_) => {
+                        return Err(self.create_error(
+                            "SyntaxError",
+                            "Source phase imports cannot request a module type",
+                        ));
+                    }
+                };
+                env.borrow_mut().declare(local, BindingKind::Const);
+                env.borrow_mut().initialize_binding(local, value);
             }
             return Ok(());
         }
@@ -2074,9 +2609,9 @@ impl Interpreter {
         // For deferred imports or when loading in deferred context,
         // use load_module_no_eval to avoid premature evaluation
         let loaded = if is_deferred || self.loading_deferred {
-            self.load_module_no_eval(&resolved)?
+            self.load_module_for_type(&resolved, None, ModuleLoadMode::Defer)?
         } else {
-            self.load_module(&resolved)?
+            self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)?
         };
 
         for spec in &import.specifiers {
@@ -2092,7 +2627,7 @@ impl Interpreter {
                     env.borrow_mut().declare(local, BindingKind::Const);
                     env.borrow_mut().initialize_binding(local, ns);
                     if let Some(ref mp) = self.current_module_path {
-                        let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
+                        let canon = mp.canonicalize();
                         if let Some(current_mod) = self.module_registry_get(&canon) {
                             current_mod
                                 .borrow_mut()
@@ -2138,11 +2673,15 @@ impl Interpreter {
         &mut self,
         local: &str,
         specifier: &str,
+        import_type: Option<ImportModuleType>,
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let referrer = self.current_module_path.clone();
-        let (target_path, module_source) =
-            self.resolve_source_phase_target(specifier, referrer.as_deref())?;
+        let (target_path, module_source) = self.resolve_source_phase_target(
+            specifier,
+            referrer.as_ref().and_then(ModuleKey::file_path),
+            import_type,
+        )?;
 
         let Some(module_source) = module_source else {
             return Err(self.create_error(
@@ -2157,7 +2696,7 @@ impl Interpreter {
         // Record the source-phase target so `export { X }` re-exports resolve
         // to the same ResolvedBinding { [[Module]], [[BindingName]]: ~source~ }.
         if let Some(ref mp) = referrer {
-            let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
+            let canon = mp.canonicalize();
             if let Some(current_mod) = self.module_registry_get(&canon) {
                 current_mod
                     .borrow_mut()
@@ -2173,7 +2712,7 @@ impl Interpreter {
         local: &str,
         imported: &str,
         loaded: &Rc<RefCell<LoadedModule>>,
-        resolved: &Path,
+        resolved: &ModuleKey,
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let binding_info = loaded.borrow().export_bindings.get(imported).cloned();
@@ -2240,8 +2779,8 @@ impl Interpreter {
     /// a star path that resolves to null is skipped, but one that resolves to
     /// AMBIGUOUS propagates ambiguity.
     fn is_ambiguous_export_error(&self, err: &JsValue) -> bool {
-        if let JsValue::Object(o) = err
-            && let JsValue::String(s) = self.get_property_on_id(o.id, "message")
+        if let Some(o) = (err).as_object_id().map(|id| crate::types::JsObject { id })
+            && let Some(s) = (self.get_property_on_id(o.id, "message")).as_string()
         {
             return s.to_string().contains("Ambiguous export");
         }
@@ -2252,24 +2791,50 @@ impl Interpreter {
         &mut self,
         source: &str,
         exported_as: Option<&String>,
+        attributes: &[(String, String)],
         module: &Rc<RefCell<LoadedModule>>,
     ) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
-        let resolved = self.resolve_module_specifier(source, module_path.as_deref())?;
-        let source_module = self.load_module(&resolved)?;
+        let resolved = self.resolve_module_specifier(
+            source,
+            module_path.as_ref().and_then(ModuleKey::file_path),
+        )?;
+        let import_type = prevalidated_import_module_type(attributes);
+        let source_module =
+            self.load_module_for_type(&resolved, import_type, ModuleLoadMode::Evaluate)?;
 
         if let Some(name) = exported_as {
             // export * as ns from './mod' - create namespace object
             let ns = self.create_module_namespace(&source_module);
             module.borrow_mut().exports.insert(name.clone(), ns.clone());
+            // A typed request cannot use the `*ns:{source}` binding: re-resolving
+            // it reloads the resource without this request's type. Bind the
+            // namespace under an internal name instead — `export * as x` creates
+            // no local `x`, so the export name itself may be taken by an
+            // unrelated local declaration in the same module.
+            let binding = match import_type {
+                Some(_) => format!("*synthetic-ns:{name}*"),
+                None => format!("*ns:{source}"),
+            };
             module
                 .borrow_mut()
                 .export_bindings
-                .insert(name.clone(), format!("*ns:{}", source));
+                .insert(name.clone(), binding.clone());
+            if let Some(itype) = import_type {
+                module
+                    .borrow_mut()
+                    .synthetic_namespace_imports
+                    .insert(binding.clone(), (resolved.clone(), itype));
+            }
             // Store in module env so indirect bindings can reference it
+            let env_name: &str = if import_type.is_some() {
+                &binding
+            } else {
+                name
+            };
             let mod_env = module.borrow().env.clone();
-            mod_env.borrow_mut().declare(name, BindingKind::Const);
-            mod_env.borrow_mut().initialize_binding(name, ns);
+            mod_env.borrow_mut().declare(env_name, BindingKind::Const);
+            mod_env.borrow_mut().initialize_binding(env_name, ns);
         } else {
             // export * from './mod' - re-export all non-default exports
             let source_exports = source_module.borrow().exports.clone();
@@ -2297,15 +2862,17 @@ impl Interpreter {
                                 UseNew,
                                 Ambiguous,
                             }
-                            let decision = if let Some(ref mp) = module_path {
+                            let decision = if let Some(ref module_key) = module_path {
                                 let mut v1 = HashSet::new();
-                                let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
+                                let r1 =
+                                    self.resolve_export_binding(module_key, &export_name, &mut v1);
                                 module
                                     .borrow_mut()
                                     .export_bindings
                                     .insert(export_name.clone(), new_reexport.clone());
                                 let mut v2 = HashSet::new();
-                                let r2 = self.resolve_export_binding(mp, &export_name, &mut v2);
+                                let r2 =
+                                    self.resolve_export_binding(module_key, &export_name, &mut v2);
                                 module
                                     .borrow_mut()
                                     .export_bindings
@@ -2376,21 +2943,27 @@ impl Interpreter {
         &self,
         specifier: &str,
         referrer: Option<&Path>,
-    ) -> Result<PathBuf, JsValue> {
+    ) -> Result<ModuleKey, JsValue> {
+        // Host-provided synthetic module. Resolved here rather than in the
+        // source-phase path so that every phase names the same Module Record.
+        if specifier == MODULE_SOURCE_SPECIFIER {
+            return Ok(ModuleKey::module_source());
+        }
+
         // Relative paths: ./ or ../
         if specifier.starts_with("./") || specifier.starts_with("../") {
             if let Some(referrer) = referrer {
                 let base = referrer.parent().unwrap_or(Path::new("."));
                 let resolved = base.join(specifier);
                 if resolved.exists() {
-                    return Ok(resolved.canonicalize().unwrap_or(resolved));
+                    return Ok(ModuleKey::for_file(resolved));
                 }
-                return Err(JsValue::String(JsString::from_str(&format!(
+                return Err(JsValue::string(JsString::from_str(&format!(
                     "Cannot find module '{}'",
                     specifier
                 ))));
             } else {
-                return Err(JsValue::String(JsString::from_str(
+                return Err(JsValue::string(JsString::from_str(
                     "Relative imports require a referrer path",
                 )));
             }
@@ -2399,11 +2972,11 @@ impl Interpreter {
         // Absolute paths
         let path = Path::new(specifier);
         if path.is_absolute() && path.exists() {
-            return Ok(path.to_path_buf());
+            return Ok(ModuleKey::for_file(path.to_path_buf()));
         }
 
         // Bare specifiers not supported
-        Err(JsValue::String(JsString::from_str(&format!(
+        Err(JsValue::string(JsString::from_str(&format!(
             "Cannot resolve bare module specifier '{}'",
             specifier
         ))))
@@ -2413,15 +2986,30 @@ impl Interpreter {
         module.borrow_mut().error = Some(err.clone());
     }
 
-    fn load_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+    fn load_module(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         self.static_module_load_depth += 1;
-        let result = self.load_module_inner(path);
+        let result = self.load_module_inner(key, path);
         self.static_module_load_depth -= 1;
         result
     }
 
-    fn load_module_inner(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    fn load_module_inner(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        // This host also supports untyped `.json` requests. Route them through
+        // the same typed loader so extension- and attribute-selected requests
+        // observe one ParseJSONModule result.
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            return self.load_typed_module(key, path, ImportModuleType::Json);
+        }
+
+        let canon_path = key.clone();
 
         // Check if module is already loaded
         if let Some(existing) = self.module_registry_get(&canon_path) {
@@ -2437,79 +3025,8 @@ impl Interpreter {
             return Ok(existing);
         }
 
-        // Handle JSON modules: parse JSON and expose as default export
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            let source = std::fs::read_to_string(path).map_err(|e| {
-                JsValue::String(JsString::from_str(&format!(
-                    "Cannot read module '{}': {}",
-                    path.display(),
-                    e
-                )))
-            })?;
-            let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _other => {
-                    return Err(JsValue::String(JsString::from_str(&format!(
-                        "JSON parse error in '{}'",
-                        path.display()
-                    ))));
-                }
-            };
-            let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
-            module_env.borrow_mut().strict = true;
-            let loaded_module = Rc::new(RefCell::new(LoadedModule {
-                path: canon_path.clone(),
-                env: module_env.clone(),
-                exports: {
-                    let mut m = HashMap::new();
-                    m.insert("default".to_string(), parsed.clone());
-                    m
-                },
-                export_bindings: {
-                    let mut m = HashMap::new();
-                    m.insert("default".to_string(), "*default*".to_string());
-                    m
-                },
-                cached_namespace: None,
-                cached_deferred_namespace: None,
-                cached_import_meta: None,
-                error: None,
-                namespace_imports: HashMap::new(),
-                source_imports: HashMap::new(),
-                module_source: None,
-                star_export_sources: Vec::new(),
-                evaluated: true,
-                is_evaluating: false,
-                deferred_only: false,
-                has_tla: false,
-                program_ast: None,
-                async_evaluation_order: None,
-                pending_async_dependencies: 0,
-                async_parent_modules: Vec::new(),
-                cycle_root: None,
-                top_level_capability: None,
-                dfs_index: None,
-                dfs_ancestor_index: None,
-            }));
-            module_env
-                .borrow_mut()
-                .declare("*default*", BindingKind::Const);
-            module_env
-                .borrow_mut()
-                .initialize_binding("*default*", parsed);
-            self.module_registry_insert(canon_path.clone(), loaded_module.clone());
-            return Ok(loaded_module);
-        }
-
         // Read and parse the module
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let source = Self::read_module_text(path)?;
 
         let mut parser = match parser::Parser::new(&source) {
             Ok(p) => p,
@@ -2548,6 +3065,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -2556,6 +3074,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -2574,7 +3093,7 @@ impl Interpreter {
                     loaded_module
                         .borrow_mut()
                         .exports
-                        .insert(export_name.clone(), JsValue::Undefined);
+                        .insert(export_name.clone(), JsValue::UNDEFINED);
                     loaded_module
                         .borrow_mut()
                         .export_bindings
@@ -2583,6 +3102,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -2617,98 +3137,75 @@ impl Interpreter {
             }
         }
 
-        // Host-resolve pre-pass (spec LoadRequestedModules): surface unresolvable
-        // specifier errors before any transitive Link-phase SyntaxError fires.
+        // Validate and host-resolve every request in source order before
+        // `load_module` can expose a dependency's link-phase error.
         for item in &program.module_items {
-            let specifier = match item {
-                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    Some(source.as_str())
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(s), ..
-                }) => Some(s.as_str()),
-                _ => None,
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            // The test262 `<module source>` host specifier is resolved by the
-            // host (source-phase imports), not as a file path; every other
-            // specifier — including source-phase targets like `<do not resolve>`
-            // — must still surface unresolvable-specifier errors here.
-            if let Some(spec) = specifier
-                && spec != "<module source>"
-                && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
-            {
+            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(path)) {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 return Err(e);
             }
         }
+        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(&program);
 
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
-            let (specifier, is_deferred, itype) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, false, None)
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (
-                        Some(import.source.as_str()),
-                        is_defer,
-                        import_module_type(&import.attributes),
-                    )
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false, None)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), false, None),
-                _ => (None, false, None),
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    match itype {
-                        Some(ImportModuleType::Text) => {
-                            self.load_text_module(&resolved)?;
-                        }
-                        Some(ImportModuleType::Bytes) => {
-                            self.load_bytes_module(&resolved)?;
-                        }
-                        None if is_deferred => {
-                            self.load_module_no_eval(&resolved)?;
-                        }
-                        None => {
-                            if let Err(e) = self.load_module(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_path;
-                                return Err(e);
-                            }
-                        }
-                    }
+            let should_cache_error = req.import_type().is_none() && !req.is_deferred;
+            if let Err(e) = self.load_prevalidated_static_module_request(req, Some(path), false) {
+                if should_cache_error {
+                    Self::cache_module_error(&loaded_module, &e);
                 }
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
         // Second pass: process re-exports (export * from) — before imports
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 return Err(e);
+            }
+        }
+
+        // Named re-exports run before imports; see validate_named_reexports.
+        {
+            let canon = canon_path.clone();
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    attributes,
+                    ..
+                }) = item
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon, source, attributes, specifiers)
+                {
+                    self.current_module_path = prev_path;
+                    Self::cache_module_error(&loaded_module, &e);
+                    return Err(e);
+                }
             }
         }
 
@@ -2723,24 +3220,6 @@ impl Interpreter {
             }
         }
 
-        // Validate named re-exports (export { x } from './mod')
-        {
-            let canon = canon_path.clone();
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    ..
-                }) = item
-                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
-                {
-                    self.current_module_path = prev_path;
-                    Self::cache_module_error(&loaded_module, &e);
-                    return Err(e);
-                }
-            }
-        }
-
         // No evaluation — handled by inner_module_evaluation
 
         self.current_module_path = prev_path;
@@ -2749,8 +3228,12 @@ impl Interpreter {
 
     /// Load a module without evaluating it (for deferred imports).
     /// Parses, links, resolves exports, but does NOT execute the module body.
-    fn load_module_no_eval(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    fn load_module_no_eval(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon_path = key.clone();
 
         if let Some(existing) = self.module_registry_get(&canon_path) {
             // Propagate parse/link errors (module never finished loading) eagerly.
@@ -2769,16 +3252,10 @@ impl Interpreter {
 
         // JSON modules are always fully evaluated
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            return self.load_module(path);
+            return self.load_module(key, path);
         }
 
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let source = Self::read_module_text(path)?;
 
         let mut parser = match parser::Parser::new(&source) {
             Ok(p) => p,
@@ -2817,6 +3294,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -2825,6 +3303,7 @@ impl Interpreter {
             deferred_only: true,
             has_tla,
             program_ast: Some(program.clone()),
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -2843,7 +3322,7 @@ impl Interpreter {
                     loaded_module
                         .borrow_mut()
                         .exports
-                        .insert(export_name.clone(), JsValue::Undefined);
+                        .insert(export_name.clone(), JsValue::UNDEFINED);
                     loaded_module
                         .borrow_mut()
                         .export_bindings
@@ -2852,6 +3331,7 @@ impl Interpreter {
                 if let ExportDeclaration::All {
                     source,
                     exported: None,
+                    ..
                 } = export
                 {
                     loaded_module
@@ -2882,55 +3362,73 @@ impl Interpreter {
         let prev_loading_deferred = self.loading_deferred;
         self.loading_deferred = true;
 
+        // Validate and host-resolve every request in source order before
+        // `load_module_no_eval` can expose a transitive failure.
+        for item in &program.module_items {
+            let Some(req) = module_item_request(item) else {
+                continue;
+            };
+            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(path)) {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
+            }
+        }
+        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(&program);
+
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
-            let (specifier, itype) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, None)
-                }
-                ModuleItem::ImportDeclaration(import) => (
-                    Some(import.source.as_str()),
-                    import_module_type(&import.attributes),
-                ),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), None)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), None),
-                _ => (None, None),
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    let result = match itype {
-                        Some(ImportModuleType::Text) => self.load_text_module(&resolved),
-                        Some(ImportModuleType::Bytes) => self.load_bytes_module(&resolved),
-                        None => self.load_module_no_eval(&resolved),
-                    };
-                    if let Err(e) = result {
-                        Self::cache_module_error(&loaded_module, &e);
-                        self.current_module_path = prev_path;
-                        self.loading_deferred = prev_loading_deferred;
-                        return Err(e);
-                    }
-                }
+            if let Err(e) = self.load_prevalidated_static_module_request(req, Some(path), true) {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
             }
         }
 
         // Process re-exports
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                source,
+                exported,
+                attributes,
+            }) = item
+                && let Err(e) = self.process_star_reexport(
+                    source,
+                    exported.as_ref(),
+                    attributes,
+                    &loaded_module,
+                )
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
+            }
+        }
+
+        // Named re-exports run before imports; see validate_named_reexports.
+        {
+            let canon = canon_path.clone();
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    attributes,
+                    ..
+                }) = item
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon, source, attributes, specifiers)
+                {
+                    self.loading_deferred = prev_loading_deferred;
+                    self.current_module_path = prev_path;
+                    Self::cache_module_error(&loaded_module, &e);
+                    return Err(e);
+                }
             }
         }
 
@@ -2946,25 +3444,6 @@ impl Interpreter {
             }
         }
 
-        // Validate named re-exports
-        {
-            let canon = canon_path.clone();
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    ..
-                }) = item
-                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
-                {
-                    self.loading_deferred = prev_loading_deferred;
-                    self.current_module_path = prev_path;
-                    Self::cache_module_error(&loaded_module, &e);
-                    return Err(e);
-                }
-            }
-        }
-
         // Async transitive deps are evaluated by inner_module_evaluation, not here
 
         self.loading_deferred = prev_loading_deferred;
@@ -2974,7 +3453,7 @@ impl Interpreter {
 
     fn create_synthetic_default_module(
         &mut self,
-        canon_path: PathBuf,
+        canon_path: ModuleKey,
         value: JsValue,
     ) -> Rc<RefCell<LoadedModule>> {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
@@ -3003,6 +3482,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -3011,6 +3491,7 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            requested_modules: Vec::new(),
             async_evaluation_order: None,
             pending_async_dependencies: 0,
             async_parent_modules: Vec::new(),
@@ -3021,42 +3502,59 @@ impl Interpreter {
         }))
     }
 
-    fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let key = (canon.clone(), ImportModuleType::Text);
-        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+    /// Load a resource as the synthetic default-export module for `import_type`,
+    /// memoized per realm by canonical path and type. All three representations
+    /// share the read/cache/registry path; only the value construction differs.
+    fn load_typed_module(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+        import_type: ImportModuleType,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = key.clone();
+        let registry_key = (self.current_realm_id, canon.clone(), import_type);
+        if let Some(existing) = self.synthetic_module_registry.get(&registry_key) {
             return Ok(existing.clone());
         }
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
-        let value = JsValue::String(JsString::from_str(&source));
+        let value = match import_type {
+            ImportModuleType::Json => {
+                let source = Self::read_module_text(path)?;
+                match crate::interpreter::helpers::json_parse_value(self, &source) {
+                    Completion::Normal(value) => value,
+                    Completion::Throw(error) => return Err(error),
+                    _ => {
+                        return Err(self.create_error(
+                            "SyntaxError",
+                            &format!("JSON parse error in '{}'", path.display()),
+                        ));
+                    }
+                }
+            }
+            ImportModuleType::Text => {
+                let source = Self::read_module_text(path)?;
+                JsValue::string(JsString::from_str(&source))
+            }
+            ImportModuleType::Bytes => {
+                let bytes = std::fs::read(path).map_err(|e| Self::module_read_error(path, &e))?;
+                self.create_immutable_uint8array(&bytes)
+            }
+        };
         let module = self.create_synthetic_default_module(canon, value);
-        self.synthetic_module_registry.insert(key, module.clone());
+        self.synthetic_module_registry
+            .insert(registry_key, module.clone());
         Ok(module)
     }
 
-    fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let key = (canon.clone(), ImportModuleType::Bytes);
-        if let Some(existing) = self.synthetic_module_registry.get(&key) {
-            return Ok(existing.clone());
-        }
-        let bytes = std::fs::read(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
-        let value = self.create_immutable_uint8array(&bytes);
-        let module = self.create_synthetic_default_module(canon, value);
-        self.synthetic_module_registry.insert(key, module.clone());
-        Ok(module)
+    fn read_module_text(path: &Path) -> Result<String, JsValue> {
+        std::fs::read_to_string(path).map_err(|e| Self::module_read_error(path, &e))
+    }
+
+    fn module_read_error(path: &Path, err: &std::io::Error) -> JsValue {
+        JsValue::string(JsString::from_str(&format!(
+            "Cannot read module '{}': {}",
+            path.display(),
+            err
+        )))
     }
 
     fn create_immutable_uint8array(&mut self, bytes: &[u8]) -> JsValue {
@@ -3083,7 +3581,7 @@ impl Interpreter {
         }
         self.gc_track_external_bytes(len);
         let ab_id = ab_obj_id;
-        let buf_val = JsValue::Object(crate::types::JsObject { id: ab_id });
+        let buf_val = JsValue::object(ab_id);
 
         let ta_info = TypedArrayInfo {
             kind: TypedArrayKind::Uint8,
@@ -3098,11 +3596,11 @@ impl Interpreter {
 
         let proto_id = self.realm().uint8array_prototype.unwrap();
         let ta_id = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
-        JsValue::Object(crate::types::JsObject { id: ta_id })
+        JsValue::object(ta_id)
     }
 
     /// Execute a module's body synchronously (no DFS into dependencies).
-    fn execute_module_body_sync(&mut self, module_path: &Path) -> Result<(), JsValue> {
+    fn execute_module_body_sync(&mut self, module_path: &ModuleKey) -> Result<(), JsValue> {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return Ok(()),
@@ -3113,37 +3611,88 @@ impl Interpreter {
         };
         let module_env = module.borrow().env.clone();
         let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.to_path_buf());
+        self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
 
-        let prev_ic_handle = self.current_ic_handle;
-        self.current_ic_handle = self.ic_store.for_body(&program.body);
+        let prev_ic_handle = self.enter_ic_body(&program.body);
 
+        // Module items reach `exec_statement` without passing through
+        // `dispatch_body`, so without a frame their work lands in
+        // `ast_work_units` but in no BODY row — module-heavy runs could not
+        // localize their tree-walker work at all (#537 review, third pass).
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let name = self.perf.name_module_body.clone();
+            self.perf
+                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
+        }
         let mut err = None;
+        // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
+        // structurally from `exec_statement`/`exec_export_declaration`, the
+        // same way `Throw` does — it must stop this loop immediately (a
+        // later module item must not run) and must reach `dispose_resources`
+        // below as `Exit`, not be discarded and reconstructed as `Normal`,
+        // so the disposer short-circuit there actually fires (#554 review).
+        let mut exit_code: Option<i32> = None;
         for item in &program.module_items {
             match item {
                 ModuleItem::Statement(stmt) => {
                     let result = self.exec_statement(stmt, &module_env);
-                    if let Completion::Throw(e) = result {
-                        module.borrow_mut().error = Some(e.clone());
-                        err = Some(e);
-                        break;
+                    match result {
+                        Completion::Throw(e) => {
+                            module.borrow_mut().error = Some(e.clone());
+                            err = Some(e);
+                            break;
+                        }
+                        Completion::Exit(code) => {
+                            exit_code = Some(code);
+                            break;
+                        }
+                        _ => {}
                     }
                 }
                 ModuleItem::ImportDeclaration(_) => {}
                 ModuleItem::ExportDeclaration(export) => {
                     let result = self.exec_export_declaration(export, &module_env);
-                    if let Completion::Throw(e) = result {
-                        module.borrow_mut().error = Some(e.clone());
-                        err = Some(e);
-                        break;
+                    match result {
+                        Completion::Throw(e) => {
+                            module.borrow_mut().error = Some(e.clone());
+                            err = Some(e);
+                            break;
+                        }
+                        Completion::Exit(code) => {
+                            exit_code = Some(code);
+                            break;
+                        }
+                        _ => {}
                     }
                     self.collect_exports(export, &module_env, &module);
                 }
             }
         }
+        let completion = match exit_code {
+            Some(code) => Completion::Exit(code),
+            None => match &err {
+                Some(e) => Completion::Throw(e.clone()),
+                None => Completion::Normal(JsValue::UNDEFINED),
+            },
+        };
+        match self.dispose_resources(&module_env, completion) {
+            Completion::Throw(e) => {
+                module.borrow_mut().error = Some(e.clone());
+                err = Some(e);
+            }
+            Completion::Exit(code) => {
+                self.pending_exit = Some(code);
+                err = None;
+            }
+            _ => {}
+        }
         module.borrow_mut().program_ast = None;
-        self.current_ic_handle = prev_ic_handle;
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
+        self.leave_ic_body(prev_ic_handle);
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
         match err {
@@ -3152,7 +3701,7 @@ impl Interpreter {
         }
     }
 
-    fn collect_all_exports(&mut self, module_path: &Path) {
+    fn collect_all_exports(&mut self, module_path: &ModuleKey) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3163,7 +3712,7 @@ impl Interpreter {
         };
         let module_env = module.borrow().env.clone();
         let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.to_path_buf());
+        self.current_module_path = Some(module_path.clone());
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(export) = item {
                 self.collect_exports(export, &module_env, &module);
@@ -3205,7 +3754,7 @@ impl Interpreter {
         stmts
     }
 
-    fn execute_async_module(&mut self, module_path: &Path) {
+    fn execute_async_module(&mut self, module_path: &ModuleKey) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3235,31 +3784,30 @@ impl Interpreter {
                 module_env.borrow_mut().declare(&lv.name, bk);
             }
         }
-        let path_for_resolve = module_path.to_path_buf();
-        let path_for_reject = module_path.to_path_buf();
+        let key_for_resolve = module_path.clone();
+        let key_for_reject = module_path.clone();
         let resolve_fn = self.create_function(JsFunction::native(
             "asyncModuleResolve".to_string(),
             0,
             move |interp, _this, _args| {
                 let prev = interp.current_module_path.take();
-                interp.current_module_path = Some(path_for_resolve.clone());
-                interp.async_module_execution_fulfilled(&path_for_resolve.clone());
+                interp.current_module_path = Some(key_for_resolve.clone());
+                interp.async_module_execution_fulfilled(&key_for_resolve);
                 interp.current_module_path = prev;
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         let reject_fn = self.create_function(JsFunction::native(
             "asyncModuleReject".to_string(),
             1,
             move |interp, _this, args| {
-                let error = args.first().cloned().unwrap_or(JsValue::Undefined);
-                interp.async_module_execution_rejected(&path_for_reject.clone(), &error);
-                Completion::Normal(JsValue::Undefined)
+                let error = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                interp.async_module_execution_rejected(&key_for_reject, &error);
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         let async_id = self.scheduler.alloc_async_function_id();
-        self.module_async_info
-            .insert(async_id, module_path.to_path_buf());
+        self.module_async_info.insert(async_id, module_path.clone());
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
@@ -3270,22 +3818,23 @@ impl Interpreter {
                 try_stack: vec![],
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: None,
                 saved_finally_exception: None,
+                pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
-                for_of_iter_env: None,
-                module_path: Some(module_path.to_path_buf()),
+                module_path: Some(module_path.clone()),
             },
         );
         let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.to_path_buf());
+        self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
         // Module top-level `await` (issue #242): this driver returns `()`, so a
         // `__host_exit` from top-level module code is recorded in the terminal
         // `pending_exit` sink rather than carried as a completion.
         if let Completion::Exit(code) =
-            self.async_function_resume(async_id, JsValue::Undefined, false)
+            self.async_function_resume(async_id, JsValue::UNDEFINED, false)
         {
             self.pending_exit = Some(code);
         }
@@ -3295,13 +3844,11 @@ impl Interpreter {
 
     fn inner_module_evaluation(
         &mut self,
-        module_path: &Path,
-        stack: &mut Vec<PathBuf>,
+        module_path: &ModuleKey,
+        stack: &mut Vec<ModuleKey>,
         index: u32,
     ) -> Result<u32, JsValue> {
-        let canon = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon = module_path.canonicalize();
         let module = match self.module_registry_get(&canon) {
             Some(m) => m,
             None => return Ok(index),
@@ -3331,7 +3878,7 @@ impl Interpreter {
 
         // Build evaluationList per spec §16.2.1.5.3.1 step 7
         let dep_paths = self.get_module_dep_paths(&canon);
-        let mut evaluation_list: Vec<PathBuf> = Vec::new();
+        let mut evaluation_list: Vec<ModuleKey> = Vec::new();
         for (dep_canon, is_deferred) in &dep_paths {
             if *is_deferred {
                 let mut to_eval = Vec::new();
@@ -3410,12 +3957,11 @@ impl Interpreter {
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
         let my_ancestor = module.borrow().dfs_ancestor_index.unwrap_or(0);
         if my_dfs == my_ancestor {
-            let has_async = module.borrow().async_evaluation_order.is_some();
             while let Some(popped) = stack.pop() {
                 if let Some(popped_mod) = self.module_registry_get(&popped) {
-                    popped_mod.borrow_mut().cycle_root = Some(canon.clone());
-                    if !has_async {
-                        let mut pm = popped_mod.borrow_mut();
+                    let mut pm = popped_mod.borrow_mut();
+                    pm.cycle_root = Some(canon.clone());
+                    if pm.async_evaluation_order.is_none() {
                         pm.evaluated = true;
                         pm.is_evaluating = false;
                     }
@@ -3428,40 +3974,37 @@ impl Interpreter {
         Ok(idx)
     }
 
-    fn get_module_dep_paths(&self, canon_path: &Path) -> Vec<(PathBuf, bool)> {
+    /// The specifier a module item contributes to the module *graph*, plus
+    /// whether the request is deferred. Typed (json/text/bytes) requests are
+    /// served by the synthetic registry and are never DFS dependencies.
+    ///
+    /// Unlike the pre-load passes, this deliberately does *not* skip
+    /// source-phase imports.
+    fn graph_dependency_request(item: &ModuleItem) -> Option<(&str, bool)> {
+        module_item_request(item)
+            .filter(|req| req.import_type().is_none())
+            .map(|req| (req.specifier, req.is_deferred))
+    }
+
+    fn graph_dependency_requests(program: &Program) -> Vec<(String, bool)> {
+        program
+            .module_items
+            .iter()
+            .filter_map(Self::graph_dependency_request)
+            .map(|(specifier, is_deferred)| (specifier.to_string(), is_deferred))
+            .collect()
+    }
+
+    fn get_module_dep_paths(&self, canon_path: &ModuleKey) -> Vec<(ModuleKey, bool)> {
         let module = match self.module_registry_get(canon_path) {
             Some(m) => m,
             None => return Vec::new(),
         };
-        let program = match module.borrow().program_ast.clone() {
-            Some(p) => p,
-            None => return Vec::new(),
-        };
+        let requests = module.borrow().requested_modules.clone();
         let mut deps = Vec::new();
-        for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
-                ModuleItem::ImportDeclaration(import) => {
-                    // Skip synthetic (text/bytes) imports — they're not DFS dependencies
-                    if import_module_type(&import.attributes).is_some() {
-                        continue;
-                    }
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
-            };
-            if let Some(spec) = specifier
-                && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(canon_path))
+        for (specifier, is_deferred) in requests {
+            if let Ok(resolved) =
+                self.resolve_module_specifier_pure(&specifier, canon_path.file_path())
             {
                 deps.push((resolved, is_deferred));
             }
@@ -3469,7 +4012,7 @@ impl Interpreter {
         deps
     }
 
-    fn gather_available_ancestors(&mut self, module_path: &Path) -> Vec<PathBuf> {
+    fn gather_available_ancestors(&mut self, module_path: &ModuleKey) -> Vec<ModuleKey> {
         let parents = match self.module_registry_get(module_path) {
             Some(m) => m.borrow().async_parent_modules.clone(),
             None => return Vec::new(),
@@ -3499,7 +4042,7 @@ impl Interpreter {
         result
     }
 
-    fn async_module_execution_rejected(&mut self, module_path: &Path, error: &JsValue) {
+    fn async_module_execution_rejected(&mut self, module_path: &ModuleKey, error: &JsValue) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3514,7 +4057,7 @@ impl Interpreter {
             m.is_evaluating = false;
         }
         if let Some((_promise, _resolve, reject)) = module.borrow().top_level_capability.clone() {
-            let _ = self.call_function(&reject, &JsValue::Undefined, std::slice::from_ref(error));
+            let _ = self.call_function(&reject, &JsValue::UNDEFINED, std::slice::from_ref(error));
         }
         let parents = module.borrow().async_parent_modules.clone();
         for parent in parents {
@@ -3522,7 +4065,7 @@ impl Interpreter {
         }
     }
 
-    fn async_module_execution_fulfilled(&mut self, module_path: &Path) {
+    fn async_module_execution_fulfilled(&mut self, module_path: &ModuleKey) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3537,7 +4080,7 @@ impl Interpreter {
         }
         self.collect_all_exports(module_path);
         if let Some((_promise, resolve, _reject)) = module.borrow().top_level_capability.clone() {
-            let _ = self.call_function(&resolve, &JsValue::Undefined, &[JsValue::Undefined]);
+            let _ = self.call_function(&resolve, &JsValue::UNDEFINED, &[JsValue::UNDEFINED]);
         }
         let mut exec_list = self.gather_available_ancestors(module_path);
         let mut i = 0;
@@ -3563,8 +4106,8 @@ impl Interpreter {
                         {
                             let _ = self.call_function(
                                 &resolve,
-                                &JsValue::Undefined,
-                                &[JsValue::Undefined],
+                                &JsValue::UNDEFINED,
+                                &[JsValue::UNDEFINED],
                             );
                         }
                     }
@@ -3714,7 +4257,7 @@ impl Interpreter {
             Expression::Array(elements, _) => {
                 elements.iter().any(|e| e.as_ref().is_some_and(Self::expr_has_await))
             }
-            Expression::Object(props) => {
+            Expression::Object(props, _) => {
                 props.iter().any(|p| {
                     Self::expr_has_await(&p.value)
                         || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_has_await(e))
@@ -3742,7 +4285,7 @@ impl Interpreter {
     }
 
     /// Eagerly evaluate async transitive dependencies of a deferred module
-    fn evaluate_async_transitive_deps(&mut self, deferred_path: &Path) {
+    fn evaluate_async_transitive_deps(&mut self, deferred_path: &ModuleKey) {
         let mut to_eval = Vec::new();
         let mut seen = HashSet::new();
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
@@ -3759,13 +4302,11 @@ impl Interpreter {
 
     fn gather_async_transitive_deps(
         &self,
-        module_path: &Path,
-        result: &mut Vec<PathBuf>,
-        seen: &mut HashSet<PathBuf>,
+        module_path: &ModuleKey,
+        result: &mut Vec<ModuleKey>,
+        seen: &mut HashSet<ModuleKey>,
     ) {
-        let canon = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon = module_path.canonicalize();
         if !seen.insert(canon.clone()) {
             return;
         }
@@ -3775,8 +4316,9 @@ impl Interpreter {
             None => return,
         };
 
+        let scc_evaluated = self.is_module_scc_evaluated(&canon);
         let module_ref = module.borrow();
-        if module_ref.evaluated {
+        if (module_ref.is_evaluating && module_ref.cycle_root.is_none()) || scc_evaluated {
             return;
         }
 
@@ -3787,34 +4329,26 @@ impl Interpreter {
             return;
         }
 
-        // Check transitive deps
-        if let Some(ref program) = module_ref.program_ast {
-            let items: Vec<_> = program.module_items.clone();
-            drop(module_ref);
-            for item in &items {
-                let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => {
-                        if import_module_type(&import.attributes).is_some() {
-                            continue;
-                        }
-                        Some(import.source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                        Some(source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                        source: Some(source),
-                        ..
-                    }) => Some(source.as_str()),
-                    _ => None,
-                };
-                if let Some(spec) = specifier
-                    && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon))
-                {
-                    self.gather_async_transitive_deps(&resolved, result, seen);
-                }
-            }
+        drop(module_ref);
+        for (resolved, _) in self.get_module_dep_paths(&canon) {
+            self.gather_async_transitive_deps(&resolved, result, seen);
         }
+    }
+
+    fn is_module_scc_evaluated(&self, module_path: &ModuleKey) -> bool {
+        let module = match self.module_registry_get(&module_path.canonicalize()) {
+            Some(module) => module,
+            None => return false,
+        };
+        let module_ref = module.borrow();
+        let cycle_root = match module_ref.cycle_root.as_ref() {
+            Some(cycle_root) => cycle_root.clone(),
+            None => return module_ref.evaluated,
+        };
+        drop(module_ref);
+
+        self.module_registry_get(&cycle_root)
+            .is_some_and(|root| root.borrow().evaluated)
     }
 
     /// Like resolve_module_specifier but doesn't need &mut self
@@ -3822,31 +4356,34 @@ impl Interpreter {
         &self,
         specifier: &str,
         referrer: Option<&Path>,
-    ) -> Result<PathBuf, JsValue> {
+    ) -> Result<ModuleKey, JsValue> {
+        if specifier == MODULE_SOURCE_SPECIFIER {
+            return Ok(ModuleKey::module_source());
+        }
         if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
         {
             let base = referrer.and_then(|r| r.parent()).unwrap_or(Path::new("."));
             let resolved = base.join(specifier);
             if resolved.exists() {
-                return Ok(resolved.canonicalize().unwrap_or(resolved));
+                return Ok(ModuleKey::for_file(resolved));
             }
             // Try .js extension
             let with_js = resolved.with_extension("js");
             if with_js.exists() {
-                return Ok(with_js.canonicalize().unwrap_or(with_js));
+                return Ok(ModuleKey::for_file(with_js));
             }
             // Try /index.js
             let index = resolved.join("index.js");
             if index.exists() {
-                return Ok(index.canonicalize().unwrap_or(index));
+                return Ok(ModuleKey::for_file(index));
             }
         }
-        Err(JsValue::Undefined)
+        Err(JsValue::UNDEFINED)
     }
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
-    fn ready_for_sync_execution(&self, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    fn ready_for_sync_execution(&self, path: &ModuleKey, seen: &mut HashSet<ModuleKey>) -> bool {
+        let canon = path.canonicalize();
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
         }
@@ -3856,10 +4393,10 @@ impl Interpreter {
             None => return true,
         };
 
-        let module_ref = module.borrow();
-        if module_ref.evaluated {
+        if self.is_module_scc_evaluated(&canon) {
             return true;
         }
+        let module_ref = module.borrow();
         if module_ref.is_evaluating {
             return false;
         }
@@ -3867,45 +4404,84 @@ impl Interpreter {
             return false;
         }
 
-        if let Some(ref program) = module_ref.program_ast {
-            let items: Vec<_> = program.module_items.clone();
-            drop(module_ref);
-            for item in &items {
-                let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => {
-                        if import_module_type(&import.attributes).is_some() {
-                            continue;
-                        }
-                        Some(import.source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                        Some(source.as_str())
-                    }
-                    ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                        source: Some(source),
-                        ..
-                    }) => Some(source.as_str()),
-                    _ => None,
-                };
-                if let Some(spec) = specifier
-                    && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon))
-                    && !self.ready_for_sync_execution(&resolved, seen)
-                {
-                    return false;
-                }
+        drop(module_ref);
+        for (resolved, _) in self.get_module_dep_paths(&canon) {
+            if !self.ready_for_sync_execution(&resolved, seen) {
+                return false;
             }
         }
 
         true
     }
 
+    /// Validate `export { x } from './mod'` re-exports, and — for typed
+    /// (json/text/bytes) requests — materialize them as bindings on the current
+    /// module.
+    ///
+    /// Callers run this *before* processing imports, so that a namespace built
+    /// while processing them (a self-import, or this module's own namespace)
+    /// already sees materialized re-export bindings. That ordering is
+    /// load-bearing: the typed branch below writes `exports`/`export_bindings`,
+    /// it does not merely check them.
     fn validate_named_reexports(
         &mut self,
-        current_module: &Path,
+        current_module: &ModuleKey,
         source: &str,
+        attributes: &[(String, String)],
         specifiers: &[ExportSpecifier],
     ) -> Result<(), JsValue> {
-        let resolved = self.resolve_module_specifier(source, Some(current_module))?;
+        let resolved = self.resolve_module_specifier(source, current_module.file_path())?;
+
+        if let Some(itype) = prevalidated_import_module_type(attributes) {
+            let loaded =
+                self.load_module_for_type(&resolved, Some(itype), ModuleLoadMode::Evaluate)?;
+            let canon_current = current_module.canonicalize();
+            for spec in specifiers {
+                let (value, source_binding, source_env, loaded_path) = {
+                    let loaded = loaded.borrow();
+                    (
+                        loaded.exports.get(&spec.local).cloned(),
+                        loaded.export_bindings.get(&spec.local).cloned(),
+                        loaded.env.clone(),
+                        loaded.path.clone(),
+                    )
+                };
+                let (Some(value), Some(source_binding)) = (value, source_binding) else {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Module '{}' has no export named '{}'",
+                            loaded_path.display(),
+                            spec.local
+                        ),
+                    ));
+                };
+
+                // Keep a collision-safe internal binding, but make it indirect:
+                // ResolveExport must identify the defining synthetic module and
+                // binding, not a copied binding in this intermediary module.
+                let Some(current) = self.module_registry_get(&canon_current) else {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Module '{}' is not registered; cannot re-export '{}'",
+                            canon_current.display(),
+                            spec.exported
+                        ),
+                    ));
+                };
+                let binding = format!("*synthetic-reexport:{}*", spec.exported);
+                let env = current.borrow().env.clone();
+                env.borrow_mut()
+                    .create_import_binding(&binding, source_env, source_binding);
+                let mut current = current.borrow_mut();
+                current.exports.insert(spec.exported.clone(), value);
+                current
+                    .export_bindings
+                    .insert(spec.exported.clone(), binding);
+            }
+            return Ok(());
+        }
 
         for spec in specifiers {
             let mut visited = HashSet::new();
@@ -3918,13 +4494,11 @@ impl Interpreter {
     /// Returns (source_env, binding_name) for creating indirect import bindings.
     fn resolve_export_binding(
         &mut self,
-        module_path: &Path,
+        module_path: &ModuleKey,
         export_name: &str,
-        visited: &mut HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(ModuleKey, String)>,
     ) -> Result<(EnvRef, String), JsValue> {
-        let canon_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = module_path.canonicalize();
         let key = (canon_path.clone(), export_name.to_string());
 
         if visited.contains(&key) {
@@ -3935,7 +4509,7 @@ impl Interpreter {
         }
         visited.insert(key);
 
-        let module = self.load_module(&canon_path)?;
+        let module = self.load_module_for_type(&canon_path, None, ModuleLoadMode::Evaluate)?;
 
         let reexport_info = {
             let module_ref = module.borrow();
@@ -3956,8 +4530,9 @@ impl Interpreter {
                     let ns_source = ns_source.to_string();
                     drop(module_ref);
                     if let Ok(resolved) =
-                        self.resolve_module_specifier(&ns_source, Some(&canon_path))
-                        && let Ok(ns_mod) = self.load_module(&resolved)
+                        self.resolve_module_specifier(&ns_source, canon_path.file_path())
+                        && let Ok(ns_mod) =
+                            self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
                     }
@@ -3976,13 +4551,30 @@ impl Interpreter {
                     let binding_name = binding.clone();
                     let env = module_ref.env.clone();
                     let ns_path = module_ref.namespace_imports.get(&binding_name).cloned();
+                    let synthetic_ns = module_ref
+                        .synthetic_namespace_imports
+                        .get(&binding_name)
+                        .cloned();
                     let source_path = module_ref.source_imports.get(&binding_name).cloned();
                     drop(module_ref);
                     // Namespace import (import * as foo) resolves to the source module
                     if let Some(ns_path) = ns_path
-                        && let Ok(ns_mod) = self.load_module(&ns_path)
+                        && let Ok(ns_mod) =
+                            self.load_module_for_type(&ns_path, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
+                    }
+                    // Typed namespace re-export. Its value is materialized in
+                    // this module, but its ResolveExport identity belongs to
+                    // the cached synthetic target module.
+                    if let Some((target_path, import_type)) = synthetic_ns {
+                        let target = self.load_module_for_type(
+                            &target_path,
+                            Some(import_type),
+                            ModuleLoadMode::Evaluate,
+                        )?;
+                        let target_env = target.borrow().env.clone();
+                        return Ok((target_env, "*namespace*".to_string()));
                     }
                     // Source-phase import (import source foo) re-exported via
                     // `export { foo }` resolves to ResolvedBinding { [[Module]]:
@@ -3990,7 +4582,8 @@ impl Interpreter {
                     // re-exports of the same `<module source>` therefore compare
                     // equal (same target env + "*source*"), so are unambiguous.
                     if let Some(source_path) = source_path
-                        && let Ok(source_mod) = self.load_module(&source_path)
+                        && let Ok(source_mod) =
+                            self.load_module_for_type(&source_path, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((source_mod.borrow().env.clone(), "*source*".to_string()));
                     }
@@ -4009,7 +4602,8 @@ impl Interpreter {
         };
 
         if let Some((source_specifier, source_export)) = reexport_info {
-            let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
+            let resolved =
+                self.resolve_module_specifier(&source_specifier, canon_path.file_path())?;
             return self.resolve_export_binding(&resolved, &source_export, visited);
         }
 
@@ -4025,13 +4619,11 @@ impl Interpreter {
 
     fn resolve_export(
         &mut self,
-        module_path: &Path,
+        module_path: &ModuleKey,
         export_name: &str,
-        visited: &mut HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(ModuleKey, String)>,
     ) -> Result<(), JsValue> {
-        let canon_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = module_path.canonicalize();
         let key = (canon_path.clone(), export_name.to_string());
 
         // §16.2.1.6.3 step 2: circular reference → return null (not resolved)
@@ -4048,7 +4640,7 @@ impl Interpreter {
         visited.insert(key);
 
         // Load the module if not already loaded
-        let module = self.load_module(&canon_path)?;
+        let module = self.load_module_for_type(&canon_path, None, ModuleLoadMode::Evaluate)?;
 
         // Check if this export is a local binding or a re-export (steps 4-5)
         let (reexport_info, star_sources) = {
@@ -4087,7 +4679,8 @@ impl Interpreter {
 
         // Step 5: follow indirect re-exports
         if let Some((source_specifier, source_export)) = reexport_info {
-            let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
+            let resolved =
+                self.resolve_module_specifier(&source_specifier, canon_path.file_path())?;
             return self.resolve_export(&resolved, &source_export, visited);
         }
 
@@ -4105,9 +4698,9 @@ impl Interpreter {
 
         // §16.2.1.6.3 step 8: check star re-exports
         let mut found_in_star = false;
-        let mut first_star_source: Option<PathBuf> = None;
+        let mut first_star_source: Option<ModuleKey> = None;
         for star_source in &star_sources {
-            let resolved = self.resolve_module_specifier(star_source, Some(&canon_path))?;
+            let resolved = self.resolve_module_specifier(star_source, canon_path.file_path())?;
             let mut v2 = visited.clone();
             if self.resolve_export(&resolved, export_name, &mut v2).is_ok() {
                 if found_in_star {
@@ -4177,14 +4770,20 @@ impl Interpreter {
             ExportDeclaration::Named {
                 specifiers,
                 source,
+                attributes,
                 declaration,
             } => {
                 if let Some(src) = source {
                     // Re-export: get values from source module
                     let module_path = self.current_module_path.clone();
-                    if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref())
-                        && let Ok(source_mod) = self.load_module(&resolved)
-                    {
+                    if let Ok(resolved) = self.resolve_module_specifier(
+                        src,
+                        module_path.as_ref().and_then(ModuleKey::file_path),
+                    ) && let Ok(source_mod) = self.load_module_for_type(
+                        &resolved,
+                        prevalidated_import_module_type(attributes),
+                        ModuleLoadMode::Evaluate,
+                    ) {
                         let source_exports = source_mod.borrow().exports.clone();
                         for spec in specifiers {
                             if let Some(val) = source_exports.get(&spec.local) {
@@ -4341,7 +4940,7 @@ impl Interpreter {
             let module_ref = module.borrow();
             let env = module_ref.env.clone();
             let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.as_os_str().is_empty() {
+            let module_path = if module_ref.path.is_empty() {
                 None
             } else {
                 Some(module_ref.path.clone())
@@ -4384,7 +4983,7 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_property(
                     name.clone(),
-                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
                 );
         }
 
@@ -4392,13 +4991,13 @@ impl Interpreter {
         // writable=false, enumerable=false, configurable=false
         let sym_key = self
             .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
             .insert_property(
                 sym_key,
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Module")),
+                    JsValue::string(JsString::from_str("Module")),
                     false,
                     false,
                     false,
@@ -4406,7 +5005,7 @@ impl Interpreter {
             );
 
         let id = obj_id;
-        let ns = JsValue::Object(crate::types::JsObject { id });
+        let ns = JsValue::object(id);
         module.borrow_mut().cached_namespace = Some(ns.clone());
         ns
     }
@@ -4423,7 +5022,7 @@ impl Interpreter {
             let module_ref = module.borrow();
             let env = module_ref.env.clone();
             let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.as_os_str().is_empty() {
+            let module_path = if module_ref.path.is_empty() {
                 None
             } else {
                 Some(module_ref.path.clone())
@@ -4462,19 +5061,19 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_property(
                     name.clone(),
-                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
                 );
         }
 
         let sym_key = self
             .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
             .insert_property(
                 sym_key,
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Deferred Module")),
+                    JsValue::string(JsString::from_str("Deferred Module")),
                     false,
                     false,
                     false,
@@ -4482,24 +5081,31 @@ impl Interpreter {
             );
 
         let id = obj_id;
-        let ns = JsValue::Object(crate::types::JsObject { id });
+        let ns = JsValue::object(id);
         module.borrow_mut().cached_deferred_namespace = Some(ns.clone());
         ns
     }
 
     fn create_namespace_for_env(&mut self, target_env: &EnvRef) -> JsValue {
         let realm_id = self.current_realm_id;
-        let found = self
+        let ordinary_modules = self
             .module_registry
             .iter()
             .filter(|((rid, _), _)| *rid == realm_id)
-            .map(|(_, module)| module)
+            .map(|(_, module)| module);
+        let synthetic_modules = self
+            .synthetic_module_registry
+            .iter()
+            .filter(|((rid, _, _), _)| *rid == realm_id)
+            .map(|(_, module)| module);
+        let found = ordinary_modules
+            .chain(synthetic_modules)
             .find(|m| Rc::ptr_eq(&m.borrow().env, target_env))
             .cloned();
         if let Some(module) = found {
             return self.create_module_namespace(&module);
         }
-        JsValue::Undefined
+        JsValue::UNDEFINED
     }
 
     /// Find the [[ModuleSource]] of the module whose environment is `target_env`.
@@ -4632,6 +5238,7 @@ impl Interpreter {
                 specifiers,
                 source,
                 declaration,
+                ..
             } => {
                 if let Some(src) = source {
                     // Re-export: export { x } from './mod'
@@ -4734,7 +5341,7 @@ impl Interpreter {
             } => self.exec_statement(decl, env),
             ExportDeclaration::Named {
                 declaration: None, ..
-            } => Completion::Normal(JsValue::Undefined),
+            } => Completion::Normal(JsValue::UNDEFINED),
             ExportDeclaration::Default(expr) => {
                 let val = if let Expression::Class(ce) = expr.as_ref()
                     && ce.name.is_none()
@@ -4762,7 +5369,7 @@ impl Interpreter {
                 };
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 env.borrow_mut().initialize_binding("*default*", val);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             ExportDeclaration::DefaultFunction(func) => {
                 let name = if func.name.is_empty() {
@@ -4794,7 +5401,7 @@ impl Interpreter {
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Let);
                 env.borrow_mut().initialize_binding("*default*", fn_obj);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             ExportDeclaration::DefaultClass(class) => {
                 let name = if class.name.is_empty() {
@@ -4820,11 +5427,11 @@ impl Interpreter {
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 env.borrow_mut().initialize_binding("*default*", class_val);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             ExportDeclaration::All { .. } => {
                 // Re-exports handled in Phase 3
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
         }
     }
@@ -4863,10 +5470,10 @@ impl Interpreter {
                         let mut lock = self.agent_async_completions.0.lock().unwrap();
                         lock.drain(..).collect()
                     };
-                    if completions.is_empty()
-                        && (self.has_awaited_pending_async()
-                            || self.scheduler.pending_timer_jobs_count() != 0)
-                    {
+                    // Only host-async work can arrive on this queue now that
+                    // timers live in-process (#254); waiting on it for a timer
+                    // would just burn a millisecond per 64 microtasks.
+                    if completions.is_empty() && self.has_awaited_pending_async() {
                         let (ref mtx, ref cvar) = *self.agent_async_completions;
                         let lock = mtx.lock().unwrap();
                         if lock.is_empty() {
@@ -4911,6 +5518,82 @@ impl Interpreter {
         }
     }
 
+    /// How long a wait on the host-async completion queue may block.
+    ///
+    /// Capped at the next timer deadline: an in-process timer never signals
+    /// that queue, so an uncapped wait would sleep straight past it. Call
+    /// before taking the queue lock — resolving the deadline needs `&mut self`.
+    ///
+    /// A drain nested inside a timer callback is not servicing timers, so their
+    /// deadlines must not shorten its wait: capping on an overdue deadline this
+    /// level cannot act on would return zero every time and spin.
+    fn completion_wait(&mut self, remaining: std::time::Duration) -> std::time::Duration {
+        let wait = remaining.min(std::time::Duration::from_millis(100));
+        if self.dispatching_timers {
+            return wait;
+        }
+        match self.scheduler.next_timer_deadline() {
+            Some(at) => wait.min(at.saturating_duration_since(std::time::Instant::now())),
+            None => wait,
+        }
+    }
+
+    /// Fire every timer that has come due, in deadline then arming order, and
+    /// report whether any ran.
+    ///
+    /// Timer callbacks are macrotasks: they run from an event-loop boundary
+    /// rather than from inside a microtask drain, and the microtask queue is
+    /// drained after each one so a promise settled by one callback is observed
+    /// before the next callback runs. A callback that throws is ignored (as
+    /// when each timer had its own thread, and as for an unhandled rejection);
+    /// a `__host_exit` latches the terminal sink and abandons the rest.
+    ///
+    /// The batch is collected as ids and each timer is taken from the queue
+    /// only as it is about to run, so a callback can still cancel a sibling
+    /// that has not fired yet, and the queue goes on rooting the ones waiting.
+    pub(crate) fn run_due_timers(&mut self) -> bool {
+        // One task must never re-enter another. A callback that nests a whole
+        // interpreter run (`$262.evalScript`, say) reaches this again, and
+        // would find the rest of its own batch — or a zero-delay interval
+        // already re-armed for the next turn — due, and recurse until the
+        // drain deadline.
+        if self.dispatching_timers {
+            return false;
+        }
+        let due = self.scheduler.take_due_timers(std::time::Instant::now());
+        if due.is_empty() {
+            return false;
+        }
+        self.dispatching_timers = true;
+        for id in due {
+            let Some((callback, args)) = self.scheduler.take_timer_for_firing(id) else {
+                continue; // cancelled by an earlier callback in this batch
+            };
+            // A one-shot has just left the queue; root it across its own call.
+            let frame = self.gc_root_frame();
+            self.gc_root_value(&callback);
+            for arg in &args {
+                self.gc_root_value(arg);
+            }
+            let result = self.call_function(&callback, &JsValue::UNDEFINED, &args);
+            self.gc_unroot_frame(frame);
+            if let Completion::Exit(code) = result {
+                self.pending_exit = Some(code);
+                break;
+            }
+            if self.pending_exit.is_some() {
+                break;
+            }
+            // Microtask checkpoint between tasks, as on the HTML/Node loop.
+            self.drain_microtasks();
+            if self.pending_exit.is_some() {
+                break;
+            }
+        }
+        self.dispatching_timers = false;
+        true
+    }
+
     /// Drain already-queued jobs, then wait for host async jobs such as
     /// Atomics.waitAsync/getReportAsync when JS code is still awaiting them.
     ///
@@ -4926,10 +5609,16 @@ impl Interpreter {
         if self.pending_exit.is_some() {
             return;
         }
-        if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
+        // Timers belong to the outermost drain. A drain nested inside a timer
+        // callback neither fires them nor waits on them.
+        let servicing_timers = !self.dispatching_timers;
+        let waiting_on_timers = |interp: &Self| servicing_timers && interp.scheduler.has_timers();
+        if !self.has_awaited_pending_async() && !waiting_on_timers(self) {
             return;
         }
 
+        // An armed timer keeps the loop alive, so an uncleared `setInterval`
+        // runs until this cap rather than forever as it would under Node.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
@@ -4939,26 +5628,38 @@ impl Interpreter {
             if self.pending_exit.is_some() {
                 return;
             }
-            if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
+            if !self.has_awaited_pending_async() && !waiting_on_timers(self) {
                 break;
             }
             if std::time::Instant::now() >= deadline {
                 break;
             }
 
+            // Run due timers, then loop so the microtask drain above handles
+            // whatever their callbacks queued. Timers armed by a callback wait
+            // for the next turn, so a recursive `setTimeout(fn, 0)` cannot
+            // starve the host-async completions below.
+            if self.run_due_timers() {
+                if self.pending_exit.is_some() {
+                    return;
+                }
+                continue;
+            }
+
+            // Nothing is due: sleep until a host async completion arrives or
+            // the earliest timer comes due, whichever is sooner.
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let wait = self.completion_wait(remaining);
             let (ref mtx, ref cvar) = *self.agent_async_completions;
             let lock = mtx.lock().unwrap();
             if !lock.is_empty() {
                 drop(lock);
                 continue;
             }
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let (_guard, _timeout_result) = cvar
-                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
-                .unwrap();
+            let (_guard, _timeout_result) = cvar.wait_timeout(lock, wait).unwrap();
             drop(_guard);
         }
 
@@ -5020,52 +5721,54 @@ impl Interpreter {
             if std::time::Instant::now() >= deadline {
                 break;
             }
-            // Wait for async completions with a timeout
+            // An agent thread services its own timers (#254); nothing arrives
+            // cross-thread on its behalf.
+            if self.run_due_timers() {
+                if self.pending_exit.is_some() {
+                    return;
+                }
+                continue;
+            }
+            // Wait for async completions with a timeout.
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let wait = self.completion_wait(remaining);
             let (ref mtx, ref cvar) = *self.agent_async_completions;
             let lock = mtx.lock().unwrap();
             if !lock.is_empty() {
                 drop(lock);
                 continue;
             }
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let (_guard, _timeout_result) = cvar
-                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
-                .unwrap();
+            let (_guard, _timeout_result) = cvar.wait_timeout(lock, wait).unwrap();
             drop(_guard);
         }
     }
 
-    pub fn format_value(&self, val: &JsValue) -> String {
-        match val {
-            JsValue::Object(o) => {
-                if self.get_object_cell(o.id).is_some() {
-                    let name = self.get_property_on_id(o.id, "name");
-                    let message = self.get_property_on_id(o.id, "message");
-                    if let JsValue::String(ref msg) = message {
-                        let msg_str = msg.to_rust_string();
-                        if let JsValue::String(ref n) = name {
-                            let n_str = n.to_rust_string();
-                            if n_str.is_empty() {
-                                return msg_str;
-                            }
-                            return format!("{n_str}: {msg_str}");
-                        }
+    pub(crate) fn format_value(&self, val: &JsValue) -> String {
+        if let Some(id) = val.as_object_id()
+            && self.get_object_cell(id).is_some()
+        {
+            let name = self.get_property_on_id(id, "name");
+            let message = self.get_property_on_id(id, "message");
+            if let Some(msg) = message.as_string() {
+                let msg_str = msg.to_rust_string();
+                if let Some(n) = name.as_string() {
+                    let n_str = n.to_rust_string();
+                    if n_str.is_empty() {
                         return msg_str;
                     }
+                    return format!("{n_str}: {msg_str}");
                 }
-                format!("{val}")
+                return msg_str;
             }
-            _ => format!("{val}"),
         }
+        format!("{val}")
     }
 }
 
 fn setup_agent_side_262(interp: &mut Interpreter) {
-    use crate::types::JsObject;
-
     let dollar_262_id = interp.create_object_id();
 
     let agent_obj_id = interp.create_object_id();
@@ -5075,7 +5778,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         "receiveBroadcast".to_string(),
         1,
         |interp, _this, args| {
-            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let rx = interp.agent_broadcast_rx.take();
             if let Some(rx) = rx {
                 if let Ok(msg) = rx.recv() {
@@ -5099,15 +5802,15 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                             },
                         );
                     }
-                    let sab_val = JsValue::Object(JsObject { id: sab_obj_id });
+                    let sab_val = JsValue::object(sab_obj_id);
                     interp.agent_broadcast_rx = Some(rx);
-                    let _ = interp.call_function(&callback, &JsValue::Undefined, &[sab_val]);
+                    let _ = interp.call_function(&callback, &JsValue::UNDEFINED, &[sab_val]);
                     interp.drain_microtasks();
                 } else {
                     interp.agent_broadcast_rx = Some(rx);
                 }
             }
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         },
     ));
     interp
@@ -5120,7 +5823,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         "report".to_string(),
         1,
         |interp, _this, args| {
-            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let s = match interp.to_string_value(&val) {
                 Ok(s) => s,
                 Err(e) => return Completion::Throw(e),
@@ -5128,7 +5831,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
             let (ref reports_lock, ref reports_cvar) = *interp.agent_reports;
             reports_lock.lock().unwrap().push_back(s);
             reports_cvar.notify_one();
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         },
     ));
     interp
@@ -5141,13 +5844,13 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         "sleep".to_string(),
         1,
         |interp, _this, args| {
-            let ms_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let ms_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let ms = match interp.to_number_value(&ms_val) {
                 Ok(n) => n.max(0.0) as u64,
                 Err(e) => return Completion::Throw(e),
             };
             std::thread::sleep(std::time::Duration::from_millis(ms));
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         },
     ));
     interp
@@ -5159,7 +5862,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
     let leaving_fn = interp.create_function(JsFunction::native(
         "leaving".to_string(),
         0,
-        |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+        |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
     ));
     interp
         .get_object_cell_expect(agent_obj_id)
@@ -5173,7 +5876,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         0,
         move |_interp, _this, _args| {
             let elapsed = start_time.elapsed().as_millis() as f64;
-            Completion::Normal(JsValue::Number(elapsed))
+            Completion::Normal(JsValue::number(elapsed))
         },
     ));
     interp
@@ -5181,13 +5884,13 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         .borrow_mut()
         .insert_builtin("monotonicNow".to_string(), monotonic_fn);
 
-    let agent_val = JsValue::Object(JsObject { id: agent_obj_id });
+    let agent_val = JsValue::object(agent_obj_id);
     interp
         .get_object_cell_expect(dollar_262_id)
         .borrow_mut()
         .insert_builtin("agent".to_string(), agent_val);
 
-    let dollar_262_val = JsValue::Object(JsObject { id: dollar_262_id });
+    let dollar_262_val = JsValue::object(dollar_262_id);
     interp
         .realm()
         .global_env

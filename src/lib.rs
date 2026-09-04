@@ -2,12 +2,22 @@
 #![allow(clippy::type_complexity)]
 
 pub mod ast;
+mod cli;
 pub(crate) mod emoji_strings;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
 pub mod types;
 pub(crate) mod unicode_tables;
+
+/// Runs the `jsse` CLI (argument parsing, file/eval/REPL/prelude dispatch) on
+/// the engine-sized stack (see [`run_on_engine_stack`]). The sole entry point
+/// `src/main.rs` calls — everything else the CLI needs stays `pub(crate)`
+/// rather than swelling the library's public API, since only this function
+/// and the fuzz-target helpers below need to cross the bin/lib boundary.
+pub fn run_cli() -> std::process::ExitCode {
+    run_on_engine_stack(cli::run_main)
+}
 
 /// Stack reserved for parsing/interpreting: deep (but bounded, see
 /// `MAX_PARSE_DEPTH`/`CALL_DEPTH_HARD_LIMIT`) recursion needs room to reach
@@ -72,6 +82,13 @@ mod lib_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "MAX_PARSE_DEPTH's headroom below ENGINE_STACK_SIZE is calibrated \
+                  for release-mode stack frames; debug-mode recursive-descent frames \
+                  are large enough that this depth overflows the native stack well \
+                  before the depth guard fires. See jsse#599."
+    )]
     fn run_on_engine_stack_borrows_non_static_data() {
         // `ast::Program` holds `Rc`s and isn't `Send`, so (matching how a real
         // fuzz target must behave) the parse result is consumed entirely
@@ -105,6 +122,13 @@ mod lib_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "MAX_PARSE_DEPTH's headroom below ENGINE_STACK_SIZE is calibrated \
+                  for release-mode stack frames; debug-mode recursive-descent frames \
+                  are large enough that this depth overflows the native stack well \
+                  before the depth guard fires. See jsse#599."
+    )]
     fn fuzz_parse_bytes_deep_nesting() {
         fuzz_parse_bytes("[".repeat(5000).as_bytes());
     }

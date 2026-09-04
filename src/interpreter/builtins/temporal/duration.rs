@@ -70,7 +70,7 @@ fn to_relative_to_date(
         return Ok(None);
     }
     // For strings, handle ZonedDateTime-like strings specially
-    if let JsValue::String(s) = val {
+    if let Some(s) = val.as_string() {
         let raw = s.to_rust_string();
         // Reject year zero (-000000)
         if raw.starts_with("-000000") {
@@ -217,8 +217,8 @@ fn to_relative_to_date(
         }
     }
     // If the value is a Temporal object, handle directly (no property bag reading)
-    if let JsValue::Object(obj_ref) = val
-        && let Some(obj) = interp.get_object_cell(obj_ref.id)
+    if let Some(obj_ref) = val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(obj_ref)
     {
         let td = obj.borrow().temporal_data().cloned();
         if let Some(super::TemporalData::ZonedDateTime {
@@ -253,7 +253,7 @@ fn to_relative_to_date(
     }
 
     // Property bag: read ALL fields in alphabetical order per spec PrepareTemporalFields.
-    if let JsValue::Object(_) = val {
+    if val.is_object() {
         // 1. calendar
         let cal_val = match get_prop(interp, val, "calendar") {
             Completion::Normal(v) => v,
@@ -1639,25 +1639,7 @@ impl Interpreter {
             .class_name = "Temporal.Duration".to_string();
 
         // @@toStringTag
-        {
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Temporal.Duration"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(proto_id, "Temporal.Duration");
 
         // Accessor properties for the 10 components + sign + blank
         let component_names = [
@@ -1679,11 +1661,11 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let snapshot = match &this {
-                        JsValue::Object(o) => interp
-                            .get_object_cell(o.id)
+                    let snapshot = match this.as_object_id() {
+                        Some(o) => interp
+                            .get_object_cell(o)
                             .map(|cell| cell.borrow().temporal_data().cloned()),
-                        _ => None,
+                        None => None,
                     };
                     match snapshot {
                         Some(Some(TemporalData::Duration {
@@ -1699,17 +1681,17 @@ impl Interpreter {
                             nanoseconds,
                         })) => {
                             let val = match name {
-                                "years" => JsValue::Number(years),
-                                "months" => JsValue::Number(months),
-                                "weeks" => JsValue::Number(weeks),
-                                "days" => JsValue::Number(days),
-                                "hours" => JsValue::Number(hours),
-                                "minutes" => JsValue::Number(minutes),
-                                "seconds" => JsValue::Number(seconds),
-                                "milliseconds" => JsValue::Number(milliseconds),
-                                "microseconds" => JsValue::Number(microseconds),
-                                "nanoseconds" => JsValue::Number(nanoseconds),
-                                "sign" => JsValue::Number(duration_sign(
+                                "years" => JsValue::number(years),
+                                "months" => JsValue::number(months),
+                                "weeks" => JsValue::number(weeks),
+                                "days" => JsValue::number(days),
+                                "hours" => JsValue::number(hours),
+                                "minutes" => JsValue::number(minutes),
+                                "seconds" => JsValue::number(seconds),
+                                "milliseconds" => JsValue::number(milliseconds),
+                                "microseconds" => JsValue::number(microseconds),
+                                "nanoseconds" => JsValue::number(nanoseconds),
+                                "sign" => JsValue::number(duration_sign(
                                     years,
                                     months,
                                     weeks,
@@ -1721,7 +1703,7 @@ impl Interpreter {
                                     microseconds,
                                     nanoseconds,
                                 ) as f64),
-                                "blank" => JsValue::Boolean(
+                                "blank" => JsValue::boolean(
                                     duration_sign(
                                         years,
                                         months,
@@ -1735,7 +1717,7 @@ impl Interpreter {
                                         nanoseconds,
                                     ) == 0,
                                 ),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
                             Completion::Normal(val)
                         }
@@ -1814,8 +1796,8 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let like = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(like, JsValue::Object(_)) {
+                let like = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !like.is_object() {
                     return Completion::Throw(
                         interp.create_type_error("Duration.with requires an object argument"),
                     );
@@ -1874,7 +1856,7 @@ impl Interpreter {
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
                 let other = match to_temporal_duration_record(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(f) => f,
                     Err(c) => return c,
@@ -1919,7 +1901,7 @@ impl Interpreter {
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
                 let other = match to_temporal_duration_record(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(f) => f,
                     Err(c) => return c,
@@ -1962,7 +1944,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let round_to = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let round_to = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if is_undefined(&round_to) {
                     return Completion::Throw(
                         interp.create_type_error("round requires options argument"),
@@ -2261,14 +2243,14 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let total_of = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let total_of = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if is_undefined(&total_of) {
                     return Completion::Throw(
                         interp.create_type_error("total requires options argument"),
                     );
                 }
 
-                let (unit, relative_to) = if let JsValue::String(ref su) = total_of {
+                let (unit, relative_to) = if let Some(su) = total_of.as_string() {
                     let su_str = su.to_rust_string();
                     let u = match temporal_unit_singular(&su_str) {
                         Some(u) => u,
@@ -2279,7 +2261,7 @@ impl Interpreter {
                         }
                     };
                     (u, None)
-                } else if matches!(total_of, JsValue::Object(_)) {
+                } else if total_of.is_object() {
                     // Per spec: get + process relativeTo first, then get + coerce unit
                     let rt = match get_prop(interp, &total_of, "relativeTo") {
                         Completion::Normal(v) => v,
@@ -2325,7 +2307,7 @@ impl Interpreter {
                     match total_relative_duration_zdt(
                         y, mo, w, d, h, mi, s, ms, us, ns, unit, by, bm, bd, ens, tz,
                     ) {
-                        Ok(result) => Completion::Normal(JsValue::Number(result)),
+                        Ok(result) => Completion::Normal(JsValue::number(result)),
                         Err(()) => Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         )),
@@ -2344,7 +2326,7 @@ impl Interpreter {
                         && us == 0.0
                         && ns == 0.0;
                     if is_zero {
-                        return Completion::Normal(JsValue::Number(0.0));
+                        return Completion::Normal(JsValue::number(0.0));
                     }
                     // Spec step 2: ISODateTimeWithinLimits on base at midnight
                     if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
@@ -2355,7 +2337,7 @@ impl Interpreter {
                     match total_relative_duration(
                         y, mo, w, d, h, mi, s, ms, us, ns, unit, by, bm, bd,
                     ) {
-                        Ok(result) => Completion::Normal(JsValue::Number(result)),
+                        Ok(result) => Completion::Normal(JsValue::number(result)),
                         Err(()) => Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         )),
@@ -2370,7 +2352,7 @@ impl Interpreter {
                         + ns as i128;
                     let unit_ns = temporal_unit_length_ns(unit) as i128;
                     let result = divide_i128_to_f64(total_ns, unit_ns);
-                    Completion::Normal(JsValue::Number(result))
+                    Completion::Normal(JsValue::number(result))
                 }
             },
         ));
@@ -2412,7 +2394,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                 };
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2434,7 +2416,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                     };
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2460,22 +2442,22 @@ impl Interpreter {
                             Ok(s) => s,
                             Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                         };
-                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                        return Completion::Normal(JsValue::from_str(&result));
                     }
                 };
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let df_instance = match interp.construct(&df_val, &[locales_arg, options_arg]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
-                if let JsValue::Object(df_obj) = &df_instance {
+                if let Some(df_obj) = df_instance.as_object_id() {
                     let format_val =
-                        match interp.get_object_property(df_obj.id, "format", &df_instance) {
+                        match interp.get_object_property(df_obj, "format", &df_instance) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                     match interp.call_function(
                         &format_val,
@@ -2484,7 +2466,7 @@ impl Interpreter {
                     ) {
                         Completion::Normal(v) => Completion::Normal(v),
                         Completion::Throw(e) => Completion::Throw(e),
-                        _ => Completion::Normal(JsValue::Undefined),
+                        _ => Completion::Normal(JsValue::UNDEFINED),
                     }
                 } else {
                     let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
@@ -2494,7 +2476,7 @@ impl Interpreter {
                             Ok(s) => s,
                             Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                         };
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::from_str(&result))
                 }
             },
         ));
@@ -2531,7 +2513,7 @@ impl Interpreter {
                 }
 
                 let get_field = |interp: &mut Interpreter, idx: usize| -> Result<f64, Completion> {
-                    let v = args.get(idx).cloned().unwrap_or(JsValue::Undefined);
+                    let v = args.get(idx).cloned().unwrap_or(JsValue::UNDEFINED);
                     if is_undefined(&v) {
                         return Ok(0.0);
                     }
@@ -2614,19 +2596,21 @@ impl Interpreter {
                     microseconds,
                     nanoseconds,
                 );
-                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                if let Completion::Normal(ref v) = result
+                    && let Some(o) = v.as_object_id()
+                {
                     let dp = interp.realm().temporal_duration_prototype;
-                    interp.apply_new_target_prototype(o.id, dp, |r| r.temporal_duration_prototype);
+                    interp.apply_new_target_prototype(o, dp, |r| r.temporal_duration_prototype);
                 }
                 result
             },
         ));
 
         // Constructor.prototype_id
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -2646,7 +2630,7 @@ impl Interpreter {
             "from".to_string(),
             1,
             |interp, _this, args| {
-                let item = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let record = match to_temporal_duration_record(interp, item) {
                     Ok(r) => r,
                     Err(c) => return c,
@@ -2655,8 +2639,8 @@ impl Interpreter {
                 create_duration_result(interp, y, mo, w, d, h, mi, s, ms, us, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -2668,23 +2652,23 @@ impl Interpreter {
             |interp, _this, args| {
                 let one = match to_temporal_duration_record(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(r) => r,
                     Err(c) => return c,
                 };
                 let two = match to_temporal_duration_record(
                     interp,
-                    args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                    args.get(1).cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(r) => r,
                     Err(c) => return c,
                 };
                 // Parse options (3rd argument)
-                let options = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                let options = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
                 let relative_to = if is_undefined(&options) {
                     None
-                } else if matches!(options, JsValue::Object(_)) {
+                } else if options.is_object() {
                     let rt = match get_prop(interp, &options, "relativeTo") {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -2711,7 +2695,7 @@ impl Interpreter {
                     && one.8 == two.8
                     && one.9 == two.9
                 {
-                    return Completion::Normal(JsValue::Number(0.0));
+                    return Completion::Normal(JsValue::number(0.0));
                 }
 
                 let has_calendar_units = one.0 != 0.0
@@ -2806,11 +2790,11 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                Completion::Normal(JsValue::Number(result))
+                Completion::Normal(JsValue::number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
@@ -2830,11 +2814,11 @@ fn get_duration_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), Completion> {
-    let snapshot = match this {
-        JsValue::Object(o) => interp
-            .get_object_cell(o.id)
+    let snapshot = match this.as_object_id() {
+        Some(o) => interp
+            .get_object_cell(o)
             .map(|cell| cell.borrow().temporal_data().cloned()),
-        _ => None,
+        None => None,
     };
     match snapshot {
         Some(Some(TemporalData::Duration {
@@ -2931,7 +2915,7 @@ pub(crate) fn create_duration_result(
             nanoseconds,
         });
     let id = obj_id;
-    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+    Completion::Normal(JsValue::object(id))
 }
 
 pub(crate) fn to_temporal_duration_record(
@@ -2939,7 +2923,7 @@ pub(crate) fn to_temporal_duration_record(
     item: JsValue,
 ) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), Completion> {
     // String path first
-    if let JsValue::String(s) = &item {
+    if let Some(s) = item.as_string() {
         let parsed = parse_temporal_duration_string(&s.to_rust_string()).ok_or_else(|| {
             Completion::Throw(interp.create_range_error(&format!("Invalid duration string: {s}")))
         })?;
@@ -2964,14 +2948,14 @@ pub(crate) fn to_temporal_duration_record(
         return Ok((y, mo, w, d, h, mi, sec, ms, us, ns));
     }
     // Must be an object (reject null, booleans, numbers, etc.)
-    if !matches!(&item, JsValue::Object(_)) {
+    if !item.is_object() {
         return Err(Completion::Throw(
             interp.create_type_error("Invalid duration: expected string or object"),
         ));
     }
     // Check for existing Duration instance
-    if let JsValue::Object(o) = &item
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = item.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let data = obj.borrow();
         if let Some(TemporalData::Duration {
@@ -3091,7 +3075,7 @@ fn parse_round_options(
     ),
     Completion,
 > {
-    if let JsValue::String(su) = round_to {
+    if let Some(su) = round_to.as_string() {
         let su_str = su.to_rust_string();
         let unit = temporal_unit_singular(&su_str).ok_or_else(|| {
             Completion::Throw(interp.create_range_error(&format!("Invalid unit: {su_str}")))
@@ -3104,7 +3088,7 @@ fn parse_round_options(
         };
         return Ok((unit, "halfExpand", 1.0, largest, None));
     }
-    if !matches!(round_to, JsValue::Object(_)) {
+    if !round_to.is_object() {
         return Err(Completion::Throw(
             interp.create_type_error("round requires a string or options object"),
         ));
@@ -3247,7 +3231,7 @@ fn parse_to_string_options(
     interp: &mut Interpreter,
     options: Option<&JsValue>,
 ) -> Result<(Option<u8>, &'static str), Completion> {
-    let opt_val = options.cloned().unwrap_or(JsValue::Undefined);
+    let opt_val = options.cloned().unwrap_or(JsValue::UNDEFINED);
     let has_opts = super::get_options_object(interp, &opt_val)?;
     if !has_opts {
         return Ok((None, "trunc"));
@@ -3264,7 +3248,7 @@ fn parse_to_string_options(
     };
     let fsd_result: Option<Option<u8>> = if is_undefined(&fp) {
         None // will use default
-    } else if matches!(fp, JsValue::Number(_)) {
+    } else if fp.is_number() {
         let n = interp.to_number_value(&fp).map_err(Completion::Throw)?;
         if n.is_nan() || !n.is_finite() {
             return Err(Completion::Throw(interp.create_range_error(

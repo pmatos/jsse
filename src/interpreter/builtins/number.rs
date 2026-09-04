@@ -259,19 +259,18 @@ impl Interpreter {
             interp: &Interpreter,
             this: &JsValue,
         ) -> Option<crate::types::JsSymbol> {
-            match this {
-                JsValue::Symbol(s) => Some(s.clone()),
-                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|obj| {
-                    let b = obj.borrow();
-                    if b.class_name == "Symbol"
-                        && let Some(JsValue::Symbol(s)) = &b.primitive_value
-                    {
-                        return Some(s.clone());
-                    }
-                    None
-                }),
-                _ => None,
+            if let Some(symbol) = this.as_symbol() {
+                return Some(symbol);
             }
+            let object_id = this.as_object_id()?;
+            interp.get_object_cell(object_id).and_then(|obj| {
+                let object = obj.borrow();
+                if object.class_name == "Symbol" {
+                    object.primitive_value.as_ref().and_then(JsValue::as_symbol)
+                } else {
+                    None
+                }
+            })
         }
 
         #[allow(clippy::type_complexity)]
@@ -290,11 +289,10 @@ impl Interpreter {
                         return Completion::Throw(err);
                     };
                     let desc = sym
-                        .description
-                        .as_ref()
+                        .description()
                         .map(|d| d.to_rust_string())
                         .unwrap_or_default();
-                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
                         "Symbol({desc})"
                     ))))
                 }),
@@ -308,7 +306,7 @@ impl Interpreter {
                             interp.create_type_error("Symbol.prototype.valueOf requires a Symbol");
                         return Completion::Throw(err);
                     };
-                    Completion::Normal(JsValue::Symbol(sym))
+                    Completion::Normal(JsValue::symbol(sym))
                 }),
             ),
         ];
@@ -328,9 +326,9 @@ impl Interpreter {
                     interp.create_type_error("Symbol.prototype.description requires a Symbol");
                 return Completion::Throw(err);
             };
-            match sym.description {
-                Some(d) => Completion::Normal(JsValue::String(d)),
-                None => Completion::Normal(JsValue::Undefined),
+            match sym.description() {
+                Some(d) => Completion::Normal(JsValue::string(d.clone())),
+                None => Completion::Normal(JsValue::UNDEFINED),
             }
         });
 
@@ -344,65 +342,35 @@ impl Interpreter {
                         interp.create_type_error("Symbol[Symbol.toPrimitive] requires a Symbol");
                     return Completion::Throw(err);
                 };
-                Completion::Normal(JsValue::Symbol(sym))
+                Completion::Normal(JsValue::symbol(sym))
             }),
             false,
         ));
-        // Get the @@toPrimitive well-known symbol key
-        if let Some(sym_val) = self.get_global_var("Symbol")
-            && let JsValue::Object(sym_obj) = &sym_val
-        {
-            let to_prim_sym = self.get_property_on_id(sym_obj.id, "toPrimitive");
-            if let JsValue::Symbol(s) = &to_prim_sym {
-                let key = format!(
-                    "Symbol({})",
-                    s.description
-                        .as_ref()
-                        .map(|d| d.to_rust_string())
-                        .unwrap_or_default()
+        if let Some(key) = self.get_symbol_key("toPrimitive") {
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(to_prim_fn, false, false, true),
                 );
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .insert_property(
-                        key,
-                        PropertyDescriptor::data(to_prim_fn, false, false, true),
-                    );
-            }
         }
 
         // [Symbol.toStringTag] = "Symbol"
-        if let Some(sym_val) = self.get_global_var("Symbol")
-            && let JsValue::Object(sym_obj) = &sym_val
-        {
-            let tag_sym = self.get_property_on_id(sym_obj.id, "toStringTag");
-            if let JsValue::Symbol(s) = &tag_sym {
-                let key = format!(
-                    "Symbol({})",
-                    s.description
-                        .as_ref()
-                        .map(|d| d.to_rust_string())
-                        .unwrap_or_default()
+        if let Some(key) = self.get_symbol_key("toStringTag") {
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(JsValue::from_str("Symbol"), false, false, true),
                 );
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .insert_property(
-                        key,
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str("Symbol")),
-                            false,
-                            false,
-                            true,
-                        ),
-                    );
-            }
         }
 
         // Set Symbol.prototype on the Symbol constructor
         if let Some(sym_val) = self.get_global_var("Symbol")
-            && let JsValue::Object(o) = &sym_val
-            && let Some(sym_obj) = self.get_object_cell(o.id)
+            && let Some(symbol_id) = sym_val.as_object_id()
+            && let Some(sym_obj) = self.get_object_cell(symbol_id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             sym_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -424,22 +392,21 @@ impl Interpreter {
             .class_name = "Number".to_string();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .primitive_value = Some(JsValue::Number(0.0));
+            .primitive_value = Some(JsValue::number(0.0));
 
         fn this_number_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
-            match this {
-                JsValue::Number(n) => Some(*n),
-                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|obj| {
-                    let b = obj.borrow();
-                    if b.class_name == "Number"
-                        && let Some(JsValue::Number(n)) = &b.primitive_value
-                    {
-                        return Some(*n);
-                    }
-                    None
-                }),
-                _ => None,
+            if let Some(number) = this.as_number() {
+                return Some(number);
             }
+            let object_id = this.as_object_id()?;
+            interp.get_object_cell(object_id).and_then(|obj| {
+                let object = obj.borrow();
+                if object.class_name == "Number" {
+                    object.primitive_value.as_ref().and_then(JsValue::as_number)
+                } else {
+                    None
+                }
+            })
         }
 
         #[allow(clippy::type_complexity)]
@@ -475,22 +442,22 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                     if radix == 10 {
-                        Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(
-                            &JsValue::Number(n),
+                        Completion::Normal(JsValue::string(JsString::from_str(&to_js_string(
+                            &JsValue::number(n),
                         ))))
                     } else if n.is_nan() {
-                        Completion::Normal(JsValue::String(JsString::from_str("NaN")))
+                        Completion::Normal(JsValue::from_str("NaN"))
                     } else if n.is_infinite() {
-                        Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 {
+                        Completion::Normal(JsValue::from_str(if n > 0.0 {
                             "Infinity"
                         } else {
                             "-Infinity"
-                        })))
+                        }))
                     } else if n == 0.0 {
-                        Completion::Normal(JsValue::String(JsString::from_str("0")))
+                        Completion::Normal(JsValue::from_str("0"))
                     } else {
                         let s = format_number_radix(n, radix);
-                        Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                        Completion::Normal(JsValue::from_str(&s))
                     }
                 }),
             ),
@@ -503,7 +470,7 @@ impl Interpreter {
                             interp.create_type_error("Number.prototype.valueOf requires a Number");
                         return Completion::Throw(err);
                     };
-                    Completion::Normal(JsValue::Number(n))
+                    Completion::Normal(JsValue::number(n))
                 }),
             ),
             (
@@ -533,21 +500,23 @@ impl Interpreter {
                     }
                     let digits = f as usize;
                     if n.is_nan() {
-                        return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                        return Completion::Normal(JsValue::from_str("NaN"));
                     }
                     if n.is_infinite() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            if n > 0.0 { "Infinity" } else { "-Infinity" },
-                        )));
+                        return Completion::Normal(JsValue::from_str(if n > 0.0 {
+                            "Infinity"
+                        } else {
+                            "-Infinity"
+                        }));
                     }
                     // Step 2: If x is -0, set x to +0
                     let n = if n == 0.0 { 0.0 } else { n };
                     if n.abs() >= 1e21 {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            &to_js_string(&JsValue::Number(n)),
+                        return Completion::Normal(JsValue::from_str(&to_js_string(
+                            &JsValue::number(n),
                         )));
                     }
-                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
                         "{n:.digits$}"
                     ))))
                 }),
@@ -572,12 +541,14 @@ impl Interpreter {
                         None
                     };
                     if n.is_nan() {
-                        return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                        return Completion::Normal(JsValue::from_str("NaN"));
                     }
                     if n.is_infinite() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            if n > 0.0 { "Infinity" } else { "-Infinity" },
-                        )));
+                        return Completion::Normal(JsValue::from_str(if n > 0.0 {
+                            "Infinity"
+                        } else {
+                            "-Infinity"
+                        }));
                     }
                     if let Some(f) = f {
                         if !(0.0..=100.0).contains(&f) {
@@ -588,10 +559,10 @@ impl Interpreter {
                             return Completion::Throw(err);
                         }
                         let result = format_exponential(n, Some(f as usize));
-                        Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                        Completion::Normal(JsValue::from_str(&result))
                     } else {
                         let result = format_exponential(n, None);
-                        Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                        Completion::Normal(JsValue::from_str(&result))
                     }
                 }),
             ),
@@ -606,8 +577,8 @@ impl Interpreter {
                     };
                     let has_arg = args.first().is_some_and(|v| !v.is_undefined());
                     if !has_arg {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            &to_js_string(&JsValue::Number(n)),
+                        return Completion::Normal(JsValue::from_str(&to_js_string(
+                            &JsValue::number(n),
                         )));
                     }
                     let p_raw = match interp.to_number_value(args.first().unwrap()) {
@@ -616,12 +587,14 @@ impl Interpreter {
                     };
                     let p = to_integer_or_infinity(p_raw);
                     if n.is_nan() {
-                        return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                        return Completion::Normal(JsValue::from_str("NaN"));
                     }
                     if n.is_infinite() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            if n > 0.0 { "Infinity" } else { "-Infinity" },
-                        )));
+                        return Completion::Normal(JsValue::from_str(if n > 0.0 {
+                            "Infinity"
+                        } else {
+                            "-Infinity"
+                        }));
                     }
                     if !(1.0..=100.0).contains(&p) {
                         let err = interp.create_error(
@@ -632,7 +605,7 @@ impl Interpreter {
                     }
                     let precision = p as usize;
                     let result = format_precision(n, precision);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::from_str(&result))
                 }),
             ),
             (
@@ -644,13 +617,13 @@ impl Interpreter {
                             .create_type_error("Number.prototype.toLocaleString requires a Number");
                         return Completion::Throw(err);
                     };
-                    let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let nf = match interp.intl_construct_number_format(&locales, &options) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let num_val = JsValue::Number(n);
+                    let num_val = JsValue::number(n);
                     interp.intl_number_format_format(&nf, &num_val)
                 }),
             ),
@@ -666,10 +639,10 @@ impl Interpreter {
 
         // Set Number.prototype on the Number constructor
         if let Some(num_val) = self.get_global_var("Number")
-            && let JsValue::Object(o) = &num_val
-            && let Some(num_obj) = self.get_object_cell(o.id)
+            && let Some(number_id) = num_val.as_object_id()
+            && let Some(num_obj) = self.get_object_cell(number_id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             num_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -689,22 +662,24 @@ impl Interpreter {
             .class_name = "Boolean".to_string();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .primitive_value = Some(JsValue::Boolean(false));
+            .primitive_value = Some(JsValue::FALSE);
 
         fn this_boolean_value(interp: &Interpreter, this: &JsValue) -> Option<bool> {
-            match this {
-                JsValue::Boolean(b) => Some(*b),
-                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|obj| {
-                    let b = obj.borrow();
-                    if b.class_name == "Boolean"
-                        && let Some(JsValue::Boolean(v)) = &b.primitive_value
-                    {
-                        return Some(*v);
-                    }
-                    None
-                }),
-                _ => None,
+            if let Some(boolean) = this.as_boolean() {
+                return Some(boolean);
             }
+            let object_id = this.as_object_id()?;
+            interp.get_object_cell(object_id).and_then(|obj| {
+                let object = obj.borrow();
+                if object.class_name == "Boolean" {
+                    object
+                        .primitive_value
+                        .as_ref()
+                        .and_then(JsValue::as_boolean)
+                } else {
+                    None
+                }
+            })
         }
 
         #[allow(clippy::type_complexity)]
@@ -722,11 +697,7 @@ impl Interpreter {
                             .create_type_error("Boolean.prototype.toString requires a Boolean");
                         return Completion::Throw(err);
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(if b {
-                        "true"
-                    } else {
-                        "false"
-                    })))
+                    Completion::Normal(JsValue::from_str(if b { "true" } else { "false" }))
                 }),
             ),
             (
@@ -738,7 +709,7 @@ impl Interpreter {
                             .create_type_error("Boolean.prototype.valueOf requires a Boolean");
                         return Completion::Throw(err);
                     };
-                    Completion::Normal(JsValue::Boolean(b))
+                    Completion::Normal(JsValue::boolean(b))
                 }),
             ),
         ];
@@ -753,10 +724,10 @@ impl Interpreter {
 
         // Set Boolean.prototype on the Boolean constructor
         if let Some(bool_val) = self.get_global_var("Boolean")
-            && let JsValue::Object(o) = &bool_val
-            && let Some(bool_obj) = self.get_object_cell(o.id)
+            && let Some(boolean_id) = bool_val.as_object_id()
+            && let Some(bool_obj) = self.get_object_cell(boolean_id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             bool_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),

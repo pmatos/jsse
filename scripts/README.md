@@ -43,14 +43,19 @@ checks on jsse.
 
 The shim's readable-output layer (`process`, the full `console` method set, and
 the `util.format` / `util.inspect` core they share) is built on top of the
-flag-gated Rust "syscall floor" (issue #229): `__host_write` (byte-accurate fd
-I/O), `__host_hrtime` (monotonic clock), and `__host_exit` (real process exit).
-The runner therefore invokes **jsse with `--node`** so those primitives exist
-(never Node — it has no such flag and doesn't need one). The shim is guarded to
-be a complete no-op on real Node, where `process`, the full `console`, and
-`require('util')` already exist; that inertness is what lets the identical bundle
-run on Node as the reference oracle. When the floor is absent (jsse without
-`--node`) each surface degrades to a pure-JS fallback.
+flag-gated Rust host floor (issue #229): `__host_write` (byte-accurate fd I/O),
+`__host_hrtime` (monotonic clock), `__host_exit` (real process exit), and
+`__host_proxy_target` (trap-free Proxy metadata for inspection), and
+`__host_array_extra_keys` (bounded Array named-key metadata). The runner
+therefore invokes **jsse with `--node`** so those primitives exist (never Node
+— it has no such flag and doesn't need one). The shim is guarded to be a
+complete no-op on real Node, where `process`, the full `console`, and
+`require('util')` already exist; that inertness is what lets the identical
+bundle run on Node as the reference oracle. The shim captures both inspection
+metadata hooks and immediately removes their configurable global bindings,
+keeping the internal metadata bypass private from subsequently evaluated
+library code. When the floor is absent (jsse without `--node`) each surface
+degrades to a pure-JS fallback.
 
 ## Running
 
@@ -87,6 +92,10 @@ and (optionally) overrides hook functions:
 | `LIB_ESBUILD_PLATFORM` | esbuild `--platform` (default `node`; acorn uses `neutral`) |
 | `LIB_ESBUILD_EXTRA` | bash array of extra esbuild flags (e.g. `(--main-fields=main,module)`) |
 | `LIB_SHIM` | extra per-lib shim file (relative to `scripts/`) layered after `node-shim.js` |
+| `LIB_SHIMS` | ordered array of additional shim files; use when a library needs more than `LIB_SHIM` |
+| `LIB_BUNDLE_PREFIXES` | ordered prefix files; when set, build one isolated copy of the bundle after each prefix (for the same corpus in multiple modes) |
+| `LIB_SEPARATE_BUNDLES` | with bundle prefixes, run each prefixed copy in a separate engine process and concatenate their output before verdict evaluation (default `0`) |
+| `LIB_ENV` | host-process environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`). Reaches each engine's **native** layer only — jsse's Rust `Date`/`Intl` and Node's ICU read the OS `TZ`/`LANG`; **not** reflected in jsse's JS-visible `process.env`, which the `--node` shim leaves `{}`. Don't use it for values a library reads from `process.env` in JS. |
 | `LIB_EXPECT_COUNT` | if set, both engines must report exactly this count (belt-and-suspenders against silent bundling drift) |
 | `LIB_TIMEOUT` | seconds; wrap each engine run so a hang/slow suite reports cleanly |
 
@@ -126,12 +135,14 @@ and on **Node**, and requires both to exit 0 and emit byte-identical stdout.
 Node is the oracle for the deterministic surfaces — the `util.format` specifiers
 (`%s %d %i %f %j %c %%`), byte-accurate `process.stdout.write`, and the
 `console.count`/`group`/`assert` output shapes are asserted exactly. The
-byte-exact `%s` guarantee covers primitives and objects with a user-defined
-`toString`; `%s`/`%o`/`%O` of plain objects and arrays route through
-`util.inspect`, which is intentionally best-effort (depth, cycles, common types)
-— it does not invoke getters, but it is only smoke-tested structurally and never
-byte-compared against Node. (Fully Node-accurate `%s` object dispatch is tracked
-separately.)
+byte-exact `%s` guarantee covers primitives and objects whose coercion hooks
+Node classifies as user-defined. The shim carries Node's bootstrap built-in-name
+set explicitly, because later Node globals and jsse-only globals are not members
+of that classifier. Objects with built-in coercion hooks (including plain
+objects and arrays) route through `util.inspect`; the dispatch matches Node,
+while the resulting inspection is intentionally best-effort (depth, cycles,
+common types) — it does not invoke getters, but it is only smoke-tested
+structurally and never generally byte-compared against Node.
 
 ## Shared test-runner harness (`node-test-harness.js`)
 
@@ -139,7 +150,7 @@ Many suites don't ship a self-contained runner — they lean on a framework whos
 *assertion* library is pure JS but whose *runner* would otherwise need
 fs/workers/vm (mocha's/jest's CLI, QUnit's Node runner, `qunit-extras`'
 `setInterval` progress ticker, …). `node-test-harness.js` supplies the runner
-in-process so those suites execute on jsse. It provides two frontends over one
+in-process so those suites execute on jsse. It provides three frontends over one
 shared core (which includes QUnit's own `equiv`, ported verbatim, for
 `deepEqual`):
 
@@ -147,10 +158,16 @@ shared core (which includes QUnit's own `equiv`, ported verbatim, for
   `root.QUnit || require('qunit-extras')` (e.g. lodash) pick it up, so the
   bundled framework stays dormant; and
 - a **TAP-emitting `describe`/`it`/`test`/`before`/`after` runner**
-  (mocha/jest/tape shape) as the reusable spine for later library clusters.
+  (mocha/jest shape) as the reusable spine for later library clusters; and
+- a **tape assertion-object adapter**, selected only on JSSE so Node still uses
+  real tape as the framework oracle.
 
 It also aliases Node's `global` to `globalThis`, which many bundles rely on for
-their root-object detection.
+their root-object detection. The TAP frontend supports Jest's array-table
+`test.each` form in addition to the basic globals. Mocha-style `describe.only`
+and `it.only` filter the registered suite tree globally, including nested
+focus, direct-test precedence, and focused skipped tests; the exclusive table
+form `test.only.each` registers each generated row as a focused test.
 
 Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
 prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
@@ -159,16 +176,40 @@ it is **inert on Node** — it activates only under jsse's `--node` host mode
 inertness is what makes the cross-check meaningful: on Node the suite's *own*
 framework runs, so the assertion count jsse reports through the adapter is
 checked against the count real QUnit/mocha report on Node, not against itself.
+Suites whose native CLI cannot run from a single bundle may prepend
+`node-test-harness-force.js` before the harness to opt into the same in-process
+runner on both engines. Luxon uses this path because Jest's CLI needs
+filesystem/workers; its generated entry bundles Jest's published matcher core,
+so assertions still use Jest semantics while Node checks the identical test
+bundle and exact count.
 
-The adapter's assertion counting mirrors qunitjs 2.x exactly (`config.stats.all
+The QUnit adapter's assertion counting mirrors qunitjs 2.x exactly (`config.stats.all
 += assertions.length` per test; an `expect(n)` mismatch or a zero-assertion test
 each push one failing assertion), so the `PASS: p  FAIL: f  TOTAL: t` summary it
 prints — the line the verdict parses — equals the one real `qunit-extras` prints
 on Node. `config.noglobals` is intentionally **not** enforced on the jsse side:
 the Node oracle enforces it and the suite passes it there, so enforcing on jsse
 could only add jsse-specific failures the oracle lacks and diverge the count.
-Async tests (`assert.async`) are bounded by a 30 s per-test timeout so a `done()`
-that never fires becomes a failure instead of stalling the run.
+QUnit uses default autostart after synchronous registration (and `QUnit.load()`
+re-checks it), while nested modules inherit outer hooks with QUnit's module and
+per-test ordering. Async QUnit tests (`assert.async`), callback-style TAP
+tests/hooks (`function (done) { ... }`), and callback-style tape tests waiting
+for `t.end()` or plan fulfillment are bounded by a 10 s timeout. A completion
+signal that never arrives therefore becomes a failure instead of stalling the
+run.
+
+QUnit suites whose tests and hooks are entirely synchronous may set
+`QUnit.config.sync = true` before `QUnit.start()`. This opt-in executes the
+suite in the main script instead of scheduling one Promise continuation per
+test, which keeps large synchronous corpora out of jsse's bounded host-async
+drain window. Async behavior remains the default; the synchronous mode rejects
+Promise-returning tests/hooks and incomplete `assert.async()` tokens. Moment
+uses this mode because its 3,871 synchronous tests take roughly 35 minutes on
+the tree-walker.
+
+The assembled bundle uses a `.cjs` suffix so Node always evaluates the
+reference oracle as CommonJS. This is independent of any unrelated ancestor
+`package.json` that may declare `"type": "module"` above the `/tmp` cache.
 
 ### Harness self-test (`run-harness-selftest.sh`)
 
@@ -181,16 +222,31 @@ passing and failing tests, each declaring the exact summary line it must emit:
 ./scripts/run-harness-selftest.sh [--no-build]
 ```
 
-The full end-to-end validation of the adapter's counting and `deepEqual` is the
-lodash cross-check below (jsse adapter vs. Node's real `qunit-extras`, 6,794
-assertions).
+The full end-to-end validation of the QUnit adapter's counting and `deepEqual`
+is the lodash cross-check below (jsse adapter vs. Node's real `qunit-extras`,
+6,794 assertions). The tape fixture covers its lifecycle and assertion surface;
+qs provides the Node-cross-checked end-to-end proof.
 
-> The **chai**, **jest-`expect`**, **tape**, and **uvu** adapters that the epic
-> anticipates are intentionally **deferred**. Unlike QUnit's global-probe
-> (`root.QUnit || …`), those are consumed via `require`/`import`, so injecting a
-> jsse implementation needs a different mechanism (esbuild `--alias` or bundling
-> the real library) that should be settled against a concrete consuming library
-> in the #233–236 clusters rather than guessed at here.
+Tape-based suites alias `require('tape')` to `node-tape-module.js`. On JSSE the
+module selects the in-process adapter; on Node it selects bundled real tape.
+The adapter counts individual assertions (including skipped subtests), awaits
+callback-style completion through `t.end()` or plan fulfillment, and supports
+nested tests, teardown/interception, and tape's common equality/throw/match
+assertions.
+
+Dependencies that import Node's `buffer` module instead of reading the global
+can similarly alias it to `node-buffer-module.js`. The selector exports the
+shared JS-only Buffer shim on JSSE and Node's native `node:buffer` module on the
+reference path. `node-util-module.js` provides the equivalent selector for the
+shared `util.format`/`util.inspect` implementation, while
+`node-string-decoder-module.js` supplies iconv-lite's buffered decoder seam,
+including UTF-8, UTF-16LE, base64, and base64url continuation state across
+`write()`/`end()` chunk boundaries.
+
+Full **chai** and **uvu** adapters remain deferred. Luxon settles the Jest seam
+concretely: `gen-luxon-entry.js` bundles the published `expect/build/matchers`
+core and supplies only the small invocation wrapper and two matchers its suite
+needs outside that core (`toThrow` and one inline snapshot).
 
 ## Current status
 
@@ -200,7 +256,309 @@ assertions).
 | `decimal.js` | v10.6.0 | ✅ 22,624 (cross-checked) | seconds |
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
-| `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
+| `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
+| `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars |
+| `uglify-js` | v3.19.3 | ✅ 4,233 (cross-checked) | ~15 min; complete compress DSL parse/transform/mangle/codegen corpus |
+| `highlight.js` | 11.11.2 | ✅ 731 (cross-checked) | 536 markup + 195 auto-detection fixtures across 192 grammars; ~30 min |
+| `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
+| `qs` | v6.15.3 | ✅ 1,013 (cross-checked) | tape corpus: nested parse/stringify, limits, charsets, Buffer, pollution guards, Map/WeakMap side channels |
+| `js-md5` | v0.8.3 | ✅ 550 (cross-checked) | Pure-JS MD5 and HMAC-MD5 vectors; UTF-8 strings, Buffer, TypedArray, and ArrayBuffer inputs |
+| `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; blocked on #262–#265. Node itself now fails 13/1,152 too (ICU/CLDR drift on the reference host, not a jsse bug — see below) |
+| `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
+| `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
+| `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
+| `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
+| `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
+| `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
+| `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
+
+### Zod normal and jitless corpus
+
+**Currently hangs jsse indefinitely (jsse#340), a regression discovered
+2026-07-20.** `./scripts/run-library-tests.sh zod` (and running either
+generated bundle directly, e.g. `jsse --node final-0.cjs`) prints only the TAP
+version header and then never produces another line — confirmed
+reproducible in isolation, not a parallel-run/resource-contention artifact.
+`/proc` inspection shows the main thread parked on a futex while a second
+thread spins, burning close to 100% CPU forever: a livelock, not merely a slow
+run. This is distinct from #310 below (#310 is jsse exiting early after
+losing one delayed callback; #340 is jsse never printing anything and never
+exiting). Timing/code-area suspicion, not a confirmed root cause: same-day
+commit `03df6fe` (PR #326) reworked GC temp-root handling around binary
+operators, and zod's validation codegen is unusually binary-op-heavy at scale.
+The description below reflects the suite's last known-good state, before this
+regression, and is what running it again should reproduce once #340 is fixed.
+
+`gen-zod-entry.js` statically imports all 79 v4 classic runtime test files.
+Native Vitest at v4.4.3 reports 1,092 tests; the harness runs the identical IIFE
+once normally and once with Zod's global `jitless` option, locking the combined
+count at 2,184. The two modes use separate engine processes so module caches,
+GC state, and pending host jobs cannot leak across the boundary. Node runs the
+same two generated files and is green at 2,184 / 2,184.
+
+The adapter uses Jest's published matcher core plus Vitest's pretty-printer;
+type-only `expectTypeOf` calls remain runtime no-ops. Node-only test imports are
+replaced by symmetric, bundle-local portability modules. The upstream 10 MiB
+base64 throughput input is bounded to 64 KiB, and one artificial 500 ms async
+delay is changed to a zero-delay timer (#310). One jitless-only async function
+refinement is visibly skipped under #309; all other registered bodies run.
+
+Before the #340 regression, jsse reported 2,176 passing and eight failures:
+Date parsing (#313), array outputs that fail `Object.isFrozen` after Zod
+freezes them (#314), and the Node-specific text of a `JSON.parse` error
+snapshot (#315), each repeated in normal and jitless mode. These remain
+failing assertions rather than skips.
+
+### qs iconv-lite shim
+
+qs uses only iconv-lite's core `encode`/`decode` surface. Its JSSE-only shim
+therefore hides the fake `process.versions.node` marker so iconv-lite does not
+activate optional Node stream and Buffer-prototype extensions; real Node keeps
+the marker and exercises its normal path. JSSE now emits the same receiver-aware
+strict-assignment `TypeError` message as Node after the #318 fix landed on main
+([#325](https://github.com/pmatos/jsse/pull/325)), so qs's upstream assertion
+runs unmodified on both engines.
+
+### tweetnacl-js curve25519/Ed25519 corpus
+
+Pinned to the `1.0.3` git tag (no `v` prefix, unlike every earlier tag —
+it points at the same commit as `v1.0.2`; that's the exact commit npm's
+published `tweetnacl@1.0.3` was cut from). The harness runs the same 13 files
+upstream's `test-node` script does (`tape test/*.js`); `test/c/*.js` needs a
+native addon built via its own Makefile and is out of scope, the same
+no-native-addon precedent js-sha256 sets.
+
+Every test file reads `nacl` via `(typeof window !== 'undefined') ?
+window.nacl : require('../' + (process.env.NACL_SRC || 'nacl.min.js'))`.
+esbuild cannot bundle that require — the argument is a runtime string
+concatenation, and esbuild treats a `'../' + x` require as a directory
+glob-import, trying (and failing) to bundle every file under the repo root,
+including `.git/`. `lib_prepare` rewrites that one identical line across all
+13 files to `window.nacl`; the jsse entry sets `window` and preloads `nacl`
+first, so this is a pure no-op simplification (the same browser/webpack mode
+upstream's own Node entry uses, and the one js-sha256-jsse-entry.js also
+forces), not a behavior change.
+
+`nacl.min.js`'s own PRNG auto-init prefers the browser path
+(`self.crypto.getRandomValues`) before falling back to Node's
+`require('crypto')`. The jsse entry sets `self`, and `node-crypto-shim.js`
+(the Web Crypto shim already wired for the uuid harness, backed by the #229
+`__host_random_bytes` syscall floor) supplies `self.crypto`, so nacl's own
+auto-init configures its PRNG with no jsse-specific code here — the same
+mechanism as upstream's unmodified browser path. `node-test-harness.js`
+supplies the tape assertion adapter on jsse; Node loads real tape as an
+independent framework oracle.
+
+Curve25519/Ed25519 point arithmetic is roughly 100-3500x slower on the
+tree-walker than V8 per operation (measured: a single `scalarMult.base` call
+≈3.4s here vs ≈35ms on Node; `sign.detached.verify` ≈12s vs ≈76ms). At the
+full upstream vector counts (256 scalarmult, 256 box, 1024 Ed25519 sign
+vectors) the complete suite is on the order of ~7h, which isn't practical to
+run as part of landing the harness — a correctness smoke test first
+confirmed all 13 files pass 1233/1233 with truncated vectors, byte-identical
+to Node, so this is pure interpretation overhead rather than an engine bug.
+`lib_prepare` therefore evenly samples the three curve-heavy vector files
+(`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
+each (stride-sampled across the full array, not a prefix, so the subset still
+spans the vector space); every other data file (secretbox, hash,
+onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
+the first sampled corpus in this harness — every other config runs its
+library's suite unmodified. Exhaustive coverage is tracked in
+[#361](https://github.com/pmatos/jsse/issues/361), to revisit once the engine
+has a faster numeric path.
+
+### PrismJS token-stream fixtures
+
+`scripts/gen-prism-entry.js` embeds Prism core, dependency-ordered grammar
+components, and all 2,563 non-HTML `.test` fixtures into a deterministic,
+filesystem-free entry. Each fixture gets a fresh Prism instance and its
+simplified token stream is compared byte-for-byte with the upstream expected
+JSON. The 11 `.html.test` fixtures are excluded because they test Prism's DOM
+markup rendering instead of tokenization.
+
+JSSE and Node execute all 2,563 fixtures. The cross-check requires both engines
+to report the same fixture count, so engine-specific skips cannot masquerade as
+a successful run.
+
+### UglifyJS compress fixtures
+
+`scripts/gen-uglify-js-entry.js` embeds UglifyJS's implementation sources and
+all 126 `test/compress/*.js` DSL files into a deterministic, filesystem-free
+entry. All 4,233 cases run UglifyJS's parser, compressor and tree transforms,
+scope analysis, optional identifier/property mangling, exact code-generation
+comparison, AST validation, and output reparse. The native runner's
+`expect_stdout` stage is excluded because it executes generated programs through
+Node's `vm` or child processes rather than testing the transformation pipeline.
+
+The suite exposed a non-Unicode RegExp range gap: character classes spanning
+UTF-16 surrogates did not include jsse's internal PUA-mapped code units, and the
+functional `@@replace` path converted matched/replacement strings lossily. The
+engine now preserves those code units and the UglifyJS suite is skip-free.
+
+### highlight.js markup and auto-detection fixtures
+
+`scripts/gen-highlightjs-entry.js` registers all 192 built-in grammars from the
+pinned source tree and embeds its filesystem fixtures into one deterministic
+bundle. The 536 markup fixtures run in highlight.js debug mode and compare the
+generated HTML byte-for-byte with upstream's expected output after the same
+whitespace trimming as its Mocha suite.
+
+The auto-detection corpus contributes 195 more cases after applying upstream's
+`autoDetection()` filter to its 198 inputs (G-code, properties, and plain text
+opt out).
+Each eligible input competes against the complete grammar set, exercising the
+relevance-scoring state machine rather than a single-language fast path. This
+is the expensive half of the run: roughly 30 minutes on jsse's tree-walker.
+
+Upstream currently comments out its dynamic auto-detection assertions, and
+eight ambiguous samples are won by a different grammar when all languages
+compete. The generator records Node's winners for pinned 11.11.2 and runs the
+public production mode for detection; debug mode exposes an upstream Nix
+zero-width assertion on otherwise valid inputs. Both engines therefore compare
+against the same fixed Node oracle and still report the exact 731-case count.
+
+### Luxon
+
+Luxon's 58 Jest files are statically bundled by `gen-luxon-entry.js`; the
+generated entry uses Jest's pinned `expect@29.7.0` matcher core and the shared
+TAP runner. Both engines run under `TZ=America/New_York` and must report exactly
+1,152 tests. jsse currently executes every test and passes 1,045.
+
+As of 2026-07-20, real Node itself also fails 13/1,152 on this host — all ICU
+week-numbering/locale-formatting tests (`getMinimumDaysInFirstWeek`,
+`weeksInLocalWeekYear`, `Interval#toLocaleString`). This looks like Node/ICU
+version drift on the reference machine since the harness was last validated
+(Node's bundled ICU/CLDR updates over time and this harness has no Node-version
+pin), not a jsse regression — no new jsse-side issue was filed for it.
+
+`patch-luxon-icu.js` contains four oracle-portability adjustments for literals
+that changed in CLDR 47 / ICU 78. They do not alter the count: two old locale
+fixtures are gated only on Node's advertised CLDR version, and two Coptic-era
+assertions accept the old and current ICU spellings.
+
+The jsse failures are left visible rather than converted to skip assertions.
+They are concentrated in four follow-ups surfaced by the suite:
+
+- #262 — `Intl.DateTimeFormat` locale names/patterns are partially hard-coded.
+- #263 — Node host mode does not honor `TZ` for the system time zone.
+- #264 — unknown IANA-shaped identifiers are accepted as valid time zones.
+- #265 — `Intl.Locale#getWeekInfo()` omits `minimalDays`.
+
+### Moment
+
+Moment's 137 locale definitions, 52 core QUnit files, and 138 locale QUnit
+files are statically imported by `gen-moment-entry.js`. This replaces only
+upstream's filesystem discovery and dynamic locale `require()` path; the test
+bodies remain upstream code. `patch-moment-bundle.js` makes one deprecation
+expectation explicit because esbuild deduplicates a hooks module that upstream
+transpiles separately. It strengthens the check symmetrically on both engines
+and does not change the registered-test count.
+
+Both engines run the same generated bundle and shared synchronous QUnit
+adapter under `TZ=America/New_York`, `LANG=en_US.utf8`, and
+`LC_ALL=en_US.utf8`. Both jsse and Node pass all 3,871 registered tests and
+all 162,868 assertions, cross-checked. jsse previously failed 198 of those
+assertions with `TypeError: Cannot convert object to primitive value`,
+concentrated in week/year and locale parser/formatting cases (#311); fixed by
+PR #326 (`03df6fe`), which corrected GC temp-root handling around binary
+operators so a persistent root captured during sustained execution was no
+longer dropped.
+
+### css-tree
+
+css-tree is a CSS tokenizer/parser/generator/walker/lexer — a new grammar
+domain distinct from the JS-focused parser/transform cluster (acorn, prismjs,
+uglify-js, highlight.js). Unlike those, its own suite (`mocha lib/__tests`)
+needed almost no rewriting: it uses only Node's built-in `assert`
+(`strictEqual`/`notStrictEqual`/`deepStrictEqual`/`deepEqual`/`throws`/
+`doesNotThrow`) and `fs.readFileSync`/`readdirSync`/`statSync().isDirectory()`
+to load its own JSON fixture tree, so `gen-css-tree-entry.js` only needed to
+replace that discovery layer, not the test bodies.
+
+The generator snapshots the read-only `fixtures/` tree plus `package.json`
+into a manifest (`globalThis.__VFS_MANIFEST__`) and statically imports every
+top-level test file — Mocha's `describe`/`it`/`before`/`after`/`beforeEach`/
+`afterEach` are ambient globals the force-enabled shared harness installs, the
+same as running them under Mocha's own CLI. `node-fs-module.js` serves both
+engines from that manifest unconditionally (not a Node-vs-jsse selector like
+the other `node-*-module.js` files): the runner executes the generated bundle
+from an arbitrary working directory, not the library's clone directory, so a
+real `fs` call on the Node reference run can't resolve the suite's own
+`./fixtures/...` relative paths. There's no independent-oracle value given up
+by sharing one implementation here either — the manifest is a verbatim
+capture of the same files real `fs` would have returned, taken at generation
+time, so a lookup bug fails loudly (a thrown `ENOENT`) on both engines alike
+rather than silently diverging between them. `node-path-module.js` and
+`node-assert-module.js` keep the usual selector shape (Node's native modules
+vs. a minimal same-surface implementation), since neither depends on a
+particular working directory.
+
+`helpers/setup.js` is excluded from the generated entry: it only installs an
+enumerable, throw-on-read getter on `Object.prototype` as a poison pill
+against accidentally reading inherited properties, and no test depends on it
+being present (confirmed: it's the only file referencing
+`__proto_pollute__`) — registered/passing counts are identical without it,
+and leaving it out avoids every shim and the harness having to tolerate a
+hostile `Object.prototype` getter for no behavioral benefit.
+
+css-tree's own library source (not its tests) uses
+`createRequire(import.meta.url)` to load JSON at three call sites — the
+package version and the `mdn-data` CSS property/at-rule/syntax tables.
+esbuild bundles that pattern as a literal runtime `require()` call rather than
+inlining the JSON, and jsse has no module system to satisfy it at runtime.
+`patch-css-tree-esm.js` rewrites those three sites to static ESM
+`import x from '*.json'` (esbuild's built-in JSON loader) during `lib_prepare`
+— same JSON content, different loading mechanism.
+
+Both engines run the identical bundle and report the same registered-test
+count, 16,727 (cross-checked). Node passes all of them; jsse passes 16,725.
+The 2 residual failures (`List#some`/`#filter` "basic") are a genuine jsse
+engine bug surfaced by this suite, not a harness gap — see jsse#355 below.
+
+### esprima test262 grammar corpus
+
+esprima's own suites (`test/utils/create-testcases.js` + `evaluate-testcase.js`
+ported inline, `test/api-tests.js` unmodified via the `assert` alias, an
+everything.js smoke parse, and the two hostile-environment checks — see
+`scripts/libs/esprima-jsse-entry.js`) cover esprima's unit-level surface, but
+issue #295 also calls for a full test262 grammar-conformance pass. Reproducing
+test262-stream's live enumeration pipeline at runtime needs `fs`/`stream`/a
+real checkout — none of which exist in a jsse bundle — so
+`scripts/gen-esprima-test262-corpus.js` runs that traversal once, in Node, at
+`lib_prepare` time, and freezes the result into a bundlable data file
+(`test/jsse-test262-corpus.js`).
+
+It clones test262 pinned at `36d2d2d348d83e9d6554af59a672fbcd9413914b` and
+walks it with `test262-stream` (`omitRuntime: true` — parsing only, never
+evaluating), storing each file's raw source once (not per scenario — the
+"strict mode" scenario is always exactly `'"use strict";\n' + source`, so the
+runtime reconstructs it instead of storing a second copy) plus every
+default/strict/module scenario test262 defines for it. A leading-boilerplate
+strip (copyright header + YAML frontmatter) shrinks the unique-source payload
+from 55.5 MiB to 19.3 MiB, verified parse-neutral per file before applying it.
+`expected` per scenario is recorded by running local Node against the exact
+compiled `dist/esprima.js` esprima-jsse-entry.js's test262 runner replays at
+run time — not test262-stream's harness-bloated `contents` and not the
+spec-ideal outcome — so a jsse run can only diverge from what's recorded by
+actually behaving differently from Node on the identical esprima code;
+esprima's own pre-existing spec gaps (tracked in
+`test/test-262-whitelist.txt`) don't masquerade as new jsse bugs. The
+whitelist is cross-referenced only as a generation-time sanity log.
+Both the strip-safety check and the recording pass run in
+`gen-esprima-test262-corpus-worker.js`, spawned as fresh child processes, so
+the two concerns never share process state; the recording pass replays the
+exact (module, string) sequence in the exact file/scenario order the runtime
+test262 block replays, so generation and runtime are structurally the same
+parse sequence. The final corpus is a `module.exports = "<JSON-encoded
+string>"` (double-encoded so jsse's tokenizer scans one string token rather
+than building an AST for tens of thousands of nested literals) at 31 MiB,
+close to the ~26 MiB the issue estimates.
+
+Generation is deterministic: a from-scratch Node replay of the recorded
+(module, source) sequence reproduces the recorded `expected` values exactly,
+every time. jsse's 53 residual failures (of 80,153 total, cross-checked
+against Node) are genuine, reproducible jsse-vs-Node divergences, not corpus
+flakiness — see "Engine bugs surfaced" below for what they are.
 
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
@@ -209,9 +567,6 @@ routed through lodash's own `skipAssert(N)` on jsse (Node still runs them, so th
 count matches). `scripts/patch-lodash-jsse.js` applies these; each is a jsse
 characteristic surfaced by the suite, tracked as a follow-up:
 
-- **`lodash.random` / `lodash.shuffle`** — jsse's `Math.random` is a deterministic
-  `0.5` stub by design (`src/interpreter/builtins/mod.rs`), so tests asserting a
-  distribution of outputs can't pass.
 - **"should work with extremely large arrays"** (flatten, min/max) — 500k-element
   operations run for minutes on the tree-walker (a performance limit, not a
   correctness one).
@@ -224,23 +579,154 @@ characteristic surfaced by the suite, tracked as a follow-up:
   doesn't exist relative to the esbuild bundle. These already fall back to
   `skipAssert` in lodash's own browser path.
 
-Timer-heavy suites (`debounce`/`throttle`) pass because `node-test-harness.js`
-backs `setTimeout`/`clearTimeout`/`setInterval` with a single-pump userland queue:
-jsse's native `setTimeout` spawns a thread per call and offers no cancellation, so
-running those thousands of timers natively would otherwise exhaust OS threads.
+Timer-heavy suites (`debounce`/`throttle`) run through the single-pump userland
+timer queue in `node-test-harness.js`. That queue was originally required: jsse's
+native `setTimeout` spawned a thread per call, returned id `0`, and had no
+cancellation, so thousands of concurrent timers exhausted OS threads. jsse#254
+replaced that with an event-loop timer model — native `setTimeout`,
+`clearTimeout`, `setInterval` and `clearInterval` with real ids — so the queue is
+now a convenience for the runner rather than a workaround.
 
-### Engine bugs surfaced (tracked separately — out of scope for the no-`src` harness slice)
+### Engine bugs surfaced
+
+- **AJV schema compilation and sustained codegen.** AJV's upstream
+  JSON-Schema-Test-Suite is inlined into a 5,480-case bundle, then each schema
+  runs through four normal AJV option variants (roughly 22,000 generated
+  validator executions). Node passes all 5,480 registered cases; jsse passes
+  5,466 deterministically. Meta-schema validation is disabled symmetrically
+  while #266 is open. The remaining generated-validator result mismatches are
+  tracked in #274 and the two catchable call-depth failures in #275.
 
 - **acorn 8.17.0+ deep-recursion abort.** 8.17.0 added a parser stack-guard test
   (`"[".repeat(2000)`) expecting the engine to *throw* a stack-space error. jsse's
   tree-walker amplifies acorn's recursive-descent frames and its Rust stack aborts
   (SIGABRT) before acorn's guard fires. Pinned to 8.16.0 until jsse raises a
   catchable `RangeError` on deep recursion; then bump the pin.
-- **bignumber.js strict-mode constructor return (jsse#238).** In a strict-mode
-  constructor, `return <call>` whose call returns a non-object makes jsse's `new`
-  return that value instead of `this`. bignumber's constructor does
+- **bignumber.js strict-mode constructor return (jsse#238, fixed).** In a
+  strict-mode constructor, `return <call>` whose call returns a non-object made
+  jsse's `new` return that value instead of `this`. bignumber's constructor does
   `return parseNumeric(...)` (which returns `undefined`), so
-  `new BigNumber("Infinity"|"NaN")` yields `undefined` on jsse. Minimal repro:
+  `new BigNumber("Infinity"|"NaN")` yielded `undefined` on jsse. Minimal repro:
   `'use strict'; function u(x){x.z=1} function F(){this.a=1;return u(this)} typeof new F()`
-  → `undefined` on jsse, `object` on Node (sloppy mode is correct). The config is
-  correct and green on Node; it goes green on jsse once the bug is fixed.
+  → was `undefined` on jsse, `object` on Node (sloppy mode is correct). Now
+  fixed; the suite is green on jsse (65,143, cross-checked).
+- **Luxon Intl/system-zone gaps (jsse#262–#265).** The pinned suite and bundle
+  are green on Node (1,152 tests) as of when these issues were filed — see the
+  Luxon section above for a newer, unrelated 13-test Node-side ICU-drift
+  finding. jsse runs the same 1,152 cases and passes 1,045; the remaining
+  failures stay visible until the four root Intl and host time-zone gaps above
+  land.
+
+- **Moment sustained object-to-primitive failures (jsse#311, fixed).** The
+  pinned bundle is green on Node (3,871 tests, 162,868 assertions). jsse used
+  to fail 198 callbacks with `TypeError: Cannot convert object to primitive
+  value` during sustained execution; fixed by PR #326 (`03df6fe`), which
+  stopped a persistent GC root from being dropped around binary-operator
+  evaluation. jsse is now green too (162,868/162,868, cross-checked).
+
+- **Zod livelock (jsse#340, open).** See the Zod section above. jsse hangs
+  indefinitely running the zod normal/jitless corpus instead of completing —
+  a spinning thread burns ~100% CPU while the main thread waits on a futex
+  that's never signaled. Discovered 2026-07-20, same day as the moment fix
+  above; suspected (unconfirmed) to be an edge case in the same GC temp-root
+  rework, since zod's validation codegen is unusually binary-operator-heavy.
+
+- **Pooled call environment corrupted by a native-function first call
+  (jsse#355, open).** See the css-tree section above. Minimal repro:
+  a class method with a default 2nd parameter that calls `fn.call(...)`
+  breaks on its *second* invocation if its *first* invocation was passed a
+  native function (e.g. `Boolean`) as `fn` — any subsequent call then throws
+  `TypeError: undefined is not a function`, regardless of what's passed.
+  Removing any one of "class method", "default 2nd parameter", or "calls
+  `.call()`" makes it disappear. Suspected regression from the pooled
+  function-call-environment work (#73).
+
+- **Astral-plane identifiers truncated by a strict-mode TCO leak (jsse#357,
+  fixed).** Originally suspected to be a lexer/Unicode bug — jsse's own
+  lexer/parser actually handle astral-plane identifiers and regex named
+  groups correctly (100% on test262's identifier and named-groups suites).
+  The real defect: `Return`'s tail-call-optimization eligibility check
+  (`expr_may_contain_tail_call`) over-approximates through a `Conditional`'s
+  two branches with `||`, so a ternary whose consequent is a bare call marks
+  the *whole* return expression tail-call-eligible even while the alternate
+  branch is what actually executes. `eval_expr` evaluated every
+  sub-expression under the ambient `in_tail_position` flag instead of
+  clearing it by default, so a call nested in the branch that runs got
+  returned as an unevaluated `Completion::TailCall`, silently skipping
+  everything after it in that expression. esprima's own
+  `Character.fromCodePoint` — `(cp < 0x10000) ? String.fromCharCode(cp) :
+  String.fromCharCode(A) + String.fromCharCode(B)` — hit this exactly: the
+  alternate's second `fromCharCode` call never ran, truncating every astral
+  surrogate pair to its high half. Fixed at the root: `eval_expr` now
+  captures the ambient tail-call eligibility once at entry and clears it by
+  default, re-propagating only at the handful of genuine tail positions
+  (Conditional's taken branch, Logical's short-circuited right operand,
+  Sequence's last element, Call, TaggedTemplate).
+
+- **Regex property-escape range endpoint not rejected (jsse#358, fixed by
+  PR #365).** `NonemptyClassRanges` static semantics require a Syntax Error
+  when either endpoint of a character-class range is a Unicode property
+  escape (`\p{...}`), since it denotes a whole class rather than one
+  character. esprima's own regex-validation logic missed this early error
+  when run on jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parsed
+  instead of throwing) but caught it correctly on Node. Accounted for the
+  remaining 4 esprima test262-corpus residuals above.
+
+- **Literal `{}` in a regex rejected instead of Annex B fallback (jsse#359,
+  open).** Found via manual exploration while wiring the esprima harness, not
+  surfaced by any esprima/test262 scenario checked so far. Per Annex B's
+  `ExtendedPatternCharacter`, a `{` not starting a valid quantifier should be
+  a literal character in non-`u`/non-`v` mode; jsse rejects `/{}/g` outright,
+  and as an uncatchable parse-time error for a regex *literal* specifically
+  (vs. a catchable `SyntaxError` for the equivalent `new RegExp("{}", "g")`).
+
+### uuid: resolving `node:test` / `node:assert/strict`, and `crypto.getRandomValues`
+
+uuid's own upstream suite (`src/test/*.test.ts`, compiled by `tsc`) imports
+`node:test` and `node:assert/strict` directly and is bundled unmodified — no
+tape/QUnit-style adapter file like other libraries. Two new pieces make that
+possible:
+
+- **`node-crypto-shim.js`** (shared, opt-in via `LIB_SHIMS`) installs
+  `globalThis.crypto.getRandomValues`/`.randomUUID`, backed by the
+  `__host_random_bytes` syscall-floor primitive (#229). It only activates when
+  `crypto` isn't already present — real Node has had a native global `crypto`
+  since Node 19 (some older Node point releases only expose it under
+  `--experimental-global-webcrypto` when running a plain script file, which
+  would make this shim install unnecessarily and then throw, since
+  `__host_random_bytes` doesn't exist on Node; run the harness with a Node ≥ 20
+  from `~/.nvm/versions/node/` if you hit that).
+- **`libs/uuid-jsse-require-shim.js`** resolves those two specifiers for jsse
+  only. esbuild's `--platform=node` build (the default) treats Node-builtin
+  specifiers as external, compiling each import down to a literal
+  `require(specifier)` call via esbuild's own `__require` fallback helper —
+  which, at call time, uses whatever `require` identifier is in scope. On real
+  Node that's the CJS module's own `require` (visible from a nested IIFE via
+  closure), so Node keeps resolving both specifiers natively — the whole point
+  being that Node runs the *unmodified* upstream suite against its own
+  `node:test`/`node:assert` as an independent oracle, not a jsse-side
+  reimplementation. On jsse there is no ambient `require`, so this shim
+  installs one as a global, mapping `"node:test"` to a thin wrapper around
+  `node-test-harness.js`'s shared TAP `describe`/`test` globals (registering an
+  arity-0 function so the harness's done-callback-vs-promise heuristic always
+  takes the promise branch, while still handing the real callback a minimal
+  `t` TestContext supporting just `t.mock.method`/`t.mock.reset` — the only
+  TestContext surface the suite uses, for its "uses native `crypto.randomUUID`"
+  tests) and `"node:assert/strict"` to `globalThis.__jsseAssertStrict`.
+- **`libs/uuid-assert-connector.js`** sets `globalThis.__jsseAssertStrict` from
+  a real, pinned copy of the `assert` npm package (browserify's pure-JS port of
+  Node's own `assert` module) rather than a hand-rolled reimplementation. It's
+  vendored via a relative `require("../node_modules/assert")` — deliberately
+  *not* the bare specifier `"assert"`, which esbuild would also auto-external
+  under `--platform=node` — the same trick `node-tape-module.js` uses for
+  `tape`.
+- The guard in both new shims keys off `__host_write` (the #229 syscall
+  floor), not `process.versions.node`: `node-shim.js` installs a *fake*
+  `process` with `versions.node` set (to pass UMD-style Node checks in
+  bundled libraries), so any later shim checking `process.versions.node`
+  would incorrectly think it's running on real Node.
+- The suite is pinned to uuid's **browser** build (`dist/`, not `dist-node/`)
+  by running `tsc` directly and swapping in the `*-browser.ts`-derived
+  `md5.js`/`sha1.js` — the same rename `scripts/build.sh` does — so v3/v5
+  exercise uuid's own pure-JS MD5/SHA-1 instead of `node:crypto`'s
+  `createHash`, keeping this slice free of any `node:crypto` dependency.

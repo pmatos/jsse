@@ -6,23 +6,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
-pub fn next_template_id() -> u64 {
+pub(crate) fn next_template_id() -> u64 {
     NEXT_TEMPLATE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 #[derive(Clone, Debug)]
-pub struct SourceText {
+pub(crate) struct SourceText {
     source: Rc<str>,
     start: usize,
     end: usize,
 }
 
 impl SourceText {
-    pub fn new(source: Rc<str>, start: usize, end: usize) -> Self {
+    pub(crate) fn new(source: Rc<str>, start: usize, end: usize) -> Self {
         Self { source, start, end }
     }
 
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.source[self.start..self.end]
     }
 }
@@ -45,7 +45,7 @@ impl fmt::Display for SourceText {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SourceType {
+pub(crate) enum SourceType {
     Script,
     Module,
 }
@@ -53,24 +53,24 @@ pub enum SourceType {
 /// Dense identifier for a call IC site within a single `Body`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(transparent)]
-pub struct CallSiteId(pub u32);
+pub(crate) struct CallSiteId(pub u32);
 
 /// Dense identifier for a property-access IC site within a single `Body`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(transparent)]
-pub struct PropSiteId(pub u32);
+pub(crate) struct PropSiteId(pub u32);
 
 impl CallSiteId {
-    pub const UNASSIGNED: Self = Self(u32::MAX);
+    pub(crate) const UNASSIGNED: Self = Self(u32::MAX);
 }
 
 impl PropSiteId {
-    pub const UNASSIGNED: Self = Self(u32::MAX);
+    pub(crate) const UNASSIGNED: Self = Self(u32::MAX);
 }
 
 /// Metadata describing the number of IC sites in a `Body`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BodyIcInfo {
+pub(crate) struct BodyIcInfo {
     pub call_site_count: u32,
     pub prop_site_count: u32,
     pub assigned: bool,
@@ -80,21 +80,31 @@ pub struct BodyIcInfo {
 /// Carries the statement vector and IC metadata; the runtime cache lives in the
 /// interpreter, keyed by the body's identity.
 #[derive(Clone, Debug)]
-pub struct Body {
+pub(crate) struct Body {
     pub statements: Rc<Vec<Statement>>,
     pub ic: BodyIcInfo,
 }
 
 impl Body {
-    pub fn new(statements: Vec<Statement>) -> Self {
+    pub(crate) fn new(statements: Vec<Statement>) -> Self {
         Self {
             statements: Rc::new(statements),
             ic: BodyIcInfo::default(),
         }
     }
 
-    pub fn as_slice(&self) -> &[Statement] {
+    pub(crate) fn as_slice(&self) -> &[Statement] {
         &self.statements
+    }
+
+    /// Identity of this Body, for side tables keyed by Body (`interpreter::ic_store`,
+    /// `interpreter::hoist_cache`). Stable across `Body` clones, since they share
+    /// the statement `Rc`. The pointer is an identity only and is never
+    /// dereferenced; a table keyed by it must pin the `Rc` for as long as the key
+    /// lives, so a freed Body's address cannot be reused for an unrelated entry
+    /// (ABA).
+    pub(crate) fn key(&self) -> *const Vec<Statement> {
+        Rc::as_ptr(&self.statements)
     }
 }
 
@@ -102,7 +112,7 @@ impl Body {
 /// member site in `body`, and record the final counts in `body.ic`.
 /// This is a single shared pass used by the parser, generator transform,
 /// `eval`, and `new Function`.
-pub fn assign_ic_sites(body: &mut Body) {
+pub(crate) fn assign_ic_sites(body: &mut Body) {
     let mut call_id = 0u32;
     let mut prop_id = 0u32;
     for stmt in Rc::make_mut(&mut body.statements).iter_mut() {
@@ -116,7 +126,7 @@ pub fn assign_ic_sites(body: &mut Body) {
 /// Assign IC sites to a nested body that was created synthetically (e.g. an
 /// arrow expression body or a dynamic `Function` body). Returns the number of
 /// call and property sites found.
-pub fn assign_ic_sites_for_body(body: &mut Body) -> (u32, u32) {
+pub(crate) fn assign_ic_sites_for_body(body: &mut Body) -> (u32, u32) {
     let before_call = body.ic.call_site_count;
     let before_prop = body.ic.prop_site_count;
     if !body.ic.assigned {
@@ -133,7 +143,7 @@ pub fn assign_ic_sites_for_body(body: &mut Body) -> (u32, u32) {
 /// share a single dense namespace keyed by the program's `body` field. This
 /// keeps IC sites on module top-level executable expressions valid while the
 /// interpreter is executing module items.
-pub fn assign_ic_sites_for_module(program: &mut Program) {
+pub(crate) fn assign_ic_sites_for_module(program: &mut Program) {
     if program.source_type == SourceType::Script {
         assign_ic_sites(&mut program.body);
         return;
@@ -174,7 +184,7 @@ fn assign_export_sites(export: &mut ExportDeclaration, call_id: &mut u32, prop_i
 }
 
 #[derive(Clone, Debug)]
-pub struct Program {
+pub(crate) struct Program {
     pub source_type: SourceType,
     pub body: Body,
     pub module_items: Vec<ModuleItem>,
@@ -183,21 +193,21 @@ pub struct Program {
 
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum ModuleItem {
+pub(crate) enum ModuleItem {
     Statement(Statement),
     ImportDeclaration(ImportDeclaration),
     ExportDeclaration(ExportDeclaration),
 }
 
 #[derive(Clone, Debug)]
-pub struct ImportDeclaration {
+pub(crate) struct ImportDeclaration {
     pub specifiers: Vec<ImportSpecifier>,
     pub source: String,
     pub attributes: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug)]
-pub enum ImportSpecifier {
+pub(crate) enum ImportSpecifier {
     Named { imported: String, local: String },
     Default(String),
     Namespace(String),
@@ -206,10 +216,11 @@ pub enum ImportSpecifier {
 }
 
 #[derive(Clone, Debug)]
-pub enum ExportDeclaration {
+pub(crate) enum ExportDeclaration {
     Named {
         specifiers: Vec<ExportSpecifier>,
         source: Option<String>,
+        attributes: Vec<(String, String)>,
         declaration: Option<Box<Statement>>,
     },
     Default(Box<Expression>),
@@ -218,17 +229,18 @@ pub enum ExportDeclaration {
     All {
         exported: Option<String>,
         source: String,
+        attributes: Vec<(String, String)>,
     },
 }
 
 #[derive(Clone, Debug)]
-pub struct ExportSpecifier {
+pub(crate) struct ExportSpecifier {
     pub local: String,
     pub exported: String,
 }
 
 #[derive(Clone, Debug)]
-pub enum Statement {
+pub(crate) enum Statement {
     Empty,
     Expression(Expression),
     Block(Vec<Statement>),
@@ -253,13 +265,13 @@ pub enum Statement {
 }
 
 #[derive(Clone, Debug)]
-pub struct VariableDeclaration {
+pub(crate) struct VariableDeclaration {
     pub kind: VarKind,
     pub declarations: Vec<VariableDeclarator>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VarKind {
+pub(crate) enum VarKind {
     Var,
     Let,
     Const,
@@ -268,13 +280,13 @@ pub enum VarKind {
 }
 
 #[derive(Clone, Debug)]
-pub struct VariableDeclarator {
+pub(crate) struct VariableDeclarator {
     pub pattern: Pattern,
     pub init: Option<Expression>,
 }
 
 #[derive(Clone, Debug)]
-pub enum Pattern {
+pub(crate) enum Pattern {
     Identifier(String),
     Array(Vec<Option<ArrayPatternElement>>),
     Object(Vec<ObjectPatternProperty>),
@@ -284,13 +296,13 @@ pub enum Pattern {
 }
 
 #[derive(Clone, Debug)]
-pub enum ArrayPatternElement {
+pub(crate) enum ArrayPatternElement {
     Pattern(Pattern),
     Rest(Pattern),
 }
 
 #[derive(Clone, Debug)]
-pub enum ObjectPatternProperty {
+pub(crate) enum ObjectPatternProperty {
     KeyValue(PropertyKey, Pattern),
     Shorthand(String),
     Rest(Pattern),
@@ -332,13 +344,13 @@ impl Pattern {
 }
 
 #[derive(Clone, Debug)]
-pub enum Expression {
+pub(crate) enum Expression {
     Literal(Literal),
     Identifier(String),
     This,
     Super,
     Array(Vec<Option<Expression>>, bool),
-    Object(Vec<Property>),
+    Object(Vec<Property>, bool),
     Function(FunctionExpr),
     ArrowFunction(ArrowFunction),
     Class(ClassExpr),
@@ -380,14 +392,14 @@ pub enum Expression {
 }
 
 #[derive(Clone, Debug)]
-pub enum MemberProperty {
+pub(crate) enum MemberProperty {
     Dot(String),
     Computed(Box<Expression>),
     Private(String),
 }
 
 #[derive(Clone, Debug)]
-pub enum Literal {
+pub(crate) enum Literal {
     Null,
     Boolean(bool),
     Number(f64),
@@ -397,7 +409,7 @@ pub enum Literal {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnaryOp {
+pub(crate) enum UnaryOp {
     Minus,
     Plus,
     Not,
@@ -405,7 +417,7 @@ pub enum UnaryOp {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinaryOp {
+pub(crate) enum BinaryOp {
     Add,
     Sub,
     Mul,
@@ -431,20 +443,20 @@ pub enum BinaryOp {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogicalOp {
+pub(crate) enum LogicalOp {
     And,
     Or,
     NullishCoalescing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UpdateOp {
+pub(crate) enum UpdateOp {
     Increment,
     Decrement,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AssignOp {
+pub(crate) enum AssignOp {
     Assign,
     AddAssign,
     SubAssign,
@@ -464,7 +476,7 @@ pub enum AssignOp {
 }
 
 #[derive(Clone, Debug)]
-pub struct Property {
+pub(crate) struct Property {
     pub key: PropertyKey,
     pub value: Expression,
     pub kind: PropertyKind,
@@ -474,42 +486,52 @@ pub struct Property {
 }
 
 #[derive(Clone, Debug)]
-pub enum PropertyKey {
+pub(crate) enum PropertyKey {
     Identifier(String),
-    String(String),
+    String(Vec<u16>),
     Number(f64),
     Computed(Box<Expression>),
     Private(String),
 }
 
+impl PropertyKey {
+    pub(crate) fn matches_name(&self, name: &str) -> bool {
+        match self {
+            Self::Identifier(identifier) => identifier == name,
+            Self::String(units) => units.iter().copied().eq(name.encode_utf16()),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PropertyKind {
+pub(crate) enum PropertyKind {
     Init,
     Get,
     Set,
 }
 
 #[derive(Clone, Debug)]
-pub struct IfStatement {
+pub(crate) struct IfStatement {
     pub test: Expression,
     pub consequent: Box<Statement>,
     pub alternate: Option<Box<Statement>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct WhileStatement {
+pub(crate) struct WhileStatement {
     pub test: Expression,
     pub body: Box<Statement>,
 }
 
 #[derive(Clone, Debug)]
-pub struct DoWhileStatement {
+pub(crate) struct DoWhileStatement {
     pub test: Expression,
     pub body: Box<Statement>,
 }
 
 #[derive(Clone, Debug)]
-pub struct ForStatement {
+pub(crate) struct ForStatement {
     pub init: Option<ForInit>,
     pub test: Option<Expression>,
     pub update: Option<Expression>,
@@ -517,20 +539,20 @@ pub struct ForStatement {
 }
 
 #[derive(Clone, Debug)]
-pub enum ForInit {
+pub(crate) enum ForInit {
     Variable(VariableDeclaration),
     Expression(Expression),
 }
 
 #[derive(Clone, Debug)]
-pub struct ForInStatement {
+pub(crate) struct ForInStatement {
     pub left: ForInOfLeft,
     pub right: Expression,
     pub body: Box<Statement>,
 }
 
 #[derive(Clone, Debug)]
-pub struct ForOfStatement {
+pub(crate) struct ForOfStatement {
     pub left: ForInOfLeft,
     pub right: Expression,
     pub body: Box<Statement>,
@@ -538,39 +560,39 @@ pub struct ForOfStatement {
 }
 
 #[derive(Clone, Debug)]
-pub enum ForInOfLeft {
+pub(crate) enum ForInOfLeft {
     Variable(VariableDeclaration),
     Pattern(Pattern),
     Expression(Expression),
 }
 
 #[derive(Clone, Debug)]
-pub struct TryStatement {
+pub(crate) struct TryStatement {
     pub block: Vec<Statement>,
     pub handler: Option<CatchClause>,
     pub finalizer: Option<Vec<Statement>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct CatchClause {
+pub(crate) struct CatchClause {
     pub param: Option<Pattern>,
     pub body: Vec<Statement>,
 }
 
 #[derive(Clone, Debug)]
-pub struct SwitchStatement {
+pub(crate) struct SwitchStatement {
     pub discriminant: Expression,
     pub cases: Vec<SwitchCase>,
 }
 
 #[derive(Clone, Debug)]
-pub struct SwitchCase {
+pub(crate) struct SwitchCase {
     pub test: Option<Expression>,
     pub consequent: Vec<Statement>,
 }
 
 #[derive(Clone, Debug)]
-pub struct FunctionDecl {
+pub(crate) struct FunctionDecl {
     pub name: String,
     pub params: Vec<Pattern>,
     pub body: Body,
@@ -581,7 +603,7 @@ pub struct FunctionDecl {
 }
 
 #[derive(Clone, Debug)]
-pub struct FunctionExpr {
+pub(crate) struct FunctionExpr {
     pub name: Option<String>,
     pub params: Vec<Pattern>,
     pub body: Body,
@@ -592,7 +614,7 @@ pub struct FunctionExpr {
 }
 
 #[derive(Clone, Debug)]
-pub struct ArrowFunction {
+pub(crate) struct ArrowFunction {
     pub params: Vec<Pattern>,
     pub body: ArrowBody,
     pub is_async: bool,
@@ -601,7 +623,7 @@ pub struct ArrowFunction {
 }
 
 #[derive(Clone, Debug)]
-pub enum ArrowBody {
+pub(crate) enum ArrowBody {
     /// Concise arrow-function body: `() => expr`. The `Body` contains a single
     /// `Statement::Expression` so it participates in the same per-body IC
     /// numbering and store as a block arrow body.
@@ -611,13 +633,13 @@ pub enum ArrowBody {
 }
 
 impl ArrowBody {
-    pub fn body(&self) -> &Body {
+    pub(crate) fn body(&self) -> &Body {
         match self {
             ArrowBody::Expression(b) | ArrowBody::Block(b) => b,
         }
     }
 
-    pub fn body_mut(&mut self) -> &mut Body {
+    pub(crate) fn body_mut(&mut self) -> &mut Body {
         match self {
             ArrowBody::Expression(b) | ArrowBody::Block(b) => b,
         }
@@ -625,7 +647,7 @@ impl ArrowBody {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClassDecl {
+pub(crate) struct ClassDecl {
     pub name: String,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
@@ -633,7 +655,7 @@ pub struct ClassDecl {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClassExpr {
+pub(crate) struct ClassExpr {
     pub name: Option<String>,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
@@ -641,7 +663,7 @@ pub struct ClassExpr {
 }
 
 #[derive(Clone, Debug)]
-pub enum ClassElement {
+pub(crate) enum ClassElement {
     Method(ClassMethod),
     Property(ClassProperty),
     AutoAccessor(ClassProperty),
@@ -649,7 +671,7 @@ pub enum ClassElement {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClassMethod {
+pub(crate) struct ClassMethod {
     pub key: PropertyKey,
     pub kind: ClassMethodKind,
     pub value: FunctionExpr,
@@ -658,7 +680,7 @@ pub struct ClassMethod {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClassMethodKind {
+pub(crate) enum ClassMethodKind {
     Method,
     Get,
     Set,
@@ -666,7 +688,7 @@ pub enum ClassMethodKind {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClassProperty {
+pub(crate) struct ClassProperty {
     pub key: PropertyKey,
     pub value: Option<Expression>,
     pub is_static: bool,
@@ -676,7 +698,7 @@ pub struct ClassProperty {
 impl Expression {
     /// Per spec §13.2.1.2 — returns true only for function/class/arrow
     /// expressions that have no binding name of their own.
-    pub fn is_anonymous_function_definition(&self) -> bool {
+    pub(crate) fn is_anonymous_function_definition(&self) -> bool {
         match self {
             Expression::Function(f) => f.name.as_ref().is_none_or(|n| n.is_empty()),
             Expression::ArrowFunction(_) => true,
@@ -687,7 +709,7 @@ impl Expression {
 }
 
 #[derive(Clone, Debug)]
-pub struct TemplateLiteral {
+pub(crate) struct TemplateLiteral {
     pub id: u64,
     pub quasis: Vec<Option<Vec<u16>>>,
     pub raw_quasis: Vec<String>,
@@ -696,7 +718,7 @@ pub struct TemplateLiteral {
 
 /// Check if a function (body + params) references the `arguments` identifier.
 /// Also checks parameter default expressions (which can reference arguments).
-pub fn func_uses_arguments(params: &[Pattern], body: &Body) -> bool {
+pub(crate) fn func_uses_arguments(params: &[Pattern], body: &Body) -> bool {
     params_use_arguments(params) || stmts_use_arguments(body.as_slice())
 }
 
@@ -704,7 +726,7 @@ pub fn func_uses_arguments(params: &[Pattern], body: &Body) -> bool {
 /// solely of single-name (identifier) bindings — no rest, defaults, or
 /// destructuring. This gates the fast parameter-binding path and mapped
 /// `arguments` objects, so it is cached on `JsFunction::User` at creation time.
-pub fn params_are_simple(params: &[Pattern]) -> bool {
+pub(crate) fn params_are_simple(params: &[Pattern]) -> bool {
     params.iter().all(|p| matches!(p, Pattern::Identifier(_)))
 }
 
@@ -715,7 +737,7 @@ fn params_use_arguments(params: &[Pattern]) -> bool {
 /// Check if a function body references the `arguments` identifier.
 /// Recurses into arrow functions (they inherit arguments) but not into
 /// regular functions, generators, or class methods (they have their own).
-pub fn stmts_use_arguments(stmts: &[Statement]) -> bool {
+pub(crate) fn stmts_use_arguments(stmts: &[Statement]) -> bool {
     stmts.iter().any(stmt_uses_arguments)
 }
 
@@ -813,7 +835,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
         Expression::Array(elems, _) => elems
             .iter()
             .any(|e| e.as_ref().is_some_and(expr_uses_arguments)),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             expr_uses_arguments(&p.value)
                 || matches!(&p.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
         }),
@@ -894,6 +916,230 @@ fn for_in_of_left_uses_arguments(left: &ForInOfLeft) -> bool {
         ForInOfLeft::Pattern(p) => pattern_uses_arguments(p),
         ForInOfLeft::Expression(e) => expr_uses_arguments(e),
     }
+}
+
+/// Predicate for the `ContainsArguments` static semantic: an unqualified
+/// reference to the `arguments` identifier.
+pub(crate) fn is_arguments_reference(expr: &Expression) -> bool {
+    matches!(expr, Expression::Identifier(name) if name == "arguments")
+}
+
+/// Predicate for the `Contains SuperCall` static semantic: a `super(...)` call.
+/// `super.prop` is a SuperProperty (not a SuperCall) and does not match.
+pub(crate) fn is_super_call(expr: &Expression) -> bool {
+    matches!(expr, Expression::Call(callee, _, _) if matches!(&**callee, Expression::Super))
+}
+
+/// Returns true if `pred` matches any expression syntactically reachable from
+/// `stmts` within the same function scope.
+///
+/// This is the single traversal behind the `ContainsArguments` and
+/// `Contains SuperCall` static-semantic early errors — class field
+/// initializers, class static blocks, and direct `eval` textually inside
+/// either. Arrow bodies and class computed keys ARE traversed (they execute in
+/// the enclosing scope); nested function, method, getter/setter, and non-arrow
+/// bodies are opaque, and binding patterns (which introduce names rather than
+/// reference them) are not visited. This deliberately differs from
+/// [`stmts_use_arguments`], which drives the `arguments`-object allocation
+/// optimization and therefore also inspects binding names and nested `eval`.
+///
+/// The match is exhaustive over `Statement`/`Expression`: a new AST variant
+/// forces this one traversal to be updated rather than silently slipping past a
+/// hand-maintained copy.
+pub(crate) fn stmts_contain_matching(
+    stmts: &[Statement],
+    pred: &dyn Fn(&Expression) -> bool,
+) -> bool {
+    stmts.iter().any(|s| stmt_contains_matching(s, pred))
+}
+
+fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) -> bool {
+    match stmt {
+        Statement::Empty
+        | Statement::Debugger
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Return(None)
+        // Nested functions own their `arguments`/`super`; opaque.
+        | Statement::FunctionDeclaration(_) => false,
+        Statement::Expression(e) | Statement::Throw(e) => expr_contains_matching(e, pred),
+        Statement::Return(Some(e)) => expr_contains_matching(e, pred),
+        Statement::Block(stmts) => stmts_contain_matching(stmts, pred),
+        Statement::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| d.init.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
+        Statement::If(i) => {
+            expr_contains_matching(&i.test, pred)
+                || stmt_contains_matching(&i.consequent, pred)
+                || i.alternate
+                    .as_ref()
+                    .is_some_and(|a| stmt_contains_matching(a, pred))
+        }
+        Statement::While(w) => {
+            expr_contains_matching(&w.test, pred) || stmt_contains_matching(&w.body, pred)
+        }
+        Statement::DoWhile(d) => {
+            expr_contains_matching(&d.test, pred) || stmt_contains_matching(&d.body, pred)
+        }
+        Statement::For(f) => {
+            f.init.as_ref().is_some_and(|i| match i {
+                ForInit::Expression(e) => expr_contains_matching(e, pred),
+                ForInit::Variable(d) => d
+                    .declarations
+                    .iter()
+                    .any(|dd| dd.init.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
+            }) || f.test.as_ref().is_some_and(|e| expr_contains_matching(e, pred))
+                || f.update.as_ref().is_some_and(|e| expr_contains_matching(e, pred))
+                || stmt_contains_matching(&f.body, pred)
+        }
+        Statement::ForIn(f) => {
+            expr_contains_matching(&f.right, pred) || stmt_contains_matching(&f.body, pred)
+        }
+        Statement::ForOf(f) => {
+            expr_contains_matching(&f.right, pred) || stmt_contains_matching(&f.body, pred)
+        }
+        Statement::Try(t) => {
+            stmts_contain_matching(&t.block, pred)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| stmts_contain_matching(&h.body, pred))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| stmts_contain_matching(f, pred))
+        }
+        Statement::Switch(s) => {
+            expr_contains_matching(&s.discriminant, pred)
+                || s.cases.iter().any(|c| {
+                    c.test
+                        .as_ref()
+                        .is_some_and(|e| expr_contains_matching(e, pred))
+                        || stmts_contain_matching(&c.consequent, pred)
+                })
+        }
+        Statement::Labeled(_, s) => stmt_contains_matching(s, pred),
+        Statement::With(e, s) => {
+            expr_contains_matching(e, pred) || stmt_contains_matching(s, pred)
+        }
+        // Method bodies are opaque, but `extends` and computed element keys
+        // evaluate in the enclosing scope.
+        Statement::ClassDeclaration(cls) => {
+            cls.super_class
+                .as_ref()
+                .is_some_and(|sc| expr_contains_matching(sc, pred))
+                || class_elements_contain_matching(&cls.body, pred)
+        }
+    }
+}
+
+pub(crate) fn expr_contains_matching(
+    expr: &Expression,
+    pred: &dyn Fn(&Expression) -> bool,
+) -> bool {
+    if pred(expr) {
+        return true;
+    }
+    match expr {
+        // Leaves with no in-scope child expressions, plus nested regular
+        // functions (opaque to `arguments`/`super`).
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::NewTarget
+        | Expression::ImportMeta
+        | Expression::PrivateIdentifier(_)
+        | Expression::Function(_) => false,
+        Expression::Array(elems, _) => elems
+            .iter()
+            .any(|e| e.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
+        Expression::Object(props, _) => props.iter().any(|p| {
+            expr_contains_matching(&p.value, pred)
+                || matches!(&p.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
+        }),
+        Expression::Member(object, property, _) => {
+            expr_contains_matching(object, pred)
+                || matches!(property, MemberProperty::Computed(e) if expr_contains_matching(e, pred))
+        }
+        Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
+            expr_contains_matching(callee, pred)
+                || args.iter().any(|a| expr_contains_matching(a, pred))
+        }
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => {
+            expr_contains_matching(l, pred) || expr_contains_matching(r, pred)
+        }
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e) => expr_contains_matching(e, pred),
+        Expression::Yield(opt, _) => opt
+            .as_ref()
+            .is_some_and(|e| expr_contains_matching(e, pred)),
+        Expression::Conditional(t, c, a) => {
+            expr_contains_matching(t, pred)
+                || expr_contains_matching(c, pred)
+                || expr_contains_matching(a, pred)
+        }
+        Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+            exprs.iter().any(|e| expr_contains_matching(e, pred))
+        }
+        Expression::Template(tl) => tl
+            .expressions
+            .iter()
+            .any(|e| expr_contains_matching(e, pred)),
+        Expression::TaggedTemplate(tag, tl) => {
+            expr_contains_matching(tag, pred)
+                || tl
+                    .expressions
+                    .iter()
+                    .any(|e| expr_contains_matching(e, pred))
+        }
+        Expression::OptionalChain(object, chain) => {
+            expr_contains_matching(object, pred) || expr_contains_matching(chain, pred)
+        }
+        Expression::Import(inner, opts)
+        | Expression::ImportDefer(inner, opts)
+        | Expression::ImportSource(inner, opts) => {
+            expr_contains_matching(inner, pred)
+                || opts
+                    .as_ref()
+                    .is_some_and(|e| expr_contains_matching(e, pred))
+        }
+        // Arrow functions inherit `arguments`/`super`, so the body executes in
+        // the enclosing scope and IS traversed.
+        Expression::ArrowFunction(af) => match af.body.body().statements.as_slice() {
+            [Statement::Return(Some(e))] => expr_contains_matching(e, pred),
+            stmts => stmts_contain_matching(stmts, pred),
+        },
+        // Method/field bodies are opaque, but `extends` and computed element
+        // keys evaluate in the enclosing scope.
+        Expression::Class(cls) => {
+            cls.super_class
+                .as_ref()
+                .is_some_and(|sc| expr_contains_matching(sc, pred))
+                || class_elements_contain_matching(&cls.body, pred)
+        }
+    }
+}
+
+fn class_elements_contain_matching(
+    body: &[ClassElement],
+    pred: &dyn Fn(&Expression) -> bool,
+) -> bool {
+    body.iter().any(|elem| match elem {
+        ClassElement::Method(m) => {
+            matches!(&m.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
+        }
+        ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
+        }
+        ClassElement::StaticBlock(_) => false,
+    })
 }
 
 fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32) {
@@ -1174,7 +1420,7 @@ fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32
                 assign_expr_sites(e, call_id, prop_id);
             }
         }
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             for p in props.iter_mut() {
                 if let PropertyKey::Computed(e) = &mut p.key {
                     assign_expr_sites(e, call_id, prop_id);
@@ -1265,7 +1511,7 @@ fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32
 /// because they execute under their own stores; a class literal's `extends`,
 /// computed keys, and static-field initializers are cleared because they evaluate
 /// at class-definition time (i.e. when the terminator expression runs).
-pub fn clear_expr_ic_sites(expr: &mut Expression) {
+pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
     match expr {
         Expression::Call(callee, args, site) => {
             clear_expr_ic_sites(callee);
@@ -1317,7 +1563,7 @@ pub fn clear_expr_ic_sites(expr: &mut Expression) {
                 clear_expr_ic_sites(e);
             }
         }
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             for p in props.iter_mut() {
                 if let PropertyKey::Computed(e) = &mut p.key {
                     clear_expr_ic_sites(e);
@@ -1517,7 +1763,7 @@ fn clear_stmt_ic_sites(stmt: &mut Statement) {
     }
 }
 
-pub fn clear_for_in_of_left(left: &mut ForInOfLeft) {
+pub(crate) fn clear_for_in_of_left(left: &mut ForInOfLeft) {
     match left {
         ForInOfLeft::Variable(decl) => {
             for d in decl.declarations.iter_mut() {
@@ -1535,7 +1781,7 @@ pub fn clear_for_in_of_left(left: &mut ForInOfLeft) {
 /// Pattern companion to [`clear_expr_ic_sites`], for patterns reachable from a
 /// terminator (e.g. destructuring declarations inside a class static block, or
 /// a for-of binding / catch parameter evaluated at a state transition).
-pub fn clear_pattern_ic_sites(pat: &mut Pattern) {
+pub(crate) fn clear_pattern_ic_sites(pat: &mut Pattern) {
     match pat {
         Pattern::Identifier(_) => {}
         Pattern::Array(elems) => {

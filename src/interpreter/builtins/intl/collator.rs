@@ -219,27 +219,15 @@ impl Interpreter {
             .class_name = "Intl.Collator".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.Collator"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.Collator");
 
         // compare getter
         let compare_getter = self.create_function(JsFunction::native(
             "get compare".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(cell) = interp.get_object_cell(o.id) {
+                if let Some(o) = this.as_object_id() {
+                    if let Some(cell) = interp.get_object_cell(o) {
                         enum Probe {
                             NotCollator,
                             Cached(JsValue),
@@ -270,7 +258,7 @@ impl Interpreter {
                         }
                     }
 
-                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                    let snapshot = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Collator {
                             locale,
@@ -317,8 +305,8 @@ impl Interpreter {
                         "".to_string(),
                         2,
                         move |interp2, _this2, args2| {
-                            let x_val = args2.first().cloned().unwrap_or(JsValue::Undefined);
-                            let y_val = args2.get(1).cloned().unwrap_or(JsValue::Undefined);
+                            let x_val = args2.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                            let y_val = args2.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                             let x_str = match interp2.to_string_value(&x_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
@@ -339,11 +327,11 @@ impl Interpreter {
                                 &x_str,
                                 &y_str,
                             );
-                            Completion::Normal(JsValue::Number(result))
+                            Completion::Normal(JsValue::number(result))
                         },
                     ));
 
-                    if let Some(obj) = interp.get_object_cell(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o) {
                         obj.borrow_mut().properties.insert(
                             crate::interpreter::key_intern::intern_key("[[BoundCompare]]"),
                             PropertyDescriptor::data(compare_fn.clone(), false, false, false),
@@ -369,8 +357,8 @@ impl Interpreter {
             "resolvedOptions".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                if let Some(o) = this.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -395,19 +383,13 @@ impl Interpreter {
                         }
 
                         let props = vec![
-                            ("locale", JsValue::String(JsString::from_str(&locale))),
-                            ("usage", JsValue::String(JsString::from_str(&usage))),
-                            (
-                                "sensitivity",
-                                JsValue::String(JsString::from_str(&sensitivity)),
-                            ),
-                            ("ignorePunctuation", JsValue::Boolean(ignore_punctuation)),
-                            ("collation", JsValue::String(JsString::from_str(&collation))),
-                            ("numeric", JsValue::Boolean(numeric)),
-                            (
-                                "caseFirst",
-                                JsValue::String(JsString::from_str(&case_first)),
-                            ),
+                            ("locale", JsValue::from_str(&locale)),
+                            ("usage", JsValue::from_str(&usage)),
+                            ("sensitivity", JsValue::from_str(&sensitivity)),
+                            ("ignorePunctuation", JsValue::boolean(ignore_punctuation)),
+                            ("collation", JsValue::from_str(&collation)),
+                            ("numeric", JsValue::boolean(numeric)),
+                            ("caseFirst", JsValue::from_str(&case_first)),
                         ];
                         for (key, val) in props {
                             interp
@@ -419,9 +401,7 @@ impl Interpreter {
                                 );
                         }
 
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: result_id,
-                        }));
+                        return Completion::Normal(JsValue::object(result_id));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -436,15 +416,15 @@ impl Interpreter {
         self.realm_mut().intl_collator_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let collator_ctor = self.create_function(JsFunction::constructor(
             "Collator".to_string(),
             0,
             move |interp, _this, args| {
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -484,16 +464,16 @@ impl Interpreter {
                 };
 
                 let opt_numeric = {
-                    let num_val = if let JsValue::Object(o) = &options {
-                        match interp.get_object_property(o.id, "numeric", &options) {
+                    let num_val = if let Some(o) = options.as_object_id() {
+                        match interp.get_object_property(o, "numeric", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
-                    if matches!(num_val, JsValue::Undefined) {
+                    if num_val.is_undefined() {
                         None
                     } else {
                         Some(interp.to_boolean_val(&num_val))
@@ -644,16 +624,16 @@ impl Interpreter {
 
                 // ignorePunctuation: boolean option with locale-dependent default
                 let ignore_punctuation = {
-                    let ip_val = if let JsValue::Object(o) = &options {
-                        match interp.get_object_property(o.id, "ignorePunctuation", &options) {
+                    let ip_val = if let Some(o) = options.as_object_id() {
+                        match interp.get_object_property(o, "ignorePunctuation", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
-                    if matches!(ip_val, JsValue::Undefined) {
+                    if ip_val.is_undefined() {
                         is_thai_locale(&locale)
                     } else {
                         interp.to_boolean_val(&ip_val)
@@ -687,15 +667,14 @@ impl Interpreter {
                         case_first,
                     }));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set Collator.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &collator_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = collator_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -708,8 +687,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),
@@ -767,16 +746,16 @@ impl Interpreter {
         let opt_collation = self.intl_get_option(&opts, "collation", &[], None)?;
 
         let opt_numeric = {
-            let num_val = if let JsValue::Object(o) = &opts {
-                match self.get_object_property(o.id, "numeric", &opts) {
+            let num_val = if let Some(o) = opts.as_object_id() {
+                match self.get_object_property(o, "numeric", &opts) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             };
-            if matches!(num_val, JsValue::Undefined) {
+            if num_val.is_undefined() {
                 None
             } else {
                 Some(self.to_boolean_val(&num_val))
@@ -854,16 +833,16 @@ impl Interpreter {
         let locale = base_locale(&raw_locale);
 
         let ignore_punctuation = {
-            let ip_val = if let JsValue::Object(o) = &opts {
-                match self.get_object_property(o.id, "ignorePunctuation", &opts) {
+            let ip_val = if let Some(o) = opts.as_object_id() {
+                match self.get_object_property(o, "ignorePunctuation", &opts) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             };
-            if matches!(ip_val, JsValue::Undefined) {
+            if ip_val.is_undefined() {
                 is_thai_locale(&locale)
             } else {
                 self.to_boolean_val(&ip_val)

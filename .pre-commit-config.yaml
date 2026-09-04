@@ -1,0 +1,53 @@
+default_install_hook_types: [pre-commit, commit-msg]
+
+exclude: |
+  (?x)^(
+    CHANGELOG\.md$
+    | scripts/\.unicode_cache/
+    | src/(emoji_strings|unicode_tables)\.rs$
+    | test262-pass(-boa|-node)?\.txt$
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+      - id: check-toml
+      - id: debug-statements
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: name-tests-test
+        exclude: _.*\.py$|lit\.cfg\.py
+        args: ["--pytest-test-first"]
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.46.1
+    hooks:
+      - id: typos
+        entry: typos
+        args: []
+
+  - repo: https://github.com/jsh9/pydoclint
+    rev: 0.8.4
+    hooks:
+      - id: pydoclint
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

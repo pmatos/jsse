@@ -574,21 +574,21 @@ fn to_duration_record(
     input: &JsValue,
 ) -> Result<DurationRecord, JsValue> {
     // Step 1-2: If input is a string, parse as ISO 8601 duration
-    if let JsValue::String(s) = input {
+    if let Some(s) = input.as_string() {
         let dur_str = s.to_rust_string();
         return parse_duration_string(interp, &dur_str);
     }
 
     // Not an object? TypeError
-    if matches!(input, JsValue::Undefined | JsValue::Null) {
+    if input.is_nullish() {
         return Err(interp.create_type_error("Duration must be an object or string"));
     }
-    if !matches!(input, JsValue::Object(_)) {
+    if !input.is_object() {
         return Err(interp.create_type_error("Duration must be an object or string"));
     }
 
-    let obj_id = if let JsValue::Object(o) = input {
-        o.id
+    let obj_id = if let Some(o) = input.as_object_id() {
+        o
     } else {
         unreachable!()
     };
@@ -634,10 +634,10 @@ fn to_duration_record(
             let val = match interp.get_object_property(obj_id, name, input) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
-            if matches!(val, JsValue::Undefined) {
+            if val.is_undefined() {
                 return Ok(0.0);
             }
 
@@ -893,8 +893,8 @@ fn extract_duration_format_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<DurationFormatData, JsValue> {
-    if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let b = obj.borrow();
         if let Some(IntlData::DurationFormat {
@@ -1146,19 +1146,7 @@ impl Interpreter {
             .class_name = "Intl.DurationFormat".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.DurationFormat"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.DurationFormat");
 
         // format(duration)
         let format_fn = self.create_function(JsFunction::native(
@@ -1170,14 +1158,14 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let dur_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let dur_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let dur = match to_duration_record(interp, &dur_arg) {
                     Ok(d) => d,
                     Err(e) => return Completion::Throw(e),
                 };
 
                 let result = format_duration(&data, &dur);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1194,7 +1182,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let dur_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let dur_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let dur = match to_duration_record(interp, &dur_arg) {
                     Ok(d) => d,
                     Err(e) => return Completion::Throw(e),
@@ -1218,7 +1206,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&ptype)),
+                                    JsValue::from_str(&ptype),
                                     true,
                                     true,
                                     true,
@@ -1230,7 +1218,7 @@ impl Interpreter {
                             .insert_property(
                                 "value".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&value)),
+                                    JsValue::from_str(&value),
                                     true,
                                     true,
                                     true,
@@ -1243,15 +1231,14 @@ impl Interpreter {
                                 .insert_property(
                                     "unit".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(&unit)),
+                                        JsValue::from_str(&unit),
                                         true,
                                         true,
                                         true,
                                     ),
                                 );
                         }
-                        let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(part_obj_id)
                     })
                     .collect();
 
@@ -1281,81 +1268,42 @@ impl Interpreter {
                 }
 
                 let mut props: Vec<(&str, JsValue)> = vec![
-                    ("locale", JsValue::String(JsString::from_str(&data.locale))),
-                    (
-                        "numberingSystem",
-                        JsValue::String(JsString::from_str(&data.numbering_system)),
-                    ),
-                    ("style", JsValue::String(JsString::from_str(&data.style))),
-                    ("years", JsValue::String(JsString::from_str(&data.years))),
-                    (
-                        "yearsDisplay",
-                        JsValue::String(JsString::from_str(&data.years_display)),
-                    ),
-                    ("months", JsValue::String(JsString::from_str(&data.months))),
-                    (
-                        "monthsDisplay",
-                        JsValue::String(JsString::from_str(&data.months_display)),
-                    ),
-                    ("weeks", JsValue::String(JsString::from_str(&data.weeks))),
-                    (
-                        "weeksDisplay",
-                        JsValue::String(JsString::from_str(&data.weeks_display)),
-                    ),
-                    ("days", JsValue::String(JsString::from_str(&data.days))),
-                    (
-                        "daysDisplay",
-                        JsValue::String(JsString::from_str(&data.days_display)),
-                    ),
-                    ("hours", JsValue::String(JsString::from_str(&data.hours))),
-                    (
-                        "hoursDisplay",
-                        JsValue::String(JsString::from_str(&data.hours_display)),
-                    ),
-                    (
-                        "minutes",
-                        JsValue::String(JsString::from_str(&data.minutes)),
-                    ),
-                    (
-                        "minutesDisplay",
-                        JsValue::String(JsString::from_str(&data.minutes_display)),
-                    ),
-                    (
-                        "seconds",
-                        JsValue::String(JsString::from_str(&data.seconds)),
-                    ),
-                    (
-                        "secondsDisplay",
-                        JsValue::String(JsString::from_str(&data.seconds_display)),
-                    ),
-                    (
-                        "milliseconds",
-                        JsValue::String(JsString::from_str(&data.milliseconds)),
-                    ),
+                    ("locale", JsValue::from_str(&data.locale)),
+                    ("numberingSystem", JsValue::from_str(&data.numbering_system)),
+                    ("style", JsValue::from_str(&data.style)),
+                    ("years", JsValue::from_str(&data.years)),
+                    ("yearsDisplay", JsValue::from_str(&data.years_display)),
+                    ("months", JsValue::from_str(&data.months)),
+                    ("monthsDisplay", JsValue::from_str(&data.months_display)),
+                    ("weeks", JsValue::from_str(&data.weeks)),
+                    ("weeksDisplay", JsValue::from_str(&data.weeks_display)),
+                    ("days", JsValue::from_str(&data.days)),
+                    ("daysDisplay", JsValue::from_str(&data.days_display)),
+                    ("hours", JsValue::from_str(&data.hours)),
+                    ("hoursDisplay", JsValue::from_str(&data.hours_display)),
+                    ("minutes", JsValue::from_str(&data.minutes)),
+                    ("minutesDisplay", JsValue::from_str(&data.minutes_display)),
+                    ("seconds", JsValue::from_str(&data.seconds)),
+                    ("secondsDisplay", JsValue::from_str(&data.seconds_display)),
+                    ("milliseconds", JsValue::from_str(&data.milliseconds)),
                     (
                         "millisecondsDisplay",
-                        JsValue::String(JsString::from_str(&data.milliseconds_display)),
+                        JsValue::from_str(&data.milliseconds_display),
                     ),
-                    (
-                        "microseconds",
-                        JsValue::String(JsString::from_str(&data.microseconds)),
-                    ),
+                    ("microseconds", JsValue::from_str(&data.microseconds)),
                     (
                         "microsecondsDisplay",
-                        JsValue::String(JsString::from_str(&data.microseconds_display)),
+                        JsValue::from_str(&data.microseconds_display),
                     ),
-                    (
-                        "nanoseconds",
-                        JsValue::String(JsString::from_str(&data.nanoseconds)),
-                    ),
+                    ("nanoseconds", JsValue::from_str(&data.nanoseconds)),
                     (
                         "nanosecondsDisplay",
-                        JsValue::String(JsString::from_str(&data.nanoseconds_display)),
+                        JsValue::from_str(&data.nanoseconds_display),
                     ),
                 ];
 
                 if let Some(fd) = data.fractional_digits {
-                    props.push(("fractionalDigits", JsValue::Number(fd as f64)));
+                    props.push(("fractionalDigits", JsValue::number(fd as f64)));
                 }
 
                 for (key, val) in props {
@@ -1368,7 +1316,7 @@ impl Interpreter {
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1378,7 +1326,7 @@ impl Interpreter {
         self.realm_mut().intl_duration_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let duration_format_ctor = self.create_function(JsFunction::constructor(
@@ -1391,8 +1339,8 @@ impl Interpreter {
                     );
                 }
 
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -1743,15 +1691,14 @@ impl Interpreter {
                         },
                     ));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set DurationFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &duration_format_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = duration_format_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -1764,8 +1711,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

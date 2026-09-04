@@ -28,6 +28,7 @@ import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 _main_pgid = None
 
@@ -41,11 +42,43 @@ def _set_pdeathsig():
         pass
 
 
+# Scratch files carry a prefix that names this runner, so the filename alone is
+# evidence that we wrote them. The startup sweep deletes what it matches, and it
+# recurses into whichever directory the caller selected, so a generic `tmp`
+# prefix would let it unlink a `tempfile` belonging to some other tool -- or a
+# real test that happened to be named that way -- inside a tree the project
+# forbids modifying at all (AGENTS.md: never modify `test262/`).
+SCRATCH_PREFIX = "jsse-scratch-"
+
+
+# Path of the scratch file this worker is currently running, or None. The
+# termination handler below is the only reader; workers are single-threaded and
+# run one scenario at a time, so a plain global is enough.
+_active_scratch_path = None
+
+
+def _worker_cleanup_handler(signum, frame):
+    """Remove the in-flight scratch file, then exit.
+
+    `run_scenario` unlinks in a `finally`, which covers every path the
+    interpreter itself unwinds. A signal is not one of those: the default
+    SIGTERM action terminates the process outright, so the scratch file next to
+    the test would survive as an untracked scratch file inside the read-only
+    submodule. Unlink it here before exiting.
+    """
+    if _active_scratch_path is not None:
+        try:
+            os.unlink(_active_scratch_path)
+        except OSError:
+            pass
+    os._exit(128 + signum)
+
+
 def _worker_init():
     """Initializer for pool worker processes."""
     _set_pdeathsig()
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, _worker_cleanup_handler)
+    signal.signal(signal.SIGINT, _worker_cleanup_handler)
 
 
 def _cleanup_handler(signum, frame):
@@ -73,6 +106,7 @@ FEATURES_RE = re.compile(r"^features:\s*\[([^\]]*)\]", re.MULTILINE)
 # Engine adapters
 # ---------------------------------------------------------------------------
 
+
 class EngineAdapter(ABC):
     """Abstract base for engine-specific behavior."""
 
@@ -81,8 +115,12 @@ class EngineAdapter(ABC):
 
     @abstractmethod
     def build_command(
-        self, test_file: Path, tmp_path: str | None, harness_files: list[Path],
-        is_module: bool, flags: list[str] | None = None,
+        self,
+        test_file: Path,
+        tmp_path: str | None,
+        harness_files: list[Path],
+        is_module: bool,
+        flags: list[str] | None = None,
     ) -> list[str]:
         """Return the command list to execute."""
 
@@ -304,6 +342,7 @@ def parse_frontmatter(text: str) -> dict:
 # Scenario computation (dual strict/non-strict per spec)
 # ---------------------------------------------------------------------------
 
+
 def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
     """Return list of (scenario_id, mode) for a test file.
 
@@ -336,6 +375,7 @@ def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
 # Harness / source building
 # ---------------------------------------------------------------------------
 
+
 def read_harness_file(test262_dir: Path, name: str) -> str:
     path = test262_dir / "harness" / name
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
@@ -363,7 +403,10 @@ def get_harness_files(
 
 
 def build_test_source(
-    test_file: Path, metadata: dict, test262_dir: Path, mode: str,
+    test_file: Path,
+    metadata: dict,
+    test262_dir: Path,
+    mode: str,
 ) -> str:
     """Build the full source to feed to the engine, prepending harness files.
 
@@ -401,6 +444,7 @@ def build_test_source(
 # ---------------------------------------------------------------------------
 # Test execution
 # ---------------------------------------------------------------------------
+
 
 def run_single_test(
     args: tuple[str, str, str, int, str, str, str],
@@ -445,6 +489,8 @@ def run_single_test(
     harness_files = get_harness_files(metadata, test262_dir, is_module, is_async)
     concat_harness = adapter.needs_harness_in_source(is_module)
 
+    global _active_scratch_path
+
     tmp_path = None
     if concat_harness or not is_module:
         try:
@@ -452,12 +498,32 @@ def run_single_test(
         except OSError:
             return (scenario_id, False, "harness_error", 0.0)
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".js", delete=False, encoding="utf-8",
-            newline="", dir=str(test_file.parent)
-        ) as tmp:
-            tmp.write(combined)
+        # The file exists on disk from inside `NamedTemporaryFile`, before it
+        # returns anything we could record. A handler firing in that gap would
+        # `os._exit` with nothing to unlink, so hold the termination signals
+        # across creation *and* registration; a signal sent while they are
+        # blocked stays pending and is delivered once the mask is restored,
+        # by which point there is a path to clean up.
+        blocked = {signal.SIGTERM, signal.SIGINT}
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix=SCRATCH_PREFIX,
+                suffix=".js",
+                delete=False,
+                encoding="utf-8",
+                newline="",
+                dir=str(test_file.parent),
+            )
             tmp_path = tmp.name
+            _active_scratch_path = tmp_path
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+        # The write is already covered: the path is registered by now.
+        with tmp:
+            tmp.write(combined)
 
     cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module, flags)
 
@@ -467,6 +533,7 @@ def run_single_test(
             cmd,
             timeout=timeout,
             capture_output=True,
+            env={**os.environ, "TZ": "UTC"},
             preexec_fn=adapter.setup_preexec,
         )
         duration = time.perf_counter() - t0
@@ -493,6 +560,7 @@ def run_single_test(
                 os.unlink(tmp_path)
             except OSError:
                 pass
+            _active_scratch_path = None
 
     stderr_text = result.stderr.decode("utf-8", errors="replace")
 
@@ -524,6 +592,7 @@ def run_single_test(
 # ---------------------------------------------------------------------------
 # CLI and main
 # ---------------------------------------------------------------------------
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -618,6 +687,15 @@ examples:
         ),
     )
     parser.add_argument(
+        "--clean-scratch",
+        action="store_true",
+        help=(
+            "Delete scratch files left behind by an earlier killed run, then "
+            "exit. Only run this while no other invocation is active: nothing "
+            "the sweep can see proves the run that created a file has died."
+        ),
+    )
+    parser.add_argument(
         "paths",
         nargs="*",
         help="Specific test files or directories to run (default: all tests)",
@@ -630,23 +708,212 @@ def _is_fixture(p: Path) -> bool:
     return name.endswith("_FIXTURE.js") or name.endswith("_FIXTURE.mjs")
 
 
+# `tempfile` composes a name as its prefix plus 8 chars drawn from this
+# alphabet. Scratch files are written next to the test they wrap, so a run
+# killed hard enough to skip cleanup leaves them among the tests.
+SCRATCH_RE = re.compile(rf"^{re.escape(SCRATCH_PREFIX)}[a-z0-9_]{{8}}\.js$")
+
+
+def _is_scratch(p: Path) -> bool:
+    """True for a scratch file this runner created.
+
+    Both the collection filter and the sweep key off this, so nothing is skipped
+    or deleted on the strength of a name we cannot claim. A generic `tempfile`
+    name is deliberately not enough: excluding one silently drops whatever it
+    really was from the run, and the scenario total this guards is the same
+    number a silent omission would corrupt. Leftovers from runs predating the
+    prefix are cleaned up out of band, not guessed at here.
+    """
+    return SCRATCH_RE.match(p.name) is not None
+
+
+class TestCollectionError(Exception):
+    """Raised when a selected path contains a test the runner would omit."""
+
+
+def _walk_matching(
+    directory: Path, suffix: str
+) -> tuple[list[Path], list[tuple[Path, OSError]]]:
+    """Collect matching files while reporting directories that could not be read."""
+    found: list[Path] = []
+    unreadable: list[tuple[Path, OSError]] = []
+    for dirpath, _dirnames, filenames in os.walk(
+        directory, onerror=lambda error: unreadable.append((Path(error.filename), error))
+    ):
+        found.extend(
+            Path(dirpath) / name for name in filenames if name.endswith(suffix)
+        )
+    return found, unreadable
+
+
+def _raise_if_unreadable(unreadable: list[tuple[Path, OSError]]) -> None:
+    if not unreadable:
+        return
+    formatted = "\n  ".join(f"{path}: {error}" for path, error in unreadable)
+    noun = "directory" if len(unreadable) == 1 else "directories"
+    raise TestCollectionError(
+        f"could not scan the following {noun} while collecting tests:\n  {formatted}"
+    )
+
+
+def _uncollected_mjs(path: Path) -> list[Path]:
+    if path.is_file():
+        candidates = [path]
+    elif path.is_dir():
+        candidates, unreadable = _walk_matching(path, ".mjs")
+        _raise_if_unreadable(unreadable)
+    else:
+        candidates = []
+    return [f for f in candidates if f.suffix == ".mjs" and not _is_fixture(f)]
+
+
+def _raise_for_uncollected_mjs(paths: list[Path], test262_dir: Path) -> None:
+    # The test262 submodule is third-party and must never be modified, so its
+    # own .mjs files (e.g. tools/) can't act on the "rename it" remedy below.
+    upstream = test262_dir.resolve()
+    uncollected = sorted(
+        {
+            f
+            for path in paths
+            for f in _uncollected_mjs(path)
+            if not f.resolve().is_relative_to(upstream)
+        }
+    )
+    if not uncollected:
+        return
+
+    formatted = "\n  ".join(str(path) for path in uncollected)
+    raise TestCollectionError(
+        "non-fixture .mjs files would not be collected:\n"
+        f"  {formatted}\n"
+        "Rename executable module tests to .js and add flags: [module], or "
+        "name imported dependencies *_FIXTURE.js/.mjs."
+    )
+
+
+class SweepResult(NamedTuple):
+    """Outcome of a sweep, in enough detail to never imply a false all-clear.
+
+    A bare count cannot distinguish "nothing to do" from "never looked", so
+    every way the sweep can fall short is reported separately: files left
+    because they are too recent to judge dead, files that resisted removal, and
+    directories that could not be traversed at all.
+    """
+
+    removed: int
+    skipped_too_recent: int
+    unremovable: list[tuple[Path, OSError]]
+    unreadable: list[tuple[Path, OSError]]
+
+    @property
+    def incomplete(self) -> bool:
+        return bool(self.unremovable or self.unreadable)
+
+
+def sweep_scratch_files(roots: list[Path], min_age_s: float) -> SweepResult:
+    """Delete scratch files left behind by a run that was killed outright.
+
+    SIGKILL runs neither the `finally` in `run_scenario` nor the worker's
+    termination handler, so nothing but an explicit sweep can reclaim those
+    files. Only names carrying `SCRATCH_PREFIX` are eligible.
+
+    This is deliberately not part of a normal run. Nothing a sweep can see
+    establishes that the run which created a file has died: a file's age is
+    bounded by the *creating* run's `--timeout`, not this one's, and a worker
+    stalled on a loaded machine outlives any fixed cutoff. Sweeping
+    automatically would therefore let one invocation delete a live scratch file
+    out from under another, whose engine would then read a missing input and
+    record a false failure. The caller asserts that no other run is active.
+
+    `min_age_s` is defence in depth for a mistaken invocation, not a liveness
+    test. See `SweepResult` for why the outcome is more than a count.
+    """
+    cutoff = time.time() - min_age_s
+    removed = 0
+    skipped = 0
+    unremovable: list[tuple[Path, OSError]] = []
+    unreadable: list[tuple[Path, OSError]] = []
+
+    def _scan(directory: Path) -> list[Path]:
+        # `Path.rglob` swallows a directory it cannot read and simply omits that
+        # subtree, which would let an unreadable corner of the tree pass as
+        # swept. `os.walk` can at least tell us it happened.
+        found: list[Path] = []
+        for dirpath, _dirnames, filenames in os.walk(
+            directory, onerror=lambda e: unreadable.append((Path(e.filename), e))
+        ):
+            found.extend(
+                Path(dirpath) / name
+                for name in filenames
+                if name.startswith(SCRATCH_PREFIX) and name.endswith(".js")
+            )
+        return found
+
+    for root in roots:
+        # `paths` accepts individual files, and a shell glob over a directory
+        # expands to them, so a file root has to be considered on its own terms
+        # rather than skipped -- otherwise naming a leaked file explicitly is a
+        # silent no-op that still reports success.
+        if root.is_file():
+            candidates = [root]
+        elif root.is_dir():
+            candidates = _scan(root)
+        else:
+            continue
+        for f in candidates:
+            if not _is_scratch(f):
+                continue
+            try:
+                if f.stat().st_mtime > cutoff:
+                    skipped += 1
+                    continue
+                f.unlink()
+            except OSError as error:
+                # A read-only checkout or changed directory permissions leaves a
+                # known stale file in place; swallowing that would let the run
+                # report success with the file still there.
+                unremovable.append((f, error))
+                continue
+            removed += 1
+    return SweepResult(removed, skipped, unremovable, unreadable)
+
+
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     if paths:
+        selected = [Path(p) for p in paths]
+        _raise_for_uncollected_mjs(selected, test262_dir)
         tests = []
-        for p in paths:
-            path = Path(p)
-            if path.is_file() and path.suffix == ".js":
+        for path in selected:
+            # A leaked scratch file reaches this branch when it is named
+            # directly or swept up by a shell glob, and the startup sweep skips
+            # it because a file is not a directory. Filter it here too, or it is
+            # counted as a test and inflates the selected run's total.
+            if path.is_file() and path.suffix == ".js" and not _is_scratch(path):
                 tests.append(path)
             elif path.is_dir():
-                tests.extend(f for f in sorted(path.rglob("*.js")) if not _is_fixture(f))
+                found, unreadable = _walk_matching(path, ".js")
+                _raise_if_unreadable(unreadable)
+                tests.extend(
+                    f
+                    for f in found
+                    if not _is_fixture(f) and not _is_scratch(f)
+                )
         return sorted(tests)
 
+    # The default corpus lives entirely inside the read-only test262 submodule,
+    # so there is nothing there the .mjs naming guard could ask an author to fix.
     test_dir = test262_dir / "test"
     tests = []
+    unreadable: list[tuple[Path, OSError]] = []
     for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
-            tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
+            found, sub_unreadable = _walk_matching(d, ".js")
+            unreadable.extend(sub_unreadable)
+            tests.extend(
+                f for f in found if not _is_fixture(f) and not _is_scratch(f)
+            )
+    _raise_if_unreadable(unreadable)
     return sorted(tests)
 
 
@@ -684,6 +951,38 @@ def main():
 
     args = parse_args()
 
+    if args.clean_scratch:
+        # Before any engine resolution: this only touches the filesystem, so it
+        # must stay usable on a checkout where the binary has not been built.
+        test262 = Path(args.test262)
+        roots = [Path(p) for p in args.paths] if args.paths else [test262 / "test"]
+        # `sweep_scratch_files` skips a root it cannot walk, so without this a
+        # mistyped path -- or a missing --test262 checkout -- would report
+        # "Removed 0" and exit 0, reading as confirmation that a tree is clean
+        # when it was never looked at. Moving this command ahead of the engine
+        # setup also moved it ahead of that directory check, so it validates its
+        # own roots.
+        missing = [r for r in roots if not r.exists()]
+        if missing:
+            for r in missing:
+                print(f"Error: cleanup path not found: {r}", file=sys.stderr)
+            sys.exit(2)
+        result = sweep_scratch_files(roots, min_age_s=max(args.timeout * 2, 300))
+        print(
+            f"Removed {result.removed} scratch file(s) left by an earlier "
+            "killed run."
+        )
+        if result.skipped_too_recent:
+            print(
+                f"Left {result.skipped_too_recent} in place as too recent to be "
+                "sure they are dead. Re-run once no other invocation is active."
+            )
+        for path, error in result.unreadable:
+            print(f"Error: could not scan {path}: {error}", file=sys.stderr)
+        for path, error in result.unremovable:
+            print(f"Error: could not remove {path}: {error}", file=sys.stderr)
+        sys.exit(1 if result.incomplete else 0)
+
     engine_name = args.engine
     binary = args.binary
     if binary is None and args.jsse_compat is not None and engine_name == "jsse":
@@ -694,6 +993,7 @@ def main():
     binary_path = Path(binary)
     if not binary_path.is_file():
         import shutil
+
         found = shutil.which(binary)
         if found:
             binary_path = Path(found)
@@ -708,17 +1008,25 @@ def main():
         sys.exit(2)
 
     selected_paths = args.paths if args.paths else None
-    tests = find_tests(test262, selected_paths)
+
+    try:
+        tests = find_tests(test262, selected_paths)
+    except TestCollectionError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(2)
 
     is_sample_run = args.sample is not None
     if is_sample_run:
         rate = args.sample
         if not (0 < rate <= 1):
-            print("Error: --sample must be between 0 (exclusive) and 1 (inclusive)", file=sys.stderr)
+            print(
+                "Error: --sample must be between 0 (exclusive) and 1 (inclusive)",
+                file=sys.stderr,
+            )
             sys.exit(2)
         tests = sample_tests(tests, rate, args.seed)
         print(
-            f"Sampling {rate*100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
+            f"Sampling {rate * 100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
             file=sys.stderr,
         )
     elif selected_paths:
@@ -840,7 +1148,7 @@ def main():
     print("=== test262 Results ===")
     print(f"Engine:  {engine_name} ({binary})")
     if is_sample_run:
-        print(f"Sample:  {args.sample*100:.1f}% (seed={args.seed})")
+        print(f"Sample:  {args.sample * 100:.1f}% (seed={args.seed})")
     elif selected_paths:
         print(f"Paths:   {', '.join(selected_paths)}")
     if baseline_source:
@@ -861,7 +1169,9 @@ def main():
             print(f"  ... and {len(fail_list) - 20} more")
 
     if regressions:
-        print(f"\n!!! REGRESSIONS: {len(regressions)} tests that previously passed now fail:")
+        print(
+            f"\n!!! REGRESSIONS: {len(regressions)} tests that previously passed now fail:"
+        )
         for r in regressions[:20]:
             print(f"  REGRESSED: {r}")
         if len(regressions) > 20:
@@ -896,16 +1206,16 @@ def main():
 
     print()
     json_obj = {
-        'engine': engine_name,
-        'files': num_files,
-        'scenarios': total,
-        'run': run_total,
-        'skip': skipped,
-        'pass': passed,
-        'fail': failed,
-        'percentage': round(percentage, 2),
-        'regressions': len(regressions),
-        'new_passes': len(new_passes),
+        "engine": engine_name,
+        "files": num_files,
+        "scenarios": total,
+        "run": run_total,
+        "skip": skipped,
+        "pass": passed,
+        "fail": failed,
+        "percentage": round(percentage, 2),
+        "regressions": len(regressions),
+        "new_passes": len(new_passes),
     }
     print(f"JSON: {json.dumps(json_obj)}")
 

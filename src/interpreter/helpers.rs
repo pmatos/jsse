@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::ValueKind;
 
 // Resolves a spec "relative index" argument (already passed through ToIntegerOrInfinity)
 // against a length, per the clamp used by e.g. Array.prototype.slice, String.prototype.slice,
@@ -11,6 +12,71 @@ pub(crate) fn resolve_relative_index(n: f64, len: usize) -> usize {
     } else {
         n.min(len) as usize
     }
+}
+
+// Resolves a spec "relative index" for element access — the `.prototype.at` and
+// `.prototype.with` methods of Array, String and TypedArray — where an
+// out-of-range index yields no element rather than being clamped. `relative`
+// must already have passed through ToIntegerOrInfinity. Returns `Some(k)` when
+// the resolved index lies in `[0, len)` (the caller reads or writes element
+// `k`); returns `None` when it is out of range (`.at` returns `undefined`,
+// `.with` throws a RangeError). Contrast `resolve_relative_index`, which clamps
+// into `[0, len]` for the range-based methods (slice/fill/copyWithin/...).
+pub(crate) fn resolve_element_index(relative: f64, len: usize) -> Option<usize> {
+    let k = if relative < 0.0 {
+        len as f64 + relative
+    } else {
+        relative
+    };
+    if k >= 0.0 && k < len as f64 {
+        Some(k as usize)
+    } else {
+        None
+    }
+}
+
+// Resolves a spec "start"-style relative-index argument for the range-based
+// methods of Array (slice, fill, copyWithin, splice, toSpliced), TypedArray,
+// String, and the ArrayBuffer/SharedArrayBuffer slice family (slice,
+// sliceToImmutable). An absent argument defaults to index 0; otherwise the
+// argument is passed through ToIntegerOrInfinity and clamped against `len` by
+// `resolve_relative_index`.
+// Unlike the "end" argument, an explicit `undefined` is NOT special-cased —
+// it coerces to 0 like any other non-numeric value.
+// `len` must be the array length captured *before* this coercion runs, since a
+// user-supplied `valueOf` observes it (the spec computes both `start` and `end`
+// against the single length captured at the top of the method).
+pub(crate) fn resolve_start_index(
+    interp: &mut Interpreter,
+    arg: Option<&JsValue>,
+    len: usize,
+) -> Result<usize, Completion> {
+    let relative = match arg {
+        Some(v) => interp
+            .to_integer_or_infinity_value(v)
+            .map_err(Completion::Throw)?,
+        None => 0.0,
+    };
+    Ok(resolve_relative_index(relative, len))
+}
+
+// Resolves a spec "end"-style relative-index argument for the range-based
+// methods (see `resolve_start_index` for the surfaces this covers). An absent
+// argument *or* an explicit `undefined` defaults to `len`; otherwise the
+// argument is passed through ToIntegerOrInfinity and clamped against `len`. See
+// `resolve_start_index` for the `len` capture invariant.
+pub(crate) fn resolve_end_index(
+    interp: &mut Interpreter,
+    arg: Option<&JsValue>,
+    len: usize,
+) -> Result<usize, Completion> {
+    let relative = match arg {
+        Some(v) if !v.is_undefined() => interp
+            .to_integer_or_infinity_value(v)
+            .map_err(Completion::Throw)?,
+        _ => len as f64,
+    };
+    Ok(resolve_relative_index(relative, len))
 }
 
 pub(crate) fn to_integer_or_infinity(n: f64) -> f64 {
@@ -48,148 +114,256 @@ pub(crate) fn format_radix(mut n: i64, radix: u32) -> String {
 
 // §7.1.3 ToBoolean
 pub(crate) fn to_boolean(val: &JsValue) -> bool {
-    match val {
-        JsValue::Undefined | JsValue::Null => false,
-        JsValue::Boolean(b) => *b,
-        JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
-        JsValue::String(s) => !s.is_empty(),
-        JsValue::BigInt(b) => b.value != num_bigint::BigInt::from(0),
-        JsValue::Symbol(_) | JsValue::Object(_) => true,
+    match val.kind() {
+        ValueKind::Undefined | ValueKind::Null => false,
+        ValueKind::Boolean => val.as_boolean().unwrap(),
+        ValueKind::Number => {
+            let n = val.as_number().unwrap();
+            n != 0.0 && !n.is_nan()
+        }
+        ValueKind::String => !val.as_string().unwrap().is_empty(),
+        ValueKind::BigInt => val
+            .with_bigint(|b| *b != num_bigint::BigInt::from(0))
+            .unwrap(),
+        ValueKind::Symbol | ValueKind::Object => true,
     }
 }
 
 // §7.1.4 ToNumber
 pub(crate) fn to_number(val: &JsValue) -> f64 {
-    match val {
-        JsValue::Undefined => f64::NAN,
-        JsValue::Null => 0.0,
-        JsValue::Boolean(b) => *b as u8 as f64,
-        JsValue::Number(n) => *n,
-        JsValue::String(s) => string_to_number(s),
+    match val.kind() {
+        ValueKind::Undefined => f64::NAN,
+        ValueKind::Null => 0.0,
+        ValueKind::Boolean => val.as_boolean().unwrap() as u8 as f64,
+        ValueKind::Number => val.as_number().unwrap(),
+        ValueKind::String => string_to_number(&val.as_string().unwrap()),
         _ => f64::NAN,
     }
+}
+
+// §12 WhiteSpace | LineTerminator — the set trimmed from a StrNumericLiteral and
+// by String.prototype.trim / parseInt / parseFloat. Kept here, in the spec
+// conversions module, as the single canonical predicate every consumer shares.
+// (Distinct from Rust's `char::is_whitespace`, which adds U+0085 and omits U+FEFF.)
+pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{FEFF}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
+}
+
+// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as an
+// exact integer, then convert it to f64 once. Parsing through the exact decimal
+// representation gives Rust's float parser the full mathematical value to round,
+// avoiding both fixed-width overflow and intermediate floating-point rounding.
+// Empty or invalid input → NaN.
+fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
+        return f64::NAN;
+    }
+    num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
+        .and_then(|exact| exact.to_string().parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
 }
 
 // §7.1.4.1.1 StringToNumber (uses §7.1.4.1.2 RoundMVResult via f64::parse)
 fn string_to_number(s: &JsString) -> f64 {
     let rust_str = s.to_rust_string();
-    // ECMA-262 §12.2 WhiteSpace includes <ZWNBSP> (U+FEFF), which Rust's
-    // char::is_whitespace omits (Unicode classifies it as Format, not White_Space).
-    let trimmed = rust_str.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}');
+    let trimmed = rust_str.trim_matches(is_ecma_whitespace);
     if trimmed.is_empty() {
         return 0.0;
     }
-    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        return i64::from_str_radix(&trimmed[2..], 16)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    // NonDecimalIntegerLiteral: no sign is permitted, so a leading '+'/'-' keeps
+    // the string out of these branches and it falls through to StrDecimalLiteral.
+    if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return radix_digits_to_f64(rest, 16);
     }
-    if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
-        return i64::from_str_radix(&trimmed[2..], 8)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    if let Some(rest) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return radix_digits_to_f64(rest, 8);
     }
-    if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
-        return i64::from_str_radix(&trimmed[2..], 2)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    if let Some(rest) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return radix_digits_to_f64(rest, 2);
     }
-    if trimmed == "Infinity" || trimmed == "+Infinity" {
-        return f64::INFINITY;
+    // StrDecimalLiteral: the only Infinity token is exactly "Infinity" (with an
+    // optional sign). Every other inf/nan spelling Rust's f64 parser would accept
+    // must be NaN, so reject them before handing off to `parse`.
+    match trimmed {
+        "Infinity" | "+Infinity" => return f64::INFINITY,
+        "-Infinity" => return f64::NEG_INFINITY,
+        _ => {}
     }
-    if trimmed == "-Infinity" {
-        return f64::NEG_INFINITY;
-    }
-    if trimmed.eq_ignore_ascii_case("infinity")
-        || trimmed.eq_ignore_ascii_case("+infinity")
-        || trimmed.eq_ignore_ascii_case("-infinity")
+    let unsigned = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    if unsigned.eq_ignore_ascii_case("inf")
+        || unsigned.eq_ignore_ascii_case("infinity")
+        || unsigned.eq_ignore_ascii_case("nan")
     {
         return f64::NAN;
     }
     trimmed.parse::<f64>().unwrap_or(f64::NAN)
 }
 
-pub(crate) fn to_js_string(val: &JsValue) -> String {
-    match val {
-        JsValue::BigInt(b) => b.value.to_string(),
-        _ => format!("{val}"),
+// §7.1.14 StringToBigInt: the single canonical parse of a String value to a
+// BigInt, returning None when the string is not a valid StringIntegerLiteral.
+// Shared by the BigInt constructor, ToBigInt (typed-array/DataView writes,
+// %TypedArray%.prototype.with), and BigInt/String loose equality so every
+// consumer agrees. Whitespace is trimmed per StrWhiteSpace (via
+// `is_ecma_whitespace`, matching `string_to_number`); the empty string is 0n.
+//
+// Unlike a bare `num_bigint` parse, the grammar is enforced: numeric separators
+// (`_`), a sign inside a NonDecimalIntegerLiteral (e.g. `0x-1`), radix points,
+// exponents, a `n` suffix, and non-ASCII digits are all rejected.
+pub(crate) fn string_to_bigint(s: &str) -> Option<num_bigint::BigInt> {
+    let trimmed = s.trim_matches(is_ecma_whitespace);
+    if trimmed.is_empty() {
+        return Some(num_bigint::BigInt::from(0));
     }
+    // NonDecimalIntegerLiteral: a 0x/0o/0b prefix followed by one or more digits
+    // of that radix — no sign, no separators. `num_bigint::parse_bytes` silently
+    // ignores `_` and accepts a leading sign, so validate the body first.
+    fn parse_non_decimal(body: &str, radix: u32) -> Option<num_bigint::BigInt> {
+        if !body.is_empty() && body.chars().all(|c| c.is_digit(radix)) {
+            num_bigint::BigInt::parse_bytes(body.as_bytes(), radix)
+        } else {
+            None
+        }
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return parse_non_decimal(hex, 16);
+    }
+    if let Some(oct) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return parse_non_decimal(oct, 8);
+    }
+    if let Some(bin) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return parse_non_decimal(bin, 2);
+    }
+    // SignedInteger: an optional single sign then one or more decimal digits —
+    // no separators, radix points, or exponents.
+    let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    trimmed.parse::<num_bigint::BigInt>().ok()
+}
+
+pub(crate) fn to_js_string(val: &JsValue) -> String {
+    val.with_bigint(|b| b.to_string())
+        .unwrap_or_else(|| format!("{val}"))
 }
 
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
 pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
-    match val {
-        JsValue::String(s) => s.code_units.to_vec(),
-        _ => to_js_string(val).encode_utf16().collect(),
-    }
+    val.with_string(|units| units.to_vec())
+        .unwrap_or_else(|| to_js_string(val).encode_utf16().collect())
 }
 
 /// Convert a JsValue to a property key string. For symbols, uses the id-based
 /// format to ensure uniqueness. For other types, same as to_js_string.
-pub(crate) fn to_property_key_string(val: &JsValue) -> String {
-    match val {
-        JsValue::Symbol(s) => s.to_property_key(),
-        _ => format!("{val}"),
+pub(crate) fn to_property_key_string(val: &JsValue) -> JsPropertyKey {
+    if let Some(s) = val.as_string() {
+        return JsPropertyKey::from_js_string(&s);
     }
+    if let Some(key) = val.with_symbol(|s| s.to_property_key()) {
+        return key;
+    }
+    JsPropertyKey::from(format!("{val}"))
 }
 
 pub(crate) fn is_string(val: &JsValue) -> bool {
-    matches!(val, JsValue::String(_))
+    val.is_string()
 }
 
 pub(crate) fn same_value(left: &JsValue, right: &JsValue) -> bool {
-    match (left, right) {
-        (JsValue::Number(a), JsValue::Number(b)) => {
-            if a.is_nan() && b.is_nan() {
-                return true;
-            }
-            if *a == 0.0 && *b == 0.0 {
-                return a.is_sign_positive() == b.is_sign_positive();
-            }
-            a == b
+    if let (Some(a), Some(b)) = (left.as_number(), right.as_number()) {
+        if a.is_nan() && b.is_nan() {
+            return true;
         }
-        _ => strict_equality(left, right),
+        if a == 0.0 && b == 0.0 {
+            return a.is_sign_positive() == b.is_sign_positive();
+        }
+        return a == b;
     }
+    strict_equality(left, right)
 }
 
 pub(crate) fn same_value_zero(left: &JsValue, right: &JsValue) -> bool {
-    match (left, right) {
-        (JsValue::Number(a), JsValue::Number(b)) => {
-            if a.is_nan() && b.is_nan() {
-                return true;
-            }
-            // -0 === +0
-            a == b
+    if let (Some(a), Some(b)) = (left.as_number(), right.as_number()) {
+        if a.is_nan() && b.is_nan() {
+            return true;
         }
-        _ => strict_equality(left, right),
+        // -0 === +0
+        return a == b;
     }
+    strict_equality(left, right)
 }
 
 pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
-    match (left, right) {
-        (JsValue::Undefined, JsValue::Undefined) => true,
-        (JsValue::Null, JsValue::Null) => true,
-        (JsValue::Boolean(a), JsValue::Boolean(b)) => a == b,
-        (JsValue::Number(a), JsValue::Number(b)) => number_ops::equal(*a, *b),
-        (JsValue::String(a), JsValue::String(b)) => a == b,
-        (JsValue::Symbol(a), JsValue::Symbol(b)) => a.id == b.id,
-        (JsValue::BigInt(a), JsValue::BigInt(b)) => bigint_ops::equal(&a.value, &b.value),
-        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-        _ => false,
+    if left.kind() != right.kind() {
+        return false;
+    }
+    match left.kind() {
+        ValueKind::Undefined | ValueKind::Null => true,
+        ValueKind::Boolean => left.as_boolean() == right.as_boolean(),
+        ValueKind::Number => {
+            number_ops::equal(left.as_number().unwrap(), right.as_number().unwrap())
+        }
+        ValueKind::String => left
+            .with_string(|a| right.with_string(|b| a == b).unwrap_or(false))
+            .unwrap_or(false),
+        ValueKind::Symbol => left
+            .with_symbol(|a| right.with_symbol(|b| a.id() == b.id()).unwrap_or(false))
+            .unwrap_or(false),
+        ValueKind::BigInt => left
+            .with_bigint(|a| {
+                right
+                    .with_bigint(|b| bigint_ops::equal(a, b))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+        ValueKind::Object => left.as_object_id() == right.as_object_id(),
     }
 }
 
 pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::ObjectArena) -> &'a str {
-    match val {
-        JsValue::Undefined => "undefined",
-        JsValue::Null => "object",
-        JsValue::Boolean(_) => "boolean",
-        JsValue::Number(_) => "number",
-        JsValue::String(_) => "string",
-        JsValue::Symbol(_) => "symbol",
-        JsValue::BigInt(_) => "bigint",
-        JsValue::Object(o) => {
-            if let Some(obj) = objects.get(o.id) {
+    match val.kind() {
+        ValueKind::Undefined => "undefined",
+        ValueKind::Null => "object",
+        ValueKind::Boolean => "boolean",
+        ValueKind::Number => "number",
+        ValueKind::String => "string",
+        ValueKind::Symbol => "symbol",
+        ValueKind::BigInt => "bigint",
+        ValueKind::Object => {
+            if let Some(id) = val.as_object_id()
+                && let Some(obj) = objects.get(id)
+            {
                 let b = obj.borrow();
                 if b.is_htmldda {
                     return "undefined";
@@ -204,10 +378,6 @@ pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::Objec
 }
 
 use std::collections::HashMap;
-
-fn json_quote(s: &str) -> String {
-    json_quote_units(&s.encode_utf16().collect::<Vec<u16>>())
-}
 
 fn json_quote_units(units: &[u16]) -> String {
     let mut result = String::with_capacity(units.len() + 2);
@@ -292,140 +462,33 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
     Ok(false)
 }
 
-pub(crate) fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
-    let mut indices: Vec<(u64, usize)> = Vec::new();
-    let mut strings: Vec<(String, usize)> = Vec::new();
-    for (pos, k) in keys.iter().enumerate() {
-        if let Ok(n) = k.parse::<u64>()
-            && n.to_string() == *k
-        {
-            indices.push((n, pos));
-            continue;
-        }
-        strings.push((k.clone(), pos));
-    }
-    indices.sort_by_key(|&(n, _)| n);
-    let mut result: Vec<String> = Vec::with_capacity(keys.len());
-    for (n, _) in indices {
-        result.push(n.to_string());
-    }
-    for (s, _) in strings {
-        result.push(s);
-    }
-    result
-}
-
 pub(crate) fn enumerable_own_keys(
     interp: &mut Interpreter,
     obj_id: u64,
-) -> Result<Vec<String>, JsValue> {
-    if let Some(obj) = interp.get_object_cell(obj_id) {
-        if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-            let target_val = interp.get_proxy_target_val(obj_id);
-            match interp.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
-                Ok(Some(v)) => {
-                    interp.validate_ownkeys_invariant(&v, &target_val)?;
-                    let mut keys = Vec::new();
-                    if let JsValue::Object(arr) = &v {
-                        const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
-                        let len = match interp.get_property_on_id(arr.id, "length") {
-                            JsValue::Number(n) if n.is_finite() && n > 0.0 => {
-                                let len = n.floor() as usize;
-                                if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
-                                    return Err(interp.create_type_error(
-                                        "'ownKeys' on proxy: trap result length exceeds supported limit",
-                                    ));
-                                }
-                                len
-                            }
-                            _ => 0,
-                        };
-                        for i in 0..len {
-                            let k = interp.get_property_on_id(arr.id, &i.to_string());
-                            if let JsValue::String(s) = k {
-                                let key_str = s.to_rust_string();
-                                let key_val = JsValue::String(s);
-                                match interp.invoke_proxy_trap(
-                                    obj_id,
-                                    "getOwnPropertyDescriptor",
-                                    vec![target_val.clone(), key_val],
-                                ) {
-                                    Ok(Some(desc_val)) => {
-                                        if let JsValue::Object(dobj) = &desc_val {
-                                            let enum_val =
-                                                interp.get_property_on_id(dobj.id, "enumerable");
-                                            if interp.to_boolean_val(&enum_val) {
-                                                keys.push(key_str);
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        if let JsValue::Object(ref t) = target_val
-                                            && let Some(tobj) = interp.get_object_cell(t.id)
-                                            && let Some(d) = tobj.borrow().properties.get(&key_str)
-                                            && d.enumerable != Some(false)
-                                        {
-                                            keys.push(key_str);
-                                        }
-                                    }
-                                    Err(e) => return Err(e),
-                                }
-                            }
-                        }
-                    }
-                    return Ok(keys);
-                }
-                Ok(None) => {
-                    // No ownKeys trap — delegate to the target
-                    if let JsValue::Object(ref t) = target_val {
-                        return enumerable_own_keys(interp, t.id);
-                    }
-                    return Ok(Vec::new());
-                }
-                Err(e) => return Err(e),
-            }
+) -> Result<Vec<JsPropertyKey>, JsValue> {
+    let own_keys = interp.proxy_own_keys(obj_id)?;
+    let mut enumerable_keys = Vec::new();
+
+    for key_value in own_keys {
+        let Some(key_string) = key_value.as_string() else {
+            continue;
+        };
+        let key = JsPropertyKey::from_js_string(&key_string);
+        let descriptor_value = interp.proxy_get_own_property_descriptor(obj_id, &key)?;
+        if descriptor_value.is_undefined() {
+            continue;
         }
-        let b = obj.borrow();
-        // String exotic object: character indices come first
-        let mut result: Vec<String> = Vec::new();
-        if let Some(JsValue::String(ref s)) = b.primitive_value {
-            let len = s.len();
-            for i in 0..len {
-                result.push(i.to_string());
-            }
+        let descriptor = match interp.to_property_descriptor(&descriptor_value) {
+            Ok(descriptor) => descriptor,
+            Err(Some(error)) => return Err(error),
+            Err(None) => continue,
+        };
+        if descriptor.enumerable == Some(true) {
+            enumerable_keys.push(key);
         }
-        // TypedArray [[OwnPropertyKeys]]: virtual indexed properties are enumerable
-        if let Some(ta) = b.typed_array_info() {
-            for i in 0..ta.array_length {
-                result.push(i.to_string());
-            }
-        }
-        let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
-        let keys: Vec<String> = b
-            .property_order
-            .iter()
-            .filter(|k| {
-                let ks: &str = k;
-                if result.iter().any(|r| r.as_str() == ks) {
-                    return false;
-                }
-                if is_string_wrapper && ks == "length" {
-                    return false;
-                }
-                !ks.starts_with("Symbol(")
-                    && b.properties
-                        .get(ks)
-                        .is_some_and(|d| d.enumerable != Some(false))
-            })
-            .map(|k| k.to_string())
-            .collect();
-        if !result.is_empty() {
-            result.extend(sort_own_keys(keys));
-            return Ok(result);
-        }
-        return Ok(sort_own_keys(keys));
     }
-    Ok(Vec::new())
+
+    Ok(enumerable_keys)
 }
 
 pub(crate) fn json_stringify_full(
@@ -435,52 +498,51 @@ pub(crate) fn json_stringify_full(
     space: &str,
 ) -> Result<Option<String>, JsValue> {
     let mut stack = Vec::new();
-    let mut property_list: Option<Vec<String>> = None;
+    let mut property_list: Option<Vec<JsPropertyKey>> = None;
     let mut replacer_fn: Option<JsValue> = None;
 
     if let Some(rep) = replacer
-        && let JsValue::Object(o) = rep
-        && let Some(obj) = interp.get_object_cell(o.id)
+        && let Some(rep_id) = rep.as_object_id()
+        && let Some(obj) = interp.get_object_cell(rep_id)
     {
         if obj.borrow().callable.is_some() {
             replacer_fn = Some(rep.clone());
-        } else if is_array_value(interp, o.id)? {
+        } else if is_array_value(interp, rep_id)? {
             let mut keys = Vec::new();
-            let obj_val = JsValue::Object(crate::types::JsObject { id: o.id });
-            let len_val = match interp.get_object_property(o.id, "length", &obj_val) {
+            let obj_val = JsValue::object(rep_id);
+            let len_val = match interp.get_object_property(rep_id, "length", &obj_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             let len = {
                 let n = interp.to_number_value(&len_val)?;
                 n as usize
             };
             for i in 0..len {
-                let item = match interp.get_object_property(o.id, &i.to_string(), &obj_val) {
+                let item = match interp.get_object_property(rep_id, &i.to_string(), &obj_val) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
-                let key_str = match &item {
-                    JsValue::String(s) => Some(s.to_rust_string()),
-                    JsValue::Number(n) => Some(number_ops::to_string(*n)),
-                    JsValue::Object(oo) => {
-                        if let Some(inner) = interp.get_object_cell(oo.id) {
-                            let cn = inner.borrow().class_name.clone();
-                            if cn == "String" || cn == "Number" {
-                                {
-                                    let s = interp.to_string_value(&item)?;
-                                    Some(s)
-                                }
-                            } else {
-                                None
-                            }
+                let key_str = if let Some(s) = item.as_string() {
+                    Some(JsPropertyKey::from_js_string(&s))
+                } else if let Some(n) = item.as_number() {
+                    Some(JsPropertyKey::from(number_ops::to_string(n)))
+                } else if let Some(item_id) = item.as_object_id() {
+                    if let Some(inner) = interp.get_object_cell(item_id) {
+                        let cn = inner.borrow().class_name.clone();
+                        if cn == "String" || cn == "Number" {
+                            let s = interp.to_string_value(&item)?;
+                            Some(JsPropertyKey::from(s))
                         } else {
                             None
                         }
+                    } else {
+                        None
                     }
-                    _ => None,
+                } else {
+                    None
                 };
                 if let Some(k) = key_str
                     && !keys.contains(&k)
@@ -499,10 +561,11 @@ pub(crate) fn json_stringify_full(
         .insert_value("".to_string(), val.clone());
     let holder_id = wrapper_id;
 
+    let root_key = JsPropertyKey::from_str("");
     json_stringify_internal(
         interp,
         holder_id,
-        "",
+        &root_key,
         val,
         &mut stack,
         &replacer_fn,
@@ -516,48 +579,48 @@ pub(crate) fn json_stringify_full(
 fn json_stringify_internal(
     interp: &mut Interpreter,
     holder_id: u64,
-    key: &str,
+    key: &JsPropertyKey,
     val: &JsValue,
     stack: &mut Vec<u64>,
     replacer_fn: &Option<JsValue>,
-    property_list: &Option<Vec<String>>,
+    property_list: &Option<Vec<JsPropertyKey>>,
     gap: &str,
     indent: &str,
 ) -> Result<Option<String>, JsValue> {
     let mut value = val.clone();
 
     // Step 2: If Type(value) is Object or BigInt, check for toJSON
-    let check_tojson = matches!(&value, JsValue::Object(_) | JsValue::BigInt(_));
+    let check_tojson = value.is_object() || value.is_bigint();
     if check_tojson {
-        let to_json = if let JsValue::Object(o) = &value {
-            match interp.get_object_property(o.id, "toJSON", &value) {
+        let to_json = if let Some(value_id) = value.as_object_id() {
+            match interp.get_object_property(value_id, "toJSON", &value) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
-        } else if let JsValue::BigInt(_) = &value {
+        } else if value.is_bigint() {
             let obj_val = match interp.to_object(&value) {
                 Completion::Normal(v) => v,
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::Object(o) = &obj_val {
+            if let Some(wrapper_id) = obj_val.as_object_id() {
                 // Use original BigInt value as receiver for proper getter behavior
-                match interp.get_object_property(o.id, "toJSON", &value) {
+                match interp.get_object_property(wrapper_id, "toJSON", &value) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             }
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
-        if let JsValue::Object(fobj) = &to_json
-            && let Some(fdata) = interp.get_object_cell(fobj.id)
+        if let Some(to_json_id) = to_json.as_object_id()
+            && let Some(fdata) = interp.get_object_cell(to_json_id)
             && fdata.borrow().callable.is_some()
         {
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = JsValue::string(key.to_js_string());
             match interp.call_function(&to_json, &value, &[key_val]) {
                 Completion::Normal(v) => value = v,
                 Completion::Throw(e) => return Err(e),
@@ -568,8 +631,8 @@ fn json_stringify_internal(
 
     // Step 3: Apply replacer function
     if let Some(rep) = replacer_fn {
-        let holder_val = JsValue::Object(crate::types::JsObject { id: holder_id });
-        let key_val = JsValue::String(JsString::from_str(key));
+        let holder_val = JsValue::object(holder_id);
+        let key_val = JsValue::string(key.to_js_string());
         match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
             Completion::Normal(v) => value = v,
             Completion::Throw(e) => return Err(e),
@@ -578,8 +641,8 @@ fn json_stringify_internal(
     }
 
     // Step 4: Unwrap wrapper objects per spec (ToNumber/ToString trigger valueOf/toString)
-    if let JsValue::Object(o) = &value {
-        let class = if let Some(cell) = interp.get_object_cell(o.id) {
+    if let Some(value_id) = value.as_object_id() {
+        let class = if let Some(cell) = interp.get_object_cell(value_id) {
             cell.borrow().class_name.clone()
         } else {
             String::new()
@@ -587,21 +650,21 @@ fn json_stringify_internal(
         match class.as_str() {
             "Number" => {
                 let n = interp.to_number_value(&value)?;
-                value = JsValue::Number(n)
+                value = JsValue::number(n)
             }
             "String" => {
                 let s = interp.to_string_value(&value)?;
-                value = JsValue::String(JsString::from_str(&s))
+                value = JsValue::from_str(&s)
             }
             "Boolean" => {
-                if let Some(cell) = interp.get_object_cell(o.id)
+                if let Some(cell) = interp.get_object_cell(value_id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
                 }
             }
             "BigInt" => {
-                if let Some(cell) = interp.get_object_cell(o.id)
+                if let Some(cell) = interp.get_object_cell(value_id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
@@ -611,22 +674,23 @@ fn json_stringify_internal(
         }
     }
 
-    match &value {
-        JsValue::Null => Ok(Some("null".to_string())),
-        JsValue::Boolean(b) => Ok(Some(b.to_string())),
-        JsValue::Number(n) => {
+    match value.kind() {
+        ValueKind::Null => Ok(Some("null".to_string())),
+        ValueKind::Boolean => Ok(Some(value.as_boolean().unwrap().to_string())),
+        ValueKind::Number => {
+            let n = value.as_number().unwrap();
             if n.is_nan() || n.is_infinite() {
                 Ok(Some("null".to_string()))
             } else {
-                Ok(Some(number_ops::to_string(*n)))
+                Ok(Some(number_ops::to_string(n)))
             }
         }
-        JsValue::String(s) => Ok(Some(json_quote_js_string(s))),
-        JsValue::BigInt(_) => {
+        ValueKind::String => Ok(Some(value.with_string(json_quote_units).unwrap())),
+        ValueKind::BigInt => {
             Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"))
         }
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id) {
+        ValueKind::Object => {
+            if let Some(obj) = interp.get_object_cell(value.as_object_id().unwrap()) {
                 if obj.borrow().is_raw_json
                     && let Some(raw) = obj.borrow().get_property_value("rawJSON")
                 {
@@ -644,7 +708,7 @@ fn json_stringify_internal(
                 stack.push(obj_id);
 
                 let is_array = is_array_value(interp, obj_id)?;
-                let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+                let obj_val = JsValue::object(obj_id);
                 let new_indent = format!("{}{}", indent, gap);
 
                 let result = if is_array {
@@ -654,7 +718,7 @@ fn json_stringify_internal(
                             stack.pop();
                             return Err(e);
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     let len = match interp.to_number_value(&len_val) {
                         Ok(n) => n as usize,
@@ -665,14 +729,14 @@ fn json_stringify_internal(
                     };
                     let mut items = Vec::new();
                     for i in 0..len {
-                        let ikey = i.to_string();
+                        let ikey = JsPropertyKey::from(i.to_string());
                         let v = match interp.get_object_property(obj_id, &ikey, &obj_val) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 stack.pop();
                                 return Err(e);
                             }
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         match json_stringify_internal(
                             interp,
@@ -703,7 +767,7 @@ fn json_stringify_internal(
                         )))
                     }
                 } else {
-                    let keys: Vec<String> = if let Some(pl) = property_list {
+                    let keys: Vec<JsPropertyKey> = if let Some(pl) = property_list {
                         pl.clone()
                     } else {
                         match enumerable_own_keys(interp, obj_id) {
@@ -722,7 +786,7 @@ fn json_stringify_internal(
                                 stack.pop();
                                 return Err(e);
                             }
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if let Some(sv) = json_stringify_internal(
                             interp,
@@ -735,7 +799,7 @@ fn json_stringify_internal(
                             gap,
                             &new_indent,
                         )? {
-                            let quoted_key = json_quote(k);
+                            let quoted_key = json_quote_js_string(&k.to_js_string());
                             if gap.is_empty() {
                                 entries.push(format!("{}:{}", quoted_key, sv));
                             } else {
@@ -763,7 +827,7 @@ fn json_stringify_internal(
                 Ok(Some("null".to_string()))
             }
         }
-        JsValue::Undefined | JsValue::Symbol(_) => Ok(None),
+        ValueKind::Undefined | ValueKind::Symbol => Ok(None),
     }
 }
 
@@ -786,10 +850,10 @@ pub(crate) fn json_trim(s: &str) -> &str {
     &s[start..end]
 }
 
-pub(crate) type SourceTextMap = HashMap<(u64, String), String>;
+pub(crate) type SourceTextMap = HashMap<(u64, JsPropertyKey), String>;
 
 pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
-    json_parse_value_inner(interp, s, None)
+    json_parse_value_inner(interp, s, None, s)
 }
 
 pub(crate) fn json_parse_value_with_source(
@@ -797,7 +861,7 @@ pub(crate) fn json_parse_value_with_source(
     s: &str,
 ) -> (Completion, SourceTextMap) {
     let mut source_map = SourceTextMap::default();
-    let result = json_parse_value_inner(interp, s, Some(&mut source_map));
+    let result = json_parse_value_inner(interp, s, Some(&mut source_map), s);
     (result, source_map)
 }
 
@@ -805,16 +869,17 @@ fn json_parse_value_inner(
     interp: &mut Interpreter,
     s: &str,
     mut source_map: Option<&mut SourceTextMap>,
+    root_source: &str,
 ) -> Completion {
     let s = json_trim(s);
     if s == "null" {
-        return Completion::Normal(JsValue::Null);
+        return Completion::Normal(JsValue::NULL);
     }
     if s == "true" {
-        return Completion::Normal(JsValue::Boolean(true));
+        return Completion::Normal(JsValue::TRUE);
     }
     if s == "false" {
-        return Completion::Normal(JsValue::Boolean(false));
+        return Completion::Normal(JsValue::FALSE);
     }
     if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
         let inner = &s[1..s.len() - 1];
@@ -822,38 +887,35 @@ fn json_parse_value_inner(
             let err = interp.create_error("SyntaxError", &msg);
             return Completion::Throw(err);
         }
-        let unescaped = json_unescape_string(inner);
-        return Completion::Normal(JsValue::String(JsString::from_str(&unescaped)));
+        return Completion::Normal(JsValue::string(json_unescape_js_string(inner)));
     }
     if json_is_valid_number(s)
         && let Ok(n) = s.parse::<f64>()
     {
-        return Completion::Normal(JsValue::Number(n));
+        return Completion::Normal(JsValue::number(n));
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
-        if json_has_invalid_comma(inner) {
-            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-            return Completion::Throw(err);
+        if let Some(token) = json_invalid_comma_token(inner, ']') {
+            return json_unexpected_token_error(interp, token, root_source);
         }
         let items = json_split_items(inner);
         let mut parsed_items: Vec<(JsValue, String)> = Vec::new();
         for item in &items {
             let trimmed_src = json_trim(item).to_string();
-            match json_parse_value_inner(interp, item, source_map.as_deref_mut()) {
+            match json_parse_value_inner(interp, item, source_map.as_deref_mut(), root_source) {
                 Completion::Normal(v) => parsed_items.push((v, trimmed_src)),
                 other => return other,
             }
         }
         let vals: Vec<JsValue> = parsed_items.iter().map(|(v, _)| v.clone()).collect();
         let arr_val = interp.create_array(vals);
-        if let JsValue::Object(ref arr_obj) = arr_val
+        if let Some(arr_id) = arr_val.as_object_id()
             && let Some(ref mut smap) = source_map
         {
-            let arr_id = arr_obj.id;
             for (i, (v, src)) in parsed_items.iter().enumerate() {
                 if is_json_primitive(v) {
-                    smap.insert((arr_id, i.to_string()), src.clone());
+                    smap.insert((arr_id, JsPropertyKey::from(i.to_string())), src.clone());
                 }
             }
         }
@@ -861,9 +923,8 @@ fn json_parse_value_inner(
     }
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
-        if json_has_invalid_comma(inner) {
-            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-            return Completion::Throw(err);
+        if let Some(token) = json_invalid_comma_token(inner, '}') {
+            return json_unexpected_token_error(interp, token, root_source);
         }
         let pairs = json_split_items(inner);
         let obj_id = interp.create_object_id();
@@ -887,13 +948,13 @@ fn json_parse_value_inner(
                     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                     return Completion::Throw(err);
                 }
-                json_unescape_string(inner)
+                JsPropertyKey::from_js_string(&json_unescape_js_string(inner))
             } else {
                 let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                 return Completion::Throw(err);
             };
             let val_src = json_trim(val_str).to_string();
-            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut()) {
+            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut(), root_source) {
                 Completion::Normal(v) => {
                     if let Some(ref mut smap) = source_map
                         && is_json_primitive(&v)
@@ -908,16 +969,39 @@ fn json_parse_value_inner(
                 other => return other,
             }
         }
-        return Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }));
+        return Completion::Normal(JsValue::object(obj_id));
+    }
+    if let Some(token) = s.chars().next() {
+        return json_unexpected_token_error(interp, token, root_source);
     }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
     Completion::Throw(err)
 }
 
+fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &str) -> Completion {
+    const MAX_SOURCE_CHARS: usize = 20;
+    const TRUNCATED_SOURCE_CHARS: usize = 10;
+
+    let (source, ellipsis) = if source.chars().nth(MAX_SOURCE_CHARS).is_some() {
+        let prefix_end = source
+            .char_indices()
+            .nth(TRUNCATED_SOURCE_CHARS)
+            .map_or(source.len(), |(index, _)| index);
+        (&source[..prefix_end], "...")
+    } else {
+        (source, "")
+    };
+    let message = format!(
+        "Unexpected token '{}', \"{}\"{} is not valid JSON",
+        token, source, ellipsis
+    );
+    Completion::Throw(interp.create_error("SyntaxError", &message))
+}
+
 pub(crate) fn is_json_primitive(val: &JsValue) -> bool {
     matches!(
-        val,
-        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) | JsValue::String(_)
+        val.kind(),
+        ValueKind::Null | ValueKind::Boolean | ValueKind::Number | ValueKind::String
     )
 }
 
@@ -945,45 +1029,43 @@ fn json_validate_string(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn json_unescape_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
+fn json_unescape_js_string(s: &str) -> JsString {
+    let mut result = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.next() {
-                Some('"') => result.push('"'),
-                Some('\\') => result.push('\\'),
-                Some('/') => result.push('/'),
-                Some('b') => result.push('\u{0008}'),
-                Some('f') => result.push('\u{000C}'),
-                Some('n') => result.push('\n'),
-                Some('r') => result.push('\r'),
-                Some('t') => result.push('\t'),
+                Some('"') => result.push(b'"' as u16),
+                Some('\\') => result.push(b'\\' as u16),
+                Some('/') => result.push(b'/' as u16),
+                Some('b') => result.push(0x0008),
+                Some('f') => result.push(0x000C),
+                Some('n') => result.push(b'\n' as u16),
+                Some('r') => result.push(b'\r' as u16),
+                Some('t') => result.push(b'\t' as u16),
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(code)
-                    {
-                        result.push(c);
+                    if let Ok(code) = u16::from_str_radix(&hex, 16) {
+                        result.push(code);
                     }
                 }
                 Some(c) => {
-                    result.push('\\');
-                    result.push(c);
+                    result.push(b'\\' as u16);
+                    result.extend(c.encode_utf16(&mut [0; 2]).iter().copied());
                 }
-                None => result.push('\\'),
+                None => result.push(b'\\' as u16),
             }
         } else {
-            result.push(ch);
+            result.extend(ch.encode_utf16(&mut [0; 2]).iter().copied());
         }
     }
-    result
+    JsString::from_vec(result)
 }
 
-fn json_internalize_apply(
+fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
     interp: &mut Interpreter,
     obj_id: u64,
-    key: &str,
+    key: &K,
     new_val: JsValue,
 ) -> Result<(), JsValue> {
     let is_proxy = interp
@@ -993,9 +1075,9 @@ fn json_internalize_apply(
 
     if is_proxy {
         let target_val = interp.get_proxy_target_val(obj_id);
-        if let JsValue::Undefined = &new_val {
+        if new_val.is_undefined() {
             // Delete via proxy deleteProperty trap
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = JsValue::string(key.to_js_property_key().to_js_string());
             match interp.invoke_proxy_trap(obj_id, "deleteProperty", vec![target_val, key_val]) {
                 Ok(Some(v)) => {
                     if !interp.to_boolean_val(&v) {
@@ -1006,8 +1088,8 @@ fn json_internalize_apply(
                 }
                 Ok(None) => {
                     // No trap, delete on target directly
-                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object_cell(t.id)
+                    if let Some(target_id) = interp.get_proxy_target_val(obj_id).as_object_id()
+                        && let Some(tobj) = interp.get_object_cell(target_id)
                     {
                         tobj.borrow_mut().remove_property(key);
                     }
@@ -1016,7 +1098,7 @@ fn json_internalize_apply(
             }
         } else {
             // CreateDataProperty via proxy defineProperty trap
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = JsValue::string(key.to_js_property_key().to_js_string());
             let desc_obj_id = interp.create_object_id();
             interp
                 .get_object_cell_expect(desc_obj_id)
@@ -1025,16 +1107,16 @@ fn json_internalize_apply(
             interp
                 .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
-                .insert_value("writable".to_string(), JsValue::Boolean(true));
+                .insert_value("writable".to_string(), JsValue::TRUE);
             interp
                 .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
-                .insert_value("enumerable".to_string(), JsValue::Boolean(true));
+                .insert_value("enumerable".to_string(), JsValue::TRUE);
             interp
                 .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
-                .insert_value("configurable".to_string(), JsValue::Boolean(true));
-            let desc_val = JsValue::Object(crate::types::JsObject { id: desc_obj_id });
+                .insert_value("configurable".to_string(), JsValue::TRUE);
+            let desc_val = JsValue::object(desc_obj_id);
             match interp.invoke_proxy_trap(
                 obj_id,
                 "defineProperty",
@@ -1049,10 +1131,11 @@ fn json_internalize_apply(
                 }
                 Ok(None) => {
                     // No trap, define on target directly
-                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object_cell(t.id)
+                    if let Some(target_id) = interp.get_proxy_target_val(obj_id).as_object_id()
+                        && let Some(tobj) = interp.get_object_cell(target_id)
                     {
-                        tobj.borrow_mut().insert_value(key.to_string(), new_val);
+                        tobj.borrow_mut()
+                            .insert_value(key.to_js_property_key(), new_val);
                     }
                 }
                 Err(e) => return Err(e),
@@ -1072,43 +1155,45 @@ fn json_internalize_apply(
         if !configurable {
             return Ok(());
         }
-        if let JsValue::Undefined = &new_val {
+        if new_val.is_undefined() {
             cell.borrow_mut().remove_property(key);
             // Also clear dense array storage so get_property doesn't find stale values
-            if let Ok(idx) = key.parse::<usize>() {
+            if let Some(key_str) = key.as_property_key_str()
+                && let Ok(idx) = key_str.parse::<usize>()
+            {
                 let mut b = cell.borrow_mut();
                 if let Some(elems) = b.array_elements_mut()
                     && idx < elems.len()
                 {
-                    elems[idx] = JsValue::Undefined;
+                    elems[idx] = JsValue::UNDEFINED;
                 }
             }
         } else {
-            cell.borrow_mut().insert_value(key.to_string(), new_val);
+            cell.borrow_mut()
+                .insert_value(key.to_js_property_key(), new_val);
         }
     }
     Ok(())
 }
 
-pub(crate) fn json_internalize(
+pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
     interp: &mut Interpreter,
     holder: &JsValue,
-    name: &str,
+    name: &K,
     reviver: &JsValue,
     source_map: &Option<SourceTextMap>,
 ) -> Completion {
-    let val = if let JsValue::Object(o) = holder {
-        match interp.get_object_property(o.id, name, holder) {
+    let val = if let Some(holder_id) = holder.as_object_id() {
+        match interp.get_object_property(holder_id, name, holder) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         }
     } else {
-        JsValue::Undefined
+        JsValue::UNDEFINED
     };
 
-    let walked = if let JsValue::Object(o) = &val {
-        let obj_id = o.id;
+    let walked = if let Some(obj_id) = val.as_object_id() {
         let is_array = match is_array_value(interp, obj_id) {
             Ok(v) => v,
             Err(e) => return Completion::Throw(e),
@@ -1117,7 +1202,7 @@ pub(crate) fn json_internalize(
             let len_val = match interp.get_object_property(obj_id, "length", &val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Completion::Throw(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             let len = match interp.to_number_value(&len_val) {
                 Ok(n) => n as usize,
@@ -1162,40 +1247,40 @@ pub(crate) fn json_internalize(
         let ctx_id = interp.create_object_id();
         if is_json_primitive(&walked)
             && let Some(smap) = source_map
-            && let JsValue::Object(o) = holder
-            && let Some(src) = smap.get(&(o.id, name.to_string()))
+            && let Some(holder_id) = holder.as_object_id()
+            && let Some(src) = smap.get(&(holder_id, name.to_js_property_key()))
         {
             // Verify the source text matches the actual value
             // (forward modifications make source invalid)
-            let source_matches = match &walked {
-                JsValue::Null => src == "null",
-                JsValue::Boolean(true) => src == "true",
-                JsValue::Boolean(false) => src == "false",
-                JsValue::Number(n) => src
-                    .parse::<f64>()
-                    .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == *n),
-                JsValue::String(s)
-                    // Source includes quotes, parse it to compare
-                    if src.starts_with('"') && src.ends_with('"') => {
+            let source_matches = if walked.is_null() {
+                src == "null"
+            } else if let Some(b) = walked.as_boolean() {
+                src == if b { "true" } else { "false" }
+            } else if let Some(n) = walked.as_number() {
+                src.parse::<f64>()
+                    .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == n)
+            } else {
+                walked
+                    .with_string(|units| {
+                        if !(src.starts_with('"') && src.ends_with('"')) {
+                            return false;
+                        }
+                        // Source includes quotes, parse it to compare
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_string(inner) == s.to_rust_string()
-                    }
-                _ => false,
+                        json_unescape_js_string(inner).code_units.as_slice() == units
+                    })
+                    .unwrap_or(false)
             };
             if source_matches {
                 interp
                     .get_object_cell_expect(ctx_id)
                     .borrow_mut()
-                    .insert_value(
-                        "source".to_string(),
-                        JsValue::String(JsString::from_str(src)),
-                    );
+                    .insert_value("source".to_string(), JsValue::from_str(src));
             }
         }
-        let id = ctx_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(ctx_id)
     };
-    let key_val = JsValue::String(JsString::from_str(name));
+    let key_val = JsValue::string(name.to_js_property_key().to_js_string());
     interp.call_function(reviver, holder, &[key_val, walked, context])
 }
 
@@ -1248,10 +1333,10 @@ fn json_is_valid_number(s: &str) -> bool {
     i == bytes.len()
 }
 
-fn json_has_invalid_comma(inner: &str) -> bool {
+fn json_invalid_comma_token(inner: &str, closing_token: char) -> Option<char> {
     let trimmed = json_trim(inner);
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
     let mut depth = 0i32;
     let mut in_string = false;
@@ -1285,7 +1370,7 @@ fn json_has_invalid_comma(inner: &str) -> bool {
             }
             ',' if depth == 0 => {
                 if prev_was_comma {
-                    return true; // double comma or leading comma
+                    return Some(','); // double comma or leading comma
                 }
                 prev_was_comma = true;
             }
@@ -1295,7 +1380,16 @@ fn json_has_invalid_comma(inner: &str) -> bool {
             }
         }
     }
-    prev_was_comma // trailing comma
+    if !prev_was_comma {
+        return None;
+    }
+
+    let before_comma = trimmed.strip_suffix(',').map(json_trim).unwrap_or_default();
+    if closing_token == '}' && before_comma.ends_with(':') {
+        Some(',')
+    } else {
+        Some(closing_token)
+    }
 }
 
 pub(crate) fn json_split_items(s: &str) -> Vec<String> {
@@ -1517,18 +1611,166 @@ pub(crate) fn time_clip(time: f64) -> f64 {
     if t == 0.0 { 0.0_f64 } else { t }
 }
 
-pub(crate) fn local_tza() -> f64 {
-    use chrono::Local;
-    let now = Local::now();
-    now.offset().local_minus_utc() as f64 * 1000.0
+fn resolve_system_time_zone() -> chrono_tz::Tz {
+    let parse = |identifier: &str| {
+        let identifier = identifier.strip_prefix(':').unwrap_or(identifier);
+        identifier.parse::<chrono_tz::Tz>().ok().or_else(|| {
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .copied()
+                .find(|tz| tz.name().eq_ignore_ascii_case(identifier))
+        })
+    };
+
+    if let Some(tz) = std::env::var("TZ").ok().and_then(|tz| parse(&tz)) {
+        return tz;
+    }
+    if let Some(tz) = iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|tz| parse(&tz))
+    {
+        return tz;
+    }
+    chrono_tz::UTC
+}
+
+fn system_time_zone() -> chrono_tz::Tz {
+    use std::sync::OnceLock;
+
+    static SYSTEM_TIME_ZONE: OnceLock<chrono_tz::Tz> = OnceLock::new();
+    *SYSTEM_TIME_ZONE.get_or_init(resolve_system_time_zone)
+}
+
+pub(crate) fn system_time_zone_identifier() -> String {
+    system_time_zone().name().to_string()
+}
+
+fn time_zone_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
+    use chrono::Datelike;
+
+    if !t.is_finite() {
+        return None;
+    }
+    let epoch_ms = t.floor() as i64;
+    let epoch_secs = epoch_ms.div_euclid(1000);
+    let nanos = epoch_ms.rem_euclid(1000) as u32 * 1_000_000;
+    let direct = chrono::DateTime::from_timestamp(epoch_secs, nanos).map(|dt| dt.naive_utc());
+
+    // chrono-tz's generated transition tables include recurring rules through
+    // 2099. Beyond that they retain the final fixed offset, so project future
+    // dates onto the last complete 28-year calendar cycle instead.
+    if direct.as_ref().is_some_and(|dt| dt.year() <= 2099) {
+        return direct;
+    }
+
+    // A time before chrono's range also precedes every recorded IANA
+    // transition. Its earliest datetime therefore selects the zone's first
+    // historical offset.
+    if t.is_sign_negative() {
+        return Some(chrono::NaiveDateTime::MIN);
+    }
+
+    let year = year_from_time(t);
+    if !(i32::MIN as f64..=i32::MAX as f64).contains(&year) {
+        return None;
+    }
+    let year = year as i32;
+    let year_start_weekday = week_day(time_from_year(year as f64));
+    let days_in_target_year = days_in_year(year as f64);
+    let proxy_year = (2072..=2099).rev().find(|candidate| {
+        days_in_year(*candidate as f64) == days_in_target_year
+            && week_day(time_from_year(*candidate as f64)) == year_start_weekday
+    })?;
+
+    chrono::NaiveDate::from_ymd_opt(
+        proxy_year,
+        month_from_time(t) as u32 + 1,
+        date_from_time(t) as u32,
+    )?
+    .and_hms_milli_opt(
+        hour_from_time(t) as u32,
+        min_from_time(t) as u32,
+        sec_from_time(t) as u32,
+        ms_from_time(t) as u32,
+    )
+}
+
+pub(crate) fn named_time_zone_offset_ms(time_zone: chrono_tz::Tz, t: f64) -> Option<f64> {
+    use chrono::{Offset, TimeZone};
+
+    let utc = time_zone_datetime_from_time_value(t)?;
+    Some(
+        time_zone
+            .offset_from_utc_datetime(&utc)
+            .fix()
+            .local_minus_utc() as f64
+            * 1000.0,
+    )
+}
+
+pub(crate) fn local_tza(t: f64) -> f64 {
+    named_time_zone_offset_ms(system_time_zone(), t).unwrap_or(0.0)
 }
 
 pub(crate) fn local_time(t: f64) -> f64 {
-    t + local_tza()
+    t + local_tza(t)
 }
 
 pub(crate) fn utc_time(t: f64) -> f64 {
-    t - local_tza()
+    use chrono::{MappedLocalTime, Offset, TimeDelta, TimeZone};
+
+    let Some(local) = time_zone_datetime_from_time_value(t) else {
+        return t;
+    };
+    let tz = system_time_zone();
+    let offset = match tz.offset_from_local_datetime(&local) {
+        MappedLocalTime::Single(offset) => offset.fix().local_minus_utc(),
+        MappedLocalTime::Ambiguous(first, second) => {
+            // The larger offset maps the repeated local time to the earlier
+            // instant, matching possibleInstants[0] in UTC.
+            first
+                .fix()
+                .local_minus_utc()
+                .max(second.fix().local_minus_utc())
+        }
+        MappedLocalTime::None => {
+            let mut offset_before = None;
+            for minutes in 1..=2 * 24 * 60 {
+                let Some(probe) = local.checked_sub_signed(TimeDelta::minutes(minutes)) else {
+                    break;
+                };
+                match tz.offset_from_local_datetime(&probe) {
+                    MappedLocalTime::Single(offset) => {
+                        offset_before = Some(offset.fix().local_minus_utc());
+                        break;
+                    }
+                    MappedLocalTime::Ambiguous(first, second) => {
+                        // The smaller offset maps the repeated local time to
+                        // the later instant, the last possible instant before
+                        // a gap.
+                        offset_before = Some(
+                            first
+                                .fix()
+                                .local_minus_utc()
+                                .min(second.fix().local_minus_utc()),
+                        );
+                        break;
+                    }
+                    MappedLocalTime::None => {}
+                }
+            }
+            offset_before.unwrap_or(0)
+        }
+    };
+    t - offset as f64 * 1000.0
+}
+
+fn local_time_zone_abbreviation(t: f64) -> String {
+    use chrono::TimeZone;
+
+    time_zone_datetime_from_time_value(t)
+        .map(|dt| system_time_zone().offset_from_utc_datetime(&dt).to_string())
+        .unwrap_or_else(system_time_zone_identifier)
 }
 
 /// Shared final step of every `Date.prototype.set*` method: combine a day
@@ -1601,14 +1843,14 @@ pub(crate) fn format_date_string(t: f64) -> String {
     let min = min_from_time(lt);
     let s = sec_from_time(lt);
 
-    let offset_ms = local_tza();
+    let offset_ms = local_tza(t);
     let offset_min = (offset_ms / 60_000.0) as i32;
     let sign = if offset_min >= 0 { '+' } else { '-' };
     let abs_offset = offset_min.unsigned_abs();
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    let tz_abbr = local_time_zone_abbreviation(t);
     format!(
         "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         day_name(wd),
@@ -1699,14 +1941,14 @@ pub(crate) fn format_time_only_string(t: f64) -> String {
     let min = min_from_time(lt);
     let s = sec_from_time(lt);
 
-    let offset_ms = local_tza();
+    let offset_ms = local_tza(t);
     let offset_min = (offset_ms / 60_000.0) as i32;
     let sign = if offset_min >= 0 { '+' } else { '-' };
     let abs_offset = offset_min.unsigned_abs();
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    let tz_abbr = local_time_zone_abbreviation(t);
     format!(
         "{:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         h as i32, min as i32, s as i32, sign, oh, om, tz_abbr
@@ -2113,7 +2355,7 @@ fn parse_utcstring_format(s: &str) -> Option<f64> {
 pub(crate) fn find_json_colon(s: &str) -> Option<usize> {
     let mut in_string = false;
     let mut escape = false;
-    for (i, ch) in s.chars().enumerate() {
+    for (i, ch) in s.char_indices() {
         if escape {
             escape = false;
             continue;
@@ -2315,6 +2557,152 @@ fn hex_val(b: u8) -> Result<u8, String> {
 }
 
 #[cfg(test)]
+mod resolve_index_arg_tests {
+    use super::{resolve_end_index, resolve_start_index};
+    use crate::interpreter::{Completion, Interpreter};
+    use crate::types::{JsBigInt, JsValue};
+
+    fn num(n: f64) -> JsValue {
+        JsValue::number(n)
+    }
+
+    // A value whose ToNumber (and thus ToIntegerOrInfinity) throws a TypeError:
+    // BigInt cannot be converted to a Number (ECMAScript, sec-tonumber).
+    fn throwing_arg() -> JsValue {
+        JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(1)))
+    }
+
+    // --- resolve_start_index: absent defaults to 0, no undefined special-case ---
+
+    #[test]
+    fn start_absent_defaults_to_zero() {
+        let mut interp = Interpreter::new();
+        assert_eq!(resolve_start_index(&mut interp, None, 10).unwrap(), 0);
+    }
+
+    #[test]
+    fn start_undefined_coerces_to_zero_not_length() {
+        // ToIntegerOrInfinity(undefined) is NaN -> 0; start does NOT treat
+        // undefined as "use length" (that is the end-index behavior).
+        let mut interp = Interpreter::new();
+        let u = JsValue::UNDEFINED;
+        assert_eq!(resolve_start_index(&mut interp, Some(&u), 10).unwrap(), 0);
+    }
+
+    #[test]
+    fn start_positive_in_range_is_unchanged() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(3.0)), 10).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn start_negative_counts_back_from_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(-3.0)), 10).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn start_negative_beyond_length_clamps_to_zero() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(-100.0)), 10).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn start_positive_beyond_length_clamps_to_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(100.0)), 10).unwrap(),
+            10
+        );
+    }
+
+    // --- resolve_end_index: absent OR undefined defaults to length ---
+
+    #[test]
+    fn end_absent_defaults_to_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(resolve_end_index(&mut interp, None, 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn end_undefined_defaults_to_length() {
+        let mut interp = Interpreter::new();
+        let u = JsValue::UNDEFINED;
+        assert_eq!(resolve_end_index(&mut interp, Some(&u), 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn end_positive_in_range_is_unchanged() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_end_index(&mut interp, Some(&num(3.0)), 10).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn end_negative_counts_back_from_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_end_index(&mut interp, Some(&num(-3.0)), 10).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn end_negative_beyond_length_clamps_to_zero() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_end_index(&mut interp, Some(&num(-100.0)), 10).unwrap(),
+            0
+        );
+    }
+
+    // --- error propagation: the coercion's own TypeError must survive ---
+
+    #[test]
+    fn start_propagates_coercion_throw_verbatim() {
+        let mut interp = Interpreter::new();
+        let bad = throwing_arg();
+        match resolve_start_index(&mut interp, Some(&bad), 10) {
+            Err(Completion::Throw(e)) => {
+                assert!(
+                    interp.format_value(&e).contains("TypeError"),
+                    "expected the ToNumber TypeError to propagate, got {}",
+                    interp.format_value(&e)
+                );
+            }
+            other => panic!("expected a propagated Throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn end_propagates_coercion_throw_verbatim() {
+        let mut interp = Interpreter::new();
+        let bad = throwing_arg();
+        match resolve_end_index(&mut interp, Some(&bad), 10) {
+            Err(Completion::Throw(e)) => {
+                assert!(
+                    interp.format_value(&e).contains("TypeError"),
+                    "expected the ToNumber TypeError to propagate, got {}",
+                    interp.format_value(&e)
+                );
+            }
+            other => panic!("expected a propagated Throw, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
 mod resolve_relative_index_tests {
     use super::resolve_relative_index;
 
@@ -2363,6 +2751,83 @@ mod resolve_relative_index_tests {
 }
 
 #[cfg(test)]
+mod resolve_element_index_tests {
+    use super::resolve_element_index;
+
+    // --- in-range indices resolve to a concrete position ---
+
+    #[test]
+    fn positive_in_range_is_itself() {
+        assert_eq!(resolve_element_index(3.0, 10), Some(3));
+    }
+
+    #[test]
+    fn negative_counts_back_from_length() {
+        assert_eq!(resolve_element_index(-3.0, 10), Some(7));
+    }
+
+    #[test]
+    fn last_valid_positive_index_is_in_range() {
+        // relative == len - 1 is the largest in-range positive index.
+        assert_eq!(resolve_element_index(9.0, 10), Some(9));
+    }
+
+    #[test]
+    fn most_negative_in_range_index_is_zero() {
+        // relative == -len maps to index 0 (the first element).
+        assert_eq!(resolve_element_index(-10.0, 10), Some(0));
+    }
+
+    // --- out-of-range indices resolve to None (no element) ---
+
+    #[test]
+    fn index_equal_to_length_is_out_of_range() {
+        assert_eq!(resolve_element_index(10.0, 10), None);
+    }
+
+    #[test]
+    fn negative_one_past_the_start_is_out_of_range() {
+        // relative == -(len) - 1 falls just before index 0.
+        assert_eq!(resolve_element_index(-11.0, 10), None);
+    }
+
+    #[test]
+    fn empty_length_has_no_valid_index() {
+        assert_eq!(resolve_element_index(0.0, 0), None);
+        assert_eq!(resolve_element_index(-1.0, 0), None);
+    }
+
+    // --- non-finite / huge magnitudes: equivalent to the pre-refactor
+    //     `f64 as i64` saturating casts (they always fell out of range) ---
+
+    #[test]
+    fn positive_infinity_is_out_of_range() {
+        assert_eq!(resolve_element_index(f64::INFINITY, 10), None);
+    }
+
+    #[test]
+    fn negative_infinity_is_out_of_range() {
+        assert_eq!(resolve_element_index(f64::NEG_INFINITY, 10), None);
+    }
+
+    #[test]
+    fn huge_positive_magnitude_is_out_of_range() {
+        assert_eq!(resolve_element_index(1e300, 10), None);
+    }
+
+    #[test]
+    fn huge_negative_magnitude_is_out_of_range() {
+        assert_eq!(resolve_element_index(-1e300, 10), None);
+    }
+
+    #[test]
+    fn negative_zero_resolves_to_index_zero() {
+        // -0.0 is not < 0.0, so it is treated as the positive index 0.
+        assert_eq!(resolve_element_index(-0.0, 10), Some(0));
+    }
+}
+
+#[cfg(test)]
 mod make_date_clipped_tests {
     use super::{make_date, make_date_clipped, time_clip, utc_time};
 
@@ -2405,5 +2870,209 @@ mod make_date_clipped_tests {
         let v = make_date_clipped(0.0, 0.0, false);
         assert_eq!(v, 0.0);
         assert!(v.is_sign_positive());
+    }
+}
+
+#[cfg(test)]
+mod string_to_number_tests {
+    // §7.1.4.1 StringToNumber. Expected values below are the independent source
+    // of truth from ECMA-262 §12 (WhiteSpace) and §7.1.4.1 (StrNumericLiteral),
+    // cross-checked against node's `Number(...)`.
+    use super::string_to_number;
+    use crate::types::JsString;
+
+    fn n(s: &str) -> f64 {
+        string_to_number(&JsString::from_str(s))
+    }
+
+    #[test]
+    fn trims_exactly_the_ecmascript_whitespace_set() {
+        // In the ECMAScript StrWhiteSpace set (trimmed): must yield 1.
+        for ws in [
+            "\u{0009}", // TAB
+            "\u{000A}", // LF
+            "\u{000B}", // VT
+            "\u{000C}", // FF
+            "\u{000D}", // CR
+            "\u{0020}", // SP
+            "\u{00A0}", // NBSP
+            "\u{FEFF}", // ZWNBSP
+            "\u{1680}", // OGHAM SPACE MARK
+            "\u{2000}", // EN QUAD
+            "\u{200A}", // HAIR SPACE
+            "\u{2028}", // LINE SEPARATOR
+            "\u{2029}", // PARAGRAPH SEPARATOR
+            "\u{202F}", // NNBSP
+            "\u{205F}", // MMSP
+            "\u{3000}", // IDEOGRAPHIC SPACE
+        ] {
+            assert_eq!(
+                n(&format!("{ws}1{ws}")),
+                1.0,
+                "U+{:04X} must be trimmed",
+                ws.chars().next().unwrap() as u32
+            );
+        }
+        assert_eq!(n("\t\n\r 5 \t\n\r"), 5.0);
+    }
+
+    #[test]
+    fn does_not_trim_non_ecmascript_whitespace() {
+        // U+0085 NEL is in Rust's White_Space but NOT ECMAScript's set.
+        assert!(n("\u{0085}1").is_nan());
+        // U+200B ZERO WIDTH SPACE is not whitespace in either.
+        assert!(n("\u{200B}1").is_nan());
+    }
+
+    #[test]
+    fn infinity_is_case_sensitive_and_only_the_full_word() {
+        assert_eq!(n("Infinity"), f64::INFINITY);
+        assert_eq!(n("+Infinity"), f64::INFINITY);
+        assert_eq!(n("-Infinity"), f64::NEG_INFINITY);
+        // Every other inf/nan spelling Rust's float parser accepts must be NaN.
+        for s in [
+            "inf", "+inf", "-inf", "INF", "infinity", "INFINITY", "nan", "NaN", "NAN",
+        ] {
+            assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
+        }
+    }
+
+    #[test]
+    fn non_decimal_integer_literals() {
+        assert_eq!(n("0x10"), 16.0);
+        assert_eq!(n("0X1F"), 31.0);
+        assert_eq!(n("0o17"), 15.0);
+        assert_eq!(n("0b101"), 5.0);
+        // Large hex must round to the nearest f64, not overflow to NaN.
+        assert_eq!(n("0x10000000000000000"), 2f64.powi(64));
+        // Convert the exact integer once: incremental f64 accumulation can
+        // double-round these values one ULP below their correct result.
+        assert_eq!(n("0x6269e107215582e"), 443_215_406_813_239_360.0);
+        assert_eq!(n("0x200000000000011"), 2f64.powi(57) + 32.0);
+        // Empty digits, bad digits, and a leading sign are all NaN.
+        for s in [
+            "0x", "0o", "0b", "0xG", "0o8", "0b2", "0x1_0", "0o1_0", "0b1_0", "+0x1", "-0x1",
+        ] {
+            assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
+        }
+    }
+
+    #[test]
+    fn decimals_and_empty() {
+        assert_eq!(n(""), 0.0);
+        assert_eq!(n("   "), 0.0);
+        assert_eq!(n("  12.5  "), 12.5);
+        assert_eq!(n("1e3"), 1000.0);
+        assert_eq!(n(".5"), 0.5);
+        assert_eq!(n("5."), 5.0);
+        assert_eq!(n("-0"), 0.0);
+        assert!(n("-0").is_sign_negative());
+    }
+}
+
+#[cfg(test)]
+mod string_to_bigint_tests {
+    // §7.1.14 StringToBigInt. Expected values are the independent source of truth
+    // from ECMA-262 §12 (WhiteSpace) and the StringIntegerLiteral grammar,
+    // cross-checked against node's `BigInt(...)`. `Some(_)` mirrors a successful
+    // parse; `None` is the "return undefined" case (a SyntaxError for the
+    // constructor/ToBigInt, and `false` for loose equality).
+    use super::string_to_bigint;
+    use num_bigint::BigInt;
+
+    fn b(s: &str) -> Option<BigInt> {
+        string_to_bigint(s)
+    }
+
+    fn v(n: i64) -> Option<BigInt> {
+        Some(BigInt::from(n))
+    }
+
+    #[test]
+    fn empty_and_whitespace_are_zero() {
+        assert_eq!(b(""), v(0));
+        assert_eq!(b("   "), v(0));
+        assert_eq!(b("\t\n\r "), v(0));
+    }
+
+    #[test]
+    fn decimal_signed_integers() {
+        assert_eq!(b("0"), v(0));
+        assert_eq!(b("00"), v(0));
+        assert_eq!(b("12"), v(12));
+        assert_eq!(b("  12  "), v(12));
+        assert_eq!(b("+5"), v(5));
+        assert_eq!(b("-5"), v(-5));
+        assert_eq!(b("   -197   "), v(-197));
+        assert_eq!(b("-0"), v(0));
+    }
+
+    #[test]
+    fn non_decimal_integer_literals() {
+        assert_eq!(b("0xFF"), v(255));
+        assert_eq!(b("0X1a"), v(26));
+        assert_eq!(b("0o17"), v(15));
+        assert_eq!(b("0O17"), v(15));
+        assert_eq!(b("0b1010"), v(10));
+        assert_eq!(b("0B11"), v(3));
+    }
+
+    #[test]
+    fn numeric_separators_are_rejected() {
+        // `num_bigint::parse_bytes`/`FromStr` silently ignore `_`; the string
+        // grammar does not permit NumericLiteralSeparator.
+        assert_eq!(b("1_0"), None);
+        assert_eq!(b("0x1_0"), None);
+        assert_eq!(b("0b1_0"), None);
+        assert_eq!(b("0o1_0"), None);
+    }
+
+    #[test]
+    fn sign_is_only_valid_for_decimal_signed_integer() {
+        // A NonDecimalIntegerLiteral has no sign; `parse_bytes` would accept one.
+        assert_eq!(b("0x-10"), None);
+        assert_eq!(b("0b-1"), None);
+        assert_eq!(b("-0x10"), None);
+        assert_eq!(b("+0x10"), None);
+        assert_eq!(b("+ 5"), None);
+        assert_eq!(b("+"), None);
+        assert_eq!(b("-"), None);
+    }
+
+    #[test]
+    fn radix_points_exponents_suffixes_and_bad_digits_are_rejected() {
+        assert_eq!(b("1.5"), None);
+        assert_eq!(b(".5"), None);
+        assert_eq!(b("1e3"), None);
+        assert_eq!(b("10n"), None);
+        assert_eq!(b("0x"), None);
+        assert_eq!(b("0b12"), None);
+        assert_eq!(b("0o18"), None);
+        assert_eq!(b("0xG"), None);
+        assert_eq!(b("Infinity"), None);
+        assert_eq!(b("abc"), None);
+    }
+
+    #[test]
+    fn non_ascii_digits_are_rejected() {
+        assert_eq!(b("\u{FF15}"), None); // fullwidth digit five
+        assert_eq!(b("\u{0665}"), None); // arabic-indic digit five
+    }
+
+    #[test]
+    fn only_strwhitespace_is_trimmed() {
+        // U+FEFF (ZWNBSP) IS StrWhiteSpace; U+0085 (NEL) is NOT. This matches
+        // `string_to_number` and node, and differs from `char::is_whitespace`.
+        assert_eq!(b("\u{FEFF}1"), v(1));
+        assert_eq!(b("1\u{FEFF}"), v(1));
+        assert_eq!(b("\u{FEFF}"), v(0));
+        assert_eq!(b("\u{0085}1"), None);
+        assert_eq!(b("\u{0085}"), None);
+    }
+
+    #[test]
+    fn large_values_round_trip() {
+        assert_eq!(b("18446744073709551616"), Some(BigInt::from(1u128 << 64)));
+        assert_eq!(b("0x10000000000000000"), Some(BigInt::from(1u128 << 64)));
     }
 }

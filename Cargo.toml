@@ -1,23 +1,33 @@
 [package]
 name = "jsse"
-version = "0.1.1"
+version = "0.6.0"
 edition = "2024"
+
+[features]
+# Opt-in execution counters for performance investigations (issue #526).
+# Off by default so the shipped binary carries no counter writes.
+perf-counters = []
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 num-bigint = "0.5"
 unicode-ident = "1.0"
 regex = "1"
-fancy-regex = "0.18"
+fancy-regex = "0.19"
 chrono = "0.4"
 ryu-js = "1.0.2"
 iana-time-zone = "0.1"
 chrono-tz = "0.10"
 icu = { version = "2.0", features = ["experimental"] }
 icu_calendar = { version = "2.0", features = ["unstable"] }
+# ICU4X 2's semantic field sets have one shared text length. ICU4X 1.5 retains
+# the classical per-field skeleton matcher used only to select mixed-width patterns.
+icu_datetime_legacy = { package = "icu_datetime", version = "=1.5.1", features = ["experimental"] }
+icu_provider_legacy = { package = "icu_provider", version = "=1.5.0" }
 fixed_decimal = { version = "0.7", features = ["ryu"] }
 tinystr = "0.8"
 icu_normalizer = "2.1.1"
+writeable = "0.6"
 rustc-hash = "2"
 smallvec = "1"
 getrandom = "0.4"

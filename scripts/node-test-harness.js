@@ -13,11 +13,10 @@
 //   * a TAP-emitting describe/it/test/before/after runner (mocha/jest/tape
 //     shape) as the reusable spine for later library clusters.
 //
-// Like node-shim.js and node-buffer-shim.js, the whole prelude is INERT on real
-// Node: there the suite's own framework (real qunit-extras, mocha, …) runs
-// instead, which is exactly what lets run-library-tests.sh use Node as a
-// same-bundle reference oracle — the count jsse reports through this adapter is
-// cross-checked against the count the real framework reports on Node.
+// Like node-shim.js and node-buffer-shim.js, the prelude is normally INERT on
+// real Node: there the suite's own framework (real qunit-extras, mocha, …) runs
+// instead. A library whose native CLI cannot execute from one bundle may opt in
+// on both engines by setting `__JSSE_FORCE_TEST_HARNESS__` in an earlier shim.
 //
 // No jsse src/ changes and nothing here touches jsse's default globals outside a
 // library run, so test262 is unaffected.
@@ -31,10 +30,14 @@
   // would be wrong here because node-shim.js (which loads before this prelude)
   // installs a *fake* process with `versions.node` set — so this prelude must
   // key off something node-shim.js does not fake. Staying inert on real Node is
-  // essential: there the suite's own framework (real qunit-extras, mocha, …)
-  // must run so run-library-tests.sh can use Node as a same-bundle reference
-  // oracle for the cross-checked test count.
-  if (typeof __host_write === "undefined") return;
+  // essential by default: there the suite's own framework (real qunit-extras,
+  // mocha, …) must run so run-library-tests.sh can use Node as a same-bundle
+  // reference oracle for the cross-checked test count. Suites such as Luxon,
+  // whose Jest CLI requires unavailable filesystem/worker host surfaces, can
+  // explicitly force this in-process runner on both engines.
+  var forceHarness = globalThis.__JSSE_FORCE_TEST_HARNESS__ === true;
+  if (typeof __host_write === "undefined" && !forceHarness) return;
+  if (forceHarness) delete globalThis.__JSSE_FORCE_TEST_HARNESS__;
 
   var g = globalThis;
 
@@ -52,15 +55,24 @@
   var nativeSetTimeout =
     typeof setTimeout === "function" ? setTimeout : null;
 
-  // jsse's setTimeout spawns a fresh OS thread per call and always returns a
-  // timer id of 0 (see src/interpreter/builtins/mod.rs), and it provides no
-  // clearTimeout/setInterval/clearInterval at all. Timer-heavy libraries
-  // (lodash's debounce/throttle churn thousands of setTimeout/clearTimeout
-  // calls) both need cancellation *and* exhaust OS threads under that model,
-  // which stalls the run. So back all four globals with a single userland timer
-  // queue driven by ONE native timer at a time (the "pump"): library timers
-  // become cheap queue entries with real ids, cancellation works, and the
-  // process never holds more than one native timer thread.
+  // Back all four timer globals with a single userland queue driven by ONE
+  // native timer at a time (the "pump"), so library timers are cheap queue
+  // entries with real, cancellable ids.
+  //
+  // This began as a workaround: jsse's setTimeout used to spawn an OS thread per
+  // call, always return a timer id of 0, and offer no clearTimeout/setInterval/
+  // clearInterval, so timer-heavy libraries (lodash's debounce/throttle churn
+  // thousands of timers) both needed cancellation and exhausted OS threads.
+  // jsse#254 fixed that in the engine — the four globals are now native and
+  // event-loop driven — so the queue is no longer load-bearing. It is kept
+  // because the runner's own scheduling depends on it (below), and because
+  // routing through it keeps the runner immune to a suite that swaps the global
+  // setTimeout.
+  //
+  // Retiring it is NOT a mechanical deletion: a native timer left armed keeps
+  // jsse's event loop alive until its ~120s deadline, so any suite that leaves
+  // an interval running at teardown (qunit-extras' progress ticker, say) would
+  // hang for two minutes instead of exiting. Audit interval teardown first.
   //
   // `queueAdd`/`queueRemove` are also what the runner's own scheduling
   // (`schedule`/`unschedule` below) uses, so the async guard, the global
@@ -70,6 +82,9 @@
   // those runner timers MUST be cleared once they are no longer needed.
   var queueAdd = null; // (fn, ms, args, interval) -> id
   var queueRemove = null; // (id) -> void
+  var waitForUserTimers = function () {
+    return Promise.resolve();
+  };
   var MAX_PUMP_DELAY_MS = 100;
   if (nativeSetTimeout) {
     var timerQueue = [];
@@ -88,11 +103,10 @@
         }
       }
       if (soonest === Infinity) return; // nothing pending → no native timer
-      // Cap the native delay: jsse spawns a thread per native timer and can't
-      // cancel one, so a far-future entry (e.g. the 600s watchdog) must NOT arm a
-      // long-lived native timer — that would keep the process's pending-timer
-      // count nonzero and delay exit. Instead poll at MAX_PUMP_DELAY_MS and let
-      // the queue empty naturally.
+      // Cap the native delay: an armed native timer keeps jsse's event loop
+      // alive, so a far-future entry (e.g. the 600s watchdog) must NOT arm a
+      // long-lived native timer — that would delay process exit. Instead poll at
+      // MAX_PUMP_DELAY_MS and let the queue empty naturally.
       var target = Math.min(soonest, Date.now() + MAX_PUMP_DELAY_MS);
       if (target >= pumpArmedFor) return; // an armed pump already wakes by then
       pumpArmedFor = target;
@@ -120,6 +134,7 @@
         if (idx !== -1) timerQueue.splice(idx, 1);
         firingTimer = t;
         try {
+          t.fires++;
           t.fn.apply(undefined, t.args);
         } catch (e) {
           // A host setTimeout callback that throws would crash the process; for
@@ -137,7 +152,7 @@
       schedulePump();
     }
 
-    function addTimer(fn, ms, extraArgs, interval) {
+    function addTimer(fn, ms, extraArgs, interval, internal) {
       if (typeof fn !== "function") return 0;
       var id = timerIdCounter++;
       var delay = typeof ms === "number" && ms > 0 ? ms : 0;
@@ -147,6 +162,8 @@
         fn: fn,
         args: extraArgs,
         interval: interval,
+        internal: internal,
+        fires: 0,
         cancelled: false,
       });
       schedulePump();
@@ -171,17 +188,84 @@
       }
     }
 
-    queueAdd = addTimer;
+    queueAdd = function (fn, ms, extraArgs, interval) {
+      return addTimer(fn, ms, extraArgs, interval, true);
+    };
     queueRemove = removeTimer;
     g.setTimeout = function (fn, ms) {
-      return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), null);
+      return addTimer(
+        fn,
+        ms,
+        Array.prototype.slice.call(arguments, 2),
+        null,
+        false
+      );
     };
     g.setInterval = function (fn, ms) {
       var iv = typeof ms === "number" && ms > 0 ? ms : 0;
-      return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), iv);
+      return addTimer(
+        fn,
+        ms,
+        Array.prototype.slice.call(arguments, 2),
+        iv,
+        false
+      );
     };
     g.clearTimeout = removeTimer;
     g.clearInterval = removeTimer;
+
+    // Give user timers a bounded chance to expose a late duplicate done() before
+    // TAP output is frozen. One-shot timers drain normally; each user interval
+    // waits for at most its next tick, so a persistent interval cannot block
+    // output for its whole lifetime. A quiet turn lets promise continuations
+    // from the last timer enqueue follow-up work. Runner-internal timers are
+    // excluded; unrelated user work can delay output only until its next event
+    // or this existing async timeout expires.
+    waitForUserTimers = function (timeoutMs) {
+      var deadline = Date.now() + timeoutMs;
+      return new Promise(function (resolve) {
+        var intervalTargets = [];
+        var quietTurn = false;
+        function poll() {
+          var now = Date.now();
+          var next = Infinity;
+          for (var i = 0; i < timerQueue.length; i++) {
+            var timer = timerQueue[i];
+            if (
+              timer.interval != null &&
+              intervalTargets[timer.id] === undefined
+            ) {
+              intervalTargets[timer.id] = timer.fires + 1;
+            }
+            if (
+              !timer.cancelled &&
+              !timer.internal &&
+              (timer.interval == null ||
+                timer.fires < intervalTargets[timer.id]) &&
+              timer.fireAt < next
+            ) {
+              next = timer.fireAt;
+            }
+          }
+          if (now >= deadline) {
+            resolve();
+            return;
+          }
+          if (next === Infinity) {
+            if (quietTurn) {
+              resolve();
+              return;
+            }
+            quietTurn = true;
+            queueAdd(poll, 0, [], null);
+            return;
+          }
+          quietTurn = false;
+          queueAdd(poll, Math.min(next, deadline) - now, [], null);
+        }
+        poll();
+      });
+    };
   }
 
   // Runner-internal scheduling, backed by the queue's own add/remove (never the
@@ -197,10 +281,11 @@
   }
 
   // ==========================================================================
-  // objectType + equiv — ported verbatim from qunitjs 2.4.1 (qunit/qunit.js),
-  // the deepEqual engine. Hand-rolling structural equality is a known trap
-  // (NaN, Date, RegExp, Map/Set, cyclic, null-proto objects), so we keep QUnit's
-  // own implementation to match its semantics exactly.
+  // objectType + createEquiv — based on qunitjs 2.4.1 (qunit/qunit.js), the
+  // deepEqual engine. QUnit uses the original behavior; tape additionally
+  // compares array-index enumerability (matching its deep-equal's Object.keys
+  // semantics) because a sparse hole and an enumerable own undefined are
+  // different values, while a non-enumerable own undefined is not.
   // ==========================================================================
   function objectType(obj) {
     if (typeof obj === "undefined") return "undefined";
@@ -225,7 +310,7 @@
     }
   }
 
-  var equiv = (function () {
+  function createEquiv(compareArrayOwnership) {
     var pairs = [];
     var getProto =
       Object.getPrototypeOf ||
@@ -303,6 +388,13 @@
         len = a.length;
         if (len !== b.length) return false;
         for (i = 0; i < len; i++) {
+          if (
+            compareArrayOwnership &&
+            Object.prototype.propertyIsEnumerable.call(a, i) !==
+              Object.prototype.propertyIsEnumerable.call(b, i)
+          ) {
+            return false;
+          }
           if (!breadthFirstCompareChild(a[i], b[i])) return false;
         }
         return true;
@@ -395,7 +487,10 @@
       pairs.length = 0;
       return result;
     };
-  })();
+  }
+
+  var equiv = createEquiv(false);
+  var tapeEquiv = createEquiv(true);
 
   // A compact value renderer for failure diagnostics (not Node's util.inspect).
   function dump(v) {
@@ -449,13 +544,17 @@
       requireExpects: false,
       asyncRetries: 0,
       testTimeout: undefined,
+      // Large suites whose tests and hooks are all synchronous can opt out of
+      // Promise-per-test execution. This keeps the run in the main script
+      // instead of JSSE's bounded host-async drain window.
+      sync: false,
       modules: [],
     };
 
-    var modules = [];
     var rootModule = { name: "", tests: [] };
-    modules.push(rootModule);
     var currentModule = rootModule;
+    var moduleStack = [];
+    var testsInOrder = [];
 
     var stats = { all: 0, bad: 0 };
     var doneCbs = [],
@@ -464,6 +563,7 @@
       moduleDoneCbs = [],
       logCbs = [];
     var started = false;
+    var autostartScheduled = false;
     var totalTests = 0;
 
     function normalizeHooks(hooks) {
@@ -483,9 +583,16 @@
         nested = hooks;
         hooks = undefined;
       }
-      var mod = { name: name, tests: [], hooks: normalizeHooks(hooks) };
-      modules.push(mod);
       var prev = currentModule;
+      var parent = moduleStack.length
+        ? moduleStack[moduleStack.length - 1]
+        : rootModule;
+      var mod = {
+        name: name,
+        parent: parent,
+        tests: [],
+        hooks: normalizeHooks(hooks),
+      };
       currentModule = mod;
       if (typeof nested === "function") {
         // Modern QUnit passes a registrar whose before/beforeEach/afterEach/after
@@ -507,27 +614,36 @@
             mod.hooks.after = fn;
           },
         };
-        nested.call(registrar, registrar);
-        currentModule = prev;
+        moduleStack.push(mod);
+        try {
+          nested.call(registrar, registrar);
+        } finally {
+          moduleStack.pop();
+          currentModule = prev;
+        }
       }
     }
 
     function testFn(name, callback) {
-      currentModule.tests.push({
+      var testObj = {
         testName: name,
         module: currentModule,
         callback: callback,
-      });
+      };
+      currentModule.tests.push(testObj);
+      testsInOrder.push(testObj);
       totalTests++;
     }
 
     function skipFn(name) {
-      currentModule.tests.push({
+      var testObj = {
         testName: name,
         module: currentModule,
         callback: null,
         skip: true,
-      });
+      };
+      currentModule.tests.push(testObj);
+      testsInOrder.push(testObj);
       totalTests++;
     }
 
@@ -745,6 +861,43 @@
       }
     }
 
+    function moduleChain(mod) {
+      var chain = [];
+      while (mod && mod !== rootModule) {
+        chain.unshift(mod);
+        mod = mod.parent;
+      }
+      return chain;
+    }
+
+    async function runTestHooks(testObj, kind, assert) {
+      var chain = moduleChain(testObj.module);
+      if (kind === "afterEach") chain.reverse();
+      for (var i = 0; i < chain.length; i++) {
+        await runHook(chain[i].hooks[kind], testObj, assert);
+      }
+    }
+
+    function requireSynchronous(result, label) {
+      if (result && typeof result.then === "function") {
+        throw new Error(label + " returned a Promise in QUnit.config.sync mode");
+      }
+    }
+
+    function runTestHooksSync(testObj, kind, assert) {
+      var chain = moduleChain(testObj.module);
+      if (kind === "afterEach") chain.reverse();
+      for (var i = 0; i < chain.length; i++) {
+        var hook = chain[i].hooks[kind];
+        if (typeof hook === "function") {
+          requireSynchronous(
+            hook.call(testObj.testEnv, assert),
+            kind + " hook"
+          );
+        }
+      }
+    }
+
     async function runTest(testObj) {
       testObj.assertions = [];
       testObj.expected = null;
@@ -764,10 +917,9 @@
       }
 
       var assert = makeAssert(testObj);
-      var hooks = testObj.module.hooks || {};
 
       try {
-        await runHook(hooks.beforeEach, testObj, assert);
+        await runTestHooks(testObj, "beforeEach", assert);
         var ret = testObj.callback.call(testObj.testEnv, assert);
         await Promise.resolve(ret);
         if (testObj.pending > 0) {
@@ -775,8 +927,8 @@
           // wait: a test whose done() never fires (e.g. a deferred callback
           // that throws on jsse before calling it) must not stall the whole
           // run. On timeout, record a failure and move on — mirrors QUnit's
-          // config.testTimeout. jsse has no clearTimeout, so the guard timer
-          // fires harmlessly later (it no-ops once _asyncResolve is cleared).
+          // config.testTimeout. The guard is cancelled below, and no-ops anyway
+          // once _asyncResolve is cleared.
           var guardId = -1;
           await new Promise(function (resolve) {
             testObj._asyncResolve = resolve;
@@ -812,11 +964,61 @@
       // suites reset fixtures/globals/timers here, so skipping it would leak
       // dirty state into later tests. A throw here is recorded as a failure.
       try {
-        await runHook(hooks.afterEach, testObj, assert);
+        await runTestHooks(testObj, "afterEach", assert);
       } catch (e) {
         pushFailure(
           testObj,
           "afterEach hook threw: " + (e && e.stack ? e.stack : e)
+        );
+      }
+
+      finalize(testObj);
+    }
+
+    function runTestSync(testObj) {
+      testObj.assertions = [];
+      testObj.expected = null;
+      testObj.pending = 0;
+      testObj.testEnv = Object.assign(
+        {},
+        testObj.module && testObj.module.sharedEnv
+      );
+      config.current = testObj;
+
+      if (testObj.skip) {
+        finalize(testObj);
+        return;
+      }
+
+      var assert = makeAssert(testObj);
+      try {
+        runTestHooksSync(testObj, "beforeEach", assert);
+        requireSynchronous(
+          testObj.callback.call(testObj.testEnv, assert),
+          "test #" + testObj.testName
+        );
+      } catch (e) {
+        pushFailure(
+          testObj,
+          "Died on test #" +
+            testObj.testName +
+            ": " +
+            (e && e.stack ? e.stack : e)
+        );
+      }
+
+      try {
+        runTestHooksSync(testObj, "afterEach", assert);
+      } catch (e) {
+        pushFailure(
+          testObj,
+          "afterEach hook threw: " + (e && e.stack ? e.stack : e)
+        );
+      }
+      if (testObj.pending > 0) {
+        pushFailure(
+          testObj,
+          "assert.async() did not complete synchronously in QUnit.config.sync mode"
         );
       }
 
@@ -902,8 +1104,10 @@
 
     // Module-level before/after run once per module (before its first test /
     // after its last), sharing `mod.sharedEnv`; each test gets a shallow copy of
-    // that env (see runTest). Assertions or throws in a hook fold into the stats
-    // like a test's would.
+    // that env (see runTest). For nested modules, `mod.sharedEnv` is seeded from
+    // the parent chain when the module is opened (see runAll), so a hook here
+    // also sees ancestor `before` state. Assertions or throws in a hook fold
+    // into the stats like a test's would.
     async function runModuleHook(mod, kind) {
       var hook = mod.hooks && mod.hooks[kind];
       if (typeof hook !== "function") return;
@@ -934,62 +1138,48 @@
       if (bad) recordFailure(pseudo);
     }
 
-    async function runAll() {
-      for (var b = 0; b < beginCbs.length; b++) {
-        beginCbs[b]({ totalTests: totalTests });
+    function runModuleHookSync(mod, kind) {
+      var hook = mod.hooks && mod.hooks[kind];
+      if (typeof hook !== "function") return;
+      mod.sharedEnv = mod.sharedEnv || {};
+      var pseudo = {
+        testName: mod.name + " [module " + kind + "]",
+        module: mod,
+        assertions: [],
+        expected: null,
+        pending: 0,
+        testEnv: mod.sharedEnv,
+      };
+      var assert = makeAssert(pseudo);
+      try {
+        requireSynchronous(
+          hook.call(mod.sharedEnv, assert),
+          "module " + kind + " hook"
+        );
+      } catch (e) {
+        pushFailure(
+          pseudo,
+          "module " + kind + " hook threw: " + (e && e.stack ? e.stack : e)
+        );
       }
-
-      // NOTE on config.noglobals: real QUnit fails a test if it leaks a new
-      // global. We deliberately do NOT enforce it here. The Node oracle (real
-      // qunit-extras) does enforce it and the suite passes it there (0 leaks),
-      // so enforcing on jsse could only ADD failures the oracle doesn't have —
-      // e.g. from jsse-specific global enumeration — which would diverge the
-      // cross-checked count. Not enforcing keeps jsse strictly no stricter than
-      // the oracle, so a genuine leak still shows up as a Node-side failure.
-
-      var aborted = false;
-      var abortedAt = 0;
-      var watchdogId = schedule(function () {
-        aborted = true;
-        // Unstick a test currently blocked on an async token that will never
-        // resolve, so the run loop can observe `aborted` and finish.
-        var cur = config.current;
-        if (cur && cur._asyncResolve) {
-          var r = cur._asyncResolve;
-          cur._asyncResolve = null;
-          pushFailure(
-            cur,
-            "run aborted by global watchdog after " + GLOBAL_WATCHDOG_MS + "ms"
-          );
-          r();
-        }
-      }, GLOBAL_WATCHDOG_MS);
-
-      var count = 0;
-      for (var m = 0; m < modules.length && !aborted; m++) {
-        var mod = modules[m];
-        if (mod.tests.length === 0) continue;
-        await runModuleHook(mod, "before");
-        for (var t = 0; t < mod.tests.length && !aborted; t++) {
-          await runTest(mod.tests[t]);
-          count++;
-          if (count % 200 === 0) await yieldTick();
-          // Liveness on stderr (ignored by the verdict, which parses the final
-          // stdout summary) so a slow tree-walker run is visibly progressing.
-          if (count % 1000 === 0) {
-            process.stderr.write(
-              "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
-            );
-          }
-        }
-        await runModuleHook(mod, "after");
+      if (pseudo.pending > 0) {
+        pushFailure(
+          pseudo,
+          "module " +
+            kind +
+            " hook left assert.async() incomplete in QUnit.config.sync mode"
+        );
       }
-      if (aborted) abortedAt = count;
-      // The run is done — cancel the watchdog so no pending host timer keeps the
-      // process alive (jsse's microtask drain waits while any native timer is
-      // outstanding).
-      unschedule(watchdogId);
+      var bad = 0;
+      stats.all += pseudo.assertions.length;
+      for (var i = 0; i < pseudo.assertions.length; i++) {
+        if (!pseudo.assertions[i].result) bad++;
+      }
+      stats.bad += bad;
+      if (bad) recordFailure(pseudo);
+    }
 
+    function reportRun(aborted, abortedAt) {
       var details = {
         passed: stats.all - stats.bad,
         failed: stats.bad,
@@ -1035,14 +1225,160 @@
       );
     }
 
+    function runAllSync() {
+      for (var b = 0; b < beginCbs.length; b++) {
+        beginCbs[b]({ totalTests: totalTests });
+      }
+
+      var count = 0;
+      var activeModules = [];
+      for (var t = 0; t < testsInOrder.length; t++) {
+        var testObj = testsInOrder[t];
+        var nextModules = moduleChain(testObj.module);
+        var common = 0;
+        while (
+          common < activeModules.length &&
+          common < nextModules.length &&
+          activeModules[common] === nextModules[common]
+        ) {
+          common++;
+        }
+        for (var close = activeModules.length - 1; close >= common; close--) {
+          runModuleHookSync(activeModules[close], "after");
+        }
+        activeModules.length = common;
+        for (var open = common; open < nextModules.length; open++) {
+          var opening = nextModules[open];
+          var parentEnv = open > 0 ? nextModules[open - 1].sharedEnv : null;
+          opening.sharedEnv = Object.assign({}, parentEnv, opening.sharedEnv);
+          runModuleHookSync(opening, "before");
+          activeModules.push(opening);
+        }
+
+        runTestSync(testObj);
+        count++;
+        if (count % 1000 === 0) {
+          process.stderr.write(
+            "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
+          );
+        }
+      }
+      for (var close = activeModules.length - 1; close >= 0; close--) {
+        runModuleHookSync(activeModules[close], "after");
+      }
+      reportRun(false, 0);
+    }
+
+    async function runAll() {
+      for (var b = 0; b < beginCbs.length; b++) {
+        beginCbs[b]({ totalTests: totalTests });
+      }
+
+      // NOTE on config.noglobals: real QUnit fails a test if it leaks a new
+      // global. We deliberately do NOT enforce it here. The Node oracle (real
+      // qunit-extras) does enforce it and the suite passes it there (0 leaks),
+      // so enforcing on jsse could only ADD failures the oracle doesn't have —
+      // e.g. from jsse-specific global enumeration — which would diverge the
+      // cross-checked count. Not enforcing keeps jsse strictly no stricter than
+      // the oracle, so a genuine leak still shows up as a Node-side failure.
+
+      var aborted = false;
+      var abortedAt = 0;
+      var watchdogId = schedule(function () {
+        aborted = true;
+        // Unstick a test currently blocked on an async token that will never
+        // resolve, so the run loop can observe `aborted` and finish.
+        var cur = config.current;
+        if (cur && cur._asyncResolve) {
+          var r = cur._asyncResolve;
+          cur._asyncResolve = null;
+          pushFailure(
+            cur,
+            "run aborted by global watchdog after " + GLOBAL_WATCHDOG_MS + "ms"
+          );
+          r();
+        }
+      }, GLOBAL_WATCHDOG_MS);
+
+      var count = 0;
+      var activeModules = [];
+      for (var t = 0; t < testsInOrder.length && !aborted; t++) {
+        var testObj = testsInOrder[t];
+        var nextModules = moduleChain(testObj.module);
+        var common = 0;
+        while (
+          common < activeModules.length &&
+          common < nextModules.length &&
+          activeModules[common] === nextModules[common]
+        ) {
+          common++;
+        }
+        for (var close = activeModules.length - 1; close >= common; close--) {
+          await runModuleHook(activeModules[close], "after");
+        }
+        activeModules.length = common;
+        for (var open = common; open < nextModules.length; open++) {
+          var opening = nextModules[open];
+          // Inherit the ancestor chain's module env so a nested module's own
+          // before/after hooks and its tests see `this` state set by parent
+          // module hooks — QUnit's nested testEnvironment inheritance. The
+          // parent (nextModules[open - 1]) is already open with its before hook
+          // applied; layer this module's own env (if re-entered) on top of a
+          // shallow copy of it, matching QUnit's per-module testEnvironment copy.
+          var parentEnv = open > 0 ? nextModules[open - 1].sharedEnv : null;
+          opening.sharedEnv = Object.assign({}, parentEnv, opening.sharedEnv);
+          await runModuleHook(opening, "before");
+          activeModules.push(opening);
+        }
+
+        await runTest(testObj);
+        count++;
+        if (count % 200 === 0) await yieldTick();
+        // Liveness on stderr (ignored by the verdict, which parses the final
+        // stdout summary) so a slow tree-walker run is visibly progressing.
+        if (count % 1000 === 0) {
+          process.stderr.write(
+            "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
+          );
+        }
+      }
+      for (var close = activeModules.length - 1; close >= 0; close--) {
+        await runModuleHook(activeModules[close], "after");
+      }
+      if (aborted) abortedAt = count;
+      // The run is done — cancel the watchdog so no pending host timer keeps the
+      // process alive (jsse's microtask drain waits while any native timer is
+      // outstanding).
+      unschedule(watchdogId);
+      reportRun(aborted, abortedAt);
+    }
+
     function start() {
       if (started) return;
       started = true;
+      if (config.sync) {
+        try {
+          runAllSync();
+        } catch (e) {
+          console.log("Harness error: " + (e && e.stack ? e.stack : e));
+          console.log("    PASS: 0  FAIL: 1  TOTAL: 1");
+        }
+        return;
+      }
       // Fire-and-forget: the returned promise chain continues on the microtask/
       // timer queue, which jsse drains after the main script returns.
       runAll().catch(function (e) {
         console.log("Harness error: " + (e && e.stack ? e.stack : e));
         console.log("    PASS: 0  FAIL: 1  TOTAL: 1");
+      });
+    }
+
+    function scheduleAutostart() {
+      if (autostartScheduled) return;
+      autostartScheduled = true;
+      Promise.resolve().then(function () {
+        autostartScheduled = false;
+        if (config.autostart && totalTests > 0) start();
       });
     }
 
@@ -1054,7 +1390,7 @@
       todo: testFn,
       only: testFn,
       start: start,
-      load: function () {},
+      load: scheduleAutostart,
       begin: function (cb) {
         beginCbs.push(cb);
       },
@@ -1087,10 +1423,403 @@
         return objectType(obj) === type;
       },
     };
+    scheduleAutostart();
     return QUnit;
   }
 
   g.QUnit = installQUnit();
+
+  // ==========================================================================
+  // tape adapter — exported as `__tape` for a tiny CommonJS selector module.
+  //
+  // tape's assertion library is browser-friendly, but its default runner pulls
+  // in Node streams/events/path/fs. Library bundles can alias `require("tape")`
+  // to scripts/node-tape-module.js: that module selects this adapter on jsse
+  // and real tape on Node, preserving an independent Node framework oracle.
+  // The counter below tracks assertions (including one assertion per skipped
+  // test), matching tape's final `# tests` count rather than counting callbacks.
+  // ==========================================================================
+  function installTape() {
+    var roots = [];
+    var started = false;
+    var counter = 0;
+    var passed = 0;
+    var failed = 0;
+
+    function testArgs(name, opts, cb) {
+      if (typeof opts === "function") {
+        cb = opts;
+        opts = {};
+      }
+      return {
+        name: String(name),
+        opts: opts || {},
+        cb: cb,
+        children: [],
+        teardowns: [],
+        assertions: 0,
+        plan: null,
+        ended: false,
+        _completeResolve: null,
+      };
+    }
+
+    function addTest(list, name, opts, cb) {
+      var test = testArgs(name, opts, cb);
+      list.push(test);
+      return test;
+    }
+
+    function tape(name, opts, cb) {
+      return addTest(roots, name, opts, cb);
+    }
+    tape.skip = function (name, opts, cb) {
+      if (typeof opts === "function") {
+        cb = opts;
+        opts = {};
+      }
+      opts = opts || {};
+      opts.skip = opts.skip || true;
+      return addTest(roots, name, opts, cb);
+    };
+    tape.only = tape;
+
+    function report(ok, name, actual, expected, skipReason) {
+      counter++;
+      var message = name || "(unnamed assert)";
+      if (ok) {
+        var suffix = skipReason
+          ? " # SKIP" + (skipReason === true ? "" : " " + skipReason)
+          : "";
+        console.log("ok " + counter + " " + message + suffix);
+        passed++;
+        return;
+      }
+
+      console.log("not ok " + counter + " " + message);
+      console.log("  ---");
+      if (arguments.length >= 3) console.log("  actual: " + dump(actual));
+      if (arguments.length >= 4) console.log("  expected: " + dump(expected));
+      console.log("  ...");
+      failed++;
+    }
+
+    function sameValue(a, b) {
+      if (Object.is) return Object.is(a, b);
+      return a === b ? a !== 0 || 1 / a === 1 / b : a !== a && b !== b;
+    }
+
+    function matchesThrown(error, expected) {
+      if (expected === undefined) return true;
+      if (typeof expected === "function") {
+        if (error instanceof expected) return true;
+        var prototype = expected.prototype;
+        var looksLikeError =
+          prototype &&
+          (prototype === Error.prototype || prototype instanceof Error);
+        return looksLikeError ? false : expected.call({}, error) === true;
+      }
+      if (expected instanceof RegExp) {
+        expected.lastIndex = 0;
+        return expected.test(String(error));
+      }
+      if (expected && typeof expected === "object") {
+        if (!error || typeof error !== "object") return false;
+        if (expected instanceof Error) {
+          return error.name === expected.name && error.message === expected.message;
+        }
+        for (var key in expected) {
+          if (!equiv(error[key], expected[key])) return false;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    function complete(test) {
+      if (test.ended) return;
+      test.ended = true;
+      if (test._completeResolve) {
+        var resolve = test._completeResolve;
+        test._completeResolve = null;
+        resolve();
+      }
+    }
+
+    function completePlan(test) {
+      if (test.plan !== null && test.assertions === test.plan) complete(test);
+    }
+
+    function makeAssert(test) {
+      function assert(ok, message, actual, expected, extra) {
+        var skipReason = extra && extra.skip;
+        test.assertions++;
+        report(ok || !!skipReason, message, actual, expected, skipReason);
+        completePlan(test);
+      }
+
+      var t = {
+        test: function (name, opts, cb) {
+          return addTest(test.children, name, opts, cb);
+        },
+        plan: function (count) {
+          test.plan = count;
+          completePlan(test);
+        },
+        end: function (error) {
+          if (error) t.error(error);
+          complete(test);
+        },
+        teardown: function (fn) {
+          if (typeof fn === "function") test.teardowns.push(fn);
+          else assert(false, "teardown is not a function", fn, "function");
+        },
+        timeoutAfter: function () {
+          return t;
+        },
+        comment: function (message) {
+          console.log("# " + message);
+        },
+        pass: function (message) {
+          assert(true, message || "pass");
+        },
+        fail: function (message) {
+          assert(false, message || "fail");
+        },
+        skip: function (message) {
+          test.assertions++;
+          report(true, message || "skip", undefined, undefined, true);
+          completePlan(test);
+        },
+        ok: function (value, message) {
+          assert(!!value, message || "should be truthy", value, true);
+        },
+        notOk: function (value, message) {
+          assert(!value, message || "should be falsy", value, false);
+        },
+        equal: function (actual, expected, message, extra) {
+          assert(
+            sameValue(actual, expected),
+            message || "should be strictly equal",
+            actual,
+            expected,
+            extra
+          );
+        },
+        notEqual: function (actual, expected, message, extra) {
+          assert(
+            !sameValue(actual, expected),
+            message || "should not be strictly equal",
+            actual,
+            expected,
+            extra
+          );
+        },
+        deepEqual: function (actual, expected, message, extra) {
+          assert(
+            tapeEquiv(actual, expected),
+            message || "should be deeply equivalent",
+            actual,
+            expected,
+            extra
+          );
+        },
+        notDeepEqual: function (actual, expected, message, extra) {
+          assert(
+            !tapeEquiv(actual, expected),
+            message || "should not be deeply equivalent",
+            actual,
+            expected,
+            extra
+          );
+        },
+        error: function (error, message) {
+          assert(!error, message || String(error), error, null);
+        },
+        doesNotThrow: function (fn, expected, message) {
+          if (typeof expected === "string") {
+            message = expected;
+            expected = undefined;
+          }
+          var error;
+          try {
+            fn();
+          } catch (e) {
+            error = e;
+          }
+          assert(!error, message || "should not throw", error, expected);
+        },
+        throws: function (fn, expected, message) {
+          if (typeof expected === "string") {
+            message = expected;
+            expected = undefined;
+          }
+          var caught = false;
+          var error;
+          try {
+            fn();
+          } catch (e) {
+            caught = true;
+            error = e;
+          }
+          assert(
+            caught && matchesThrown(error, expected),
+            message || "should throw",
+            error,
+            expected
+          );
+        },
+        match: function (value, pattern, message) {
+          var ok = typeof value === "string" && pattern instanceof RegExp;
+          if (ok) {
+            pattern.lastIndex = 0;
+            ok = pattern.test(value);
+          }
+          assert(ok, message || "should match pattern", value, pattern);
+        },
+        intercept: function (object, property, descriptor) {
+          descriptor = descriptor || {};
+          var previous = Object.getOwnPropertyDescriptor(object, property);
+          var value = descriptor.value;
+          Object.defineProperty(object, property, {
+            configurable: true,
+            enumerable: descriptor.enumerable !== false,
+            get: function () {
+              return descriptor.get ? descriptor.get.call(this) : value;
+            },
+            set: function (next) {
+              if (descriptor.set) return descriptor.set.call(this, next);
+              if (descriptor.writable) value = next;
+              return value;
+            },
+          });
+          var restore = function () {
+            if (previous) Object.defineProperty(object, property, previous);
+            else delete object[property];
+          };
+          test.teardowns.push(restore);
+          var calls = function () {
+            return [];
+          };
+          calls.restore = restore;
+          return calls;
+        },
+      };
+
+      t["true"] = t.assert = t.ok;
+      t["false"] = t.notok = t.notOk;
+      t.equals = t.strictEqual = t.equal;
+      t.notEquals = t.notStrictEqual = t.notEqual;
+      t.deepEquals = t.same = t.deepEqual;
+      t.notDeepEquals = t.notSame = t.notDeepEqual;
+      t.ifError = t.ifErr = t.error;
+      t["throws"] = t.throws;
+      t.test.skip = function (name, opts, cb) {
+        if (typeof opts === "function") {
+          cb = opts;
+          opts = {};
+        }
+        opts = opts || {};
+        opts.skip = opts.skip || true;
+        return addTest(test.children, name, opts, cb);
+      };
+      t.test.only = t.test;
+      return t;
+    }
+
+    async function runTest(test) {
+      console.log("# " + test.name);
+      if (test.opts.skip) {
+        report(true, test.name, undefined, undefined, test.opts.skip);
+        return;
+      }
+
+      var t = makeAssert(test);
+      try {
+        var result = typeof test.cb === "function" ? test.cb(t) : undefined;
+        if (result && typeof result.then === "function") {
+          await result;
+          complete(test);
+        }
+      } catch (e) {
+        t.fail(e && e.stack ? e.stack : String(e));
+        complete(test);
+      }
+
+      // Tape auto-ends a no-plan parent once its synchronously registered
+      // subtests are ready to run. The children themselves are drained below.
+      if (!test.ended && test.plan === null && test.children.length > 0) {
+        complete(test);
+      }
+
+      if (!test.ended) {
+        var guardId = -1;
+        await new Promise(function (resolve) {
+          test._completeResolve = resolve;
+          // Use the runner queue so suites that replace setTimeout cannot
+          // strand callback-style tests. This mirrors the QUnit async guard.
+          guardId = schedule(function () {
+            if (test._completeResolve) {
+              test._completeResolve = null;
+              test.ended = true;
+              t.fail(
+                "async test timed out after " + ASYNC_TIMEOUT_MS + "ms"
+              );
+              resolve();
+            }
+          }, ASYNC_TIMEOUT_MS);
+        });
+        unschedule(guardId);
+      }
+
+      for (var i = 0; i < test.children.length; i++) {
+        await runTest(test.children[i]);
+      }
+
+      if (test.plan !== null && test.plan !== test.assertions) {
+        report(false, "plan != count", test.assertions, test.plan);
+      }
+
+      while (test.teardowns.length) {
+        try {
+          test.teardowns.shift()();
+        } catch (e) {
+          report(false, "teardown failed", e, "no error");
+        }
+      }
+    }
+
+    async function runAll() {
+      console.log("TAP version 13");
+      for (var i = 0; i < roots.length; i++) await runTest(roots[i]);
+      console.log("1.." + counter);
+      console.log("# tests " + counter);
+      console.log("# pass  " + passed);
+      if (failed) console.log("# fail  " + failed);
+      console.log(failed ? "# failed" : "# ok");
+      console.log(
+        "    PASS: " + passed + "  FAIL: " + failed + "  TOTAL: " + counter
+      );
+    }
+
+    function run() {
+      if (started) return;
+      started = true;
+      runAll().catch(function (e) {
+        console.log("Tape harness error: " + (e && e.stack ? e.stack : e));
+        console.log("    PASS: 0  FAIL: 1  TOTAL: 1");
+      });
+    }
+
+    Promise.resolve().then(function () {
+      if (roots.length) run();
+    });
+
+    tape.run = run;
+    return tape;
+  }
+
+  g.__tape = installTape();
 
   // ==========================================================================
   // TAP describe/it/test/before/after runner — the reusable spine.
@@ -1098,48 +1827,177 @@
   // suites use and is self-verified by scripts/shim-fixtures. Emits TAP 13.
   // ==========================================================================
   function installTap() {
-    function makeSuite(name, parent) {
-      return {
+    function makeSuite(name, parent, skipped) {
+      var suite = {
         name: name,
         parent: parent,
+        skipped: !!skipped,
         // A single ordered list of children (tests and nested suites) so
         // execution follows definition order, the way mocha/jest run them.
         children: [],
+        onlyTests: [],
+        onlySuites: [],
         before: [],
         after: [],
         beforeEach: [],
         afterEach: [],
       };
+      // Mocha exposes timeout configuration through the suite callback's
+      // `this`. The shared harness owns one global watchdog instead of
+      // per-suite timers, so accept these calls as chainable no-ops.
+      suite.timeout = suite.slow = suite.retries = function () {
+        return suite;
+      };
+      return suite;
     }
 
-    var rootSuite = makeSuite("", null);
+    var rootSuite = makeSuite("", null, false);
     var currentSuite = rootSuite;
     var started = false;
     var counter = 0;
+    var results = [];
     var passed = 0,
       failed = 0;
 
-    function describe(name, fn) {
-      var suite = makeSuite(name, currentSuite);
+    function addSuite(name, fn, skipped, exclusive) {
+      var suite = makeSuite(
+        name,
+        currentSuite,
+        skipped || currentSuite.skipped
+      );
       currentSuite.children.push({ kind: "suite", suite: suite });
+      if (exclusive) currentSuite.onlySuites.push(suite);
       var prev = currentSuite;
       currentSuite = suite;
       if (typeof fn === "function") fn.call(suite);
       currentSuite = prev;
+      return suite;
+    }
+
+    function describe(name, fn) {
+      return addSuite(name, fn, false, false);
+    }
+
+    function addTest(name, fn, skipped, exclusive) {
+      var test = {
+        name: name,
+        fn: fn,
+        suite: currentSuite,
+        skip: !!skipped || currentSuite.skipped,
+      };
+      currentSuite.children.push({
+        kind: "test",
+        test: test,
+      });
+      if (exclusive) currentSuite.onlyTests.push(test);
+      test.timeout = test.slow = test.retries = function () {
+        return test;
+      };
+      return test;
     }
 
     function it(name, fn) {
-      currentSuite.children.push({
-        kind: "test",
-        test: { name: name, fn: fn, suite: currentSuite },
+      return addTest(name, fn, false, false);
+    }
+
+    function formatEachName(template, row, index) {
+      var arg = 0;
+      return String(template).replace(/%([%#sdijp])/g, function (_, token) {
+        if (token === "%") return "%";
+        if (token === "#") return String(index);
+        var value = row[arg++];
+        if (token === "d") return String(Number(value));
+        if (token === "i") return String(parseInt(value, 10));
+        if (token === "j" || token === "p") {
+          try {
+            var json = JSON.stringify(value);
+            return json === undefined ? String(value) : json;
+          } catch (e) {
+            return String(value);
+          }
+        }
+        return String(value);
       });
     }
 
+    // Jest's array-table form: test.each([[a, b], [c, d]])(name, callback).
+    // The callback receives each row as positional arguments and every row is
+    // registered as a distinct test, preserving the oracle-visible count. The
+    // per-row registrar is a parameter so it.only.each can register each row as
+    // a *focused* test (mirroring Mocha/Jest's test.only.each) rather than an
+    // ordinary one.
+    function eachRegistrar(register) {
+      return function (table) {
+        return function (name, fn) {
+          for (var i = 0; i < table.length; i++) {
+            (function (row, index) {
+              var args = Array.isArray(row) ? row : [row];
+              register(formatEachName(name, args, index), function () {
+                return fn.apply(this, args);
+              });
+            })(table[i], i);
+          }
+        };
+      };
+    }
+    it.each = eachRegistrar(it);
+
     function xit(name) {
-      currentSuite.children.push({
-        kind: "test",
-        test: { name: name, fn: null, suite: currentSuite, skip: true },
+      return addTest(name, null, true, false);
+    }
+
+    // Mocha's skip helpers still execute suite definition callbacks so nested
+    // tests are registered and included in the total, but their bodies/hooks
+    // do not run. AJV's JSON-Schema-Test-Suite uses both forms extensively.
+    describe.skip = function (name, fn) {
+      return addSuite(name, fn, true, false);
+    };
+    describe.only = function (name, fn) {
+      return addSuite(name, fn, false, true);
+    };
+    it.skip = xit;
+    it.only = function (name, fn) {
+      return addTest(name, fn, false, true);
+    };
+    // test.only.each(table)(...) must register each row as a *focused* test so
+    // exclusivity applies to the generated rows (global `test` aliases `it`, so
+    // this covers test.only.each too). Without it, replacing the old
+    // `it.only = it` alias would drop `.each` and throw at registration.
+    it.only.each = eachRegistrar(it.only);
+
+    function hasOnly(suite) {
+      if (suite.onlyTests.length || suite.onlySuites.length) return true;
+      for (var i = 0; i < suite.children.length; i++) {
+        var child = suite.children[i];
+        if (child.kind === "suite" && hasOnly(child.suite)) return true;
+      }
+      return false;
+    }
+
+    function filterOnly(suite) {
+      // Match Mocha's Suite#filterOnly precedence: direct exclusive tests win
+      // over every child suite, including suites that are themselves focused.
+      if (suite.onlyTests.length) {
+        suite.children = suite.children.filter(function (child) {
+          return (
+            child.kind === "test" &&
+            suite.onlyTests.indexOf(child.test) !== -1
+          );
+        });
+        return true;
+      }
+      // With no direct exclusive tests, keep direct exclusive suites in full
+      // unless nested focus narrows them. Ordinary suites survive only when a
+      // focused descendant survives their recursive filter.
+      suite.children = suite.children.filter(function (child) {
+        if (child.kind !== "suite") return false;
+        if (suite.onlySuites.indexOf(child.suite) !== -1) {
+          if (hasOnly(child.suite)) filterOnly(child.suite);
+          return true;
+        }
+        return filterOnly(child.suite);
       });
+      return suite.children.length > 0;
     }
 
     function hookRegister(kind) {
@@ -1176,75 +2034,218 @@
       return out;
     }
 
-    async function runHooks(hooks, ctx) {
+    function invokeRunnable(fn, ctx, onLateError) {
+      if (fn.length === 0) return Promise.resolve(fn.call(ctx));
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+        var doneCalled = false;
+        var duplicateReported = false;
+        var settleId = null;
+        var guardId = schedule(function () {
+          if (settled || doneCalled) return;
+          settled = true;
+          reject(
+            new Error(
+              "done callback timed out after " + ASYNC_TIMEOUT_MS + "ms"
+            )
+          );
+        }, ASYNC_TIMEOUT_MS);
+        function done(error) {
+          if (doneCalled) {
+            if (duplicateReported) return;
+            duplicateReported = true;
+            var duplicateError = new Error("done() called multiple times");
+            if (settled) {
+              if (onLateError) onLateError(duplicateError);
+            } else {
+              settled = true;
+              unschedule(settleId);
+              reject(duplicateError);
+            }
+            return;
+          }
+          if (settled) return;
+          doneCalled = true;
+          unschedule(guardId);
+          // Settle on the next runner tick so a synchronous second completion
+          // can replace the first result with a duplicate-done failure.
+          settleId = schedule(function () {
+            if (settled) return;
+            settled = true;
+            if (error) reject(error);
+            else resolve();
+          }, 0);
+        }
+        try {
+          fn.call(ctx, done);
+        } catch (e) {
+          done(e);
+        }
+      });
+    }
+
+    async function runHooks(hooks, ctx, onLateError) {
       for (var i = 0; i < hooks.length; i++) {
-        await Promise.resolve(hooks[i].call(ctx));
+        await invokeRunnable(hooks[i], ctx, onLateError);
       }
     }
 
-    async function runOneTest(t) {
-      counter++;
-      var name = fullName(t.suite, t.name);
-      if (t.skip) {
-        console.log("ok " + counter + " - " + name + " # SKIP");
-        passed++;
-        return;
-      }
-      var testCtx = {};
-      var ok = true,
-        errText = "";
-      try {
-        await runHooks(eachHook(t.suite, "beforeEach"), testCtx);
-        await Promise.resolve(t.fn.call(testCtx));
-      } catch (e) {
-        ok = false;
-        errText = e && e.stack ? e.stack : String(e);
-      }
-      // afterEach must run even when beforeEach or the test body threw (mocha/
-      // jest do this) so suites that reset globals/timers/shared state there
-      // don't leak dirty state into later tests. A throw here fails the test if
-      // it was otherwise passing.
-      try {
-        await runHooks(eachHook(t.suite, "afterEach"), testCtx);
-      } catch (e) {
-        if (ok) {
-          ok = false;
-          errText = "afterEach hook: " + (e && e.stack ? e.stack : String(e));
+    // Buffer results until suite execution finishes so a duplicate done()
+    // callback from an earlier runnable can still turn its pass into a failure.
+    function recordResult(name, skipped) {
+      var result = {
+        number: ++counter,
+        name: name,
+        skipped: !!skipped,
+        ok: true,
+        errText: "",
+      };
+      results.push(result);
+      return result;
+    }
+
+    function failResult(result, err) {
+      if (!result.ok) return;
+      result.ok = false;
+      result.errText = err && err.stack ? err.stack : String(err);
+    }
+
+    function recordFailure(name, err) {
+      var result = recordResult(name, false);
+      failResult(result, err);
+      return result;
+    }
+
+    function makeHookFailureRecorder(name) {
+      var result = null;
+      return function (error) {
+        if (result === null) result = recordFailure(name, error);
+      };
+    }
+
+    async function runSuiteHooks(hooks, ctx, name) {
+      for (var i = 0; i < hooks.length; i++) {
+        var recordHookFailure = makeHookFailureRecorder(name);
+        try {
+          await invokeRunnable(hooks[i], ctx, recordHookFailure);
+        } catch (e) {
+          recordHookFailure(e);
+          return false;
         }
       }
-      if (ok) {
-        console.log("ok " + counter + " - " + name);
-        passed++;
-      } else {
-        console.log("not ok " + counter + " - " + name);
+      return true;
+    }
+
+    function emitResults() {
+      for (var i = 0; i < results.length; i++) {
+        var result = results[i];
+        if (result.ok) {
+          console.log(
+            "ok " +
+              result.number +
+              " - " +
+              result.name +
+              (result.skipped ? " # SKIP" : "")
+          );
+          passed++;
+          continue;
+        }
+        console.log("not ok " + result.number + " - " + result.name);
         console.log("  ---");
-        var lines = String(errText).split("\n");
-        for (var e2 = 0; e2 < lines.length; e2++) {
-          console.log("  " + lines[e2]);
+        var lines = result.errText.split("\n");
+        for (var j = 0; j < lines.length; j++) {
+          console.log("  " + lines[j]);
         }
         console.log("  ...");
         failed++;
       }
     }
 
-    async function runSuite(suite) {
-      var ctx = {};
-      await runHooks(suite.before, ctx);
-      // Children run in definition order (tests interleaved with nested suites).
-      for (var i = 0; i < suite.children.length; i++) {
-        var child = suite.children[i];
-        if (child.kind === "test") {
-          await runOneTest(child.test);
-        } else {
-          await runSuite(child.suite);
+    async function runOneTest(t) {
+      var name = fullName(t.suite, t.name);
+      var result = recordResult(name, t.skip);
+      if (t.skip) {
+        return;
+      }
+      function recordLateFailure(error) {
+        failResult(result, error);
+      }
+      var testCtx = {};
+      try {
+        await runHooks(
+          eachHook(t.suite, "beforeEach"),
+          testCtx,
+          recordLateFailure
+        );
+        await invokeRunnable(t.fn, testCtx, recordLateFailure);
+      } catch (e) {
+        failResult(result, e);
+      }
+      // afterEach must run even when beforeEach or the test body threw (mocha/
+      // jest do this) so suites that reset globals/timers/shared state there
+      // don't leak dirty state into later tests. A throw here fails the test if
+      // it was otherwise passing.
+      try {
+        await runHooks(
+          eachHook(t.suite, "afterEach"),
+          testCtx,
+          recordLateFailure
+        );
+      } catch (e) {
+        if (result.ok) {
+          failResult(
+            result,
+            "afterEach hook: " + (e && e.stack ? e.stack : String(e))
+          );
         }
       }
-      await runHooks(suite.after, ctx);
+    }
+
+    async function runSuite(suite) {
+      var ctx = {};
+      // A skipped suite still registers and reports every nested test, but
+      // none of its hooks or test bodies run.
+      if (suite.skipped) {
+        for (var skippedIndex = 0; skippedIndex < suite.children.length; skippedIndex++) {
+          var skippedChild = suite.children[skippedIndex];
+          if (skippedChild.kind === "test") {
+            await runOneTest(skippedChild.test);
+          } else {
+            await runSuite(skippedChild.suite);
+          }
+        }
+        return;
+      }
+      // Suite-level before/after hooks are contained the same way per-test hooks
+      // are in runOneTest: a failing hook (thrown, done(error), or timed out) is
+      // recorded as a single `not ok` and the run continues, rather than the
+      // rejection propagating to the top-level harness catch and collapsing every
+      // count to PASS: 0  FAIL: 1  TOTAL: 1. A failed `before all` skips this
+      // suite's children (their fixture state is unreliable) but lets sibling
+      // suites still run; `after all` runs regardless, for cleanup.
+      var beforeName = fullName(suite, '"before all" hook');
+      var beforeFailed = !(await runSuiteHooks(suite.before, ctx, beforeName));
+      if (!beforeFailed) {
+        // Children run in definition order (tests interleaved with nested suites).
+        for (var i = 0; i < suite.children.length; i++) {
+          var child = suite.children[i];
+          if (child.kind === "test") {
+            await runOneTest(child.test);
+          } else {
+            await runSuite(child.suite);
+          }
+        }
+      }
+      var afterName = fullName(suite, '"after all" hook');
+      await runSuiteHooks(suite.after, ctx, afterName);
     }
 
     async function runAll() {
       console.log("TAP version 13");
+      if (hasOnly(rootSuite)) filterOnly(rootSuite);
       await runSuite(rootSuite);
+      await waitForUserTimers(ASYNC_TIMEOUT_MS);
+      emitResults();
       console.log("1.." + counter);
       console.log("# tests " + counter);
       console.log("# pass " + passed);
@@ -1276,8 +2277,8 @@
       describe: describe,
       it: it,
       xit: xit,
-      xdescribe: function (name) {
-        describe(name, function () {});
+      xdescribe: function (name, fn) {
+        return addSuite(name, fn, true, false);
       },
       before: hookRegister("before"),
       after: hookRegister("after"),

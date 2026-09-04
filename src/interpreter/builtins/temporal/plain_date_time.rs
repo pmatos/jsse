@@ -46,7 +46,7 @@ pub(super) fn create_plain_date_time_result(
             calendar: cal.to_string(),
         });
     let id = obj_id;
-    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+    Completion::Normal(JsValue::object(id))
 }
 
 pub(super) fn to_temporal_plain_date_time(
@@ -61,125 +61,120 @@ pub(super) fn to_temporal_plain_date_time_with_overflow(
     item: JsValue,
     overflow: &str,
 ) -> Result<(i32, u8, u8, u8, u8, u8, u16, u16, u16, String), Completion> {
-    match &item {
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id) {
-                let data = obj.borrow();
-                if let Some(TemporalData::PlainDateTime {
-                    iso_year,
-                    iso_month,
-                    iso_day,
-                    hour,
-                    minute,
-                    second,
-                    millisecond,
-                    microsecond,
-                    nanosecond,
-                    calendar,
-                }) = data.temporal_data()
-                {
-                    return Ok((
-                        *iso_year,
-                        *iso_month,
-                        *iso_day,
-                        *hour,
-                        *minute,
-                        *second,
-                        *millisecond,
-                        *microsecond,
-                        *nanosecond,
-                        calendar.clone(),
-                    ));
-                }
-                if let Some(TemporalData::PlainDate {
-                    iso_year,
-                    iso_month,
-                    iso_day,
-                    calendar,
-                }) = data.temporal_data()
-                {
-                    return Ok((
-                        *iso_year,
-                        *iso_month,
-                        *iso_day,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        calendar.clone(),
-                    ));
-                }
-                if let Some(TemporalData::ZonedDateTime {
-                    epoch_nanoseconds,
-                    time_zone,
-                    calendar,
-                }) = data.temporal_data()
-                {
-                    let (y, mo, d, h, mi, s, ms, us, ns) =
-                        super::zoned_date_time::epoch_ns_to_components(
-                            epoch_nanoseconds,
-                            time_zone,
-                        );
-                    return Ok((y, mo, d, h, mi, s, ms, us, ns, calendar.clone()));
-                }
+    if let Some(o) = item.as_object_id() {
+        if let Some(obj) = interp.get_object_cell(o) {
+            let data = obj.borrow();
+            if let Some(TemporalData::PlainDateTime {
+                iso_year,
+                iso_month,
+                iso_day,
+                hour,
+                minute,
+                second,
+                millisecond,
+                microsecond,
+                nanosecond,
+                calendar,
+            }) = data.temporal_data()
+            {
+                return Ok((
+                    *iso_year,
+                    *iso_month,
+                    *iso_day,
+                    *hour,
+                    *minute,
+                    *second,
+                    *millisecond,
+                    *microsecond,
+                    *nanosecond,
+                    calendar.clone(),
+                ));
             }
-            let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) =
-                read_pdt_property_bag(interp, &item)?;
-
-            // Non-ISO calendar: convert calendar fields to ISO
-            if cal != "iso8601" {
-                let era_val = match super::get_prop(interp, &item, "era") {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
-                let era_year_val = match super::get_prop(interp, &item, "eraYear") {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
-                let has_era = !super::is_undefined(&era_val);
-                let has_era_year = !super::is_undefined(&era_year_val);
-
-                let (icu_era, icu_year) =
-                    if super::calendar_has_eras(&cal) && has_era && has_era_year {
-                        let era_str =
-                            super::to_primitive_and_require_string(interp, &era_val, "era")?;
-                        let ey = super::to_integer_with_truncation(interp, &era_year_val)? as i32;
-                        (Some(era_str), ey)
-                    } else if super::calendar_has_eras(&cal) && (has_era != has_era_year) {
-                        return Err(Completion::Throw(interp.create_type_error(
-                            "era and eraYear must both be present or both be absent",
-                        )));
-                    } else {
-                        (None, y_f as i32)
-                    };
-
-                if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
-                    icu_era.as_deref(),
-                    icu_year,
-                    mc_str.as_deref(),
-                    month_num.map(|v| v as u8),
-                    d_f as u8,
-                    &cal,
-                ) {
-                    return Ok((iso_y, iso_m, iso_d, h, mi, s, ms, us, ns, cal));
-                }
-                if icu_era.is_some() || overflow == "reject" {
-                    return Err(Completion::Throw(
-                        interp.create_range_error("Invalid calendar date"),
-                    ));
-                }
+            if let Some(TemporalData::PlainDate {
+                iso_year,
+                iso_month,
+                iso_day,
+                calendar,
+            }) = data.temporal_data()
+            {
+                return Ok((
+                    *iso_year,
+                    *iso_month,
+                    *iso_day,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    calendar.clone(),
+                ));
             }
-
-            apply_pdt_overflow(
-                interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, overflow,
-            )
+            if let Some(TemporalData::ZonedDateTime {
+                epoch_nanoseconds,
+                time_zone,
+                calendar,
+            }) = data.temporal_data()
+            {
+                let (y, mo, d, h, mi, s, ms, us, ns) =
+                    super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
+                return Ok((y, mo, d, h, mi, s, ms, us, ns, calendar.clone()));
+            }
         }
-        JsValue::String(s) => parse_date_time_string(interp, &s.to_rust_string()),
-        _ => Err(Completion::Throw(
-            interp.create_type_error("Cannot convert to Temporal.PlainDateTime"),
-        )),
+        let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) =
+            read_pdt_property_bag(interp, &item)?;
+
+        // Non-ISO calendar: convert calendar fields to ISO
+        if cal != "iso8601" {
+            let era_val = match super::get_prop(interp, &item, "era") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let era_year_val = match super::get_prop(interp, &item, "eraYear") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let has_era = !super::is_undefined(&era_val);
+            let has_era_year = !super::is_undefined(&era_year_val);
+
+            let (icu_era, icu_year) = if super::calendar_has_eras(&cal) && has_era && has_era_year {
+                let era_str = super::to_primitive_and_require_string(interp, &era_val, "era")?;
+                let ey = super::to_integer_with_truncation(interp, &era_year_val)? as i32;
+                (Some(era_str), ey)
+            } else if super::calendar_has_eras(&cal) && (has_era != has_era_year) {
+                return Err(Completion::Throw(interp.create_type_error(
+                    "era and eraYear must both be present or both be absent",
+                )));
+            } else {
+                (None, y_f as i32)
+            };
+
+            if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
+                icu_era.as_deref(),
+                icu_year,
+                mc_str.as_deref(),
+                month_num.map(|v| v as u8),
+                d_f as u8,
+                &cal,
+            ) {
+                return Ok((iso_y, iso_m, iso_d, h, mi, s, ms, us, ns, cal));
+            }
+            if icu_era.is_some() || overflow == "reject" {
+                return Err(Completion::Throw(
+                    interp.create_range_error("Invalid calendar date"),
+                ));
+            }
+        }
+
+        apply_pdt_overflow(
+            interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, overflow,
+        )
+    } else if let Some(s) = item.as_string() {
+        parse_date_time_string(interp, &s.to_rust_string())
+    } else {
+        Err(Completion::Throw(interp.create_type_error(
+            "Cannot convert to Temporal.PlainDateTime",
+        )))
     }
 }
 
@@ -468,11 +463,12 @@ fn get_pdt_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(i32, u8, u8, u8, u8, u8, u16, u16, u16, String), Completion> {
-    let snapshot = match this {
-        JsValue::Object(o) => interp
-            .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data().cloned()),
-        _ => None,
+    let snapshot = if let Some(o) = this.as_object_id() {
+        interp
+            .get_object_cell(o)
+            .map(|cell| cell.borrow().temporal_data().cloned())
+    } else {
+        None
     };
     match snapshot {
         Some(Some(TemporalData::PlainDateTime {
@@ -542,27 +538,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .class_name = "Temporal.PlainDateTime".to_string();
-        {
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str(
-                    "Temporal.PlainDateTime",
-                ))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(proto_id, "Temporal.PlainDateTime");
 
         // Getter: calendarId
         {
@@ -574,7 +550,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&cal)))
+                    Completion::Normal(JsValue::from_str(&cal))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -610,14 +586,14 @@ impl Interpreter {
                             1 => cf.month_ordinal as f64,
                             _ => cf.day as f64,
                         };
-                        return Completion::Normal(JsValue::Number(val));
+                        return Completion::Normal(JsValue::number(val));
                     }
                     let val = match idx {
                         0 => y as f64,
                         1 => m as f64,
                         _ => d as f64,
                     };
-                    Completion::Normal(JsValue::Number(val))
+                    Completion::Normal(JsValue::number(val))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -660,7 +636,7 @@ impl Interpreter {
                         4 => us as f64,
                         _ => ns as f64,
                     };
-                    Completion::Normal(JsValue::Number(val))
+                    Completion::Normal(JsValue::number(val))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -691,11 +667,9 @@ impl Interpreter {
                     if cal != "iso8601"
                         && let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal)
                     {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            &cf.month_code,
-                        )));
+                        return Completion::Normal(JsValue::from_str(&cf.month_code));
                     }
-                    Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
+                    Completion::Normal(JsValue::from_str(&iso_month_code(m)))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -736,37 +710,37 @@ impl Interpreter {
                     if cal != "iso8601" {
                         // weekOfYear and yearOfWeek are undefined for non-ISO calendars
                         if which == 2 || which == 3 {
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
                             let val = match which {
-                                0 => JsValue::Number(iso_day_of_week(y, m, d) as f64),
-                                1 => JsValue::Number(cf.day_of_year as f64),
-                                4 => JsValue::Number(7.0),
-                                5 => JsValue::Number(cf.days_in_month as f64),
-                                6 => JsValue::Number(cf.days_in_year as f64),
-                                7 => JsValue::Number(cf.months_in_year as f64),
-                                _ => JsValue::Boolean(cf.in_leap_year),
+                                0 => JsValue::number(iso_day_of_week(y, m, d) as f64),
+                                1 => JsValue::number(cf.day_of_year as f64),
+                                4 => JsValue::number(7.0),
+                                5 => JsValue::number(cf.days_in_month as f64),
+                                6 => JsValue::number(cf.days_in_year as f64),
+                                7 => JsValue::number(cf.months_in_year as f64),
+                                _ => JsValue::boolean(cf.in_leap_year),
                             };
                             return Completion::Normal(val);
                         }
                     }
                     let val = match which {
-                        0 => JsValue::Number(iso_day_of_week(y, m, d) as f64),
-                        1 => JsValue::Number(iso_day_of_year(y, m, d) as f64),
+                        0 => JsValue::number(iso_day_of_week(y, m, d) as f64),
+                        1 => JsValue::number(iso_day_of_year(y, m, d) as f64),
                         2 => {
                             let (w, _) = iso_week_of_year(y, m, d);
-                            JsValue::Number(w as f64)
+                            JsValue::number(w as f64)
                         }
                         3 => {
                             let (_, yw) = iso_week_of_year(y, m, d);
-                            JsValue::Number(yw as f64)
+                            JsValue::number(yw as f64)
                         }
-                        4 => JsValue::Number(7.0),
-                        5 => JsValue::Number(iso_days_in_month(y, m) as f64),
-                        6 => JsValue::Number(iso_days_in_year(y) as f64),
-                        7 => JsValue::Number(12.0),
-                        _ => JsValue::Boolean(iso_is_leap_year(y)),
+                        4 => JsValue::number(7.0),
+                        5 => JsValue::number(iso_days_in_month(y, m) as f64),
+                        6 => JsValue::number(iso_days_in_year(y) as f64),
+                        7 => JsValue::number(12.0),
+                        _ => JsValue::boolean(iso_is_leap_year(y)),
                     };
                     Completion::Normal(val)
                 },
@@ -801,17 +775,17 @@ impl Interpreter {
                     {
                         if is_era {
                             return Completion::Normal(match cf.era {
-                                Some(e) => JsValue::String(JsString::from_str(&e)),
-                                None => JsValue::Undefined,
+                                Some(e) => JsValue::from_str(&e),
+                                None => JsValue::UNDEFINED,
                             });
                         } else {
                             return Completion::Normal(match cf.era_year {
-                                Some(ey) => JsValue::Number(ey as f64),
-                                None => JsValue::Undefined,
+                                Some(ey) => JsValue::number(ey as f64),
+                                None => JsValue::UNDEFINED,
                             });
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -838,7 +812,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let item = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // IsPartialTemporalObject
                 if let Err(c) = is_partial_temporal_object(interp, &item) {
                     return c;
@@ -975,7 +949,7 @@ impl Interpreter {
 
                     let overflow = match parse_overflow_option(
                         interp,
-                        &args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                        &args.get(1).cloned().unwrap_or(JsValue::UNDEFINED),
                     ) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -1087,7 +1061,7 @@ impl Interpreter {
                     );
                 }
                 // GetTemporalOverflowOption
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1154,7 +1128,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let time_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let time_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let (h, mi, s, ms, us, ns) = if is_undefined(&time_arg) {
                     (0, 0, 0, 0, 0, 0)
                 } else {
@@ -1184,8 +1158,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let cal_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if matches!(cal_arg, JsValue::Undefined) {
+                let cal_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if cal_arg.is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("withCalendar requires a calendar argument"),
                     );
@@ -1213,12 +1187,12 @@ impl Interpreter {
                     };
                     let dur = match super::duration::to_temporal_duration_record(
                         interp,
-                        args.first().cloned().unwrap_or(JsValue::Undefined),
+                        args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                     ) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let overflow = match parse_overflow_option(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -1294,7 +1268,7 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let (y2, m2, d2, h2, mi2, s2, ms2, us2, ns2, cal2) =
                         match to_temporal_plain_date_time(interp, other) {
                             Ok(v) => v,
@@ -1305,7 +1279,7 @@ impl Interpreter {
                             &format!("cannot compute difference between dates of different calendars: {} and {}", cal, cal2),
                         ));
                     }
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let all_units: &[&str] = &[
                         "year",
                         "month",
@@ -1598,8 +1572,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let options = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (unit, mode_str, increment) = if let JsValue::String(ref s) = options {
+                let options = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let (unit, mode_str, increment) = if let Some(s) = options.as_string() {
                     let u = match temporal_unit_singular(&s.to_rust_string()) {
                         Some(u) => u,
                         None => {
@@ -1607,7 +1581,7 @@ impl Interpreter {
                         }
                     };
                     (u, "halfExpand".to_string(), 1i128)
-                } else if matches!(options, JsValue::Object(_)) {
+                } else if options.is_object() {
                     // Read all options in alphabetical order first, then validate
                     // 1. roundingIncrement
                     let ri = match get_prop(interp, &options, "roundingIncrement") {
@@ -1738,7 +1712,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let b = match to_temporal_plain_date_time(interp, other) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1753,7 +1727,7 @@ impl Interpreter {
                     && a.7 == b.7
                     && a.8 == b.8
                     && a.9 == b.9;
-                Completion::Normal(JsValue::Boolean(eq))
+                Completion::Normal(JsValue::boolean(eq))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1769,7 +1743,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let options = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let has_opts = match super::get_options_object(interp, &options) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1806,7 +1780,7 @@ impl Interpreter {
                         };
                         let mut prec: Option<i32> = if is_undefined(&fsd) {
                             None
-                        } else if matches!(fsd, JsValue::Number(_)) {
+                        } else if fsd.is_number() {
                             let n = match interp.to_number_value(&fsd) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -1942,7 +1916,7 @@ impl Interpreter {
                     show_calendar,
                     precision,
                 );
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1960,7 +1934,7 @@ impl Interpreter {
                 };
                 let result =
                     format_plain_date_time(y, m, d, h, mi, s, ms, us, ns, &cal, "auto", None);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1983,15 +1957,15 @@ impl Interpreter {
                         let result = format_plain_date_time(
                             _y, _m, _d, _h, _mi, _s, _ms, _us, _ns, &_cal, "auto", None,
                         );
-                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                        return Completion::Normal(JsValue::from_str(&result));
                     }
                 };
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
                 if let Err(e) = super::check_calendar_mismatch(interp, &dtf_instance, &_cal, true) {
                     return Completion::Throw(e);
@@ -2058,20 +2032,20 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let tz = match super::to_temporal_time_zone_identifier(interp, &tz_arg) {
                     Ok(t) => t,
                     Err(c) => return c,
                 };
                 // Validate options: read disambiguation per spec
-                let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                if !super::is_undefined(&opts) && !matches!(opts, JsValue::Object(_)) {
+                let opts = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                if !super::is_undefined(&opts) && !opts.is_object() {
                     return Completion::Throw(
                         interp.create_type_error("options must be an object"),
                     );
                 }
                 let mut disambiguation = "compatible".to_string();
-                if matches!(opts, JsValue::Object(_)) {
+                if opts.is_object() {
                     let dis_val = match super::get_prop(interp, &opts, "disambiguation") {
                         Completion::Normal(v) => v,
                         c => return c,
@@ -2130,7 +2104,7 @@ impl Interpreter {
                         interp.create_type_error("Temporal.PlainDateTime must be called with new"),
                     );
                 }
-                let y_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let y_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let y = match interp.to_number_value(&y_val) {
                     Ok(n) => {
                         if !n.is_finite() {
@@ -2140,7 +2114,7 @@ impl Interpreter {
                     }
                     Err(e) => return Completion::Throw(e),
                 };
-                let m_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let m_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let m = match interp.to_number_value(&m_val) {
                     Ok(n) => {
                         if !n.is_finite() {
@@ -2154,7 +2128,7 @@ impl Interpreter {
                     }
                     Err(e) => return Completion::Throw(e),
                 };
-                let d_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                let d_val = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
                 let d = match interp.to_number_value(&d_val) {
                     Ok(n) => {
                         if !n.is_finite() {
@@ -2192,7 +2166,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let cal_arg = args.get(9).cloned().unwrap_or(JsValue::Undefined);
+                let cal_arg = args.get(9).cloned().unwrap_or(JsValue::UNDEFINED);
                 let cal = match super::validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
@@ -2207,9 +2181,11 @@ impl Interpreter {
                 }
                 let result =
                     create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal);
-                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                if let Completion::Normal(ref v) = result
+                    && let Some(o) = v.as_object_id()
+                {
                     let dp = interp.realm().temporal_plain_date_time_prototype;
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                    interp.apply_new_target_prototype(o, dp, |r| {
                         r.temporal_plain_date_time_prototype
                     });
                 }
@@ -2218,10 +2194,10 @@ impl Interpreter {
         ));
 
         // Constructor.prototype_id
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -2239,10 +2215,10 @@ impl Interpreter {
             "from".to_string(),
             1,
             |interp, _this, args| {
-                let item = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 // Per spec: if item is a string, parse first, then validate overflow (but don't use it)
-                if matches!(&item, JsValue::String(_)) {
+                if item.is_string() {
                     let (y, m, d, h, mi, s, ms, us, ns, cal) =
                         match to_temporal_plain_date_time_with_overflow(interp, item, "constrain") {
                             Ok(v) => v,
@@ -2262,8 +2238,8 @@ impl Interpreter {
                     );
                 }
                 // Check if it's a Temporal object (read overflow first, then return copy)
-                let is_temporal = if let JsValue::Object(ref o) = item {
-                    if let Some(obj) = interp.get_object_cell(o.id) {
+                let is_temporal = if let Some(o) = item.as_object_id() {
+                    if let Some(obj) = interp.get_object_cell(o) {
                         let data = obj.borrow();
                         matches!(
                             data.temporal_data(),
@@ -2393,8 +2369,8 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -2406,14 +2382,14 @@ impl Interpreter {
             |interp, _this, args| {
                 let a = match to_temporal_plain_date_time(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 let b = match to_temporal_plain_date_time(
                     interp,
-                    args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                    args.get(1).cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -2425,11 +2401,11 @@ impl Interpreter {
                     std::cmp::Ordering::Equal => 0.0,
                     std::cmp::Ordering::Greater => 1.0,
                 };
-                Completion::Normal(JsValue::Number(result))
+                Completion::Normal(JsValue::number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
@@ -2450,7 +2426,7 @@ fn get_constructor_field(
     min: u8,
     max: u8,
 ) -> Result<u8, Completion> {
-    let val = arg.cloned().unwrap_or(JsValue::Undefined);
+    let val = arg.cloned().unwrap_or(JsValue::UNDEFINED);
     if is_undefined(&val) {
         return Ok(0);
     }
@@ -2480,7 +2456,7 @@ fn get_constructor_field_u16(
     min: u16,
     max: u16,
 ) -> Result<u16, Completion> {
-    let val = arg.cloned().unwrap_or(JsValue::Undefined);
+    let val = arg.cloned().unwrap_or(JsValue::UNDEFINED);
     if is_undefined(&val) {
         return Ok(0);
     }

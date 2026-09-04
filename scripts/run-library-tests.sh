@@ -73,6 +73,24 @@ fi
 LIB_ESBUILD_PLATFORM="node"
 LIB_ESBUILD_EXTRA=()
 LIB_SHIM=""
+LIB_SHIMS=()
+# Optional ordered prefix files that each select an independent copy of the
+# esbuild IIFE. This is useful for suites that must execute the identical corpus
+# under isolated module state in more than one mode. Empty by default: every
+# existing library still gets one copy.
+LIB_BUNDLE_PREFIXES=()
+# Run prefixed copies in independent engine processes instead of concatenating
+# them into one file. This is useful when mode isolation must include the heap,
+# event loop, and host jobs as well as the esbuild module graph. The resulting
+# outputs are concatenated before the library verdict runs.
+LIB_SEPARATE_BUNDLES=0
+# Host-process environment assignments (e.g. TZ, LANG) applied to BOTH engine
+# runs. These reach each engine's NATIVE layer only: jsse's Rust Date/Intl and
+# Node's ICU read the OS TZ/LANG directly. They are NOT reflected in jsse's
+# JS-visible `process.env` — the `--node` shim leaves it `{}` (there is no host
+# getenv). Do not use LIB_ENV for values a library reads from `process.env` in
+# JS: those would be set on Node but `undefined` under jsse.
+LIB_ENV=()
 LIB_EXPECT_COUNT=""   # if set, both engines must report exactly this count
 LIB_TIMEOUT=""        # if set (seconds), wrap each engine run so a hang/slow
                       # suite reports cleanly instead of blocking the caller
@@ -116,7 +134,13 @@ source "$CONFIG"
 LIB_CACHE="$CACHE_ROOT/$LIB"
 REPO_DIR="$LIB_CACHE/repo"
 BUNDLE="$LIB_CACHE/bundle.js"
-FINAL="$LIB_CACHE/final.js"
+# Use a .cjs suffix so Node always treats the reference bundle as CommonJS,
+# even when an unrelated ancestor package.json (for example /tmp/package.json)
+# declares "type": "module". esbuild's platform=node output may retain dynamic
+# requires for Node built-ins, so accidentally loading it as ESM breaks the
+# reference oracle before the library suite starts.
+FINAL="$LIB_CACHE/final.cjs"
+FINAL_FILES=("$FINAL")
 PREPARED_MARKER="$LIB_CACHE/.prepared"
 
 if [ "$CLEAN" -eq 1 ]; then
@@ -182,8 +206,29 @@ SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
 if [ -n "$LIB_SHIM" ]; then
     SHIMS+=("$SCRIPT_DIR/$LIB_SHIM")
 fi
-cat "${SHIMS[@]}" "$BUNDLE" > "$FINAL"
-echo "Final bundle: $FINAL ($(wc -c < "$FINAL") bytes)"
+for shim in "${LIB_SHIMS[@]}"; do
+    SHIMS+=("$SCRIPT_DIR/$shim")
+done
+if [ "${#LIB_BUNDLE_PREFIXES[@]}" -eq 0 ]; then
+    cat "${SHIMS[@]}" "$BUNDLE" > "$FINAL"
+elif [ "$LIB_SEPARATE_BUNDLES" -eq 1 ]; then
+    FINAL_FILES=()
+    variant_index=0
+    for prefix in "${LIB_BUNDLE_PREFIXES[@]}"; do
+        variant="$LIB_CACHE/final-$variant_index.cjs"
+        cat "${SHIMS[@]}" "$SCRIPT_DIR/$prefix" "$BUNDLE" > "$variant"
+        FINAL_FILES+=("$variant")
+        variant_index=$((variant_index + 1))
+    done
+else
+    cat "${SHIMS[@]}" > "$FINAL"
+    for prefix in "${LIB_BUNDLE_PREFIXES[@]}"; do
+        cat "$SCRIPT_DIR/$prefix" "$BUNDLE" >> "$FINAL"
+    done
+fi
+for final_file in "${FINAL_FILES[@]}"; do
+    echo "Final bundle: $final_file ($(wc -c < "$final_file") bytes)"
+done
 
 # ---- step 6: build jsse (unless node-only) ---------------------------------
 if [ "$NODE_ONLY" -eq 0 ]; then
@@ -195,7 +240,7 @@ fi
 VERDICT=""; COUNT=""
 evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     local engine="$1" label="$2"
-    local out="$LIB_CACHE/out-$label.txt" rc=0 result
+    local out="$LIB_CACHE/out-$label.txt" rc=0 result run_rc run_index run_file variant_out
     # jsse needs --node to install the #229 __host_* syscall floor (byte I/O,
     # monotonic clock, process exit) that node-shim.js builds process/console/
     # util on. Node has no such flag, and the shim is guarded so it stays inert
@@ -206,12 +251,25 @@ evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     echo "========================================"
     echo "  Running $LIB test suite on $label"
     echo "========================================"
-    if [ -n "$LIB_TIMEOUT" ]; then
-        timeout "$LIB_TIMEOUT" "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
-        [ "$rc" -eq 124 ] && echo "(timed out after ${LIB_TIMEOUT}s)" >> "$out"
-    else
-        "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
-    fi
+    # `env "${LIB_ENV[@]}"` sets the host OS environment for the engine child
+    # (native Date/Intl reads TZ/LANG here); it does not populate jsse's
+    # JS-visible process.env — see the LIB_ENV note above.
+    : > "$out"
+    run_index=0
+    for run_file in "${FINAL_FILES[@]}"; do
+        variant_out="$LIB_CACHE/out-$label-$run_index.txt"
+        run_rc=0
+        if [ -n "$LIB_TIMEOUT" ]; then
+            timeout "$LIB_TIMEOUT" env "${LIB_ENV[@]}" \
+                "$engine" "${engine_args[@]}" "$run_file" > "$variant_out" 2>&1 || run_rc=$?
+            [ "$run_rc" -eq 124 ] && echo "(timed out after ${LIB_TIMEOUT}s)" >> "$variant_out"
+        else
+            env "${LIB_ENV[@]}" "$engine" "${engine_args[@]}" "$run_file" > "$variant_out" 2>&1 || run_rc=$?
+        fi
+        cat "$variant_out" >> "$out"
+        [ "$run_rc" -eq 0 ] || rc="$run_rc"
+        run_index=$((run_index + 1))
+    done
     cat "$out"
     result="$(lib_verdict "$out" "$rc" || true)"
     VERDICT="${result%% *}"

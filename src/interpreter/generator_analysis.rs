@@ -2,7 +2,7 @@ use crate::ast::*;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
-pub struct GeneratorAnalysis {
+pub(crate) struct GeneratorAnalysis {
     pub yield_points: Vec<YieldPoint>,
     pub local_vars: Vec<LocalVariable>,
     pub try_contexts: Vec<TryContext>,
@@ -12,7 +12,7 @@ pub struct GeneratorAnalysis {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct YieldPoint {
+pub(crate) struct YieldPoint {
     pub id: usize,
     pub is_delegate: bool,
     pub inside_try: Option<usize>,
@@ -22,7 +22,7 @@ pub struct YieldPoint {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct LocalVariable {
+pub(crate) struct LocalVariable {
     pub name: String,
     pub kind: VarKind,
     pub scope_depth: usize,
@@ -30,7 +30,7 @@ pub struct LocalVariable {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct TryContext {
+pub(crate) struct TryContext {
     pub id: usize,
     pub has_catch: bool,
     pub has_finally: bool,
@@ -40,7 +40,7 @@ pub struct TryContext {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct LoopContext {
+pub(crate) struct LoopContext {
     pub id: usize,
     pub loop_type: LoopType,
     pub label: Option<String>,
@@ -49,7 +49,7 @@ pub struct LoopContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoopType {
+pub(crate) enum LoopType {
     While,
     DoWhile,
     For,
@@ -83,7 +83,7 @@ impl AnalysisContext {
     }
 }
 
-pub fn analyze_generator_body(body: &[Statement], params: &[Pattern]) -> GeneratorAnalysis {
+pub(crate) fn analyze_generator_body(body: &[Statement], params: &[Pattern]) -> GeneratorAnalysis {
     let mut analysis = GeneratorAnalysis {
         yield_points: Vec::new(),
         local_vars: Vec::new(),
@@ -460,7 +460,7 @@ fn analyze_expression(
             }
         }
 
-        Expression::Object(props) => {
+        Expression::Object(props, _) => {
             for prop in props {
                 if let PropertyKey::Computed(key_expr) = &prop.key {
                     analyze_expression(key_expr, analysis, ctx, true);
@@ -630,7 +630,7 @@ fn collect_pattern_vars(
     }
 }
 
-pub fn contains_yield(stmt: &Statement) -> bool {
+pub(crate) fn contains_yield(stmt: &Statement) -> bool {
     match stmt {
         Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {
             false
@@ -688,7 +688,7 @@ pub fn contains_yield(stmt: &Statement) -> bool {
     }
 }
 
-pub fn expr_contains_yield(expr: &Expression) -> bool {
+pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
     match expr {
         Expression::Yield(_, _) => true,
         Expression::Literal(_)
@@ -699,7 +699,7 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
         | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => false,
         Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_yield),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             matches!(&p.key, PropertyKey::Computed(e) if expr_contains_yield(e))
                 || expr_contains_yield(&p.value)
         }),
@@ -742,7 +742,7 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
     }
 }
 
-pub fn expr_contains_suspension(expr: &Expression) -> bool {
+pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
     match expr {
         Expression::Yield(_, _) | Expression::Await(_) => true,
         Expression::Literal(_)
@@ -753,7 +753,7 @@ pub fn expr_contains_suspension(expr: &Expression) -> bool {
         | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => false,
         Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_suspension),
-        Expression::Object(props) => props.iter().any(|p| {
+        Expression::Object(props, _) => props.iter().any(|p| {
             matches!(&p.key, PropertyKey::Computed(e) if expr_contains_suspension(e))
                 || expr_contains_suspension(&p.value)
         }),
@@ -801,7 +801,7 @@ pub fn expr_contains_suspension(expr: &Expression) -> bool {
 /// Checks if a statement is or contains a Block with `await using` declarations.
 /// Only blocks need special handling because their disposal (at block exit) must
 /// trigger an Await suspension. For/try/switch handle disposal internally.
-pub fn has_block_with_await_using(stmt: &Statement) -> bool {
+pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
     match stmt {
         Statement::Block(stmts) => block_has_await_using(stmts),
         Statement::If(i) => {
@@ -815,13 +815,13 @@ pub fn has_block_with_await_using(stmt: &Statement) -> bool {
     }
 }
 
-pub fn block_has_await_using(stmts: &[Statement]) -> bool {
+pub(crate) fn block_has_await_using(stmts: &[Statement]) -> bool {
     stmts
         .iter()
         .any(|s| matches!(s, Statement::Variable(decl) if decl.kind == VarKind::AwaitUsing))
 }
 
-pub fn contains_suspension(stmt: &Statement) -> bool {
+pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
     match stmt {
         Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {
             false

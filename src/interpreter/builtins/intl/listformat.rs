@@ -37,7 +37,7 @@ fn string_list_from_iterable(
     interp: &mut Interpreter,
     iterable: &JsValue,
 ) -> Result<Vec<String>, JsValue> {
-    if matches!(iterable, JsValue::Undefined) {
+    if iterable.is_undefined() {
         return Ok(Vec::new());
     }
 
@@ -49,7 +49,7 @@ fn string_list_from_iterable(
             None => break,
             Some(result) => {
                 let value = interp.iterator_value(&result)?;
-                if let JsValue::String(s) = &value {
+                if let Some(s) = value.as_string() {
                     list.push(s.to_rust_string());
                 } else {
                     let err = interp.create_type_error("Iterable yielded a non-string value");
@@ -113,19 +113,7 @@ impl Interpreter {
             .class_name = "Intl.ListFormat".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.ListFormat"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.ListFormat");
 
         // format(list)
         let format_fn = self.create_function(JsFunction::native(
@@ -137,19 +125,19 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let string_list = match string_list_from_iterable(interp, &iterable) {
                     Ok(list) => list,
                     Err(e) => return Completion::Throw(e),
                 };
 
                 if string_list.is_empty() {
-                    return Completion::Normal(JsValue::String(JsString::from_str("")));
+                    return Completion::Normal(JsValue::from_str(""));
                 }
 
                 let formatter = create_list_formatter(&locale, &list_type, &style);
                 let result = formatter.format_to_string(string_list.iter().map(|s| s.as_str()));
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -166,7 +154,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let string_list = match string_list_from_iterable(interp, &iterable) {
                     Ok(list) => list,
                     Err(e) => return Completion::Throw(e),
@@ -195,7 +183,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&ptype)),
+                                    JsValue::from_str(&ptype),
                                     true,
                                     true,
                                     true,
@@ -207,14 +195,13 @@ impl Interpreter {
                             .insert_property(
                                 "value".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&value)),
+                                    JsValue::from_str(&value),
                                     true,
                                     true,
                                     true,
                                 ),
                             );
-                        let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(part_obj_id)
                     })
                     .collect();
 
@@ -244,9 +231,9 @@ impl Interpreter {
                 }
 
                 let props = vec![
-                    ("locale", JsValue::String(JsString::from_str(&locale))),
-                    ("type", JsValue::String(JsString::from_str(&list_type))),
-                    ("style", JsValue::String(JsString::from_str(&style))),
+                    ("locale", JsValue::from_str(&locale)),
+                    ("type", JsValue::from_str(&list_type)),
+                    ("style", JsValue::from_str(&style)),
                 ];
                 for (key, val) in props {
                     interp
@@ -258,7 +245,7 @@ impl Interpreter {
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -268,7 +255,7 @@ impl Interpreter {
         self.realm_mut().intl_list_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let list_format_ctor = self.create_function(JsFunction::constructor(
@@ -281,8 +268,8 @@ impl Interpreter {
                     );
                 }
 
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -350,15 +337,14 @@ impl Interpreter {
                         style,
                     }));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set ListFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &list_format_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = list_format_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -371,8 +357,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),
@@ -410,8 +396,8 @@ fn extract_list_format_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(String, String, String), JsValue> {
-    if let JsValue::Object(o) = this
-        && let Some(cell) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(cell) = interp.get_object_cell(o)
     {
         let b = cell.borrow();
         if let Some(IntlData::ListFormat {

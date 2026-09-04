@@ -1,0 +1,107 @@
+PERF	vm_ops	19089196
+PERF	ast_stmt_execs	58787189
+PERF	ast_expr_evals	206518225
+PERF	ast_work_units	265305414
+PERF	body_dispatch_compiled	1381051
+PERF	body_dispatch_ast	9395345
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	13.82
+PERF	ast_units_in_functions	265305042
+PERF	ast_units_per_ast_body	28.24
+PERF	compile_ok	1188
+PERF	compile_bail	11213
+PERF	calls_from_vm	16060
+PERF	calls_to_native	3495164
+PERF	calls_to_user	10776396
+PERF	gc_minor	116
+PERF	gc_major	11
+PERF	gc_ms	1754
+BAIL	call callee	10360
+BAIL	expression:This	307
+BAIL	nested tail call	184
+BAIL	statement:FunctionDeclaration	165
+BAIL	statement:Switch	86
+BAIL	expression:Array	39
+BAIL	expression:New	39
+BAIL	expression:Typeof	12
+BAIL	assign target	8
+BAIL	expression:Function	2
+BAIL	expression:Object	2
+BAIL	literal	2
+BAIL	statement:Continue	2
+BAIL	update target	2
+BAIL	lexical declaration	1
+BAIL	statement:ForIn	1
+BAIL	statement:Try	1
+BODY	<anonymous#3066>	25083387	9.45%	178157	call callee
+BODY	<anonymous#1086>#11130	23876281	9.00%	211240	call callee
+BODY	<anonymous#3006>	18485253	6.97%	1421943	expression:This
+BODY	<anonymous#2168>	14690290	5.54%	304695	call callee
+BODY	<anonymous#3052>	13595087	5.12%	1235917	update target
+BODY	<anonymous#3064>	10350929	3.90%	75206	expression:This
+BODY	postAssignScopes	9364717	3.53%	141845	call callee
+BODY	<anonymous#2811>	7596780	2.86%	37707	expression:Typeof
+BODY	cleanASTType	7391748	2.79%	147353	expression:New
+BODY	AST	6191520	2.33%	154788	call callee
+BODY	<anonymous#2807>	5718613	2.16%	37713	expression:This
+BODY	<anonymous#3004>	5401624	2.04%	284296	expression:This
+BODY	<anonymous#2547>	4771812	1.80%	250172	call callee
+BODY	<anonymous#2823>	3970932	1.50%	17201	expression:This
+BODY	<anonymous#2813>	3633741	1.37%	37713	expression:New
+BODY	<anonymous#2601>	3321073	1.25%	91984	expression:This
+BODY	<anonymous#2583>	3144729	1.19%	41864	call callee
+BODY	<anonymous#2599>	2974153	1.12%	13203	expression:Typeof
+BODY	<anonymous#3589>	2919616	1.10%	21977	call callee
+BODY	<anonymous#3058>	2850512	1.07%	178157	expression:This
+BODY	<anonymous#1185>	2707872	1.02%	225656	expression:This
+BODY	walkBinaryExpressionChildren	2147706	0.81%	65082	call callee
+BODY	<anonymous#3629>	2102987	0.79%	22947	expression:This
+BODY	<anonymous#1420>	2060930	0.78%	31915	expression:This
+BODY	<anonymous#2527>	2052776	0.77%	186616	call callee
+BODY	walkListChildren	1978404	0.75%	28653	call callee
+BODY	<anonymous#3038>	1909564	0.72%	2001	expression:This
+BODY	<anonymous#3018>	1832378	0.69%	24358	expression:This
+BODY	<anonymous#2827>	1720890	0.65%	5483	expression:This
+BODY	<anonymous#3231>	1646030	0.62%	27646	expression:This
+BODY	ASTSpan	1593360	0.60%	159336	expression:This
+BODY	Identifier	1579456	0.60%	54464	call callee
+BODY	<anonymous#3501>	1479803	0.56%	36384	expression:This
+BODY	<anonymous#3573>	1372627	0.52%	26045	expression:This
+BODY	<anonymous#2737>	1301930	0.49%	125401	expression:New
+BODY	<anonymous#3481>	1026363	0.39%	4350	expression:This
+BODY	preCollectTypes	1016848	0.38%	10628	call callee
+BODY	<anonymous#3649>	1013787	0.38%	8209	expression:This
+BODY	<anonymous#3048>	1005930	0.38%	167655	expression:This
+BODY	<anonymous#3978>	995111	0.38%	14053	statement:Switch
+OP	LoadName	5659213	29.65%
+OP	GetProp	4001427	20.96%
+OP	JumpIfFalse	1437788	7.53%
+OP	Eq	1414345	7.41%
+OP	Return	1217291	6.38%
+OP	Pop	913218	4.78%
+OP	LoadConst	705645	3.70%
+OP	ResolveName	419300	2.20%
+OP	StoreResolvedName	419300	2.20%
+OP	NotEq	385863	2.02%
+OP	BitAnd	385863	2.02%
+OP	JumpIfTruthyKeep	290575	1.52%
+OP	LoadTrue	275200	1.44%
+OP	GtEq	205754	1.08%
+OP	GetElement	190999	1.00%
+OP	SetProp	166687	0.87%
+OP	ReturnUndefined	163760	0.86%
+OP	Lt	155202	0.81%
+OP	Jump	152481	0.80%
+OP	Add	146112	0.77%
+OP	LoadFalse	117292	0.61%
+OP	JumpIfFalsyKeep	113133	0.59%
+OP	Shr	51004	0.27%
+OP	LtEq	45626	0.24%
+OP	LoadCalleeName	16060	0.08%
+OP	Sub	10032	0.05%
+OP	ReturnCall	8186	0.04%
+OP	Call	7874	0.04%
+OP	StrictEq	4074	0.02%
+OP	Gt	4074	0.02%
+OP	Neg	4074	0.02%
+OP	LoadNull	1744	0.01%

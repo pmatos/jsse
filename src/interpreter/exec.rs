@@ -8,15 +8,146 @@ impl Interpreter {
 
     /// Execute a `Body` as a unit, switching to that body's IC store for the
     /// duration and restoring the parent body's handle on return. Used for
-    /// top-level scripts, function bodies, `eval` programs, and dynamically
-    /// created functions. See `docs/adr/0001-inline-cache-ast-seam.md`.
+    /// tree-walker script fallback, generator/state-machine Bodies, and other
+    /// dynamically executed Bodies. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        let handle = self.ic_store.for_body(body);
-        let prev = self.current_ic_handle;
-        self.current_ic_handle = handle;
-        let result = self.exec_statements_cached(body.as_slice(), env, None);
-        self.current_ic_handle = prev;
+        #[cfg(feature = "perf-counters")]
+        let label = self.perf.name_non_function_body.clone();
+        #[cfg(feature = "perf-counters")]
+        return self.exec_body_attributed(body, env, label);
+        #[cfg(not(feature = "perf-counters"))]
+        self.exec_body_inner(body, env)
+    }
+
+    /// Execute one generator/async state-machine Body while attributing its
+    /// tree-walker work to the function that created the machine. These are
+    /// replay/resume steps rather than `dispatch_body` invocations, so they
+    /// remain outside the function-invocation counters.
+    pub(crate) fn exec_state_machine_body(
+        &mut self,
+        body: &Body,
+        env: &EnvRef,
+        _state_machine: &crate::interpreter::generator_transform::GeneratorStateMachine,
+    ) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let (name, id) = _state_machine.perf_key.clone().unwrap_or_else(|| {
+                (
+                    self.perf.name_non_function_body.clone(),
+                    crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                )
+            });
+            self.perf.enter_ast_body(name, id, false);
+            let result = self.exec_body_inner(body, env);
+            self.perf.leave_ast_body();
+            result
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        self.exec_body_inner(body, env)
+    }
+
+    /// Unlabelled Body execution, the script-body fallback, and `eval` reach
+    /// statement execution without passing through `dispatch_body`. Without a
+    /// frame of their own, their work units are credited to whichever ordinary
+    /// body happens to be on the attribution stack — silently inflating that
+    /// caller's exclusive total (#537 review). These bodies carry no function
+    /// object, so each population gets a synthetic label.
+    ///
+    /// The execution count deliberately does NOT go to `body_ast`: this fires
+    /// once per state-machine step, not once per invocation, and `body_ast` is
+    /// the published denominator of the compiled/AST invocation split.
+    /// Counting steps there overstated AST invocations ~4x per yield and
+    /// understated the compiled share 5x on generator-heavy code (#537 review,
+    /// second pass).
+    #[cfg(feature = "perf-counters")]
+    fn exec_body_attributed(
+        &mut self,
+        body: &Body,
+        env: &EnvRef,
+        label: std::rc::Rc<str>,
+    ) -> Completion {
+        self.perf.body_non_function += 1;
+        self.perf.enter_ast_body(
+            label,
+            crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+            false,
+        );
+        let result = self.exec_body_inner(body, env);
+        self.perf.leave_ast_body();
         result
+    }
+
+    fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        let prev = self.enter_ic_body(body);
+        let result = self.exec_statements_cached(body.as_slice(), env, None);
+        self.leave_ic_body(prev);
+        result
+    }
+
+    /// Execute a Script Body through the opt-in bytecode path when the entire
+    /// Body is eligible. Script declaration instantiation and StatementList
+    /// completion semantics differ from a function body's, so this is a
+    /// separate entry point rather than a synthetic function dispatch.
+    pub(crate) fn exec_script_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        if self.bytecode_enabled {
+            // Compiled once and matched on, so the counter build does not pay a
+            // second compile. Both outcomes are recorded — a script-only
+            // workload previously reported compile_ok and BAIL as zero however
+            // the compile went. The execution counts as a non-function body,
+            // never in `body_compiled`, which is the published count of
+            // function invocations (#537 review, third pass).
+            match crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice()) {
+                Ok(chunk) => {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.compile_ok += 1;
+                        self.perf.body_non_function += 1;
+                    }
+                    let prev = self.enter_ic_body(body);
+                    let result = if let Some(err) =
+                        self.instantiate_body_declarations(body.as_slice(), env, None)
+                    {
+                        err
+                    } else {
+                        self.call_stack_envs.push(env.clone());
+                        let result = crate::interpreter::bytecode::vm::run_script_chunk(
+                            self,
+                            &chunk,
+                            env,
+                            JsValue::UNDEFINED,
+                        );
+                        self.call_stack_envs.pop();
+                        result
+                    };
+                    self.leave_ic_body(prev);
+                    return result;
+                }
+                Err(_e) => {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
+                            reason,
+                        ) = _e;
+                        let name = self.perf.name_script_body.clone();
+                        self.perf.record_bail(
+                            reason,
+                            name,
+                            crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                        );
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "perf-counters")]
+        {
+            let label = self.perf.name_script_body.clone();
+            self.exec_body_attributed(body, env, label)
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        {
+            self.exec_body_inner(body, env)
+        }
     }
 
     /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
@@ -28,9 +159,19 @@ impl Interpreter {
     /// semantics would corrupt those bindings. Returns the last statement's
     /// completion value (eval's result), matching PerformEval / PerformShadowRealmEval.
     pub(crate) fn exec_eval_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        let handle = self.ic_store.for_body(body);
-        let prev = self.current_ic_handle;
-        self.current_ic_handle = handle;
+        // Same attribution gap as `exec_body`: eval'd code never passes through
+        // `dispatch_body`, so it needs its own frame (#537 review).
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            let name = self.perf.name_eval_body.clone();
+            self.perf.enter_ast_body(
+                name,
+                crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                false,
+            );
+        }
+        let prev = self.enter_ic_body(body);
         let mut last = Completion::Empty;
         for stmt in body.as_slice() {
             self.gc_root_completion(&last);
@@ -46,7 +187,9 @@ impl Interpreter {
                 }
             }
         }
-        self.current_ic_handle = prev;
+        self.leave_ic_body(prev);
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         last
     }
 
@@ -61,6 +204,21 @@ impl Interpreter {
         env: &EnvRef,
         analysis: Option<&Rc<HoistAnalysis>>,
     ) -> Completion {
+        if let Some(err) = self.instantiate_body_declarations(stmts, env, analysis) {
+            return err;
+        }
+        self.exec_prepared_statements(stmts, env)
+    }
+
+    /// Perform the declaration-instantiation half of Body execution. Keeping
+    /// this separate lets eligible Script Bodies establish global bindings
+    /// before entering the VM, exactly as the tree-walker does.
+    fn instantiate_body_declarations(
+        &mut self,
+        stmts: &[Statement],
+        env: &EnvRef,
+        analysis: Option<&Rc<HoistAnalysis>>,
+    ) -> Option<Completion> {
         // Hoist var and function declarations
         let var_scope = Environment::find_var_scope(env);
         let is_global = var_scope.borrow().global_object_id.is_some();
@@ -69,7 +227,7 @@ impl Interpreter {
         // §16.1.7 GlobalDeclarationInstantiation: pre-check CanDeclareGlobalFunction
         // and CanDeclareGlobalVar before any hoisting takes place.
         if is_global && let Some(err) = self.check_global_declarations(stmts, env) {
-            return err;
+            return Some(err);
         }
 
         // Hoist var declarations. When a cached analysis is present, declare from
@@ -95,7 +253,7 @@ impl Interpreter {
         for stmt in stmts {
             // Check for function declarations (including inside labels). This
             // builds fresh closures per call and is never cached.
-            if let Some(f) = Self::unwrap_labeled_function(stmt) {
+            if let Some(f) = super::hoisting::unwrap_labeled_function(stmt) {
                 self.hoist_function_decl(f, env, is_global);
             }
         }
@@ -195,6 +353,10 @@ impl Interpreter {
             }
         }
 
+        None
+    }
+
+    fn exec_prepared_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {
@@ -207,7 +369,7 @@ impl Interpreter {
                 Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
                 Completion::Break(label, break_val) => {
                     let val = match break_val {
-                        None => Some(result.value_or(JsValue::Undefined)),
+                        None => Some(result.value_or(JsValue::UNDEFINED)),
                         some => some,
                     };
                     self.call_stack_envs.pop();
@@ -215,7 +377,7 @@ impl Interpreter {
                 }
                 Completion::Continue(label, cont_val) => {
                     let val = match cont_val {
-                        None => Some(result.value_or(JsValue::Undefined)),
+                        None => Some(result.value_or(JsValue::UNDEFINED)),
                         some => some,
                     };
                     self.call_stack_envs.pop();
@@ -229,14 +391,6 @@ impl Interpreter {
         }
         self.call_stack_envs.pop();
         result
-    }
-
-    pub(crate) fn unwrap_labeled_function(stmt: &Statement) -> Option<&FunctionDecl> {
-        match stmt {
-            Statement::FunctionDeclaration(f) => Some(f),
-            Statement::Labeled(_, inner) => Self::unwrap_labeled_function(inner),
-            _ => None,
-        }
     }
 
     /// §9.1.1.4.16 CanDeclareGlobalFunction
@@ -344,7 +498,7 @@ impl Interpreter {
         // Collect function declaration names (step 10)
         let mut declared_function_names: Vec<String> = Vec::new();
         for stmt in stmts.iter().rev() {
-            if let Some(f) = Self::unwrap_labeled_function(stmt)
+            if let Some(f) = super::hoisting::unwrap_labeled_function(stmt)
                 && !declared_function_names.contains(&f.name)
             {
                 // Step 6 also applies to function decl names
@@ -896,6 +1050,10 @@ impl Interpreter {
     }
 
     pub(crate) fn exec_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.ast_stmts += 1;
+        }
         match stmt {
             Statement::Empty => Completion::Empty,
             Statement::Expression(expr) => self.eval_expr(expr, env),
@@ -924,12 +1082,12 @@ impl Interpreter {
                 };
                 if self.to_boolean_val(&test) {
                     self.exec_statement(&if_stmt.consequent, env)
-                        .update_empty(JsValue::Undefined)
+                        .update_empty(JsValue::UNDEFINED)
                 } else if let Some(alt) = &if_stmt.alternate {
                     self.exec_statement(alt, env)
-                        .update_empty(JsValue::Undefined)
+                        .update_empty(JsValue::UNDEFINED)
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
             Statement::While(w) => self.exec_while(w, env),
@@ -955,7 +1113,7 @@ impl Interpreter {
                         other => return other,
                     }
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 };
                 Completion::Return(val)
             }
@@ -982,7 +1140,7 @@ impl Interpreter {
                 };
                 match &comp {
                     Completion::Break(Some(l), val) if l == label => {
-                        Completion::Normal(val.clone().unwrap_or(JsValue::Undefined))
+                        Completion::Normal(val.clone().unwrap_or(JsValue::UNDEFINED))
                     }
                     _ => comp,
                 }
@@ -996,10 +1154,13 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let JsValue::Object(obj_ref) = &obj_val {
+                if let Some(obj_ref) = obj_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     if self.get_object_cell(obj_ref.id).is_some() {
                         let with_env = Rc::new(RefCell::new(Environment {
-                            bindings: HashMap::new(),
+                            bindings: Default::default(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,
@@ -1024,20 +1185,20 @@ impl Interpreter {
                         self.with_scope_depth -= 1;
                         // UpdateEmpty(C, undefined) per §14.11.2 step 9
                         match c {
-                            Completion::Empty => Completion::Normal(JsValue::Undefined),
+                            Completion::Empty => Completion::Normal(JsValue::UNDEFINED),
                             Completion::Break(label, None) => {
-                                Completion::Break(label, Some(JsValue::Undefined))
+                                Completion::Break(label, Some(JsValue::UNDEFINED))
                             }
                             Completion::Continue(label, None) => {
-                                Completion::Continue(label, Some(JsValue::Undefined))
+                                Completion::Continue(label, Some(JsValue::UNDEFINED))
                             }
                             other => other,
                         }
                     } else {
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     }
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
             Statement::Debugger => Completion::Empty,
@@ -1075,7 +1236,7 @@ impl Interpreter {
                                 cursor = cur_b.parent.clone();
                             }
                             if !blocked_by_intermediate {
-                                let val = self.env_get(env, &f.name).unwrap_or(JsValue::Undefined);
+                                let val = self.env_get(env, &f.name).unwrap_or(JsValue::UNDEFINED);
                                 let _ = self.env_set(&var_scope, &f.name, val);
                             }
                         }
@@ -1162,7 +1323,7 @@ impl Interpreter {
                     }
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             };
             if let Pattern::Identifier(ref name) = d.pattern
                 && d.init
@@ -1179,11 +1340,7 @@ impl Interpreter {
                 }
             }
             if is_using {
-                let hint = if decl.kind == VarKind::AwaitUsing {
-                    DisposeHint::Async
-                } else {
-                    DisposeHint::Sync
-                };
+                let hint = DisposeHint::for_var_kind(decl.kind);
                 if let Err(e) = self.add_disposable_resource(env, &val, hint) {
                     return Completion::Throw(e);
                 }
@@ -1202,7 +1359,7 @@ impl Interpreter {
                 return Completion::Throw(e);
             }
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(JsValue::UNDEFINED)
     }
 
     pub(crate) fn bind_pattern(
@@ -1259,7 +1416,7 @@ impl Interpreter {
                             target.borrow_mut().bindings.insert(
                                 name.to_string(),
                                 Binding {
-                                    value: JsValue::Undefined,
+                                    value: JsValue::UNDEFINED,
                                     kind,
                                     initialized: false,
                                     deletable: false,
@@ -1270,7 +1427,7 @@ impl Interpreter {
                     match self.eval_expr(default, env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     }
                 } else {
                     val
@@ -1284,7 +1441,10 @@ impl Interpreter {
             }
             Pattern::Array(elements) => {
                 let iterator = self.get_iterator(&val)?;
-                if let JsValue::Object(o) = &iterator {
+                if let Some(o) = iterator
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     self.gc_temp_roots.push(o.id);
                 }
                 let mut done = false;
@@ -1295,7 +1455,7 @@ impl Interpreter {
                         match elem {
                             ArrayPatternElement::Pattern(p) => {
                                 let item = if done {
-                                    JsValue::Undefined
+                                    JsValue::UNDEFINED
                                 } else {
                                     match self.iterator_step(&iterator) {
                                         Ok(Some(result)) => match self.iterator_value(&result) {
@@ -1308,7 +1468,7 @@ impl Interpreter {
                                         },
                                         Ok(None) => {
                                             done = true;
-                                            JsValue::Undefined
+                                            JsValue::UNDEFINED
                                         }
                                         Err(e) => {
                                             done = true;
@@ -1377,7 +1537,9 @@ impl Interpreter {
                     }
                 }
                 let unroot_iter = |s: &mut Self| {
-                    if let JsValue::Object(o) = &iterator
+                    if let Some(o) = iterator
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                         && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
                     {
                         s.gc_temp_roots.remove(pos);
@@ -1409,15 +1571,18 @@ impl Interpreter {
                 for prop in props {
                     match prop {
                         ObjectPatternProperty::Shorthand(name) => {
-                            excluded_keys.push(name.clone());
-                            let v = if let JsValue::Object(o) = &obj_val {
+                            excluded_keys.push(JsPropertyKey::from(name.clone()));
+                            let v = if let Some(o) = obj_val
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
+                            {
                                 match self.get_object_property(o.id, name, &obj_val) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Err(e),
-                                    _ => JsValue::Undefined,
+                                    _ => JsValue::UNDEFINED,
                                 }
                             } else {
-                                JsValue::Undefined
+                                JsValue::UNDEFINED
                             };
                             if kind == BindingKind::Var {
                                 let var_scope = Environment::find_var_scope(env);
@@ -1432,14 +1597,17 @@ impl Interpreter {
                         }
                         ObjectPatternProperty::KeyValue(key, pat) => {
                             let key_str = match key {
-                                PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                                PropertyKey::Number(n) => {
-                                    crate::interpreter::to_js_string(&JsValue::Number(*n))
+                                PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                                PropertyKey::String(s) => {
+                                    JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
                                 }
+                                PropertyKey::Number(n) => JsPropertyKey::from(
+                                    crate::interpreter::to_js_string(&JsValue::number(*n)),
+                                ),
                                 PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
                                     Completion::Normal(v) => self.to_property_key(&v)?,
                                     Completion::Throw(e) => return Err(e),
-                                    _ => String::new(),
+                                    _ => JsPropertyKey::from_str(""),
                                 },
                                 PropertyKey::Private(_) => {
                                     return Err(self.create_type_error(
@@ -1489,14 +1657,17 @@ impl Interpreter {
                                     };
 
                                 // Step 3: v = GetV(value, propertyName)
-                                let mut v = if let JsValue::Object(o) = &obj_val {
+                                let mut v = if let Some(o) = obj_val
+                                    .as_object_id()
+                                    .map(|id| crate::types::JsObject { id })
+                                {
                                     match self.get_object_property(o.id, &key_str, &obj_val) {
                                         Completion::Normal(v) => v,
                                         Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::Undefined,
+                                        _ => JsValue::UNDEFINED,
                                     }
                                 } else {
-                                    JsValue::Undefined
+                                    JsValue::UNDEFINED
                                 };
 
                                 // Step 4: If v undefined and initializer present, evaluate
@@ -1506,7 +1677,7 @@ impl Interpreter {
                                     v = match self.eval_expr(dflt, env) {
                                         Completion::Normal(v) => v,
                                         Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::Undefined,
+                                        _ => JsValue::UNDEFINED,
                                     };
                                     if dflt.is_anonymous_function_definition() {
                                         self.set_function_name(&v, binding_name);
@@ -1525,21 +1696,27 @@ impl Interpreter {
                                     None => self.env_set(env, binding_name, v)?,
                                 }
                             } else {
-                                let v = if let JsValue::Object(o) = &obj_val {
+                                let v = if let Some(o) = obj_val
+                                    .as_object_id()
+                                    .map(|id| crate::types::JsObject { id })
+                                {
                                     match self.get_object_property(o.id, &key_str, &obj_val) {
                                         Completion::Normal(v) => v,
                                         Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::Undefined,
+                                        _ => JsValue::UNDEFINED,
                                     }
                                 } else {
-                                    JsValue::Undefined
+                                    JsValue::UNDEFINED
                                 };
                                 self.bind_pattern(pat, v, kind, env)?;
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
                             let rest_obj_id = self.create_object_id();
-                            if let JsValue::Object(o) = &obj_val {
+                            if let Some(o) = obj_val
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
+                            {
                                 let pairs =
                                     self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
                                 for (k, v) in pairs {
@@ -1549,7 +1726,7 @@ impl Interpreter {
                                 }
                             }
                             let rest_id = rest_obj_id;
-                            let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
+                            let rest_val = JsValue::object(rest_id);
                             self.bind_pattern(pat, rest_val, kind, env)?;
                         }
                     }
@@ -1562,7 +1739,7 @@ impl Interpreter {
     }
 
     fn exec_while(&mut self, w: &WhileStatement, env: &EnvRef) -> Completion {
-        let mut v = JsValue::Undefined;
+        let mut v = JsValue::UNDEFINED;
         loop {
             self.gc_root_value(&v);
             self.gc_safepoint();
@@ -1574,51 +1751,27 @@ impl Interpreter {
             if !self.to_boolean_val(&test) {
                 break;
             }
-            match self.exec_statement(&w.body, env) {
-                Completion::Normal(val) => {
-                    v = val;
-                }
-                Completion::Empty => {}
-                Completion::Continue(None, cont_val) => {
-                    if let Some(val) = cont_val {
-                        v = val;
-                    }
-                }
-                Completion::Break(None, break_val) => {
-                    if let Some(val) = break_val {
-                        v = val;
-                    }
-                    return Completion::Normal(v);
-                }
-                other => return other,
+            let comp = self.exec_statement(&w.body, env);
+            match handle_loop_body_completion(comp, &mut v, None) {
+                LoopFlow::Iterate => {}
+                LoopFlow::Break => return Completion::Normal(v),
+                LoopFlow::Propagate(other) => return other,
             }
         }
         Completion::Normal(v)
     }
 
     fn exec_do_while(&mut self, dw: &DoWhileStatement, env: &EnvRef) -> Completion {
-        let mut v = JsValue::Undefined;
+        let mut v = JsValue::UNDEFINED;
         loop {
             self.gc_root_value(&v);
             self.gc_safepoint();
             self.gc_unroot_value(&v);
-            match self.exec_statement(&dw.body, env) {
-                Completion::Normal(val) => {
-                    v = val;
-                }
-                Completion::Empty => {}
-                Completion::Continue(None, cont_val) => {
-                    if let Some(val) = cont_val {
-                        v = val;
-                    }
-                }
-                Completion::Break(None, break_val) => {
-                    if let Some(val) = break_val {
-                        v = val;
-                    }
-                    return Completion::Normal(v);
-                }
-                other => return other,
+            let comp = self.exec_statement(&dw.body, env);
+            match handle_loop_body_completion(comp, &mut v, None) {
+                LoopFlow::Iterate => {}
+                LoopFlow::Break => return Completion::Normal(v),
+                LoopFlow::Propagate(other) => return other,
             }
             let test = match self.eval_expr(&dw.test, env) {
                 Completion::Normal(v) => v,
@@ -1634,7 +1787,7 @@ impl Interpreter {
     fn exec_labeled_loop(&mut self, stmt: &Statement, env: &EnvRef, label: &str) -> Completion {
         match stmt {
             Statement::While(w) => {
-                let mut v = JsValue::Undefined;
+                let mut v = JsValue::UNDEFINED;
                 loop {
                     self.gc_root_value(&v);
                     self.gc_safepoint();
@@ -1646,60 +1799,26 @@ impl Interpreter {
                     if !self.to_boolean_val(&test) {
                         break;
                     }
-                    match self.exec_statement(&w.body, env) {
-                        Completion::Normal(val) => {
-                            v = val;
-                        }
-                        Completion::Empty => {}
-                        Completion::Continue(None, cont_val) => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Continue(Some(ref l), cont_val) if l == label => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Break(None, break_val) => {
-                            if let Some(val) = break_val {
-                                v = val;
-                            }
-                            return Completion::Normal(v);
-                        }
-                        other => return other,
+                    let comp = self.exec_statement(&w.body, env);
+                    match handle_loop_body_completion(comp, &mut v, Some(label)) {
+                        LoopFlow::Iterate => {}
+                        LoopFlow::Break => return Completion::Normal(v),
+                        LoopFlow::Propagate(other) => return other,
                     }
                 }
                 Completion::Normal(v)
             }
             Statement::DoWhile(dw) => {
-                let mut v = JsValue::Undefined;
+                let mut v = JsValue::UNDEFINED;
                 loop {
                     self.gc_root_value(&v);
                     self.gc_safepoint();
                     self.gc_unroot_value(&v);
-                    match self.exec_statement(&dw.body, env) {
-                        Completion::Normal(val) => {
-                            v = val;
-                        }
-                        Completion::Empty => {}
-                        Completion::Continue(None, cont_val) => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Continue(Some(ref l), cont_val) if l == label => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Break(None, break_val) => {
-                            if let Some(val) = break_val {
-                                v = val;
-                            }
-                            return Completion::Normal(v);
-                        }
-                        other => return other,
+                    let comp = self.exec_statement(&dw.body, env);
+                    match handle_loop_body_completion(comp, &mut v, Some(label)) {
+                        LoopFlow::Iterate => {}
+                        LoopFlow::Break => return Completion::Normal(v),
+                        LoopFlow::Propagate(other) => return other,
                     }
                     let test = match self.eval_expr(&dw.test, env) {
                         Completion::Normal(v) => v,
@@ -1763,7 +1882,7 @@ impl Interpreter {
         let mut iter_env = if !per_iteration_bindings.is_empty() {
             let new_env = Environment::new(Some(env.clone()));
             for (name, kind) in &per_iteration_bindings {
-                let val = self.env_get(&for_env, name).unwrap_or(JsValue::Undefined);
+                let val = self.env_get(&for_env, name).unwrap_or(JsValue::UNDEFINED);
                 new_env.borrow_mut().declare(name, *kind);
                 new_env.borrow_mut().initialize_binding(name, val);
             }
@@ -1772,7 +1891,7 @@ impl Interpreter {
             for_env.clone()
         };
 
-        let mut v = JsValue::Undefined;
+        let mut v = JsValue::UNDEFINED;
         let result = 'for_loop: {
             loop {
                 self.gc_root_value(&v);
@@ -1787,34 +1906,17 @@ impl Interpreter {
                         break;
                     }
                 }
-                match self.exec_statement(&f.body, &iter_env) {
-                    Completion::Normal(val) => {
-                        v = val;
-                    }
-                    Completion::Empty => {}
-                    Completion::Continue(None, cont_val) => {
-                        if let Some(val) = cont_val {
-                            v = val;
-                        }
-                    }
-                    Completion::Continue(Some(ref l), cont_val) if label == Some(l.as_str()) => {
-                        if let Some(val) = cont_val {
-                            v = val;
-                        }
-                    }
-                    Completion::Break(None, break_val) => {
-                        if let Some(val) = break_val {
-                            v = val;
-                        }
-                        break;
-                    }
-                    other => break 'for_loop other,
+                let comp = self.exec_statement(&f.body, &iter_env);
+                match handle_loop_body_completion(comp, &mut v, label) {
+                    LoopFlow::Iterate => {}
+                    LoopFlow::Break => break,
+                    LoopFlow::Propagate(other) => break 'for_loop other,
                 }
                 // CreatePerIterationEnvironment before update
                 if !per_iteration_bindings.is_empty() {
                     let new_env = Environment::new(Some(env.clone()));
                     for (name, kind) in &per_iteration_bindings {
-                        let val = self.env_get(&iter_env, name).unwrap_or(JsValue::Undefined);
+                        let val = self.env_get(&iter_env, name).unwrap_or(JsValue::UNDEFINED);
                         new_env.borrow_mut().declare(name, *kind);
                         new_env.borrow_mut().initialize_binding(name, val);
                     }
@@ -1884,14 +1986,14 @@ impl Interpreter {
         };
         // After evaluating expr, restore to oldEnv (use original env from here)
         if obj_val.is_nullish() {
-            return Completion::Normal(JsValue::Undefined);
+            return Completion::Normal(JsValue::UNDEFINED);
         }
         let obj_val = match self.to_object(&obj_val) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => return Completion::Normal(JsValue::Undefined),
+            _ => return Completion::Normal(JsValue::UNDEFINED),
         };
-        let mut v = JsValue::Undefined;
+        let mut v = JsValue::UNDEFINED;
         // Root the iterable wrapper across the entire for-in body. Primitive
         // iterables (e.g. `for (k in Object("abc"))`) get a fresh String wrapper
         // from `to_object` that is held only by this Rust local; without rooting,
@@ -1900,7 +2002,10 @@ impl Interpreter {
         // funnel through a single `gc_unroot_value` call.
         self.gc_root_value(&obj_val);
         let loop_result: Completion = 'unroot: {
-            if let JsValue::Object(ref o) = obj_val {
+            if let Some(o) = (obj_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 let obj_id = o.id;
                 let keys = {
                     let needs_proxy_path = self
@@ -1918,7 +2023,7 @@ impl Interpreter {
                     } else if self.get_object_cell(obj_id).is_some() {
                         self.enumerable_keys_with_proto_on_id(obj_id)
                     } else {
-                        break 'unroot Completion::Normal(JsValue::Undefined);
+                        break 'unroot Completion::Normal(JsValue::UNDEFINED);
                     }
                 };
                 for key in keys {
@@ -1933,7 +2038,7 @@ impl Interpreter {
                     if !still_exists {
                         continue;
                     }
-                    let key_val = JsValue::String(JsString::from_str(&key));
+                    let key_val = JsValue::string(key.to_js_string());
                     let for_env = Environment::new(Some(env.clone()));
                     match &fi.left {
                         ForInOfLeft::Variable(decl) => {
@@ -2004,30 +2109,10 @@ impl Interpreter {
                         }
                     }
                     let result = self.exec_statement(&fi.body, &for_env);
-                    match result {
-                        Completion::Normal(val) => {
-                            v = val;
-                        }
-                        Completion::Empty => {}
-                        Completion::Continue(None, cont_val) => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Continue(Some(ref l), cont_val)
-                            if label == Some(l.as_str()) =>
-                        {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Break(None, break_val) => {
-                            if let Some(val) = break_val {
-                                v = val;
-                            }
-                            break 'unroot Completion::Normal(v);
-                        }
-                        other => break 'unroot other,
+                    match handle_loop_body_completion(result, &mut v, label) {
+                        LoopFlow::Iterate => {}
+                        LoopFlow::Break => break 'unroot Completion::Normal(v),
+                        LoopFlow::Propagate(other) => break 'unroot other,
                     }
                 }
             }
@@ -2093,7 +2178,7 @@ impl Interpreter {
                 tdz_env.borrow_mut().bindings.insert(
                     name.clone(),
                     Binding {
-                        value: JsValue::Undefined,
+                        value: JsValue::UNDEFINED,
                         kind: BindingKind::Let,
                         initialized: false,
                         deletable: false,
@@ -2136,7 +2221,7 @@ impl Interpreter {
         iterator: &JsValue,
         loop_label: Option<&str>,
     ) -> Completion {
-        let mut v = JsValue::Undefined;
+        let mut v = JsValue::UNDEFINED;
         loop {
             self.gc_root_value(&v);
             self.gc_safepoint();
@@ -2185,11 +2270,7 @@ impl Interpreter {
                         &for_env
                     };
                     if is_using {
-                        let hint = if decl.kind == VarKind::AwaitUsing {
-                            DisposeHint::Async
-                        } else {
-                            DisposeHint::Sync
-                        };
+                        let hint = DisposeHint::for_var_kind(decl.kind);
                         if let Err(e) = self.add_disposable_resource(bind_env, &val, hint) {
                             self.iterator_close(iterator, e.clone());
                             return Completion::Throw(e);
@@ -2360,7 +2441,7 @@ impl Interpreter {
                 return fin_result;
             }
         }
-        result.update_empty(JsValue::Undefined)
+        result.update_empty(JsValue::UNDEFINED)
     }
 
     fn exec_switch(&mut self, s: &SwitchStatement, env: &EnvRef) -> Completion {
@@ -2374,7 +2455,7 @@ impl Interpreter {
         // (only regular functions, not generators/async — those stay block-scoped)
         for case in &s.cases {
             for stmt in &case.consequent {
-                let unwrapped = Self::unwrap_labeled_function(stmt);
+                let unwrapped = super::hoisting::unwrap_labeled_function(stmt);
                 if let Some(f) = unwrapped
                     && !f.is_generator
                     && !f.is_async
@@ -2404,7 +2485,7 @@ impl Interpreter {
 
         let default_idx = s.cases.iter().position(|c| c.test.is_none());
         let a_end = default_idx.unwrap_or(s.cases.len());
-        let mut v = JsValue::Undefined;
+        let mut v = JsValue::UNDEFINED;
 
         // Phase 1: Search list A (cases before default) for a match
         let mut found = false;
@@ -2497,16 +2578,16 @@ impl Interpreter {
         hint: DisposeHint,
     ) -> Result<(), JsValue> {
         // §AddDisposableResource step 1a: early return for null/undefined only for sync-dispose
-        if matches!(value, JsValue::Null | JsValue::Undefined) {
+        if (value).is_nullish() {
             if hint == DisposeHint::Sync {
                 return Ok(());
             }
             // For async-dispose, we still need a resource record with method=undefined
             // so that DisposeResources will perform Await(undefined) per §10.4.4.3 Dispose step 3
             let resource = DisposableResource {
-                value: JsValue::Undefined,
+                value: JsValue::UNDEFINED,
                 hint,
-                dispose_method: JsValue::Undefined,
+                dispose_method: JsValue::UNDEFINED,
             };
             let mut env_ref = env.borrow_mut();
             if env_ref.dispose_stack.is_none() {
@@ -2523,14 +2604,16 @@ impl Interpreter {
         };
         let sym_key = self.get_symbol_key(sym_name);
 
-        let mut method = JsValue::Undefined;
+        let mut method = JsValue::UNDEFINED;
 
         if let Some(ref key) = sym_key
-            && let JsValue::Object(o) = value
+            && let Some(o) = (value)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
         {
             let obj_id = o.id;
             match self.get_object_property(obj_id, key, value) {
-                Completion::Normal(v) if !matches!(v, JsValue::Undefined | JsValue::Null) => {
+                Completion::Normal(v) if !(v).is_nullish() => {
                     method = v;
                 }
                 Completion::Throw(e) => return Err(e),
@@ -2538,14 +2621,16 @@ impl Interpreter {
             }
         }
 
-        if matches!(method, JsValue::Undefined) && hint == DisposeHint::Async {
+        if (method).is_undefined() && hint == DisposeHint::Async {
             let sync_key = self.get_symbol_key("dispose");
             if let Some(ref key) = sync_key
-                && let JsValue::Object(o) = value
+                && let Some(o) = (value)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
             {
                 let obj_id = o.id;
                 match self.get_object_property(obj_id, key, value) {
-                    Completion::Normal(v) if !matches!(v, JsValue::Undefined | JsValue::Null) => {
+                    Completion::Normal(v) if !(v).is_nullish() => {
                         method = v;
                     }
                     Completion::Throw(e) => return Err(e),
@@ -2554,7 +2639,7 @@ impl Interpreter {
             }
         }
 
-        if matches!(method, JsValue::Undefined) {
+        if (method).is_undefined() {
             return Err(
                 self.create_type_error("Object is not disposable (missing [Symbol.dispose])")
             );
@@ -2603,8 +2688,8 @@ impl Interpreter {
 
         for resource in &stack {
             // §10.4.4.3 Dispose: If method is undefined, result is undefined; else Call(method, V)
-            let result = if matches!(resource.dispose_method, JsValue::Undefined) {
-                Completion::Normal(JsValue::Undefined)
+            let result = if (resource.dispose_method).is_undefined() {
+                Completion::Normal(JsValue::UNDEFINED)
             } else {
                 self.call_function(&resource.dispose_method, &resource.value, &[])
             };
@@ -2666,23 +2751,25 @@ impl Interpreter {
         let ctor = self.env_get(env, name);
         if let Some(ctor_val) = ctor {
             let new_obj_id = self.create_object_id();
-            if let JsValue::Object(ref o) = ctor_val
+            if let Some(o) = (ctor_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(JsValue::Object(proto_obj)) = proto {
+                if let Some(proto_obj_id) = proto.as_ref().and_then(JsValue::as_object_id) {
                     self.get_object_cell_expect(new_obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(proto_obj.id);
+                        .prototype_id = Some(proto_obj_id);
                 }
             }
-            let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+            let this_val = JsValue::object(new_obj_id);
             let prev_new_target = self.new_target.take();
             self.new_target = Some(ctor_val.clone());
             let result = self.call_function(&ctor_val, &this_val, args);
             self.new_target = prev_new_target;
             match result {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
+                Completion::Normal(v) if (v).is_object() => Completion::Normal(v),
                 Completion::Normal(_) => Completion::Normal(this_val),
                 other => other,
             }
@@ -2703,5 +2790,204 @@ impl Interpreter {
             }
             _ => false,
         }
+    }
+}
+
+/// What a loop executor should do after running its body once. Externalises the
+/// per-loop-kind control-flow — `return`, `break`, or `break 'label` — so the
+/// shared body-completion bookkeeping (folding the completion value into the
+/// running loop value, matching labels) lives in exactly one place instead of
+/// being copy-pasted at each loop head.
+#[derive(Debug)]
+enum LoopFlow {
+    /// Keep iterating. The body's completion value has already been folded into
+    /// the running loop value.
+    Iterate,
+    /// Terminate the loop normally; the running loop value is the result.
+    Break,
+    /// An abrupt completion this loop does not consume — the caller propagates
+    /// it in whatever way its control-flow requires.
+    Propagate(Completion),
+}
+
+/// Apply one iteration's body `Completion` to the running loop value `v` and
+/// decide how the loop proceeds. `label` is the loop's own label (`None` for an
+/// unlabelled loop), used to recognise a `continue label;` that targets *this*
+/// loop.
+///
+/// This concentrates the `while` / `do-while` / `for` / `for-in` body protocol.
+/// `for-of` and `switch` are deliberately NOT routed through here: `for-of`
+/// must interleave IteratorClose on every abrupt completion, and `switch` has
+/// no `continue` arm and a different break-value default.
+fn handle_loop_body_completion(comp: Completion, v: &mut JsValue, label: Option<&str>) -> LoopFlow {
+    match comp {
+        Completion::Normal(val) => {
+            *v = val;
+            LoopFlow::Iterate
+        }
+        Completion::Empty => LoopFlow::Iterate,
+        Completion::Continue(None, cont_val) => {
+            if let Some(val) = cont_val {
+                *v = val;
+            }
+            LoopFlow::Iterate
+        }
+        Completion::Continue(Some(l), cont_val) => {
+            if label == Some(l.as_str()) {
+                if let Some(val) = cont_val {
+                    *v = val;
+                }
+                LoopFlow::Iterate
+            } else {
+                LoopFlow::Propagate(Completion::Continue(Some(l), cont_val))
+            }
+        }
+        Completion::Break(None, break_val) => {
+            if let Some(val) = break_val {
+                *v = val;
+            }
+            LoopFlow::Break
+        }
+        other => LoopFlow::Propagate(other),
+    }
+}
+
+#[cfg(test)]
+mod loop_flow_tests {
+    use super::*;
+
+    fn num(x: f64) -> JsValue {
+        JsValue::number(x)
+    }
+
+    fn is_num(v: &JsValue, x: f64) -> bool {
+        v.as_number() == Some(x)
+    }
+
+    #[test]
+    fn normal_completion_folds_value_and_iterates() {
+        let mut v = JsValue::UNDEFINED;
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Normal(num(7.0)), &mut v, None),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 7.0));
+    }
+
+    #[test]
+    fn empty_completion_iterates_and_preserves_value() {
+        let mut v = num(3.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Empty, &mut v, None),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 3.0));
+    }
+
+    #[test]
+    fn unlabelled_continue_with_value_folds_and_iterates() {
+        let mut v = JsValue::UNDEFINED;
+        // A loop's own label is irrelevant to an unlabelled continue.
+        assert!(matches!(
+            handle_loop_body_completion(
+                Completion::Continue(None, Some(num(5.0))),
+                &mut v,
+                Some("l")
+            ),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 5.0));
+    }
+
+    #[test]
+    fn unlabelled_continue_without_value_preserves_value() {
+        let mut v = num(9.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Continue(None, None), &mut v, None),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 9.0));
+    }
+
+    #[test]
+    fn matching_labelled_continue_folds_and_iterates() {
+        let mut v = JsValue::UNDEFINED;
+        let comp = Completion::Continue(Some("outer".to_string()), Some(num(11.0)));
+        assert!(matches!(
+            handle_loop_body_completion(comp, &mut v, Some("outer")),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 11.0));
+    }
+
+    #[test]
+    fn non_matching_labelled_continue_propagates_untouched() {
+        let mut v = num(1.0);
+        let comp = Completion::Continue(Some("outer".to_string()), Some(num(2.0)));
+        match handle_loop_body_completion(comp, &mut v, Some("inner")) {
+            LoopFlow::Propagate(Completion::Continue(Some(l), Some(pv))) => {
+                assert_eq!(l, "outer");
+                assert!(is_num(&pv, 2.0));
+            }
+            other => panic!("expected Propagate(Continue outer), got {other:?}"),
+        }
+        // A continue we don't consume must not disturb our running value.
+        assert!(is_num(&v, 1.0));
+    }
+
+    #[test]
+    fn labelled_continue_in_unlabelled_loop_propagates() {
+        let mut v = num(1.0);
+        let comp = Completion::Continue(Some("outer".to_string()), None);
+        match handle_loop_body_completion(comp, &mut v, None) {
+            LoopFlow::Propagate(Completion::Continue(Some(l), None)) => assert_eq!(l, "outer"),
+            other => panic!("expected Propagate(Continue outer), got {other:?}"),
+        }
+        assert!(is_num(&v, 1.0));
+    }
+
+    #[test]
+    fn unlabelled_break_with_value_folds_and_breaks() {
+        let mut v = JsValue::UNDEFINED;
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Break(None, Some(num(99.0))), &mut v, None),
+            LoopFlow::Break
+        ));
+        assert!(is_num(&v, 99.0));
+    }
+
+    #[test]
+    fn unlabelled_break_without_value_preserves_value_and_breaks() {
+        let mut v = num(44.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Break(None, None), &mut v, None),
+            LoopFlow::Break
+        ));
+        assert!(is_num(&v, 44.0));
+    }
+
+    #[test]
+    fn labelled_break_propagates_untouched() {
+        let mut v = num(1.0);
+        let comp = Completion::Break(Some("outer".to_string()), Some(num(2.0)));
+        match handle_loop_body_completion(comp, &mut v, Some("inner")) {
+            LoopFlow::Propagate(Completion::Break(Some(l), _)) => assert_eq!(l, "outer"),
+            other => panic!("expected Propagate(Break outer), got {other:?}"),
+        }
+        assert!(is_num(&v, 1.0));
+    }
+
+    #[test]
+    fn throw_and_return_propagate_untouched() {
+        let mut v = num(1.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Throw(num(7.0)), &mut v, None),
+            LoopFlow::Propagate(Completion::Throw(_))
+        ));
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Return(num(8.0)), &mut v, None),
+            LoopFlow::Propagate(Completion::Return(_))
+        ));
+        assert!(is_num(&v, 1.0));
     }
 }

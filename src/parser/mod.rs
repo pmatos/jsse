@@ -17,7 +17,7 @@ enum PrivateNameKind {
 }
 
 #[derive(Debug)]
-pub struct ParseError {
+pub(crate) struct ParseError {
     pub message: String,
 }
 
@@ -33,7 +33,7 @@ impl From<LexError> for ParseError {
     }
 }
 
-pub struct Parser<'a> {
+pub(crate) struct Parser<'a> {
     source: &'a str,
     source_text_source: Rc<str>,
     lexer: Lexer<'a>,
@@ -81,8 +81,15 @@ pub struct Parser<'a> {
 const MAX_PARSE_DEPTH: u32 = 4_000;
 
 impl<'a> Parser<'a> {
-    pub fn new(source: &'a str) -> Result<Self, ParseError> {
-        let mut lexer = Lexer::new(source);
+    pub(crate) fn new(source: &'a str) -> Result<Self, ParseError> {
+        Self::new_with_lexer(source, Lexer::new(source))
+    }
+
+    pub(crate) fn new_for_eval(source: &'a str) -> Result<Self, ParseError> {
+        Self::new_with_lexer(source, Lexer::new_for_eval(source))
+    }
+
+    fn new_with_lexer(source: &'a str, mut lexer: Lexer<'a>) -> Result<Self, ParseError> {
         let mut had_lt = false;
         let current = loop {
             let tok = lexer.next_token()?;
@@ -225,31 +232,31 @@ impl<'a> Parser<'a> {
         Some(SourceText::new(self.source_text_source.clone(), start, end))
     }
 
-    pub fn set_strict(&mut self, strict: bool) {
+    pub(crate) fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
         self.lexer.strict = strict;
     }
 
-    pub fn set_eval_in_class_with_names(&mut self, names: HashSet<String>) {
+    pub(crate) fn set_eval_in_class_with_names(&mut self, names: HashSet<String>) {
         self.private_name_scopes.push((names, Vec::new()));
     }
 
-    pub fn set_eval_in_field_initializer(&mut self) {
+    pub(crate) fn set_eval_in_field_initializer(&mut self) {
         self.in_field_initializer_eval = true;
         self.allow_super_property = true;
         self.in_function += 1;
         self.in_non_arrow_function += 1;
     }
 
-    pub fn set_eval_new_target_allowed(&mut self) {
+    pub(crate) fn set_eval_new_target_allowed(&mut self) {
         self.eval_new_target_allowed = true;
     }
 
-    pub fn set_eval_allow_super_property(&mut self) {
+    pub(crate) fn set_eval_allow_super_property(&mut self) {
         self.allow_super_property = true;
     }
 
-    pub fn set_eval_allow_super_call(&mut self) {
+    pub(crate) fn set_eval_allow_super_call(&mut self) {
         self.allow_super_call = true;
     }
 
@@ -278,7 +285,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub fn validate_eval_private_names(&mut self) -> Result<(), ParseError> {
+    pub(crate) fn validate_eval_private_names(&mut self) -> Result<(), ParseError> {
         while !self.private_name_scopes.is_empty() {
             self.pop_private_scope()?;
         }
@@ -534,207 +541,6 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn contains_arguments(expr: &Expression) -> bool {
-        use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
-        match expr {
-            Expression::Identifier(name) => name == "arguments",
-            Expression::Array(elems, _) => elems
-                .iter()
-                .any(|e| e.as_ref().is_some_and(Self::contains_arguments)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
-                Self::contains_arguments(&p.value)
-                    || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::contains_arguments(e))
-            }),
-            Expression::Member(object, property, _) => {
-                Self::contains_arguments(object)
-                    || matches!(property, MemberProperty::Computed(e) if Self::contains_arguments(e))
-            }
-            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-                Self::contains_arguments(callee)
-                    || args.iter().any(Self::contains_arguments)
-            }
-            Expression::Binary(_, left, right)
-            | Expression::Logical(_, left, right)
-            | Expression::Assign(_, left, right) => {
-                Self::contains_arguments(left) || Self::contains_arguments(right)
-            }
-            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
-                Self::contains_arguments(operand)
-            }
-            Expression::Conditional(test, consequent, alternate) => {
-                Self::contains_arguments(test)
-                    || Self::contains_arguments(consequent)
-                    || Self::contains_arguments(alternate)
-            }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(Self::contains_arguments)
-            }
-            Expression::Import(inner, opts)
-            | Expression::ImportDefer(inner, opts)
-            | Expression::ImportSource(inner, opts) => {
-                Self::contains_arguments(inner)
-                    || opts.as_ref().is_some_and(|e| Self::contains_arguments(e))
-            }
-            Expression::Spread(inner)
-            | Expression::Await(inner) => Self::contains_arguments(inner),
-            Expression::Yield(opt_e, _) => {
-                opt_e.as_ref().is_some_and(|e| Self::contains_arguments(e))
-            }
-            // Arrow functions don't create their own arguments binding,
-            // so references inside them still refer to the enclosing scope's arguments
-            Expression::ArrowFunction(af) => match &af.body {
-                            ArrowBody::Expression(body) => {
-                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
-                                    Self::contains_arguments(e)
-                                } else {
-                                    false
-                                }
-                            }
-                            ArrowBody::Block(body) => Self::stmts_contain_arguments(body.as_slice()),
-                        },
-            Expression::Template(tl) => {
-                tl.expressions.iter().any(Self::contains_arguments)
-            }
-            Expression::TaggedTemplate(tag, tl) => {
-                Self::contains_arguments(tag)
-                    || tl.expressions.iter().any(Self::contains_arguments)
-            }
-            Expression::Typeof(e) | Expression::Void(e) | Expression::Delete(e) => {
-                Self::contains_arguments(e)
-            }
-            Expression::OptionalChain(object, chain) => {
-                Self::contains_arguments(object) || Self::contains_arguments(chain)
-            }
-            // Class expressions: recurse into computed property names and field initializers
-            // (they are evaluated in the enclosing scope), but NOT method bodies
-            Expression::Class(cls) => {
-                if let Some(ref sc) = cls.super_class
-                    && Self::contains_arguments(sc) {
-                        return true;
-                    }
-                Self::class_elements_contain_arguments(&cls.body)
-            }
-            // Functions/classes create their own scope, don't recurse
-            Expression::Literal(_)
-            | Expression::This
-            | Expression::Super
-            | Expression::NewTarget
-            | Expression::ImportMeta
-            | Expression::Function(_)
-            | Expression::PrivateIdentifier(_) => false,
-        }
-    }
-
-    fn class_elements_contain_arguments(body: &[crate::ast::ClassElement]) -> bool {
-        for elem in body {
-            match elem {
-                crate::ast::ClassElement::Method(m) => {
-                    if let crate::ast::PropertyKey::Computed(e) = &m.key
-                        && Self::contains_arguments(e)
-                    {
-                        return true;
-                    }
-                }
-                crate::ast::ClassElement::Property(p) => {
-                    if let crate::ast::PropertyKey::Computed(e) = &p.key
-                        && Self::contains_arguments(e)
-                    {
-                        return true;
-                    }
-                }
-                crate::ast::ClassElement::AutoAccessor(p) => {
-                    if let crate::ast::PropertyKey::Computed(e) = &p.key
-                        && Self::contains_arguments(e)
-                    {
-                        return true;
-                    }
-                }
-                crate::ast::ClassElement::StaticBlock(_) => {}
-            }
-        }
-        false
-    }
-
-    fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
-        stmts.iter().any(Self::stmt_contains_arguments)
-    }
-
-    fn stmt_contains_arguments(stmt: &Statement) -> bool {
-        use crate::ast::Statement;
-        match stmt {
-            Statement::Expression(e) | Statement::Throw(e) => Self::contains_arguments(e),
-            Statement::Return(Some(e)) => Self::contains_arguments(e),
-            Statement::Return(None) | Statement::Empty | Statement::Debugger => false,
-            Statement::Block(stmts) => Self::stmts_contain_arguments(stmts),
-            Statement::Variable(decl) => decl
-                .declarations
-                .iter()
-                .any(|d| d.init.as_ref().is_some_and(Self::contains_arguments)),
-            Statement::If(i) => {
-                Self::contains_arguments(&i.test)
-                    || Self::stmt_contains_arguments(&i.consequent)
-                    || i.alternate
-                        .as_ref()
-                        .is_some_and(|a| Self::stmt_contains_arguments(a))
-            }
-            Statement::While(w) => {
-                Self::contains_arguments(&w.test) || Self::stmt_contains_arguments(&w.body)
-            }
-            Statement::DoWhile(d) => {
-                Self::contains_arguments(&d.test) || Self::stmt_contains_arguments(&d.body)
-            }
-            Statement::For(f) => {
-                f.init.as_ref().is_some_and(|i| match i {
-                    crate::ast::ForInit::Expression(e) => Self::contains_arguments(e),
-                    crate::ast::ForInit::Variable(d) => d
-                        .declarations
-                        .iter()
-                        .any(|dd| dd.init.as_ref().is_some_and(Self::contains_arguments)),
-                }) || f.test.as_ref().is_some_and(Self::contains_arguments)
-                    || f.update.as_ref().is_some_and(Self::contains_arguments)
-                    || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::ForIn(f) => {
-                Self::contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::ForOf(f) => {
-                Self::contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::Try(t) => {
-                Self::stmts_contain_arguments(&t.block)
-                    || t.handler
-                        .as_ref()
-                        .is_some_and(|h| Self::stmts_contain_arguments(&h.body))
-                    || t.finalizer
-                        .as_ref()
-                        .is_some_and(|f| Self::stmts_contain_arguments(f))
-            }
-            Statement::Switch(s) => {
-                Self::contains_arguments(&s.discriminant)
-                    || s.cases.iter().any(|c| {
-                        c.test.as_ref().is_some_and(Self::contains_arguments)
-                            || Self::stmts_contain_arguments(&c.consequent)
-                    })
-            }
-            Statement::Labeled(_, s) => Self::stmt_contains_arguments(s),
-            Statement::With(e, s) => {
-                Self::contains_arguments(e) || Self::stmt_contains_arguments(s)
-            }
-            Statement::Break(_) | Statement::Continue(_) => false,
-            // Function declarations create their own scope
-            Statement::FunctionDeclaration(_) => false,
-            // Class declarations: check computed property names (evaluated in enclosing scope)
-            Statement::ClassDeclaration(cls) => {
-                if let Some(ref sc) = cls.super_class
-                    && Self::contains_arguments(sc)
-                {
-                    return true;
-                }
-                Self::class_elements_contain_arguments(&cls.body)
-            }
-        }
-    }
-
     pub(super) fn expr_contains_await_identifier(expr: &Expression) -> bool {
         use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
         match expr {
@@ -742,7 +548,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_identifier)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
+            Expression::Object(props, _) => props.iter().any(|p: &Property| {
                 Self::expr_contains_await_identifier(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_await_identifier(e))
             }),
@@ -805,7 +611,8 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_identifier(e)
             }
             Expression::OptionalChain(object, chain) => {
-                Self::expr_contains_await_identifier(object) || Self::expr_contains_await_identifier(chain)
+                Self::expr_contains_await_identifier(object)
+                    || Self::optional_chain_contains_await_identifier(chain)
             }
             Expression::Literal(_)
             | Expression::This
@@ -816,6 +623,23 @@ impl<'a> Parser<'a> {
             | Expression::Class(_)
             | Expression::ArrowFunction(_)
             | Expression::PrivateIdentifier(_) => false,
+        }
+    }
+
+    fn optional_chain_contains_await_identifier(chain: &Expression) -> bool {
+        match chain {
+            // Optional-chain tails use identifiers for static property names and
+            // as placeholders for computed access and optional calls.
+            Expression::Identifier(_) => false,
+            Expression::Member(base, property, _) => {
+                Self::optional_chain_contains_await_identifier(base)
+                    || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_await_identifier(e))
+            }
+            Expression::Call(callee, args, _) => {
+                Self::optional_chain_contains_await_identifier(callee)
+                    || args.iter().any(Self::expr_contains_await_identifier)
+            }
+            _ => Self::expr_contains_await_identifier(chain),
         }
     }
 
@@ -851,7 +675,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_expression)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
+            Expression::Object(props, _) => props.iter().any(|p: &Property| {
                 Self::expr_contains_await_expression(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_await_expression(e))
             }),
@@ -945,7 +769,7 @@ impl<'a> Parser<'a> {
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_yield_expression)),
-            Expression::Object(props) => props.iter().any(|p: &Property| {
+            Expression::Object(props, _) => props.iter().any(|p: &Property| {
                 Self::expr_contains_yield_expression(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_yield_expression(e))
             }),
@@ -1050,7 +874,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+    pub(crate) fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut body = Vec::new();
         let mut in_directive_prologue = true;
         let mut body_is_strict = false;
@@ -1134,7 +958,7 @@ impl<'a> Parser<'a> {
         Ok(program)
     }
 
-    pub fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
+    pub(crate) fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
         self.is_module = true;
         self.lexer.is_module = true;
         self.set_strict(true);
@@ -1469,7 +1293,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             }
             Ok(Pattern::Array(pats))
         }
-        Expression::Object(props) => {
+        Expression::Object(props, trailing_comma_after_spread) => {
             let mut pat_props = Vec::new();
             let mut saw_rest = false;
             for prop in props {
@@ -1508,6 +1332,11 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                         message: "Invalid destructuring target".to_string(),
                     });
                 }
+            }
+            if saw_rest && trailing_comma_after_spread {
+                return Err(ParseError {
+                    message: "Rest element must be last element".to_string(),
+                });
             }
             Ok(Pattern::Object(pat_props))
         }
@@ -1570,7 +1399,7 @@ fn pattern_to_expr(pat: Pattern) -> Expression {
                     },
                 })
                 .collect();
-            Expression::Object(expr_props)
+            Expression::Object(expr_props, false)
         }
         Pattern::Assign(pat, default) => {
             Expression::Assign(AssignOp::Assign, Box::new(pattern_to_expr(*pat)), default)
@@ -1631,6 +1460,64 @@ mod tests {
     fn parse_arrow_function() {
         let prog = parse("var f = (a, b) => a + b;");
         assert!(matches!(&prog.body.as_slice()[0], Statement::Variable(_)));
+    }
+
+    #[test]
+    fn rejects_trailing_comma_after_object_rest_in_assignment_pattern() {
+        for source in [
+            "0, {...rest,} = {};",
+            "({a: {...rest,}} = {});",
+            "([{...rest,}] = []);",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_err());
+        }
+
+        for source in [
+            "0, {...rest} = {};",
+            "0, {a, ...rest} = {};",
+            "var object = {...rest,};",
+            "({a, b,} = {});",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_trailing_comma_after_object_rest_in_reinterpreted_patterns() {
+        for source in [
+            "for ({...rest,} in object) ;",
+            "for ({...rest,} of object) ;",
+            "({...rest,}) => {};",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_err());
+        }
+
+        for source in [
+            "for ({...rest} in object) ;",
+            "for ({...rest} of object) ;",
+            "({...rest}) => {};",
+            "({...rest,});",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_ok());
+        }
+    }
+
+    #[test]
+    fn optional_chain_await_property_in_async_arrow_parameters() {
+        assert!(
+            Parser::new("var f = async (x = ({await: 1})?.await) => x;")
+                .unwrap()
+                .parse_program()
+                .is_ok()
+        );
+
+        for source in [
+            "var f = async (x = await) => x;",
+            "var f = async (x = ({})?.[await]) => x;",
+            "var f = async (x = (() => 1)?.(await)) => x;",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_err());
+        }
     }
 
     #[test]

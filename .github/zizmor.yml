@@ -28,9 +28,24 @@ rules:
       # checksums (no .git), so the token cannot leak via artifacts.
       - release.yml
 
-  # semgrep/semgrep-action is archived. Migrating off it (to the semgrep CLI /
-  # container) changes an existing, green scan job, so it is tracked as a
-  # separate follow-up rather than bundled into this hardening change.
-  archived-uses:
+  # lint-pr-title.yml uses pull_request_target so the check runs for PRs from
+  # forks. Its checkout deliberately leaves ref unset, so GitHub checks out the
+  # trusted base branch rather than the PR head before commitlint loads the
+  # repository config. The untrusted title is passed through an environment
+  # variable and stdin, never interpolated into shell code, and permissions are
+  # scoped to `contents: read`.
+  dangerous-triggers:
     ignore:
-      - semgrep.yml
+      - lint-pr-title.yml
+
+  # The commitlint workflows install @commitlint/cli and
+  # @commitlint/config-conventional ad-hoc (pinned to major version @21) rather
+  # than via a project lockfile: this repo has no package.json/lockfile of its
+  # own (it's a Rust project), so there is nothing for these CI-only tools to
+  # lock against. The jobs only have `contents: read`, disable persisted
+  # checkout credentials, and never push, so a compromised transitive
+  # dependency has no credentials to exfiltrate.
+  adhoc-packages:
+    ignore:
+      - commitlint.yml
+      - lint-pr-title.yml

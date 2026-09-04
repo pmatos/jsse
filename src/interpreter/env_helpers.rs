@@ -9,7 +9,7 @@
 //! double-borrow the same env.
 
 use super::*;
-use crate::types::{JsString, JsValue};
+use crate::types::JsValue;
 
 impl Interpreter {
     /// Read a name from the current realm's global env, falling through to
@@ -21,10 +21,10 @@ impl Interpreter {
         self.env_get(&env, name)
     }
 
-    /// `&self` variant of `get_global_var` for read-only call sites that don't
-    /// have a `&mut Interpreter` (e.g. helpers like `get_symbol_iterator_key`).
-    /// Skips Proxy traps on the global object — sufficient for built-in name
-    /// lookups that should resolve via own properties.
+    /// Test-only `&self` variant of `get_global_var`.
+    /// Skips Proxy traps on the global object, which is sufficient for test
+    /// assertions that inspect the global object's own properties.
+    #[cfg(test)]
     pub(crate) fn get_global_var_ref(&self, name: &str) -> Option<JsValue> {
         let env = self.realm().global_env.borrow();
         if let Some(v) = env.get(name) {
@@ -47,50 +47,50 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let mut current = env.clone();
         loop {
-            // Inspect this frame without mutating; capture the next action.
+            // A declarative local write needs no re-entrant object operation,
+            // so update it while this single map probe is live. Global writes
+            // still defer mutation until after the mirrored object write.
             let action = {
-                let e = current.borrow();
+                let mut e = current.borrow_mut();
                 if e.is_indirect_binding(name) {
-                    return Err(JsValue::String(JsString::from_str(
-                        "Assignment to constant variable.",
-                    )));
+                    return Err(JsValue::from_str("Assignment to constant variable."));
                 }
-                if let Some(binding) = e.bindings.get(name) {
+                let strict = e.strict;
+                let global_object_id = e.global_object_id;
+                if let Some(binding) = e.bindings.get_mut(name) {
                     if !binding.initialized
                         && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
                     {
-                        return Err(JsValue::String(JsString::from_str(&format!(
+                        return Err(JsValue::from_str(&format!(
                             "Cannot access '{name}' before initialization"
-                        ))));
+                        )));
                     }
                     if binding.kind == BindingKind::Const && binding.initialized {
-                        return Err(JsValue::String(JsString::from_str(
-                            "Assignment to constant variable.",
-                        )));
+                        return Err(JsValue::from_str("Assignment to constant variable."));
                     }
                     if (binding.kind == BindingKind::FunctionName
                         || binding.kind == BindingKind::ImmutableValue)
                         && binding.initialized
                     {
-                        if e.strict {
-                            return Err(JsValue::String(JsString::from_str(
-                                "Assignment to constant variable.",
-                            )));
+                        if strict {
+                            return Err(JsValue::from_str("Assignment to constant variable."));
                         }
                         return Ok(());
                     }
-                    let mirror = if binding.kind == BindingKind::Var {
-                        e.global_object_id
+                    if global_object_id.is_none() {
+                        binding.value = value;
+                        binding.initialized = true;
+                        return Ok(());
+                    }
+                    let mirror_gid = if binding.kind == BindingKind::Var {
+                        global_object_id
                     } else {
                         None
                     };
-                    EnvSetAction::WriteBinding {
-                        mirror_gid: mirror,
-                        strict: e.strict,
-                    }
+                    EnvSetAction::WriteBinding { mirror_gid, strict }
                 } else if e.parent.is_some() {
                     EnvSetAction::Recurse(e.parent.clone().unwrap())
-                } else if let Some(gid) = e.global_object_id {
+                } else if let Some(gid) = global_object_id {
                     EnvSetAction::ImplicitGlobal { gid }
                 } else {
                     EnvSetAction::CreateBinding
@@ -103,12 +103,15 @@ impl Interpreter {
                         // Borrow on `current` is dropped above; safe to call
                         // out to the slab (re-entrant set traps OK).
                         if let Some(go) = self.get_object_cell(gid) {
-                            let ok = go.borrow_mut().set_property_value(name, value.clone());
+                            self.gc_write_barrier_value(go, &value);
+                            let ok = go
+                                .borrow_mut_untracked()
+                                .set_property_value(name, value.clone());
                             if !ok {
                                 if strict {
-                                    return Err(JsValue::String(JsString::from_str(&format!(
+                                    return Err(JsValue::from_str(&format!(
                                         "Cannot assign to read only property '{name}' of object '#<Object>'"
-                                    ))));
+                                    )));
                                 }
                                 return Ok(());
                             }
@@ -128,9 +131,11 @@ impl Interpreter {
                     let already_on_global = self
                         .get_object_cell(gid)
                         .is_some_and(|go| go.borrow().has_own_property(name));
-                    let ok = self
-                        .get_object_cell(gid)
-                        .is_some_and(|go| go.borrow_mut().set_property_value(name, value.clone()));
+                    let ok = self.get_object_cell(gid).is_some_and(|go| {
+                        self.gc_write_barrier_value(go, &value);
+                        go.borrow_mut_untracked()
+                            .set_property_value(name, value.clone())
+                    });
                     if !ok {
                         return Ok(());
                     }
@@ -215,10 +220,10 @@ impl Interpreter {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     let key = crate::interpreter::key_intern::intern_key(name);
-                    g.property_order.push(Rc::clone(&key));
+                    g.property_order.push(key.clone());
                     g.properties.insert(
                         key,
-                        PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                        PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
                     );
                 }
             }
@@ -243,10 +248,10 @@ impl Interpreter {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     let key = crate::interpreter::key_intern::intern_key(name);
-                    g.property_order.push(Rc::clone(&key));
+                    g.property_order.push(key.clone());
                     g.properties.insert(
                         key,
-                        PropertyDescriptor::data(JsValue::Undefined, true, true, true),
+                        PropertyDescriptor::data(JsValue::UNDEFINED, true, true, true),
                     );
                 }
             }
@@ -321,7 +326,7 @@ impl Interpreter {
                 let desc = PropertyDescriptor::data(value, true, true, configurable);
                 let key = crate::interpreter::key_intern::intern_key(name);
                 if !g.properties.contains_key(name) {
-                    g.property_order.push(Rc::clone(&key));
+                    g.property_order.push(key.clone());
                 }
                 g.properties.insert(key, desc);
             } else {

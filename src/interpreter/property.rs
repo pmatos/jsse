@@ -1,19 +1,107 @@
 use super::*;
+
+/// Formats `n` into `buf` and returns the digits as a `&str`, without a heap
+/// allocation. Used on the dense-array numeric-read fast path, where an
+/// owned `String` per read would defeat the point of the fast path.
+fn format_u32_stack(n: u32, buf: &mut [u8; 10]) -> &str {
+    let mut i = buf.len();
+    let mut n = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    // Safety of `unwrap`: every byte written above is one of b'0'..=b'9'.
+    std::str::from_utf8(&buf[i..]).unwrap()
+}
+
+/// The observable result of [[Set]] plus the internal write-path fact needed
+/// by the evaluator's global object-record bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SetOutcome {
+    Rejected,
+    Succeeded,
+    OwnDataWrite(u64),
+}
+
+impl SetOutcome {
+    pub(crate) fn succeeded(self) -> bool {
+        !matches!(self, Self::Rejected)
+    }
+
+    fn from_success(succeeded: bool) -> Self {
+        if succeeded {
+            Self::Succeeded
+        } else {
+            Self::Rejected
+        }
+    }
+
+    fn from_own_data_write(receiver_id: u64, succeeded: bool) -> Self {
+        if succeeded {
+            Self::OwnDataWrite(receiver_id)
+        } else {
+            Self::Rejected
+        }
+    }
+
+    pub(crate) fn wrote_own_data_property_on(self, receiver_id: u64) -> bool {
+        self == Self::OwnDataWrite(receiver_id)
+    }
+}
+
 impl Interpreter {
+    /// Advance the resource counter shared by Proxy-mediated prototype-chain
+    /// walks. The counter is local to one internal-method operation, so user
+    /// code that starts a nested operation gets an independent budget.
+    pub(crate) fn advance_proxy_chain_depth(&mut self, depth: usize) -> Result<usize, JsValue> {
+        if depth >= PROXY_CHAIN_DEPTH_LIMIT {
+            return Err(self.create_error("RangeError", "Maximum call stack size exceeded"));
+        }
+        Ok(depth + 1)
+    }
+
     /// Canonical [[Set]] entry point (§10.1.9 OrdinarySet + exotic dispatch).
     /// Handles proxy `set` trap, TypedArray integer-index element set,
     /// accessor setter invocation, prototype-chain walk, and receiver logic.
     /// Returns `Ok(true)` on success, `Ok(false)` if the set was rejected
     /// (e.g. read-only property), `Err(e)` if an exception was thrown.
     #[allow(dead_code)]
-    pub(crate) fn set_object_property(
+    pub(crate) fn set_object_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<bool, JsValue> {
-        self.proxy_set(obj_id, key, value, receiver)
+        self.set_object_property_with_outcome(obj_id, key, value, receiver)
+            .map(SetOutcome::succeeded)
+    }
+
+    /// Canonical [[Set]] entry point retaining whether the operation itself
+    /// reached a successful own data-property write on the Receiver. A plain
+    /// Boolean cannot distinguish that path from a successful setter or Proxy
+    /// trap, and inspecting the descriptor after user code returns is racy with
+    /// a setter that redefines the property.
+    pub(crate) fn set_object_property_with_outcome<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        value: JsValue,
+        receiver: &JsValue,
+    ) -> Result<SetOutcome, JsValue> {
+        // Module namespace exotic [[Set]] (§10.4.6.9) always rejects the set,
+        // even though exported bindings have writable own data descriptors.
+        if self
+            .get_object_cell(obj_id)
+            .is_some_and(|obj| obj.borrow().module_namespace().is_some())
+        {
+            return Ok(SetOutcome::Rejected);
+        }
+        self.proxy_set_with_outcome(obj_id, key, value, receiver)
     }
 
     /// Canonical [[DefineOwnProperty]] entry point.
@@ -24,10 +112,10 @@ impl Interpreter {
     ///
     /// `desc_val` is the property descriptor as a JsValue (object or undefined).
     #[allow(dead_code)]
-    pub(crate) fn define_object_property(
+    pub(crate) fn define_object_property<K: Into<JsPropertyKey>>(
         &mut self,
         obj_id: u64,
-        key: String,
+        key: K,
         desc_val: &JsValue,
     ) -> Result<bool, JsValue> {
         self.proxy_define_own_property(obj_id, key, desc_val)
@@ -36,19 +124,67 @@ impl Interpreter {
     /// Canonical [[Delete]] entry point (§10.1.5 OrdinaryDelete + exotic dispatch).
     /// Handles proxy `deleteProperty` trap, String exotic, and ordinary delete.
     #[allow(dead_code)]
-    pub(crate) fn delete_object_property(
+    pub(crate) fn delete_object_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
     ) -> Result<bool, JsValue> {
         self.proxy_delete_property(obj_id, key)
     }
 
-    pub(crate) fn get_object_property(
+    pub(crate) fn get_object_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
         this_val: &JsValue,
+    ) -> Completion {
+        self.get_object_property_with_proxy_depth(obj_id, key, this_val, 0)
+    }
+
+    /// Returns the result of a computed numeric-index read when the receiver's
+    /// object kind makes it safe to bypass `ToPropertyKey` and the property MOP.
+    pub(super) fn numeric_index_fast_get(&self, obj_val: &JsValue, index: f64) -> Option<JsValue> {
+        let obj_id = obj_val.as_object_id()?;
+        let obj_rc = self.get_object_cell(obj_id)?;
+        let obj_borrow = obj_rc.borrow();
+
+        if let Some(ta) = obj_borrow.typed_array_info() {
+            use crate::interpreter::types::{is_valid_integer_index, typed_array_get_index};
+
+            if is_valid_integer_index(ta, index) {
+                return Some(typed_array_get_index(ta, index as usize));
+            }
+            // Any canonical numeric index on a typed array that is out of
+            // range returns undefined without walking the prototype chain.
+            // Raw -0 must fall through: ToPropertyKey(-0) produces "0", so it
+            // addresses element zero rather than the canonical string "-0".
+            let trunc = index.trunc();
+            if index == trunc && !index.is_nan() && !index.is_sign_negative() {
+                return Some(JsValue::UNDEFINED);
+            }
+        }
+
+        if let Some(elems) = obj_borrow.array_elements() {
+            let trunc = index.trunc();
+            if index == trunc && index >= 0.0 && (index as usize) < elems.len() {
+                let idx = index as usize;
+                let mut buf = [0u8; 10];
+                let key_str = format_u32_stack(idx as u32, &mut buf);
+                if !obj_borrow.properties.contains_key(key_str) && !elems[idx].is_undefined() {
+                    return Some(elems[idx].clone());
+                }
+            }
+        }
+
+        None
+    }
+
+    fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        this_val: &JsValue,
+        proxy_depth: usize,
     ) -> Completion {
         // Single-borrow fast path: classify object and check own property in one borrow
         if let Some(obj) = self.get_object_cell(obj_id) {
@@ -72,24 +208,22 @@ impl Interpreter {
                     if is_valid_integer_index(ta, index) {
                         return Completion::Normal(typed_array_get_index(ta, index as usize));
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
 
                 // Check own property
                 let own_desc = b.get_own_property_full(key);
                 match own_desc {
-                    Some(ref d)
-                        if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) =>
-                    {
+                    Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
                         let getter = d.get.clone().unwrap();
                         drop(b);
                         return self.call_function(&getter, this_val, &[]);
                     }
                     Some(ref d) if d.get.is_some() => {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     Some(ref d) => {
-                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined));
+                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED));
                     }
                     None => {}
                 }
@@ -99,22 +233,28 @@ impl Interpreter {
                 drop(b);
                 if let Some(proto_rc) = proto {
                     let proto_id = proto_rc;
-                    return self.get_object_property(proto_id, key, this_val);
+                    return self.get_object_property_with_proxy_depth(
+                        proto_id,
+                        key,
+                        this_val,
+                        proxy_depth,
+                    );
                 }
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
             drop(b);
         }
 
         // Slow path: proxy or module namespace objects
-        self.get_object_property_slow(obj_id, key, this_val)
+        self.get_object_property_slow(obj_id, key, this_val, proxy_depth)
     }
 
-    fn get_object_property_slow(
+    fn get_object_property_slow<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
         this_val: &JsValue,
+        proxy_depth: usize,
     ) -> Completion {
         // Check if object is a proxy
         if self.get_proxy_info(obj_id).is_some() {
@@ -125,8 +265,8 @@ impl Interpreter {
             {
                 Ok(Some(v)) => {
                     // Invariant checks
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc
@@ -136,7 +276,7 @@ impl Interpreter {
                                 && desc.writable == Some(false)
                                 && !same_value(
                                     &v,
-                                    desc.value.as_ref().unwrap_or(&JsValue::Undefined),
+                                    desc.value.as_ref().unwrap_or(JsValue::undefined_ref()),
                                 )
                             {
                                 return Completion::Throw(self.create_type_error(
@@ -144,11 +284,8 @@ impl Interpreter {
                                     ));
                             }
                             if desc.is_accessor_descriptor()
-                                && matches!(
-                                    desc.get.as_ref().unwrap_or(&JsValue::Undefined),
-                                    JsValue::Undefined
-                                )
-                                && !matches!(v, JsValue::Undefined)
+                                && desc.get.as_ref().is_none_or(|g| g.is_undefined())
+                                && !v.is_undefined()
                             {
                                 return Completion::Throw(self.create_type_error(
                                         "'get' on proxy: property is a non-configurable accessor property on the proxy target and does not have a getter function, but the trap did not return 'undefined'",
@@ -160,10 +297,16 @@ impl Interpreter {
                 }
                 Ok(None) => {
                     // No trap, fall through to target
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.get_object_property(t.id, key, this_val);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        let next_depth = match self.advance_proxy_chain_depth(proxy_depth) {
+                            Ok(depth) => depth,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        return self.get_object_property_with_proxy_depth(
+                            target_id, key, this_val, next_depth,
+                        );
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 Err(e) => return Completion::Throw(e),
             }
@@ -182,22 +325,25 @@ impl Interpreter {
                 {
                     return Completion::Throw(e);
                 }
-                if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+                if let Some(key_str) = key.as_property_key_str()
+                    && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
+                {
                     let module_path = ns_data.module_path.clone();
                     match self.resolve_module_export_value(
                         binding_name,
                         &ns_data.env,
-                        module_path.as_deref(),
-                        key,
+                        module_path.as_ref(),
+                        key_str,
                     ) {
                         Ok(val) => return Completion::Normal(val),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
                 // Fallback: check module's exports directly
-                if let Some(ref module_path) = ns_data.module_path
+                if let Some(key_str) = key.as_property_key_str()
+                    && let Some(ref module_path) = ns_data.module_path
                     && let Some(module) = self.module_registry_get(module_path)
-                    && let Some(val) = module.borrow().exports.get(key)
+                    && let Some(val) = module.borrow().exports.get(key_str)
                 {
                     return Completion::Normal(val.clone());
                 }
@@ -211,12 +357,12 @@ impl Interpreter {
             None
         };
         match own_desc {
-            Some(ref d) if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) => {
+            Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
                 let getter = d.get.clone().unwrap();
                 self.call_function(&getter, this_val, &[])
             }
-            Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
-            Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
+            Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::UNDEFINED),
+            Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED)),
             None => {
                 let proto = if let Some(obj) = self.get_object_cell(obj_id) {
                     obj.borrow().prototype_id
@@ -225,16 +371,29 @@ impl Interpreter {
                 };
                 if let Some(proto_rc) = proto {
                     let proto_id = proto_rc;
-                    self.get_object_property(proto_id, key, this_val)
+                    self.get_object_property_with_proxy_depth(proto_id, key, this_val, proxy_depth)
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
         }
     }
 
     /// Proxy-aware [[HasProperty]] - checks proxy `has` trap, recurses on target if no trap.
-    pub(crate) fn proxy_has_property(&mut self, obj_id: u64, key: &str) -> Result<bool, JsValue> {
+    pub(crate) fn proxy_has_property<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+    ) -> Result<bool, JsValue> {
+        self.proxy_has_property_with_proxy_depth(obj_id, key, 0)
+    }
+
+    fn proxy_has_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        proxy_depth: usize,
+    ) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = self.symbol_key_to_jsvalue(key);
@@ -242,8 +401,8 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if !trap_result
-                        && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                        && let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
@@ -262,8 +421,10 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_has_property(t.id, key);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        let next_depth = self.advance_proxy_chain_depth(proxy_depth)?;
+                        return self
+                            .proxy_has_property_with_proxy_depth(target_id, key, next_depth);
                     }
                     Ok(false)
                 }
@@ -298,7 +459,7 @@ impl Interpreter {
             let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
-                return self.proxy_has_property(proto_id, key);
+                return self.proxy_has_property_with_proxy_depth(proto_id, key, proxy_depth);
             }
             Ok(false)
         } else {
@@ -307,11 +468,15 @@ impl Interpreter {
     }
 
     /// Iterative prototype-chain walk of `get_property`. Returns
-    /// `JsValue::Undefined` when the key is not found anywhere in the chain.
+    /// `JsValue::UNDEFINED` when the key is not found anywhere in the chain.
     /// Each frame borrows the slot's `RefCell` directly via `get_object_cell_expect`,
     /// avoiding an `Rc::clone` per prototype hop. The walk holds no state across
     /// `&mut self` calls, so the `&self`-tied lifetime is safe.
-    pub(crate) fn get_property_on_id(&self, start_id: u64, key: &str) -> JsValue {
+    pub(crate) fn get_property_on_id<K: PropertyKeyLike + ?Sized>(
+        &self,
+        start_id: u64,
+        key: &K,
+    ) -> JsValue {
         let mut current = Some(start_id);
         while let Some(id) = current {
             let b = self.get_object_cell_expect(id).borrow();
@@ -322,14 +487,14 @@ impl Interpreter {
             drop(b);
             current = next;
         }
-        JsValue::Undefined
+        JsValue::UNDEFINED
     }
 
     /// Iterative prototype-chain walk of `get_property_descriptor`.
-    pub(crate) fn get_property_descriptor_on_id(
+    pub(crate) fn get_property_descriptor_on_id<K: PropertyKeyLike + ?Sized>(
         &self,
         start_id: u64,
-        key: &str,
+        key: &K,
     ) -> Option<PropertyDescriptor> {
         let mut current = Some(start_id);
         while let Some(id) = current {
@@ -351,7 +516,11 @@ impl Interpreter {
     // uncalled — CreateDataProperty's extensibility guard now correctly uses
     // the own-only variant.
     #[allow(dead_code)]
-    pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
+    pub(crate) fn has_property_on_id<K: PropertyKeyLike + ?Sized>(
+        &self,
+        start_id: u64,
+        key: &K,
+    ) -> bool {
         let mut current = Some(start_id);
         while let Some(id) = current {
             let b = self.get_object_cell_expect(id).borrow();
@@ -369,9 +538,9 @@ impl Interpreter {
     /// each frame's emit with a global shadow set so non-enumerable own keys on
     /// one frame correctly suppress enumerable inherited keys with matching
     /// names on subsequent frames.
-    pub(crate) fn enumerable_keys_with_proto_on_id(&self, start_id: u64) -> Vec<String> {
-        let mut global_seen: HashSet<String> = HashSet::default();
-        let mut result: Vec<String> = Vec::new();
+    pub(crate) fn enumerable_keys_with_proto_on_id(&self, start_id: u64) -> Vec<JsPropertyKey> {
+        let mut global_seen: HashSet<JsPropertyKey> = HashSet::default();
+        let mut result: Vec<JsPropertyKey> = Vec::new();
         let mut current = Some(start_id);
         while let Some(id) = current {
             let b = self.get_object_cell_expect(id).borrow();
@@ -392,7 +561,34 @@ impl Interpreter {
     }
 
     /// §10.4.2.4 ArraySetLength(A, Desc)
+    ///
+    /// Roots `obj_id` for the whole operation: ToUint32/ToNumber on
+    /// `desc.value` below can invoke a user `valueOf` that reaches a GC
+    /// safepoint, and every step after that re-derefs `obj_id` — an
+    /// unrooted, ephemeral receiver (e.g. an array literal used only as a
+    /// destructuring-assignment target) can otherwise be collected out from
+    /// under this function, turning `get_object_cell(obj_id).unwrap()` into
+    /// a panic.
+    ///
+    /// Unroots only this receiver on the way out (mirrors
+    /// `call_function_inner`'s operand cleanup), not a bulk
+    /// `gc_unroot_frame`: the `valueOf` call above can itself leave a
+    /// *persistent* root on the stack — e.g. `Atomics.waitAsync`'s resolver,
+    /// meant to survive until the async completion settles — and a frame
+    /// truncate would discard that too.
     pub(crate) fn array_set_length(
+        &mut self,
+        obj_id: usize,
+        desc: PropertyDescriptor,
+    ) -> Result<bool, JsValue> {
+        let receiver = JsValue::object(obj_id as u64);
+        self.gc_root_value(&receiver);
+        let result = self.array_set_length_inner(obj_id, desc);
+        self.gc_unroot_value(&receiver);
+        result
+    }
+
+    fn array_set_length_inner(
         &mut self,
         obj_id: usize,
         desc: PropertyDescriptor,
@@ -424,7 +620,7 @@ impl Interpreter {
         }
 
         // 5. Set newLenDesc.[[Value]] to newLen (as a Number).
-        new_len_desc.value = Some(JsValue::Number(new_len as f64));
+        new_len_desc.value = Some(JsValue::number(new_len as f64));
 
         // 6. Let oldLenDesc be OrdinaryGetOwnProperty(A, "length").
         let (old_len, old_len_writable) = {
@@ -436,13 +632,8 @@ impl Interpreter {
                     let ol = d
                         .value
                         .as_ref()
-                        .and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(*n as u32)
-                            } else {
-                                None
-                            }
-                        })
+                        .and_then(JsValue::as_number)
+                        .map(|n| n as u32)
                         .unwrap_or(0);
                     let w = d.writable.unwrap_or(true);
                     (ol, w)
@@ -500,7 +691,7 @@ impl Interpreter {
                 .filter_map(|k| {
                     k.parse::<u64>()
                         .ok()
-                        .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == **k)
+                        .filter(|&idx| idx <= 0xFFFF_FFFE && k.eq_str(&idx.to_string()))
                         .map(|idx| idx as u32)
                         .filter(|&idx| idx >= new_len && idx < old_len)
                         .map(|idx| (idx, k.to_string()))
@@ -533,7 +724,7 @@ impl Interpreter {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.value = Some(JsValue::Number(actual_new_len as f64));
+                len_desc.value = Some(JsValue::number(actual_new_len as f64));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
             if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
@@ -555,21 +746,22 @@ impl Interpreter {
     }
 
     /// §10.4.2.1 [[DefineOwnProperty]](P, Desc) for Array exotic objects
-    pub(crate) fn array_define_own_property(
+    pub(crate) fn array_define_own_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: usize,
-        key: &str,
+        key: &K,
         desc: PropertyDescriptor,
     ) -> Result<bool, JsValue> {
         // 1. If P is "length", return ArraySetLength(A, Desc).
-        if key == "length" {
+        if key.as_property_key_str() == Some("length") {
             return self.array_set_length(obj_id, desc);
         }
 
         // 2. If P is an array index (canonical numeric string with value <= 0xFFFFFFFE)...
-        if let Ok(index) = key.parse::<u64>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Ok(index) = key_str.parse::<u64>()
             && index <= 0xFFFF_FFFE
-            && index.to_string() == key
+            && index.to_string() == key_str
         {
             let index_u32 = index as u32;
 
@@ -580,13 +772,8 @@ impl Interpreter {
                 let len_desc = obj.properties.get("length");
                 let ol = len_desc
                     .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    })
+                    .and_then(JsValue::as_number)
+                    .map(|n| n as u32)
                     .unwrap_or(0);
                 let w = len_desc.and_then(|d| d.writable).unwrap_or(true);
                 (ol, w)
@@ -602,7 +789,7 @@ impl Interpreter {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 obj_rc
                     .borrow_mut()
-                    .define_own_property(key.to_string(), desc.clone())
+                    .define_own_property(key.to_js_property_key(), desc.clone())
             };
 
             // 2.d. If succeeded is false, return false.
@@ -616,16 +803,16 @@ impl Interpreter {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.value = Some(JsValue::Number(new_len as f64));
+                    len_desc.value = Some(JsValue::number(new_len as f64));
                 }
                 if let Some(elems) = obj.array_elements_mut() {
-                    let val = desc.value.unwrap_or(JsValue::Undefined);
+                    let val = desc.value.unwrap_or(JsValue::UNDEFINED);
                     let idx = index_u32 as usize;
                     if idx < elems.len() {
                         elems[idx] = val;
                     } else if idx <= elems.len() + 1024 {
                         while elems.len() < idx {
-                            elems.push(JsValue::Undefined);
+                            elems.push(JsValue::UNDEFINED);
                         }
                         elems.push(val);
                     }
@@ -650,17 +837,39 @@ impl Interpreter {
         let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
         Ok(obj_rc
             .borrow_mut()
-            .define_own_property(key.to_string(), desc))
+            .define_own_property(key.to_js_property_key(), desc))
     }
 
     /// Proxy-aware [[Set]] - checks proxy `set` trap, recurses on target if no trap.
-    pub(crate) fn proxy_set(
+    pub(crate) fn proxy_set<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<bool, JsValue> {
+        self.proxy_set_with_outcome(obj_id, key, value, receiver)
+            .map(SetOutcome::succeeded)
+    }
+
+    fn proxy_set_with_outcome<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        value: JsValue,
+        receiver: &JsValue,
+    ) -> Result<SetOutcome, JsValue> {
+        self.proxy_set_with_outcome_and_proxy_depth(obj_id, key, value, receiver, 0)
+    }
+
+    fn proxy_set_with_outcome_and_proxy_depth<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+        value: JsValue,
+        receiver: &JsValue,
+        proxy_depth: usize,
+    ) -> Result<SetOutcome, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = self.symbol_key_to_jsvalue(key);
@@ -671,8 +880,8 @@ impl Interpreter {
             ) {
                 Ok(Some(v)) => {
                     if self.to_boolean_val(&v) {
-                        if let JsValue::Object(ref t) = target_val
-                            && let Some(tobj) = self.get_object(t.id)
+                        if let Some(target_id) = target_val.as_object_id()
+                            && let Some(tobj) = self.get_object(target_id)
                         {
                             let target_desc = tobj.borrow().get_own_property(key);
                             if let Some(ref desc) = target_desc
@@ -682,7 +891,7 @@ impl Interpreter {
                                     && desc.writable == Some(false)
                                     && !same_value(
                                         &value,
-                                        desc.value.as_ref().unwrap_or(&JsValue::Undefined),
+                                        desc.value.as_ref().unwrap_or(JsValue::undefined_ref()),
                                     )
                                 {
                                     return Err(self.create_type_error(
@@ -690,10 +899,7 @@ impl Interpreter {
                                         ));
                                 }
                                 if desc.is_accessor_descriptor()
-                                    && matches!(
-                                        desc.set.as_ref().unwrap_or(&JsValue::Undefined),
-                                        JsValue::Undefined
-                                    )
+                                    && desc.set.as_ref().is_none_or(|s| s.is_undefined())
                                 {
                                     return Err(self.create_type_error(
                                             "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter",
@@ -701,16 +907,19 @@ impl Interpreter {
                                 }
                             }
                         }
-                        Ok(true)
+                        Ok(SetOutcome::Succeeded)
                     } else {
-                        Ok(false)
+                        Ok(SetOutcome::Rejected)
                     }
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_set(t.id, key, value, receiver);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        let next_depth = self.advance_proxy_chain_depth(proxy_depth)?;
+                        return self.proxy_set_with_outcome_and_proxy_depth(
+                            target_id, key, value, receiver, next_depth,
+                        );
                     }
-                    Ok(false)
+                    Ok(SetOutcome::Rejected)
                 }
                 Err(e) => Err(e),
             }
@@ -718,11 +927,7 @@ impl Interpreter {
             // TypedArray [[Set]] §10.4.5.5
             let is_ta = obj.borrow().typed_array_info().is_some();
             if is_ta && let Some(index) = canonical_numeric_index_string(key) {
-                let same_val = if let JsValue::Object(ref r) = *receiver {
-                    r.id == obj_id
-                } else {
-                    false
-                };
+                let same_val = receiver.as_object_id() == Some(obj_id);
                 if same_val {
                     // SameValue(O, Receiver): IntegerIndexedElementSet
                     let is_bigint = obj
@@ -733,7 +938,7 @@ impl Interpreter {
                     let num_val = if is_bigint {
                         self.to_bigint_value(&value)?
                     } else {
-                        JsValue::Number(self.to_number_value(&value)?)
+                        JsValue::number(self.to_number_value(&value)?)
                     };
                     let obj_ref = obj.borrow();
                     let ta = obj_ref.typed_array_info().unwrap();
@@ -742,7 +947,7 @@ impl Interpreter {
                         drop(obj_ref);
                         typed_array_set_index(&ta_clone, index as usize, &num_val);
                     }
-                    return Ok(true);
+                    return Ok(SetOutcome::Succeeded);
                 } else {
                     // Different receiver: if invalid index return true without coercing
                     let valid = {
@@ -751,7 +956,7 @@ impl Interpreter {
                         is_valid_integer_index(ta, index)
                     };
                     if !valid {
-                        return Ok(true);
+                        return Ok(SetOutcome::Succeeded);
                     }
                     // Valid index, different receiver: fall through to OrdinarySet below
                     // OrdinarySet will find writable data descriptor from TypedArray [[GetOwnProperty]],
@@ -764,35 +969,68 @@ impl Interpreter {
                 if desc.is_accessor_descriptor() {
                     // Call setter with receiver as this
                     if let Some(ref setter) = desc.set
-                        && !matches!(setter, JsValue::Undefined)
+                        && !setter.is_undefined()
                     {
                         let setter = setter.clone();
                         match self.call_function(&setter, receiver, &[value]) {
-                            Completion::Normal(_) => return Ok(true),
+                            Completion::Normal(_) => return Ok(SetOutcome::Succeeded),
                             Completion::Throw(e) => return Err(e),
-                            _ => return Ok(true),
+                            _ => return Ok(SetOutcome::Succeeded),
                         }
                     }
-                    return Ok(false);
+                    return Ok(SetOutcome::Rejected);
                 }
                 // Data descriptor
                 if desc.writable == Some(false) {
-                    return Ok(false);
+                    return Ok(SetOutcome::Rejected);
                 }
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
-                let recv_id = if let JsValue::Object(r) = receiver {
-                    Some(r.id)
-                } else {
-                    None
-                };
+                let recv_id = receiver.as_object_id();
                 if recv_id == Some(obj_id) {
-                    // Common case: receiver is the same object, direct set
-                    return Ok(obj.borrow_mut().set_property_value(key, value));
+                    // Common case: receiver is the same object. Ordinary objects
+                    // (and ordinary Array properties) can take the direct route;
+                    // only Array's "length" is exotic and must go through
+                    // [[DefineOwnProperty]] (ArraySetLength, §10.4.2.4) or its
+                    // ToUint32 coercion / RangeError / element-deletion semantics
+                    // are silently skipped. Gate on the key too, not just the
+                    // class — routing every existing-element write (e.g. `a[0]++`)
+                    // through descriptor allocation regressed a 200k-iteration
+                    // increment loop by ~1.7-2x.
+                    if key.as_property_key_str() == Some("length")
+                        && obj.borrow().class_name == "Array"
+                    {
+                        // Call ArraySetLength directly with a native descriptor —
+                        // round-tripping through from_property_descriptor +
+                        // to_property_descriptor would build a JS object whose
+                        // [[Prototype]] is Object.prototype, and ToPropertyDescriptor
+                        // reads fields via [[HasProperty]] (prototype-chain walk), so
+                        // an unrelated Object.prototype mutation (e.g. a non-callable
+                        // "get") would leak into this internal, value-only descriptor.
+                        let val_desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
+                        };
+                        return self
+                            .array_set_length(obj_id as usize, val_desc)
+                            .map(|succeeded| SetOutcome::from_own_data_write(obj_id, succeeded));
+                    }
+                    self.gc_write_barrier_value(&obj, &value);
+                    let succeeded = obj.borrow_mut_untracked().set_property_value(key, value);
+                    return Ok(SetOutcome::from_own_data_write(obj_id, succeeded));
                 }
                 // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
                 if let Some(rid) = recv_id {
+                    let receiver_uses_proxy_define =
+                        self.get_object_cell(rid).is_some_and(|cell| {
+                            let b = cell.borrow();
+                            b.is_proxy() || b.is_proxy_revoked()
+                        });
                     let existing = self.proxy_get_own_property_descriptor(rid, key)?;
-                    if matches!(existing, JsValue::Undefined) {
+                    if existing.is_undefined() {
                         // CreateDataProperty(Receiver, P, V)
                         let desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
@@ -803,19 +1041,28 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&desc);
-                        return self.proxy_define_own_property(rid, key.to_string(), &desc_val);
+                        let succeeded = self.proxy_define_own_property(
+                            rid,
+                            key.to_js_property_key(),
+                            &desc_val,
+                        )?;
+                        return Ok(if receiver_uses_proxy_define {
+                            SetOutcome::from_success(succeeded)
+                        } else {
+                            SetOutcome::from_own_data_write(rid, succeeded)
+                        });
                     } else {
                         // existingDescriptor found: check accessor or non-writable
                         let existing_desc = match self.to_property_descriptor(&existing) {
                             Ok(d) => d,
                             Err(Some(e)) => return Err(e),
-                            Err(None) => return Ok(false),
+                            Err(None) => return Ok(SetOutcome::Rejected),
                         };
                         if existing_desc.is_accessor_descriptor() {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         if existing_desc.writable == Some(false) {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         // [[DefineOwnProperty]](P, {Value: V})
                         let val_desc = crate::interpreter::types::PropertyDescriptor {
@@ -827,27 +1074,60 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&val_desc);
-                        return self.proxy_define_own_property(rid, key.to_string(), &desc_val);
+                        let succeeded = self.proxy_define_own_property(
+                            rid,
+                            key.to_js_property_key(),
+                            &desc_val,
+                        )?;
+                        return Ok(if receiver_uses_proxy_define {
+                            SetOutcome::from_success(succeeded)
+                        } else {
+                            SetOutcome::from_own_data_write(rid, succeeded)
+                        });
                     }
                 }
-                return Ok(obj.borrow_mut().set_property_value(key, value));
+                // Receiver is not an Object: [[Set]] must return false, never
+                // fall back to writing the property onto `obj` itself — `obj`
+                // may be a shared prototype reached by walking up from the
+                // (non-object) receiver's own [[Prototype]] chain.
+                return Ok(SetOutcome::Rejected);
             }
             // No own property, walk prototype chain
             let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
-                return self.proxy_set(proto_id, key, value, receiver);
+                return self.proxy_set_with_outcome_and_proxy_depth(
+                    proto_id,
+                    key,
+                    value,
+                    receiver,
+                    proxy_depth,
+                );
             }
             // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
             // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
-            if let JsValue::Object(recv_o) = receiver {
-                let recv_id = recv_o.id;
-                let is_proxy_recv = self
-                    .get_object_cell(recv_id)
-                    .is_some_and(|o| o.borrow().is_proxy() || o.borrow().is_proxy_revoked());
+            if let Some(recv_id) = receiver.as_object_id() {
+                // Which exotic [[GetOwnProperty]]/[[DefineOwnProperty]] the
+                // receiver has, read in one borrow that ends before the
+                // `&mut self` calls below.
+                let (is_module_namespace_recv, is_proxy_recv) =
+                    self.get_object_cell(recv_id).map_or((false, false), |o| {
+                        let b = o.borrow();
+                        (
+                            b.module_namespace().is_some(),
+                            b.is_proxy() || b.is_proxy_revoked(),
+                        )
+                    });
+                // Module namespace exotic [[GetOwnProperty]] triggers deferred
+                // evaluation / TDZ checks before its [[DefineOwnProperty]]
+                // necessarily rejects the new data property.
+                if is_module_namespace_recv {
+                    self.check_namespace_tdz(recv_id, key)?;
+                    return Ok(SetOutcome::Rejected);
+                }
                 if is_proxy_recv {
                     let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
-                    if matches!(existing, JsValue::Undefined) {
+                    if existing.is_undefined() {
                         // CreateDataProperty(Receiver, P, V)
                         let create_desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
@@ -858,18 +1138,23 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&create_desc);
-                        return self.proxy_define_own_property(recv_id, key.to_string(), &desc_val);
+                        let succeeded = self.proxy_define_own_property(
+                            recv_id,
+                            key.to_js_property_key(),
+                            &desc_val,
+                        )?;
+                        return Ok(SetOutcome::from_success(succeeded));
                     } else {
                         let existing_desc = match self.to_property_descriptor(&existing) {
                             Ok(d) => d,
                             Err(Some(e)) => return Err(e),
-                            Err(None) => return Ok(false),
+                            Err(None) => return Ok(SetOutcome::Rejected),
                         };
                         if existing_desc.is_accessor_descriptor() {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         if existing_desc.writable == Some(false) {
-                            return Ok(false);
+                            return Ok(SetOutcome::Rejected);
                         }
                         let val_desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
@@ -880,16 +1165,27 @@ impl Interpreter {
                             set: None,
                         };
                         let desc_val = self.from_property_descriptor(&val_desc);
-                        return self.proxy_define_own_property(recv_id, key.to_string(), &desc_val);
+                        let succeeded = self.proxy_define_own_property(
+                            recv_id,
+                            key.to_js_property_key(),
+                            &desc_val,
+                        )?;
+                        return Ok(SetOutcome::from_success(succeeded));
                     }
                 }
                 if let Some(recv_obj) = self.get_object_cell(recv_id) {
-                    return Ok(recv_obj.borrow_mut().set_property_value(key, value));
+                    self.gc_write_barrier_value(recv_obj, &value);
+                    let succeeded = recv_obj
+                        .borrow_mut_untracked()
+                        .set_property_value(key, value);
+                    return Ok(SetOutcome::from_own_data_write(recv_id, succeeded));
                 }
             }
-            Ok(obj.borrow_mut().set_property_value(key, value))
+            // Receiver is not an Object (or resolved to no live object): [[Set]]
+            // must return false, never fall back to writing onto `obj` itself.
+            Ok(SetOutcome::Rejected)
         } else {
-            Ok(false)
+            Ok(SetOutcome::Rejected)
         }
     }
 
@@ -909,10 +1205,10 @@ impl Interpreter {
     }
 
     /// Proxy-aware [[Delete]] - checks proxy `deleteProperty` trap, recurses on target if no trap.
-    pub(crate) fn proxy_delete_property(
+    pub(crate) fn proxy_delete_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
     ) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
@@ -925,8 +1221,8 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if trap_result
-                        && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                        && let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
@@ -945,8 +1241,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_delete_property(t.id, key);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_delete_property(target_id, key);
                     }
                     Ok(true)
                 }
@@ -957,16 +1253,16 @@ impl Interpreter {
             {
                 let borrow = obj.borrow();
                 if borrow.class_name == "String"
-                    && let Some(JsValue::String(ref s)) = borrow.primitive_value
+                    && let Some(len) = borrow
+                        .primitive_value
+                        .as_ref()
+                        .and_then(|v| v.with_string(|s| s.len()))
                 {
-                    if key == "length" {
+                    if key.as_property_key_str() == Some("length") {
                         return Ok(false);
                     }
-                    if let Ok(idx) = key.parse::<usize>() {
-                        let char_len = s.to_string().chars().count();
-                        if idx < char_len {
-                            return Ok(false);
-                        }
+                    if crate::interpreter::types::string_exotic_index(key, len).is_some() {
+                        return Ok(false);
                     }
                 }
             }
@@ -977,11 +1273,12 @@ impl Interpreter {
                 return Ok(false);
             }
             m.remove_property(key);
-            if let Some(elems) = m.array_elements_mut()
-                && let Ok(idx) = key.parse::<usize>()
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(elems) = m.array_elements_mut()
+                && let Ok(idx) = key_str.parse::<usize>()
                 && idx < elems.len()
             {
-                elems[idx] = JsValue::Undefined;
+                elems[idx] = JsValue::UNDEFINED;
             }
             Ok(true)
         } else {
@@ -993,10 +1290,10 @@ impl Interpreter {
     /// Returns Ok(None) if not a typed array numeric index (caller should use generic path).
     /// Returns Ok(Some(bool)) if handled by TypedArray exotic logic.
     /// Returns Err(JsValue) if an error occurred (e.g., ToBigInt/ToNumber throws).
-    pub(crate) fn typed_array_define_own_property(
+    pub(crate) fn typed_array_define_own_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
         desc: &PropertyDescriptor,
     ) -> Result<Option<bool>, JsValue> {
         use crate::interpreter::types::{canonical_numeric_index_string, is_valid_integer_index};
@@ -1062,7 +1359,7 @@ impl Interpreter {
             let num_val = if is_bigint {
                 self.to_bigint_value(value)?
             } else {
-                JsValue::Number(self.to_number_value(value)?)
+                JsValue::number(self.to_number_value(value)?)
             };
             // After conversion, re-read ta info (buffer may have been detached during conversion)
             if let Some(obj) = self.get_object_cell(obj_id) {
@@ -1085,12 +1382,13 @@ impl Interpreter {
         Ok(Some(true))
     }
 
-    pub(crate) fn proxy_define_own_property(
+    pub(crate) fn proxy_define_own_property<K: Into<JsPropertyKey>>(
         &mut self,
         obj_id: u64,
-        key: String,
+        key: K,
         desc_val: &JsValue,
     ) -> Result<bool, JsValue> {
+        let key = key.into();
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = self.symbol_key_to_jsvalue(&key);
@@ -1104,8 +1402,8 @@ impl Interpreter {
                     if !trap_result {
                         return Ok(false);
                     }
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(&key);
                         let target_extensible = tobj.borrow().extensible;
@@ -1157,8 +1455,8 @@ impl Interpreter {
                     Ok(true)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_define_own_property(t.id, key, desc_val);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_define_own_property(target_id, key, desc_val);
                     }
                     Ok(false)
                 }
@@ -1195,10 +1493,10 @@ impl Interpreter {
     }
 
     /// Proxy-aware [[GetOwnProperty]] - checks proxy `getOwnPropertyDescriptor` trap, recurses on target if no trap.
-    pub(crate) fn proxy_get_own_property_descriptor(
+    pub(crate) fn proxy_get_own_property_descriptor<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
-        key: &str,
+        key: &K,
     ) -> Result<JsValue, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
@@ -1210,17 +1508,17 @@ impl Interpreter {
             ) {
                 Ok(Some(v)) => {
                     // Step 11: If Type(trapResultObj) is neither Object nor Undefined, throw TypeError
-                    if !matches!(v, JsValue::Object(_) | JsValue::Undefined) {
+                    if !v.is_object() && !v.is_undefined() {
                         return Err(self.create_type_error(
                             "'getOwnPropertyDescriptor' on proxy: trap returned neither Object nor undefined",
                         ));
                     }
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         let target_extensible = tobj.borrow().extensible;
-                        if matches!(v, JsValue::Undefined) {
+                        if v.is_undefined() {
                             if let Some(ref td) = target_desc {
                                 if td.configurable == Some(false) {
                                     return Err(self.create_type_error(
@@ -1233,11 +1531,11 @@ impl Interpreter {
                                     ));
                                 }
                             }
-                        } else if matches!(v, JsValue::Object(_)) {
+                        } else if v.is_object() {
                             let result_desc = match self.to_property_descriptor(&v) {
                                 Ok(d) => d,
                                 Err(Some(e)) => return Err(e),
-                                Err(None) => return Ok(JsValue::Undefined),
+                                Err(None) => return Ok(JsValue::UNDEFINED),
                             };
                             // Step 22: If resultDesc.[[Configurable]] is false
                             if result_desc.configurable == Some(false) {
@@ -1344,10 +1642,10 @@ impl Interpreter {
                     Ok(v)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_get_own_property_descriptor(t.id, key);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_get_own_property_descriptor(target_id, key);
                     }
-                    Ok(JsValue::Undefined)
+                    Ok(JsValue::UNDEFINED)
                 }
                 Err(e) => Err(e),
             }
@@ -1357,10 +1655,10 @@ impl Interpreter {
             let desc = obj.borrow().get_own_property(key);
             match desc {
                 Some(d) => Ok(self.from_property_descriptor(&d)),
-                None => Ok(JsValue::Undefined),
+                None => Ok(JsValue::UNDEFINED),
             }
         } else {
-            Ok(JsValue::Undefined)
+            Ok(JsValue::UNDEFINED)
         }
     }
 
@@ -1373,21 +1671,20 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    if !matches!(v, JsValue::Object(_)) {
+                    if !v.is_object() {
                         return Err(
                             self.create_type_error("CreateListFromArrayLike called on non-object")
                         );
                     }
-                    if let JsValue::Object(arr) = &v {
-                        let arr_id = arr.id;
+                    if let Some(arr_id) = v.as_object_id() {
                         // Use [[Get]] for length (spec: CreateListFromArrayLike)
                         let len_val = match self.get_object_property(arr_id, "length", &v) {
                             Completion::Normal(lv) => lv,
                             Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
-                        let len = match len_val {
-                            JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+                        let len = match len_val.as_number() {
+                            Some(n) if n.is_finite() && n > 0.0 => {
                                 let len = n.floor() as usize;
                                 if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
                                     return Err(self.create_type_error(
@@ -1396,8 +1693,8 @@ impl Interpreter {
                                 }
                                 len
                             }
-                            JsValue::Number(_) => 0,
-                            _ => {
+                            Some(_) => 0,
+                            None => {
                                 return Err(self.create_type_error(
                                     "ownKeys trap result length is not a number",
                                 ));
@@ -1409,12 +1706,12 @@ impl Interpreter {
                             let elem = match self.get_object_property(arr_id, &i.to_string(), &v) {
                                 Completion::Normal(ev) => ev,
                                 Completion::Throw(e) => return Err(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
                             keys.push(elem);
                         }
                         for key in &keys {
-                            if !matches!(key, JsValue::String(_) | JsValue::Symbol(_)) {
+                            if !key.is_string() && !key.is_symbol() {
                                 return Err(self.create_type_error(
                                     "'ownKeys' on proxy: trap returned non-string/symbol key",
                                 ));
@@ -1436,8 +1733,8 @@ impl Interpreter {
                     }
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_own_keys(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_own_keys(target_id);
                     }
                     Ok(vec![])
                 }
@@ -1460,22 +1757,21 @@ impl Interpreter {
             let b = obj.borrow();
 
             // String exotic objects (§10.4.3.3): virtual char indices included
-            let is_string_wrapper =
-                b.class_name == "String" && matches!(b.primitive_value, Some(JsValue::String(_)));
+            let is_string_wrapper = b.class_name == "String"
+                && b.primitive_value.as_ref().is_some_and(JsValue::is_string);
             let string_len = if is_string_wrapper {
-                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                    s.code_units.len()
-                } else {
-                    0
-                }
+                b.primitive_value
+                    .as_ref()
+                    .and_then(|v| v.with_string(|s| s.len()))
+                    .unwrap_or(0)
             } else {
                 0
             };
 
             let mut int_keys_set: std::collections::BTreeMap<u64, String> =
                 std::collections::BTreeMap::new();
-            let mut str_keys: Vec<String> = Vec::new();
-            let mut sym_keys: Vec<String> = Vec::new();
+            let mut str_keys: Vec<JsPropertyKey> = Vec::new();
+            let mut sym_keys: Vec<JsPropertyKey> = Vec::new();
 
             // String exotic: char indices 0..len are virtual integer indices
             if is_string_wrapper {
@@ -1497,7 +1793,7 @@ impl Interpreter {
 
             if let Some(elems) = b.array_elements() {
                 for (i, value) in elems.iter().enumerate() {
-                    if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                    if value.is_undefined() || i > 0xFFFF_FFFE {
                         continue;
                     }
                     int_keys_set.insert(i as u64, i.to_string());
@@ -1505,34 +1801,32 @@ impl Interpreter {
             }
 
             for k in &b.property_order {
-                if k.starts_with("Symbol(") {
-                    sym_keys.push(k.to_string());
-                } else if let Ok(n) = k.parse::<u64>() {
-                    if n.to_string() == **k {
-                        // This is an integer index - add/overwrite (string char indices take precedence, but we let btreemap handle uniqueness)
-                        int_keys_set.insert(n, k.to_string());
-                    } else {
-                        str_keys.push(k.to_string());
-                    }
+                if k.is_symbol() {
+                    sym_keys.push(k.clone());
+                } else if let Some(n) = parse_array_index(k) {
+                    // String char indices take precedence, but the BTreeMap
+                    // handles uniqueness and ascending numeric order.
+                    int_keys_set.insert(n as u64, k.to_string());
                 } else {
                     // Skip "length" for string wrappers - it's virtual, added separately
-                    if is_string_wrapper && &**k == "length" {
+                    if is_string_wrapper && k.eq_str("length") {
                         continue;
                     }
-                    str_keys.push(k.to_string());
+                    str_keys.push(k.clone());
                 }
             }
 
             let mut result: Vec<JsValue> = Vec::new();
             for (_, k) in int_keys_set {
-                result.push(JsValue::String(JsString::from_str(&k)));
+                result.push(JsValue::from_str(&k));
+            }
+            // A String exotic's virtual "length" property exists before any
+            // subsequently created ordinary string properties.
+            if is_string_wrapper {
+                result.push(JsValue::from_str("length"));
             }
             for k in str_keys {
-                result.push(JsValue::String(JsString::from_str(&k)));
-            }
-            // String exotic: "length" is a virtual non-enumerable string key (after other str keys, before symbols)
-            if is_string_wrapper {
-                result.push(JsValue::String(JsString::from_str("length")));
+                result.push(JsValue::string(k.to_js_string()));
             }
             for k in sym_keys {
                 result.push(self.symbol_key_to_jsvalue(&k));
@@ -1547,27 +1841,25 @@ impl Interpreter {
     pub(crate) fn proxy_enumerable_keys_with_proto(
         &mut self,
         obj_id: u64,
-    ) -> Result<Vec<String>, JsValue> {
+    ) -> Result<Vec<JsPropertyKey>, JsValue> {
         let mut seen = HashSet::new();
         let mut keys = Vec::new();
         let mut current_id = Some(obj_id);
+        let mut proxy_depth = 0;
 
         while let Some(cid) = current_id {
             // Get own keys for current object (proxy-aware)
             let own_keys = self.proxy_own_keys(cid)?;
             for key in &own_keys {
-                if let JsValue::String(s) = key {
-                    let key_str = s.to_rust_string();
-                    if key_str.starts_with("Symbol(") {
-                        continue;
-                    }
+                if let Some(s) = key.as_string() {
+                    let key_str = JsPropertyKey::from_js_string(&s);
                     if seen.contains(&key_str) {
                         continue;
                     }
                     // Check enumerability via proxy-aware [[GetOwnProperty]]
                     let desc_val = self.proxy_get_own_property_descriptor(cid, &key_str)?;
                     seen.insert(key_str.clone());
-                    if !matches!(desc_val, JsValue::Undefined)
+                    if !desc_val.is_undefined()
                         && let Ok(desc) = self.to_property_descriptor(&desc_val)
                         && desc.enumerable != Some(false)
                     {
@@ -1577,13 +1869,10 @@ impl Interpreter {
             }
 
             // Walk prototype chain (proxy-aware)
-            match self.proxy_get_prototype_of(cid) {
-                Ok(JsValue::Object(proto_ref)) => {
-                    current_id = Some(proto_ref.id);
-                }
-                Ok(_) => current_id = None,
-                Err(e) => return Err(e),
+            if self.get_proxy_info(cid).is_some() {
+                proxy_depth = self.advance_proxy_chain_depth(proxy_depth)?;
             }
+            current_id = self.proxy_get_prototype_of(cid)?.as_object_id();
         }
         Ok(keys)
     }
@@ -1594,20 +1883,20 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "getPrototypeOf", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    if !matches!(v, JsValue::Object(_) | JsValue::Null) {
+                    if !v.is_object() && !v.is_null() {
                         return Err(self.create_type_error(
                             "'getPrototypeOf' on proxy: trap returned neither object nor null",
                         ));
                     }
                     // Step 8: extensibleTarget = ? IsExtensible(target)
-                    if let JsValue::Object(ref t) = target_val {
-                        let extensible_target = self.proxy_is_extensible(t.id)?;
+                    if let Some(target_id) = target_val.as_object_id() {
+                        let extensible_target = self.proxy_is_extensible(target_id)?;
                         if !extensible_target {
                             // Step 10: targetProto = ? target.[[GetPrototypeOf]]()
-                            let actual_proto = self.proxy_get_prototype_of(t.id)?;
-                            let same = match (&v, &actual_proto) {
-                                (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                                (JsValue::Null, JsValue::Null) => true,
+                            let actual_proto = self.proxy_get_prototype_of(target_id)?;
+                            let same = match (v.as_object_id(), actual_proto.as_object_id()) {
+                                (Some(a), Some(b)) => a == b,
+                                (None, None) => v.is_null() && actual_proto.is_null(),
                                 _ => false,
                             };
                             if !same {
@@ -1620,21 +1909,21 @@ impl Interpreter {
                     Ok(v)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_get_prototype_of(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_get_prototype_of(target_id);
                     }
-                    Ok(JsValue::Null)
+                    Ok(JsValue::NULL)
                 }
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             if let Some(id) = obj.borrow().prototype_id {
-                Ok(JsValue::Object(crate::types::JsObject { id }))
+                Ok(JsValue::object(id))
             } else {
-                Ok(JsValue::Null)
+                Ok(JsValue::NULL)
             }
         } else {
-            Ok(JsValue::Null)
+            Ok(JsValue::NULL)
         }
     }
 
@@ -1656,9 +1945,7 @@ impl Interpreter {
                         return Ok(false);
                     }
                     // Step 8: IsExtensible(target) — may throw, must use proxy-aware check
-                    let target_id = if let JsValue::Object(ref t) = target_val {
-                        t.id
-                    } else {
+                    let Some(target_id) = target_val.as_object_id() else {
                         return Ok(true);
                     };
                     let extensible_target = self.proxy_is_extensible(target_id)?;
@@ -1668,9 +1955,9 @@ impl Interpreter {
                     }
                     // Step 10: GetPrototypeOf(target) — may throw
                     let actual_proto = self.proxy_get_prototype_of(target_id)?;
-                    let same = match (proto, &actual_proto) {
-                        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                        (JsValue::Null, JsValue::Null) => true,
+                    let same = match (proto.as_object_id(), actual_proto.as_object_id()) {
+                        (Some(a), Some(b)) => a == b,
+                        (None, None) => proto.is_null() && actual_proto.is_null(),
                         _ => false,
                     };
                     if !same {
@@ -1681,8 +1968,8 @@ impl Interpreter {
                     Ok(true)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_set_prototype_of(t.id, proto);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_set_prototype_of(target_id, proto);
                     }
                     Ok(true)
                 }
@@ -1691,12 +1978,8 @@ impl Interpreter {
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             // OrdinarySetPrototypeOf
             let current_proto_id = obj.borrow().prototype_id;
-            let new_proto_id = if let JsValue::Object(p) = proto {
-                Some(p.id)
-            } else {
-                None
-            };
-            let same = (matches!(proto, JsValue::Null) && current_proto_id.is_none())
+            let new_proto_id = proto.as_object_id();
+            let same = (proto.is_null() && current_proto_id.is_none())
                 || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
             if same {
                 return Ok(true);
@@ -1705,8 +1988,8 @@ impl Interpreter {
                 return Ok(false);
             }
             // Cycle check
-            if let JsValue::Object(p) = proto {
-                let mut check_id = Some(p.id);
+            if let Some(proto_id) = proto.as_object_id() {
+                let mut check_id = Some(proto_id);
                 while let Some(cid) = check_id {
                     if cid == obj_id {
                         return Ok(false);
@@ -1716,16 +1999,12 @@ impl Interpreter {
                         .and_then(|o| o.borrow().prototype_id.as_ref().copied());
                 }
             }
-            match proto {
-                JsValue::Null => {
-                    obj.borrow_mut().prototype_id = None;
-                }
-                JsValue::Object(p) => {
-                    if let Some(po) = self.get_object_cell(p.id) {
-                        obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
-                    }
-                }
-                _ => {}
+            if proto.is_null() {
+                obj.borrow_mut().prototype_id = None;
+            } else if let Some(new_id) = proto.as_object_id()
+                && let Some(po) = self.get_object_cell(new_id)
+            {
+                obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
             }
             Ok(true)
         } else {
@@ -1740,8 +2019,8 @@ impl Interpreter {
             match self.invoke_proxy_trap(obj_id, "isExtensible", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_extensible = tobj.borrow().extensible;
                         if trap_result != target_extensible {
@@ -1753,8 +2032,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_is_extensible(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_is_extensible(target_id);
                     }
                     Ok(false)
                 }
@@ -1775,8 +2054,8 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if trap_result
-                        && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                        && let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                         && tobj.borrow().extensible
                     {
                         return Err(self.create_type_error(
@@ -1786,8 +2065,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_prevent_extensions(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_prevent_extensions(target_id);
                     }
                     Ok(false)
                 }
@@ -1843,11 +2122,13 @@ fn is_compatible_property_desc(
                 return false;
             }
             // 6a.ii: If Desc has [[Value]] and SameValue(Desc.[[Value]], current.[[Value]]) is false
-            if let Some(ref desc_val) = desc.value {
-                let current_val = current.value.as_ref().unwrap_or(&JsValue::Undefined);
-                if !same_value(desc_val, current_val) {
-                    return false;
-                }
+            if let Some(ref desc_val) = desc.value
+                && !same_value(
+                    desc_val,
+                    current.value.as_ref().unwrap_or(JsValue::undefined_ref()),
+                )
+            {
+                return false;
             }
         }
         return true;
@@ -1855,18 +2136,22 @@ fn is_compatible_property_desc(
     // Step 7: Both are accessor descriptors
     if current.configurable == Some(false) {
         // 7a.i: If Desc has [[Set]] and SameValue(Desc.[[Set]], current.[[Set]]) is false
-        if let Some(ref desc_set) = desc.set {
-            let current_set = current.set.as_ref().unwrap_or(&JsValue::Undefined);
-            if !same_value(desc_set, current_set) {
-                return false;
-            }
+        if let Some(ref desc_set) = desc.set
+            && !same_value(
+                desc_set,
+                current.set.as_ref().unwrap_or(JsValue::undefined_ref()),
+            )
+        {
+            return false;
         }
         // 7a.ii: If Desc has [[Get]] and SameValue(Desc.[[Get]], current.[[Get]]) is false
-        if let Some(ref desc_get) = desc.get {
-            let current_get = current.get.as_ref().unwrap_or(&JsValue::Undefined);
-            if !same_value(desc_get, current_get) {
-                return false;
-            }
+        if let Some(ref desc_get) = desc.get
+            && !same_value(
+                desc_get,
+                current.get.as_ref().unwrap_or(JsValue::undefined_ref()),
+            )
+        {
+            return false;
         }
     }
     true

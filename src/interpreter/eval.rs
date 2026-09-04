@@ -1,7 +1,9 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
+use crate::interpreter::property::SetOutcome;
 
 mod access;
+mod generator_runtime;
 mod literals;
 mod modules;
 
@@ -20,37 +22,21 @@ impl Drop for EvalDepthGuard {
     }
 }
 
-/// StringToBigInt per spec §7.1.14 — handles empty string, hex, octal, binary.
-fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Some(num_bigint::BigInt::from(0));
-    }
-    if let Some(hex) = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-    {
-        return num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16);
-    }
-    if let Some(oct) = trimmed
-        .strip_prefix("0o")
-        .or_else(|| trimmed.strip_prefix("0O"))
-    {
-        return num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8);
-    }
-    if let Some(bin) = trimmed
-        .strip_prefix("0b")
-        .or_else(|| trimmed.strip_prefix("0B"))
-    {
-        return num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2);
-    }
-    trimmed.parse::<num_bigint::BigInt>().ok()
-}
-
 pub(super) enum IdentifierRef {
     WithObject(u64),
     Unresolvable,
     SpecificEnv(EnvRef),
+}
+
+/// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
+/// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
+/// discarded its reason by the time a message is needed, so the assignment
+/// paths re-derive it here rather than each walking the prototype chain again.
+struct SetRejection {
+    is_module_namespace: bool,
+    has_own: bool,
+    /// `None` when the lookup was skipped because a proxy is involved.
+    desc: Option<PropertyDescriptor>,
 }
 
 /// Pre-evaluated lref for destructuring assignment targets.
@@ -60,11 +46,94 @@ enum DestructLRef {
     Member(JsValue, JsValue),
     /// Private field: base object + private name
     Private(JsValue, String),
-    /// Super property: super_base_id + key string + this_val + strict
-    Super(u64, String, JsValue, bool),
+    /// Super property: super_base_id + property key + this_val + strict
+    Super(u64, JsPropertyKey, JsValue, bool),
+}
+
+/// Result of pre-evaluating a possible member target for destructuring.
+/// Suspension is distinct from the optional-reference channel so callers
+/// cannot mistake a yielded evaluation for a non-member target.
+enum MemberLhsRef {
+    Ref(Option<DestructLRef>),
+    Suspended(JsValue),
 }
 
 impl Interpreter {
+    /// §2.1.1.1 EvaluateImportCall: evaluate an import call's options expression
+    /// without inspecting the resulting value. The raw value must survive the
+    /// specifier's observable ToString; only after that succeeds may the caller
+    /// read `with` and validate its attributes.
+    ///
+    /// `Err` is an abrupt completion from evaluating the options expression.
+    fn eval_import_call_options(
+        &mut self,
+        options_expr: Option<&Expression>,
+        env: &EnvRef,
+    ) -> Result<JsValue, Completion> {
+        let Some(options_expr) = options_expr else {
+            return Ok(JsValue::UNDEFINED);
+        };
+        match self.eval_expr(options_expr, env) {
+            Completion::Normal(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+
+    /// Inspect an already-evaluated import options value after the specifier's
+    /// ToString has succeeded. Import attributes are the *enumerable own*
+    /// properties of `with`, so inherited or non-enumerable properties are not
+    /// attributes. All three dynamic import forms share this path.
+    fn import_call_options_type(
+        &mut self,
+        opts_val: &JsValue,
+        callee: &str,
+    ) -> Result<Option<super::ImportModuleType>, Completion> {
+        self.import_call_module_type(opts_val, callee)
+            .map_err(|e| self.create_rejected_promise(e))
+    }
+
+    fn import_call_module_type(
+        &mut self,
+        opts_val: &JsValue,
+        callee: &str,
+    ) -> Result<Option<super::ImportModuleType>, JsValue> {
+        if opts_val.is_undefined() {
+            return Ok(None);
+        }
+        let Some(opts_id) = opts_val.as_object_id() else {
+            return Err(self.create_type_error(&format!(
+                "The second argument to {callee} must be an object"
+            )));
+        };
+        let wv = match self.get_object_property(opts_id, "with", opts_val) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Err(self.create_type_error("Invalid import options")),
+        };
+        if wv.is_undefined() {
+            return Ok(None);
+        }
+        let Some(with_id) = wv.as_object_id() else {
+            return Err(self.create_type_error("The 'with' option must be an object"));
+        };
+
+        let mut attrs = Vec::new();
+        for k in crate::interpreter::helpers::enumerable_own_keys(self, with_id)? {
+            let v = match self.get_object_property(with_id, &k, &wv) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(self.create_type_error("Invalid import attribute")),
+            };
+            let Some(sv) = (v).as_string() else {
+                return Err(self.create_type_error("Import attribute values must be strings"));
+            };
+            // Every value must be read and string-checked before
+            // AllImportAttributesSupported examines the collected keys.
+            attrs.push((k.to_string(), sv.to_rust_string()));
+        }
+        self.dynamic_import_module_type(&attrs)
+    }
+
     fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> String {
         let mut current = Some(env.clone());
         while let Some(e) = current {
@@ -93,6 +162,28 @@ impl Interpreter {
             return Self::this_is_in_tdz(parent);
         }
         false
+    }
+
+    /// `ResolveThisBinding` (`sec-resolvethisbinding`): walk the lexical
+    /// environment chain for a `this` binding, skipping object Environment
+    /// Records (`with`) entirely — unlike ordinary identifier resolution,
+    /// which the bytecode `LoadName` op uses and which does consult
+    /// with-objects. Shared by the tree-walker's `Expression::This` arm and
+    /// the bytecode `Op::LoadThis` handler so both observe identical
+    /// semantics, including the derived-constructor TDZ throw.
+    pub(super) fn resolve_this_binding(&mut self, env: &EnvRef) -> Completion {
+        match env.borrow().get("this") {
+            Some(v) => Completion::Normal(v),
+            None => {
+                if Self::this_is_in_tdz(env) {
+                    Completion::Throw(self.create_reference_error(
+                        "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                    ))
+                } else {
+                    Completion::Normal(JsValue::UNDEFINED)
+                }
+            }
+        }
     }
 
     /// Initialize the `this` binding in a derived constructor's environment.
@@ -130,14 +221,19 @@ impl Interpreter {
         } else {
             return Ok(());
         };
-        let instance_field_defs = if let JsValue::Object(ref o) = new_target_val
+        let instance_field_defs = if let Some(o) = (new_target_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow().class_instance_field_defs.clone()
         } else {
             return Ok(());
         };
-        let this_obj_id = if let JsValue::Object(ref o) = this_val {
+        let this_obj_id = if let Some(o) = (this_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             o.id
         } else {
             return Ok(());
@@ -145,7 +241,9 @@ impl Interpreter {
         // Create env for evaluating field initializers.
         // Use the class constructor's closure (class_env) so the class name binding
         // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-        let (ctor_closure, class_pn) = if let JsValue::Object(ref o) = new_target_val
+        let (ctor_closure, class_pn) = if let Some(o) = (new_target_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
             if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
@@ -172,9 +270,12 @@ impl Interpreter {
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
         // Instance field HomeObject = class prototype.
-        if let JsValue::Object(ref o) = new_target_val {
+        if let Some(o) = (new_target_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let proto_val = self.get_property_on_id(o.id, "prototype");
-            if let JsValue::Object(_) = &proto_val {
+            if proto_val.is_object() {
                 init_env.borrow_mut().bindings.insert(
                     "__home_object__".to_string(),
                     crate::interpreter::types::Binding {
@@ -244,10 +345,10 @@ impl Interpreter {
                                 v
                             }
                             Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         if !obj.borrow().extensible {
@@ -275,10 +376,10 @@ impl Interpreter {
                                 v
                             }
                             Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
                     crate::interpreter::builtins::array::create_data_property_or_throw(
                         self, &this_val, key, val,
@@ -289,10 +390,10 @@ impl Interpreter {
                         match self.eval_expr(init, &init_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         obj.borrow_mut()
@@ -306,7 +407,19 @@ impl Interpreter {
         Ok(())
     }
 
+    fn with_tail_position_suppressed<T>(&mut self, evaluate: impl FnOnce(&mut Self) -> T) -> T {
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+        let result = evaluate(self);
+        self.in_tail_position = saved_tail;
+        result
+    }
+
     pub(crate) fn eval_expr(&mut self, expr: &Expression, env: &EnvRef) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.ast_exprs += 1;
+        }
         // Catchable stack-depth guard for expression evaluation. Every
         // expression node — and each recursive descent into an operand —
         // funnels through here, so bounding this depth bounds the native
@@ -332,6 +445,19 @@ impl Interpreter {
         }
         self.eval_depth.set(depth + 1);
         let _depth_guard = EvalDepthGuard(std::rc::Rc::clone(&self.eval_depth));
+
+        // A call is only ever in tail position if it is (recursively) the
+        // return statement's own expression: `return`, through a Conditional's
+        // taken branch, a Logical's short-circuited right operand, or a
+        // Sequence's last element (mirrors expr_may_contain_tail_call below).
+        // Capture the ambient eligibility once and clear it by default so
+        // *every* other sub-expression (operands, elements, computed keys,
+        // arguments, ...) evaluates as non-tail unless one of those few arms
+        // explicitly restores it right before its own recursive dispatch —
+        // this makes "not a tail position" the default instead of something
+        // each arm has to remember to establish.
+        let tail = self.in_tail_position;
+        self.in_tail_position = false;
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
             Expression::Identifier(name) => {
@@ -340,35 +466,28 @@ impl Interpreter {
                 self.resolve_identifier(name, env, strict)
             }
 
-            Expression::This => {
-                match env.borrow().get("this") {
-                    Some(v) => Completion::Normal(v),
-                    None => {
-                        // Check if this is TDZ (derived constructor before super())
-                        if Self::this_is_in_tdz(env) {
-                            Completion::Throw(self.create_reference_error(
-                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                            ))
-                        } else {
-                            Completion::Normal(JsValue::Undefined)
-                        }
-                    }
-                }
-            }
+            Expression::This => self.resolve_this_binding(env),
             Expression::Super => {
-                Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::Undefined))
+                Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED))
             }
             Expression::NewTarget => {
-                Completion::Normal(self.new_target.clone().unwrap_or(JsValue::Undefined))
+                Completion::Normal(self.new_target.clone().unwrap_or(JsValue::UNDEFINED))
             }
             Expression::PrivateIdentifier(_) => Completion::Throw(
                 self.create_type_error("Private identifier can only be used with 'in' operator"),
             ),
             Expression::Unary(op, operand) => {
-                let val = match self.eval_expr(operand, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
+                // §15.10.2 HasCallInTailPosition: a call nested in a unary
+                // expression is not in tail position. This matters when the
+                // unary expression is reached through a conditional/logical
+                // branch that is otherwise evaluated in tail position: the
+                // call result still has to be transformed by the unary
+                // operator before the surrounding function can return.
+                let val =
+                    match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                 self.eval_unary(*op, &val)
             }
             Expression::Binary(op, left, right) => {
@@ -380,85 +499,112 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    return match &rval {
-                            JsValue::Object(o) => {
-                                if let Some(obj) = self.get_object_cell(o.id) {
-                                    Completion::Normal(JsValue::Boolean(
-                                        obj.borrow().private_fields.contains_key(&branded),
-                                    ))
-                                } else {
-                                    Completion::Normal(JsValue::Boolean(false))
-                                }
-                            }
-                            _ => Completion::Throw(self.create_type_error(
-                                "Cannot use 'in' operator to search for a private field without an object",
-                            )),
-                        };
+                    let Some(id) = rval.as_object_id() else {
+                        return Completion::Throw(self.create_type_error(
+                            "Cannot use 'in' operator to search for a private field without an object",
+                        ));
+                    };
+                    return if let Some(obj) = self.get_object_cell(id) {
+                        Completion::Normal(JsValue::boolean(
+                            obj.borrow().private_fields.contains_key(&branded),
+                        ))
+                    } else {
+                        Completion::Normal(JsValue::boolean(false))
+                    };
                 }
                 let lval = match self.eval_expr(left, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                // EvaluateStringOrNumericBinaryExpression retains lVal while
+                // evaluating rVal, then retains both values while applying the
+                // operator. Either phase can run user code and reach a GC
+                // safepoint, so keep object operands rooted until the operation
+                // has completed.
+                self.gc_root_value(&lval);
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if *op == BinaryOp::Instanceof {
-                    return self.eval_instanceof(&lval, &rval);
-                }
-                // Fast path for string + on owned primitive values:
-                // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
-                if *op == BinaryOp::Add
-                    && !matches!(&lval, JsValue::Object(_))
-                    && !matches!(&rval, JsValue::Object(_))
-                    && (matches!(&lval, JsValue::String(_)) || matches!(&rval, JsValue::String(_)))
-                {
-                    if matches!(&lval, JsValue::Symbol(_)) || matches!(&rval, JsValue::Symbol(_)) {
-                        return Completion::Throw(
-                            self.create_type_error("Cannot convert a Symbol value to a string"),
-                        );
-                    }
-                    let mut code_units = match lval {
-                        JsValue::String(s) => s.into_vec(),
-                        ref other => js_value_to_code_units(other),
-                    };
-                    match rval {
-                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
-                        ref other => code_units.extend(js_value_to_code_units(other)),
-                    };
-                    return Completion::Normal(JsValue::String(JsString::from_vec(code_units)));
-                }
-                self.eval_binary(*op, &lval, &rval)
-            }
-            Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
-            Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
-            Expression::Assign(op, left, right) => self.eval_assign(*op, left, right, env),
-            Expression::Conditional(test, cons, alt) => {
-                let saved_tail = self.in_tail_position;
-                self.in_tail_position = false;
-                let test_val = match self.eval_expr(test, env) {
-                    Completion::Normal(v) => v,
                     other => {
-                        self.in_tail_position = saved_tail;
+                        self.gc_unroot_value(&lval);
                         return other;
                     }
                 };
-                self.in_tail_position = saved_tail;
+                self.gc_root_value(&rval);
+                // The fast string-concat arm below moves lval/rval, so snapshot
+                // the object operands now for a targeted unroot afterwards. Only
+                // objects are ever rooted, and that arm runs only for primitives,
+                // so these are cheap handle copies or None.
+                let lroot = lval.is_object().then(|| lval.clone());
+                let rroot = rval.is_object().then(|| rval.clone());
+                let result = if *op == BinaryOp::Instanceof {
+                    self.eval_instanceof(&lval, &rval)
+                // Fast path for string + on owned primitive values:
+                // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
+                } else if *op == BinaryOp::Add
+                    && !lval.is_object()
+                    && !rval.is_object()
+                    && (lval.is_string() || rval.is_string())
+                {
+                    if lval.is_symbol() || rval.is_symbol() {
+                        Completion::Throw(
+                            self.create_type_error("Cannot convert a Symbol value to a string"),
+                        )
+                    } else {
+                        let mut code_units = if lval.is_string() {
+                            lval.into_string().expect("kind checked").into_vec()
+                        } else {
+                            js_value_to_code_units(&lval)
+                        };
+                        if rval
+                            .with_string(|s| code_units.extend_from_slice(s))
+                            .is_none()
+                        {
+                            code_units.extend(js_value_to_code_units(&rval));
+                        }
+                        Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                    }
+                } else {
+                    self.eval_binary(*op, &lval, &rval)
+                };
+                // Unroot only the operands rooted for this expression.
+                if let Some(ref r) = rroot {
+                    self.gc_unroot_value(r);
+                }
+                if let Some(ref l) = lroot {
+                    self.gc_unroot_value(l);
+                }
+                result
+            }
+            Expression::Logical(op, left, right) => {
+                self.in_tail_position = tail;
+                self.eval_logical(*op, left, right, env)
+            }
+            Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
+            Expression::Assign(op, left, right) => self.eval_assign(*op, left, right, env),
+            Expression::Conditional(test, cons, alt) => {
+                let test_val = match self.eval_expr(test, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                self.in_tail_position = tail;
                 if self.to_boolean_val(&test_val) {
                     self.eval_expr(cons, env)
                 } else {
                     self.eval_expr(alt, env)
                 }
             }
-            Expression::Call(callee, args, site_id) => self.eval_call(callee, args, env, *site_id),
+            Expression::Call(callee, args, site_id) => {
+                self.in_tail_position = tail;
+                self.eval_call(callee, args, env, *site_id)
+            }
             Expression::New(callee, args, site_id) => self.eval_new(callee, args, env, *site_id),
             Expression::Member(obj, prop, site_id) => self.eval_member(obj, prop, env, *site_id),
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
-            Expression::Object(props) => self.eval_object_literal(props, env),
+            Expression::Object(props, _) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
-                        bindings: HashMap::new(),
+                        bindings: Default::default(),
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -544,7 +690,7 @@ impl Interpreter {
                         match self.resolve_with_has_binding(name, env) {
                             Ok(Some(obj_id)) => {
                                 return match self.with_get_binding_value(obj_id, name, strict) {
-                                    Completion::Normal(val) => Completion::Normal(JsValue::String(
+                                    Completion::Normal(val) => Completion::Normal(JsValue::string(
                                         JsString::from_str(typeof_val(&val, &self.objects)),
                                     )),
                                     other => other,
@@ -556,7 +702,7 @@ impl Interpreter {
                     }
                     if let Some(result) = self.resolve_global_getter(name, env) {
                         return match result {
-                            Completion::Normal(val) => Completion::Normal(JsValue::String(
+                            Completion::Normal(val) => Completion::Normal(JsValue::string(
                                 JsString::from_str(typeof_val(&val, &self.objects)),
                             )),
                             other => other,
@@ -564,7 +710,7 @@ impl Interpreter {
                     }
                     match self.env_get(env, name) {
                         Some(val) => {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
+                            return Completion::Normal(JsValue::string(JsString::from_str(
                                 typeof_val(&val, &self.objects),
                             )));
                         }
@@ -574,27 +720,28 @@ impl Interpreter {
                                     "Cannot access '{name}' before initialization"
                                 )));
                             }
-                            return Completion::Normal(JsValue::String(JsString::from_str(
+                            return Completion::Normal(JsValue::string(JsString::from_str(
                                 "undefined",
                             )));
                         }
                     }
                 }
-                let val = match self.eval_expr(operand, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                Completion::Normal(JsValue::String(JsString::from_str(typeof_val(
+                let val =
+                    match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                Completion::Normal(JsValue::string(JsString::from_str(typeof_val(
                     &val,
                     &self.objects,
                 ))))
             }
             Expression::Void(operand) => {
-                match self.eval_expr(operand, env) {
+                match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
                     Completion::Normal(_) => {}
                     other => return other,
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             Expression::Delete(expr) => match expr.as_ref() {
                 Expression::Member(obj_expr, prop, _) => {
@@ -608,7 +755,9 @@ impl Interpreter {
                             ));
                         }
                         if let MemberProperty::Computed(expr) = prop {
-                            match self.eval_expr(expr, env) {
+                            match self
+                                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
+                            {
                                 Completion::Normal(_) => {}
                                 other => return other,
                             }
@@ -617,19 +766,25 @@ impl Interpreter {
                             self.create_reference_error("Unsupported reference to 'super'"),
                         );
                     }
-                    let obj_val = match self.eval_expr(obj_expr, env) {
+                    let obj_val = match self
+                        .with_tail_position_suppressed(|this| this.eval_expr(obj_expr, env))
+                    {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
                     let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
-                        MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            },
-                            other => return other,
-                        },
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                        MemberProperty::Computed(expr) => {
+                            match self
+                                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
+                            {
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                },
+                                other => return other,
+                            }
+                        }
                         MemberProperty::Private(_) => {
                             return Completion::Throw(
                                 self.create_type_error("Private fields cannot be deleted"),
@@ -649,13 +804,21 @@ impl Interpreter {
                         )));
                     }
                     // Auto-box primitives via to_object
-                    let obj_ref = if let JsValue::Object(o) = &obj_val {
+                    let obj_ref = if let Some(o) = obj_val
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                    {
                         o.clone()
                     } else {
                         match self.to_object(&obj_val) {
-                            Completion::Normal(JsValue::Object(o)) => o,
+                            Completion::Normal(v) => {
+                                let Some(id) = v.as_object_id() else {
+                                    return Completion::Normal(JsValue::boolean(true));
+                                };
+                                crate::types::JsObject { id }
+                            }
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => return Completion::Normal(JsValue::Boolean(true)),
+                            _ => return Completion::Normal(JsValue::boolean(true)),
                         }
                     };
                     if let Some(obj) = self.get_object_cell(obj_ref.id) {
@@ -668,14 +831,14 @@ impl Interpreter {
                                             &format!("Cannot delete property '{key}' of object"),
                                         ));
                                     }
-                                    return Completion::Normal(JsValue::Boolean(false));
+                                    return Completion::Normal(JsValue::boolean(false));
                                 }
-                                Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
+                                Ok(result) => return Completion::Normal(JsValue::boolean(result)),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
                         // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
-                        if !key.starts_with("Symbol(") {
+                        if !key.is_symbol() {
                             let ns_info = obj
                                 .borrow()
                                 .module_namespace()
@@ -690,7 +853,10 @@ impl Interpreter {
                                 {
                                     return Completion::Throw(e);
                                 }
-                                if export_names.contains(&key) {
+                                if key
+                                    .as_str()
+                                    .is_some_and(|key| export_names.iter().any(|name| name == key))
+                                {
                                     if env.borrow().strict {
                                         return Completion::Throw(self.create_type_error(
                                             &format!(
@@ -698,9 +864,9 @@ impl Interpreter {
                                             ),
                                         ));
                                     }
-                                    return Completion::Normal(JsValue::Boolean(false));
+                                    return Completion::Normal(JsValue::boolean(false));
                                 }
-                                return Completion::Normal(JsValue::Boolean(true));
+                                return Completion::Normal(JsValue::boolean(true));
                             }
                         }
                         // TypedArray: §10.4.5.4 [[Delete]]
@@ -719,20 +885,25 @@ impl Interpreter {
                                             ),
                                         ));
                                     }
-                                    return Completion::Normal(JsValue::Boolean(false));
+                                    return Completion::Normal(JsValue::boolean(false));
                                 }
-                                return Completion::Normal(JsValue::Boolean(true));
+                                return Completion::Normal(JsValue::boolean(true));
                             }
                         }
                         let is_strict = env.borrow().strict;
                         // String exotic: length and index properties are non-configurable (§10.4.3.4)
                         {
                             let obj_b = obj.borrow();
-                            if let Some(JsValue::String(ref s)) = obj_b.primitive_value
+                            if let Some(s) =
+                                obj_b.primitive_value.as_ref().and_then(JsValue::as_string)
                                 && obj_b.class_name == "String"
                             {
-                                let is_exotic = key == "length"
-                                    || key.parse::<usize>().is_ok_and(|i| i < s.code_units.len());
+                                let is_exotic = key.eq_str("length")
+                                    || crate::interpreter::types::string_exotic_index(
+                                        &key,
+                                        s.code_units.len(),
+                                    )
+                                    .is_some();
                                 if is_exotic {
                                     drop(obj_b);
                                     if is_strict {
@@ -740,7 +911,7 @@ impl Interpreter {
                                             &format!("Cannot delete property '{key}' of object"),
                                         ));
                                     }
-                                    return Completion::Normal(JsValue::Boolean(false));
+                                    return Completion::Normal(JsValue::boolean(false));
                                 }
                             }
                         }
@@ -754,20 +925,22 @@ impl Interpreter {
                                     "Cannot delete property '{key}' of object"
                                 )));
                             }
-                            return Completion::Normal(JsValue::Boolean(false));
+                            return Completion::Normal(JsValue::boolean(false));
                         }
                         obj_mut.remove_property(&key);
-                        if let Some(map) = obj_mut.parameter_map_mut() {
-                            map.remove(&key);
+                        if let Some(map) = obj_mut.parameter_map_mut()
+                            && let Some(key) = key.as_str()
+                        {
+                            map.remove(key);
                         }
                         if let Ok(idx) = key.parse::<usize>()
                             && let Some(elems) = obj_mut.array_elements_mut()
                             && idx < elems.len()
                         {
-                            elems[idx] = JsValue::Undefined;
+                            elems[idx] = JsValue::UNDEFINED;
                         }
                     }
-                    Completion::Normal(JsValue::Boolean(true))
+                    Completion::Normal(JsValue::boolean(true))
                 }
                 Expression::Identifier(name) => {
                     // Check with-scopes first (Bug C fix)
@@ -775,7 +948,7 @@ impl Interpreter {
                         match self.resolve_with_has_binding(name, env) {
                             Ok(Some(obj_id)) => {
                                 return match self.proxy_delete_property(obj_id, name) {
-                                    Ok(b) => Completion::Normal(JsValue::Boolean(b)),
+                                    Ok(b) => Completion::Normal(JsValue::boolean(b)),
                                     Err(e) => Completion::Throw(e),
                                 };
                             }
@@ -801,9 +974,9 @@ impl Interpreter {
                             if binding.deletable {
                                 drop(eb);
                                 e.borrow_mut().bindings.remove(name);
-                                return Completion::Normal(JsValue::Boolean(true));
+                                return Completion::Normal(JsValue::boolean(true));
                             }
-                            return Completion::Normal(JsValue::Boolean(false));
+                            return Completion::Normal(JsValue::boolean(false));
                         }
                         let next = eb.parent.clone();
                         drop(eb);
@@ -818,38 +991,39 @@ impl Interpreter {
                         let gb = global.borrow();
                         if let Some(desc) = gb.properties.get(name) {
                             if desc.configurable == Some(false) {
-                                return Completion::Normal(JsValue::Boolean(false));
+                                return Completion::Normal(JsValue::boolean(false));
                             }
                             drop(gb);
                             global.borrow_mut().remove_property(name);
                             self.realm().global_env.borrow_mut().bindings.remove(name);
-                            return Completion::Normal(JsValue::Boolean(true));
+                            return Completion::Normal(JsValue::boolean(true));
                         }
                     }
                     // Check if it's a binding in the global env (var declaration not on global object)
                     if self.realm().global_env.borrow().bindings.contains_key(name) {
-                        return Completion::Normal(JsValue::Boolean(false));
+                        return Completion::Normal(JsValue::boolean(false));
                     }
                     // Unresolvable reference — return true per spec
-                    Completion::Normal(JsValue::Boolean(true))
+                    Completion::Normal(JsValue::boolean(true))
                 }
                 Expression::OptionalChain(base, chain) => {
-                    self.eval_delete_optional_chain(base, chain, env)
+                    self.with_tail_position_suppressed(|this| {
+                        this.eval_delete_optional_chain(base, chain, env)
+                    })
                 }
                 _ => {
                     // Evaluate the expression for side effects, then return true
-                    match self.eval_expr(expr, env) {
-                        Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),
+                    match self.with_tail_position_suppressed(|this| this.eval_expr(expr, env)) {
+                        Completion::Normal(_) => Completion::Normal(JsValue::boolean(true)),
                         other => other,
                     }
                 }
             },
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                let saved_tail = self.in_tail_position;
                 let last_idx = exprs.len().saturating_sub(1);
-                let mut result = JsValue::Undefined;
+                let mut result = JsValue::UNDEFINED;
                 for (i, e) in exprs.iter().enumerate() {
-                    self.in_tail_position = if i == last_idx { saved_tail } else { false };
+                    self.in_tail_position = if i == last_idx { tail } else { false };
                     match self.eval_expr(e, env) {
                         Completion::Normal(v) => result = v,
                         other => return other,
@@ -857,7 +1031,7 @@ impl Interpreter {
                 }
                 Completion::Normal(result)
             }
-            Expression::Spread(_) => Completion::Normal(JsValue::Undefined), // handled by caller
+            Expression::Spread(_) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
             Expression::Yield(expr, delegate) => {
                 if *delegate {
                     let iterable = if let Some(e) = expr {
@@ -866,7 +1040,7 @@ impl Interpreter {
                             other => return other,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
                     let is_async_gen = self
                         .generator_context
@@ -885,7 +1059,10 @@ impl Interpreter {
                         }
                     };
                     let gc_frame = self.gc_root_frame();
-                    if let JsValue::Object(o) = &iterator {
+                    if let Some(o) = iterator
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                    {
                         self.gc_temp_roots.push(o.id);
                     }
                     let result = loop {
@@ -965,7 +1142,7 @@ impl Interpreter {
                             other => return other,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
                     if let Some(ctx) = self.generator_context.as_mut() {
                         let current = ctx.current_yield;
@@ -976,7 +1153,7 @@ impl Interpreter {
                                 .prev_sent_values
                                 .get(current)
                                 .cloned()
-                                .unwrap_or(JsValue::Undefined);
+                                .unwrap_or(JsValue::UNDEFINED);
                             return Completion::Normal(ff_val);
                         }
                         if current == ctx.target_yield {
@@ -1007,7 +1184,7 @@ impl Interpreter {
                 let module_path =
                     Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
                 if let Some(ref path) = module_path {
-                    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let canon = path.canonicalize();
                     if let Some(module) = self.module_registry_get(&canon)
                         && let Some(ref cached) = module.borrow().cached_import_meta
                     {
@@ -1018,14 +1195,14 @@ impl Interpreter {
                 self.get_object_cell_expect(meta_id)
                     .borrow_mut()
                     .prototype_id = None;
-                if let Some(ref path) = module_path {
+                if let Some(path) = module_path.as_ref().and_then(ModuleKey::file_path) {
                     let url = format!("file://{}", path.display());
                     self.get_object_cell_expect(meta_id)
                         .borrow_mut()
                         .insert_property(
                             "url".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&url)),
+                                JsValue::string(JsString::from_str(&url)),
                                 true,
                                 true,
                                 true,
@@ -1033,9 +1210,9 @@ impl Interpreter {
                         );
                 }
                 let id = meta_id;
-                let meta_val = JsValue::Object(crate::types::JsObject { id });
+                let meta_val = JsValue::object(id);
                 if let Some(ref path) = module_path {
-                    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let canon = path.canonicalize();
                     if let Some(module) = self.module_registry_get(&canon) {
                         module.borrow_mut().cached_import_meta = Some(meta_val.clone());
                     }
@@ -1049,86 +1226,21 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Evaluate options expression if present (abrupt completions propagate directly)
-                let mut dynamic_import_type: Option<super::ImportModuleType> = None;
-                if let Some(opts_expr) = options_expr {
-                    match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(opts_val) => {
-                            // Steps 9-10: If options is not undefined, validate it
-                            if !opts_val.is_undefined() {
-                                if !matches!(opts_val, JsValue::Object(_)) {
-                                    let err = self.create_type_error(
-                                        "The second argument to import() must be an object",
-                                    );
-                                    return self.create_rejected_promise(err);
-                                }
-                                // Step 11: Get "with" property (must use [[Get]] to invoke getters)
-                                if let JsValue::Object(o) = &opts_val.clone() {
-                                    let wv = match self.get_object_property(o.id, "with", &opts_val)
-                                    {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => {
-                                            return self.create_rejected_promise(e);
-                                        }
-                                        other => return other,
-                                    };
-                                    if !wv.is_undefined() {
-                                        if !matches!(wv, JsValue::Object(_)) {
-                                            let err = self.create_type_error(
-                                                "The 'with' option must be an object",
-                                            );
-                                            return self.create_rejected_promise(err);
-                                        }
-                                        // §2.1.1.1 step 10d: enumerate properties, each value must be a string
-                                        if let JsValue::Object(ref with_obj) = wv {
-                                            let keys = match crate::interpreter::helpers::enumerable_own_keys(self, with_obj.id) {
-                                                Ok(k) => k,
-                                                Err(e) => return self.create_rejected_promise(e),
-                                            };
-                                            for k in keys {
-                                                let v = match self.get_object_property(
-                                                    with_obj.id,
-                                                    &k,
-                                                    &wv,
-                                                ) {
-                                                    Completion::Normal(v) => v,
-                                                    Completion::Throw(e) => {
-                                                        return self.create_rejected_promise(e);
-                                                    }
-                                                    other => return other,
-                                                };
-                                                if let JsValue::String(ref sv) = v {
-                                                    if k == "type" {
-                                                        let s = sv.to_string();
-                                                        if s == "text" {
-                                                            dynamic_import_type =
-                                                                Some(super::ImportModuleType::Text);
-                                                        } else if s == "bytes" {
-                                                            dynamic_import_type = Some(
-                                                                super::ImportModuleType::Bytes,
-                                                            );
-                                                        }
-                                                    }
-                                                } else {
-                                                    let err = self.create_type_error(
-                                                        "Import attribute values must be strings",
-                                                    );
-                                                    return self.create_rejected_promise(err);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        other => return other,
-                    }
-                }
+                let options_val = match self.eval_import_call_options(options_expr.as_deref(), env)
+                {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 // Per spec: ToString(specifier) errors produce a rejected promise
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                let dynamic_import_type =
+                    match self.import_call_options_type(&options_val, "import()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 self.dynamic_import(&source, dynamic_import_type)
             }
             Expression::ImportDefer(source_expr, options_expr) => {
@@ -1136,45 +1248,37 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let Some(opts_expr) = options_expr {
-                    match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(opts_val) => {
-                            if !opts_val.is_undefined() {
-                                if !matches!(opts_val, JsValue::Object(_)) {
-                                    let err = self.create_type_error(
-                                        "The second argument to import.defer() must be an object",
-                                    );
-                                    return self.create_rejected_promise(err);
-                                }
-                                if let JsValue::Object(o) = &opts_val {
-                                    let wv = self.get_property_on_id(o.id, "with");
-                                    if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
-                                        let err = self.create_type_error(
-                                            "The 'with' option must be an object",
-                                        );
-                                        return self.create_rejected_promise(err);
-                                    }
-                                }
-                            }
-                        }
-                        other => return other,
-                    }
-                }
+                let options_val = match self.eval_import_call_options(options_expr.as_deref(), env)
+                {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                let defer_import_type =
+                    match self.import_call_options_type(&options_val, "import.defer()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 // import.defer() loads module without evaluation, returns deferred namespace
                 // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
                 let module_path = self.current_module_path.clone();
-                let resolved = match self.resolve_module_specifier(&source, module_path.as_deref())
-                {
+                let resolved = match self.resolve_module_specifier(
+                    &source,
+                    module_path.as_ref().and_then(ModuleKey::file_path),
+                ) {
                     Ok(r) => r,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                match self.load_module_no_eval(&resolved) {
+                match self.load_module_for_type(
+                    &resolved,
+                    defer_import_type,
+                    super::ModuleLoadMode::Defer,
+                ) {
                     Ok(module) => {
-                        let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+                        let resolved_canon = resolved.canonicalize();
                         self.evaluate_async_transitive_deps(&resolved_canon);
                         self.drain_microtasks();
                         let ns = self.create_deferred_module_namespace(&module);
@@ -1188,39 +1292,29 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let Some(opts_expr) = options_expr {
-                    match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(opts_val) => {
-                            if !opts_val.is_undefined() {
-                                if !matches!(opts_val, JsValue::Object(_)) {
-                                    let err = self.create_type_error(
-                                        "The second argument to import.source() must be an object",
-                                    );
-                                    return self.create_rejected_promise(err);
-                                }
-                                if let JsValue::Object(o) = &opts_val {
-                                    let wv = self.get_property_on_id(o.id, "with");
-                                    if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
-                                        let err = self.create_type_error(
-                                            "The 'with' option must be an object",
-                                        );
-                                        return self.create_rejected_promise(err);
-                                    }
-                                }
-                            }
-                        }
-                        other => return other,
-                    }
-                }
+                let options_val = match self.eval_import_call_options(options_expr.as_deref(), env)
+                {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                let source_import_type =
+                    match self.import_call_options_type(&options_val, "import.source()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 // ContinueDynamicImport with source phase: resolve to the
                 // target module's [[ModuleSource]]. A Source Text Module has an
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
                 let referrer = self.current_module_path.clone();
-                match self.resolve_source_phase_target(&source, referrer.as_deref()) {
+                match self.resolve_source_phase_target(
+                    &source,
+                    referrer.as_ref().and_then(ModuleKey::file_path),
+                    source_import_type,
+                ) {
                     Ok((_, Some(ms))) => self.create_resolved_promise(ms),
                     Ok((_, None)) => {
                         let err = self.create_error(
@@ -1250,21 +1344,19 @@ impl Interpreter {
                         code_units.extend(str_val.encode_utf16());
                     }
                 }
-                Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
+                Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
             }
             Expression::OptionalChain(base, prop) => {
                 let (base_val, base_this) = match self.eval_oc_base(base, prop, env) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                if matches!(base_val, JsValue::Null | JsValue::Undefined) {
-                    return Completion::Normal(JsValue::Undefined);
+                if (base_val).is_nullish() {
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 self.eval_optional_chain_tail_with_base_this(&base_val, &base_this, prop, env)
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
-                let saved_tail = self.in_tail_position;
-                self.in_tail_position = false;
                 let (func_val, this_val) = match tag_expr.as_ref() {
                     Expression::Member(obj_expr, prop, _) => {
                         let obj_val = match self.eval_expr(obj_expr, env) {
@@ -1272,7 +1364,7 @@ impl Interpreter {
                             other => return other,
                         };
                         let key = match prop {
-                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(expr) => {
                                 let v = match self.eval_expr(expr, env) {
                                     Completion::Normal(v) => v,
@@ -1289,10 +1381,10 @@ impl Interpreter {
                                 );
                             }
                         };
-                        let func = match &obj_val {
-                            JsValue::Object(o) => self.get_object_property(o.id, &key, &obj_val),
-                            _ => Completion::Normal(JsValue::Undefined),
-                        };
+                        let func = obj_val.as_object_id().map_or_else(
+                            || Completion::Normal(JsValue::UNDEFINED),
+                            |id| self.get_object_property(id, &key, &obj_val),
+                        );
                         let func = match func {
                             Completion::Normal(v) => v,
                             other => return other,
@@ -1304,81 +1396,97 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        (func, JsValue::Undefined)
+                        (func, JsValue::UNDEFINED)
                     }
                 };
 
+                // The tag, its receiver, and each substitution value are held
+                // in Rust locals until EvaluateCall invokes the tag. Later
+                // substitutions can run arbitrary JavaScript (and therefore a
+                // GC safepoint), so keep all previously evaluated values live.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&func_val);
+                self.gc_root_value(&this_val);
                 let template_obj = self.get_template_object(tmpl);
+                self.gc_root_value(&template_obj);
 
                 let mut call_args = vec![template_obj];
                 for sub_expr in &tmpl.expressions {
                     match self.eval_expr(sub_expr, env) {
-                        Completion::Normal(v) => call_args.push(v),
-                        other => return other,
+                        Completion::Normal(v) => {
+                            self.gc_root_value(&v);
+                            call_args.push(v);
+                        }
+                        other => {
+                            self.gc_unroot_frame(gc_frame);
+                            return other;
+                        }
                     }
                 }
 
-                if saved_tail {
+                if tail {
+                    self.gc_unroot_frame(gc_frame);
                     return Completion::TailCall {
                         func: func_val,
                         this: this_val,
                         args: call_args,
                     };
                 }
-                self.call_function(&func_val, &this_val, &call_args)
+                let result = self.call_function(&func_val, &this_val, &call_args);
+                self.gc_unroot_frame(gc_frame);
+                result
             }
         }
     }
 
-    fn access_property_on_value(&mut self, base_val: &JsValue, name: &str) -> Completion {
-        match base_val {
-            JsValue::Object(o) => self.get_object_property(o.id, name, base_val),
-            JsValue::String(s) => {
-                if name == "length" {
-                    Completion::Normal(JsValue::Number(s.len() as f64))
-                } else if let Ok(idx) = name.parse::<usize>() {
-                    if idx < s.code_units.len() {
-                        Completion::Normal(JsValue::String(JsString::from_vec(vec![
-                            s.code_units[idx],
-                        ])))
-                    } else {
-                        Completion::Normal(JsValue::Undefined)
-                    }
-                } else if let Some(sp_id) = self.realm().string_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, name))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
+    fn access_property_on_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base_val: &JsValue,
+        name: &K,
+    ) -> Completion {
+        // §6.2.5.5 GetValue permits eliding the transient primitive wrapper,
+        // but its prototype [[Get]] must still receive the primitive itself.
+        let name = name.to_js_property_key();
+        if let Some(id) = base_val.as_object_id() {
+            self.get_object_property(id, &name, base_val)
+        } else if let Some(s) = base_val.as_string() {
+            if name.eq_str("length") {
+                Completion::Normal(JsValue::number(s.len() as f64))
+            } else if let Some(idx) =
+                crate::interpreter::types::string_exotic_index(&name, s.code_units.len())
+            {
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+            } else if let Some(sp_id) = self.realm().string_prototype {
+                self.get_object_property(sp_id, &name, base_val)
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             }
-            JsValue::Number(_) => {
-                if let Some(np_id) = self.realm().number_prototype {
-                    Completion::Normal(self.get_property_on_id(np_id, name))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
+        } else if base_val.is_number() {
+            if let Some(np_id) = self.realm().number_prototype {
+                self.get_object_property(np_id, &name, base_val)
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             }
-            JsValue::Boolean(_) => {
-                if let Some(bp_id) = self.realm().boolean_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, name))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
+        } else if base_val.is_boolean() {
+            if let Some(bp_id) = self.realm().boolean_prototype {
+                self.get_object_property(bp_id, &name, base_val)
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             }
-            JsValue::Symbol(_) => {
-                if let Some(sp_id) = self.realm().symbol_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, name))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
+        } else if base_val.is_symbol() {
+            if let Some(sp_id) = self.realm().symbol_prototype {
+                self.get_object_property(sp_id, &name, base_val)
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             }
-            JsValue::BigInt(_) => {
-                if let Some(bp_id) = self.realm().bigint_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, name))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
+        } else if base_val.is_bigint() {
+            if let Some(bp_id) = self.realm().bigint_prototype {
+                self.get_object_property(bp_id, &name, base_val)
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             }
-            _ => Completion::Normal(JsValue::Undefined),
+        } else {
+            Completion::Normal(JsValue::UNDEFINED)
         }
     }
 
@@ -1390,53 +1498,52 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                match numeric {
-                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: bigint_ops::unary_minus(&b.value),
-                    })),
-                    JsValue::Number(n) => {
-                        Completion::Normal(JsValue::Number(number_ops::unary_minus(n)))
-                    }
-                    _ => unreachable!(),
+                if let Some(b) = numeric.as_bigint() {
+                    Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::unary_minus(
+                        &b.value,
+                    ))))
+                } else {
+                    Completion::Normal(JsValue::number(number_ops::unary_minus(
+                        numeric.as_number().expect("ToNumeric result"),
+                    )))
                 }
             }
             UnaryOp::Plus => match self.to_number_value(val) {
-                Ok(n) => Completion::Normal(JsValue::Number(n)),
+                Ok(n) => Completion::Normal(JsValue::number(n)),
                 Err(e) => Completion::Throw(e),
             },
-            UnaryOp::Not => Completion::Normal(JsValue::Boolean(!self.to_boolean_val(val))),
+            UnaryOp::Not => Completion::Normal(JsValue::boolean(!self.to_boolean_val(val))),
             UnaryOp::BitNot => {
                 let numeric = match self.to_numeric(val) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                match numeric {
-                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: bigint_ops::bitwise_not(&b.value),
-                    })),
-                    JsValue::Number(n) => {
-                        Completion::Normal(JsValue::Number(number_ops::bitwise_not(n)))
-                    }
-                    _ => unreachable!(),
+                if let Some(b) = numeric.as_bigint() {
+                    Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::bitwise_not(
+                        &b.value,
+                    ))))
+                } else {
+                    Completion::Normal(JsValue::number(number_ops::bitwise_not(
+                        numeric.as_number().expect("ToNumeric result"),
+                    )))
                 }
             }
         }
     }
 
     fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
-        match val {
-            JsValue::Undefined | JsValue::Null => {
-                let err = self.create_type_error("Cannot convert undefined or null to object");
-                Completion::Throw(err)
-            }
-            _ => Completion::Normal(val.clone()),
+        if val.is_nullish() {
+            let err = self.create_type_error("Cannot convert undefined or null to object");
+            Completion::Throw(err)
+        } else {
+            Completion::Normal(val.clone())
         }
     }
 
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_index(&mut self, val: &JsValue) -> Completion {
         if val.is_undefined() {
-            return Completion::Normal(JsValue::Number(0.0));
+            return Completion::Normal(JsValue::number(0.0));
         }
         // §7.1.22 ToIndex: Let integerIndex be ! ToIntegerOrInfinity(value).
         // ToIntegerOrInfinity calls ToNumber (which invokes ToPrimitive for objects)
@@ -1453,54 +1560,43 @@ impl Interpreter {
             let err = self.create_error("RangeError", "Invalid index");
             return Completion::Throw(err);
         }
-        Completion::Normal(JsValue::Number(integer_index))
+        Completion::Normal(JsValue::number(integer_index))
     }
 
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_object(&mut self, val: &JsValue) -> Completion {
-        match val {
-            JsValue::Undefined | JsValue::Null => {
-                let err = self.create_type_error("Cannot convert undefined or null to object");
-                Completion::Throw(err)
-            }
-            JsValue::Boolean(_)
-            | JsValue::Number(_)
-            | JsValue::String(_)
-            | JsValue::Symbol(_)
-            | JsValue::BigInt(_) => {
-                let mut obj_data = JsObjectData::new();
-                obj_data.primitive_value = Some(val.clone());
-                match val {
-                    JsValue::String(_) => {
-                        obj_data.class_name = "String".to_string();
-                        obj_data.prototype_id = self.realm().string_prototype;
-                    }
-                    JsValue::Number(_) => {
-                        obj_data.class_name = "Number".to_string();
-                        obj_data.prototype_id = self.realm().number_prototype;
-                    }
-                    JsValue::Boolean(_) => {
-                        obj_data.class_name = "Boolean".to_string();
-                        obj_data.prototype_id = self.realm().boolean_prototype;
-                    }
-                    JsValue::Symbol(_) => {
-                        obj_data.class_name = "Symbol".to_string();
-                        obj_data.prototype_id = self.realm().symbol_prototype;
-                    }
-                    JsValue::BigInt(_) => {
-                        obj_data.class_name = "BigInt".to_string();
-                        obj_data.prototype_id = self.realm().bigint_prototype;
-                    }
-                    _ => unreachable!(),
-                }
-                if obj_data.prototype_id.is_none() {
-                    obj_data.prototype_id = self.realm().object_prototype;
-                }
-                let id = self.alloc_object(obj_data);
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-            }
-            JsValue::Object(_) => Completion::Normal(val.clone()),
+        if val.is_nullish() {
+            let err = self.create_type_error("Cannot convert undefined or null to object");
+            return Completion::Throw(err);
         }
+        if val.is_object() {
+            return Completion::Normal(val.clone());
+        }
+        let mut obj_data = JsObjectData::new();
+        obj_data.primitive_value = Some(val.clone());
+        if val.is_string() {
+            obj_data.class_name = "String".to_string();
+            obj_data.prototype_id = self.realm().string_prototype;
+        } else if val.is_number() {
+            obj_data.class_name = "Number".to_string();
+            obj_data.prototype_id = self.realm().number_prototype;
+        } else if val.is_boolean() {
+            obj_data.class_name = "Boolean".to_string();
+            obj_data.prototype_id = self.realm().boolean_prototype;
+        } else if val.is_symbol() {
+            obj_data.class_name = "Symbol".to_string();
+            obj_data.prototype_id = self.realm().symbol_prototype;
+        } else if val.is_bigint() {
+            obj_data.class_name = "BigInt".to_string();
+            obj_data.prototype_id = self.realm().bigint_prototype;
+        } else {
+            unreachable!();
+        }
+        if obj_data.prototype_id.is_none() {
+            obj_data.prototype_id = self.realm().object_prototype;
+        }
+        let id = self.alloc_object(obj_data);
+        Completion::Normal(JsValue::object(id))
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -1509,74 +1605,77 @@ impl Interpreter {
         val: &JsValue,
         preferred_type: &str,
     ) -> Result<JsValue, JsValue> {
-        match val {
-            JsValue::Object(o) => {
-                // §7.1.1 Step 2-3: Check @@toPrimitive
-                let exotic_to_prim = {
-                    let key = "Symbol(Symbol.toPrimitive)";
-                    match self.get_object_property(o.id, key, val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
-                    }
-                };
-                if !matches!(exotic_to_prim, JsValue::Undefined | JsValue::Null) {
-                    if let JsValue::Object(fo) = &exotic_to_prim
-                        && self
-                            .get_object_cell(fo.id)
-                            .map(|o| o.borrow().callable.is_some())
-                            .unwrap_or(false)
-                    {
-                        let hint = JsValue::String(JsString::from_str(preferred_type));
-                        let result = self.call_function(&exotic_to_prim, val, &[hint]);
-                        match result {
-                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
-                                return Ok(v);
-                            }
-                            Completion::Normal(_) => {
-                                return Err(
-                                    self.create_type_error("@@toPrimitive must return a primitive")
-                                );
-                            }
-                            Completion::Throw(e) => return Err(e),
-                            _ => {}
-                        }
-                    } else {
-                        return Err(self.create_type_error("@@toPrimitive is not callable"));
-                    }
+        if let Some(id) = val.as_object_id() {
+            // §7.1.1 Step 2-3: Check @@toPrimitive
+            let exotic_to_prim = {
+                let key = JsPropertyKey::well_known_symbol("toPrimitive");
+                match self.get_object_property(id, &key, val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::UNDEFINED,
                 }
-
-                // §7.1.1.1 OrdinaryToPrimitive
-                let methods = if preferred_type == "string" {
-                    ["toString", "valueOf"]
+            };
+            if !(exotic_to_prim).is_nullish() {
+                if let Some(fo) = exotic_to_prim
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && self
+                        .get_object_cell(fo.id)
+                        .map(|o| o.borrow().callable.is_some())
+                        .unwrap_or(false)
+                {
+                    let hint = JsValue::string(JsString::from_str(preferred_type));
+                    let result = self.call_function(&exotic_to_prim, val, &[hint]);
+                    match result {
+                        Completion::Normal(v) if !(v).is_object() => {
+                            return Ok(v);
+                        }
+                        Completion::Normal(_) => {
+                            return Err(
+                                self.create_type_error("@@toPrimitive must return a primitive")
+                            );
+                        }
+                        Completion::Throw(e) => return Err(e),
+                        _ => {}
+                    }
                 } else {
-                    ["valueOf", "toString"]
+                    return Err(self.create_type_error("@@toPrimitive is not callable"));
+                }
+            }
+
+            // §7.1.1.1 OrdinaryToPrimitive
+            let methods = if preferred_type == "string" {
+                ["toString", "valueOf"]
+            } else {
+                ["valueOf", "toString"]
+            };
+            for method_name in &methods {
+                let method_val = match self.get_object_property(id, method_name, val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::UNDEFINED,
                 };
-                for method_name in &methods {
-                    let method_val = match self.get_object_property(o.id, method_name, val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
-                    };
-                    if let JsValue::Object(fo) = &method_val
-                        && self
-                            .get_object_cell(fo.id)
-                            .map(|o| o.borrow().callable.is_some())
-                            .unwrap_or(false)
-                    {
-                        let result = self.call_function(&method_val, val, &[]);
-                        match result {
-                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
-                                return Ok(v);
-                            }
-                            Completion::Throw(e) => return Err(e),
-                            _ => {}
+                if let Some(fo) = method_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && self
+                        .get_object_cell(fo.id)
+                        .map(|o| o.borrow().callable.is_some())
+                        .unwrap_or(false)
+                {
+                    let result = self.call_function(&method_val, val, &[]);
+                    match result {
+                        Completion::Normal(v) if !(v).is_object() => {
+                            return Ok(v);
                         }
+                        Completion::Throw(e) => return Err(e),
+                        _ => {}
                     }
                 }
-                Err(self.create_type_error("Cannot convert object to primitive value"))
             }
-            _ => Ok(val.clone()),
+            Err(self.create_type_error("Cannot convert object to primitive value"))
+        } else {
+            Ok(val.clone())
         }
     }
 
@@ -1586,10 +1685,10 @@ impl Interpreter {
         let prim = self.to_primitive(val, "number")?;
         if prim.is_bigint() {
             Ok(prim)
-        } else if matches!(prim, JsValue::Symbol(_)) {
+        } else if (prim).is_symbol() {
             Err(self.create_type_error("Cannot convert a Symbol value to a number"))
         } else {
-            Ok(JsValue::Number(to_number(&prim)))
+            Ok(JsValue::number(to_number(&prim)))
         }
     }
 
@@ -1604,49 +1703,48 @@ impl Interpreter {
     // §7.1.17 ToString — calls ToPrimitive for objects
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_string_value(&mut self, val: &JsValue) -> Result<String, JsValue> {
-        match val {
-            JsValue::Undefined => Ok("undefined".to_string()),
-            JsValue::Null => Ok("null".to_string()),
-            JsValue::Boolean(b) => Ok(if *b { "true" } else { "false" }.to_string()),
-            JsValue::Number(n) => Ok(number_ops::to_string(*n)),
-            JsValue::String(s) => Ok(s.to_rust_string()),
-            JsValue::Symbol(_) => {
-                Err(self.create_type_error("Cannot convert a Symbol value to a string"))
-            }
-            JsValue::BigInt(n) => Ok(n.value.to_string()),
-            JsValue::Object(_) => {
-                let prim = self.to_primitive(val, "string")?;
-                self.to_string_value(&prim)
-            }
+        if val.is_undefined() {
+            Ok("undefined".to_string())
+        } else if val.is_null() {
+            Ok("null".to_string())
+        } else if let Some(b) = val.as_boolean() {
+            Ok(if b { "true" } else { "false" }.to_string())
+        } else if let Some(n) = val.as_number() {
+            Ok(number_ops::to_string(n))
+        } else if let Some(s) = val.as_string() {
+            Ok(s.to_rust_string())
+        } else if val.is_symbol() {
+            Err(self.create_type_error("Cannot convert a Symbol value to a string"))
+        } else if let Some(n) = val.as_bigint() {
+            Ok(n.value.to_string())
+        } else {
+            let prim = self.to_primitive(val, "string")?;
+            self.to_string_value(&prim)
         }
     }
 
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_js_string(&mut self, val: &JsValue) -> Result<JsString, JsValue> {
-        match val {
-            JsValue::String(s) => Ok(s.clone()),
-            other => {
-                let s = self.to_string_value(other)?;
-                Ok(JsString::from_str(&s))
-            }
+        if let Some(s) = val.as_string() {
+            Ok(s)
+        } else {
+            let s = self.to_string_value(val)?;
+            Ok(JsString::from_str(&s))
         }
     }
 
     // §7.1.4 ToNumber — calls ToPrimitive for objects
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_number_value(&mut self, val: &JsValue) -> Result<f64, JsValue> {
-        match val {
-            JsValue::Object(_) => {
-                let prim = self.to_primitive(val, "number")?;
-                self.to_number_value(&prim)
-            }
-            JsValue::Symbol(_) => {
-                Err(self.create_type_error("Cannot convert a Symbol value to a number"))
-            }
-            JsValue::BigInt(_) => {
-                Err(self.create_type_error("Cannot convert a BigInt value to a number"))
-            }
-            _ => Ok(to_number(val)),
+        if val.is_object() {
+            let prim = self.to_primitive(val, "number")?;
+            self.to_number_value(&prim)
+        } else if val.is_symbol() {
+            Err(self.create_type_error("Cannot convert a Symbol value to a number"))
+        } else if val.is_bigint() {
+            Err(self.create_type_error("Cannot convert a BigInt value to a number"))
+        } else {
+            Ok(to_number(val))
         }
     }
 
@@ -1664,80 +1762,58 @@ impl Interpreter {
     // §7.1.13 ToBigInt
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_bigint_value(&mut self, val: &JsValue) -> Result<JsValue, JsValue> {
-        let prim = match val {
-            JsValue::Object(_) => self.to_primitive(val, "number")?,
-            _ => val.clone(),
+        let prim = if val.is_object() {
+            self.to_primitive(val, "number")?
+        } else {
+            val.clone()
         };
-        match &prim {
-            JsValue::BigInt(_) => Ok(prim),
-            JsValue::Boolean(b) => Ok(JsValue::BigInt(crate::types::JsBigInt {
-                value: if *b {
-                    num_bigint::BigInt::from(1)
-                } else {
-                    num_bigint::BigInt::from(0)
-                },
-            })),
-            JsValue::String(s) => {
-                let text = s.to_rust_string();
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    return Ok(JsValue::BigInt(crate::types::JsBigInt {
-                        value: num_bigint::BigInt::from(0),
-                    }));
-                }
-                let parsed = if let Some(hex) = trimmed
-                    .strip_prefix("0x")
-                    .or_else(|| trimmed.strip_prefix("0X"))
-                {
-                    num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-                } else if let Some(oct) = trimmed
-                    .strip_prefix("0o")
-                    .or_else(|| trimmed.strip_prefix("0O"))
-                {
-                    num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-                } else if let Some(bin) = trimmed
-                    .strip_prefix("0b")
-                    .or_else(|| trimmed.strip_prefix("0B"))
-                {
-                    num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
-                } else {
-                    trimmed.parse::<num_bigint::BigInt>().ok()
-                };
-                match parsed {
-                    Some(n) => Ok(JsValue::BigInt(crate::types::JsBigInt { value: n })),
-                    None => Err(self.create_error(
-                        "SyntaxError",
-                        &format!("Cannot convert {} to a BigInt", text),
-                    )),
-                }
+        if prim.is_bigint() {
+            Ok(prim)
+        } else if let Some(b) = prim.as_boolean() {
+            Ok(JsValue::bigint(crate::types::JsBigInt::new(if b {
+                num_bigint::BigInt::from(1)
+            } else {
+                num_bigint::BigInt::from(0)
+            })))
+        } else if let Some(s) = prim.as_string() {
+            let text = s.to_rust_string();
+            match crate::interpreter::helpers::string_to_bigint(&text) {
+                Some(n) => Ok(JsValue::bigint(crate::types::JsBigInt::new(n))),
+                None => Err(self.create_error(
+                    "SyntaxError",
+                    &format!("Cannot convert {} to a BigInt", text),
+                )),
             }
-            JsValue::Undefined => {
-                Err(self.create_type_error("Cannot convert undefined to a BigInt"))
-            }
-            JsValue::Null => Err(self.create_type_error("Cannot convert null to a BigInt")),
-            JsValue::Number(_) => {
-                Err(self.create_type_error("Cannot convert a Number to a BigInt"))
-            }
-            JsValue::Symbol(_) => {
-                Err(self.create_type_error("Cannot convert a Symbol to a BigInt"))
-            }
-            _ => Err(self.create_type_error("Cannot convert to BigInt")),
+        } else if prim.is_undefined() {
+            Err(self.create_type_error("Cannot convert undefined to a BigInt"))
+        } else if prim.is_null() {
+            Err(self.create_type_error("Cannot convert null to a BigInt"))
+        } else if prim.is_number() {
+            Err(self.create_type_error("Cannot convert a Number to a BigInt"))
+        } else if prim.is_symbol() {
+            Err(self.create_type_error("Cannot convert a Symbol to a BigInt"))
+        } else {
+            Err(self.create_type_error("Cannot convert to BigInt"))
         }
     }
 
     fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> Result<bool, JsValue> {
-        if std::mem::discriminant(left) == std::mem::discriminant(right) {
+        if left.kind() == right.kind() {
             return Ok(strict_equality(left, right));
         }
         // B.3.6.2: IsHTMLDDA == null/undefined
-        if let JsValue::Object(o) = left
+        if let Some(o) = (left)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
             && (right.is_null() || right.is_undefined())
         {
             return Ok(true);
         }
-        if let JsValue::Object(o) = right
+        if let Some(o) = (right)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
             && (left.is_null() || left.is_undefined())
@@ -1748,51 +1824,55 @@ impl Interpreter {
             return Ok(true);
         }
         if left.is_number() && right.is_string() {
-            return self.abstract_equality(left, &JsValue::Number(to_number(right)));
+            return self.abstract_equality(left, &JsValue::number(to_number(right)));
         }
         if left.is_string() && right.is_number() {
-            return self.abstract_equality(&JsValue::Number(to_number(left)), right);
+            return self.abstract_equality(&JsValue::number(to_number(left)), right);
         }
         if left.is_boolean() {
-            return self.abstract_equality(&JsValue::Number(to_number(left)), right);
+            return self.abstract_equality(&JsValue::number(to_number(left)), right);
         }
         if right.is_boolean() {
-            return self.abstract_equality(left, &JsValue::Number(to_number(right)));
+            return self.abstract_equality(left, &JsValue::number(to_number(right)));
         }
         // BigInt == Number
-        if let (JsValue::BigInt(b), JsValue::Number(n)) | (JsValue::Number(n), JsValue::BigInt(b)) =
-            (left, right)
+        if let Some((b, n)) = left
+            .as_bigint()
+            .zip(right.as_number())
+            .or_else(|| right.as_bigint().zip(left.as_number()))
         {
             if n.is_nan() || n.is_infinite() {
                 return Ok(false);
             }
-            if *n != n.trunc() {
+            if n != n.trunc() {
                 return Ok(false);
             }
-            let n_as_bigint = crate::interpreter::builtins::bigint::f64_to_bigint(*n);
+            let n_as_bigint = crate::interpreter::builtins::bigint::f64_to_bigint(n);
             return Ok(bigint_ops::equal(&b.value, &n_as_bigint));
         }
         // BigInt == String (via StringToBigInt)
-        if let (JsValue::BigInt(b), JsValue::String(s)) = (left, right) {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
+        if let (Some(b), Some(s)) = (left.as_bigint(), right.as_string()) {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
                 return Ok(bigint_ops::equal(&b.value, &parsed));
             }
             return Ok(false);
         }
-        if let (JsValue::String(s), JsValue::BigInt(b)) = (left, right) {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
+        if let (Some(s), Some(b)) = (left.as_string(), right.as_bigint()) {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
                 return Ok(bigint_ops::equal(&parsed, &b.value));
             }
             return Ok(false);
         }
         // Object vs primitive (including BigInt)
-        if matches!(left, JsValue::Object(_))
+        if (left).is_object()
             && (right.is_string() || right.is_number() || right.is_symbol() || right.is_bigint())
         {
             let lprim = self.to_primitive(left, "default")?;
             return self.abstract_equality(&lprim, right);
         }
-        if matches!(right, JsValue::Object(_))
+        if (right).is_object()
             && (left.is_string() || left.is_number() || left.is_symbol() || left.is_bigint())
         {
             let rprim = self.to_primitive(right, "default")?;
@@ -1827,137 +1907,66 @@ impl Interpreter {
         };
         if is_string(&lprim) && is_string(&rprim) {
             // §7.2.13 step 3: Compare by UTF-16 code units, not UTF-8 bytes
-            let ls = match &lprim {
-                JsValue::String(s) => &s.code_units,
-                _ => unreachable!(),
-            };
-            let rs = match &rprim {
-                JsValue::String(s) => &s.code_units,
-                _ => unreachable!(),
-            };
-            return Ok(Some(ls < rs));
+            return Ok(Some(
+                lprim.as_string().expect("kind checked").code_units
+                    < rprim.as_string().expect("kind checked").code_units,
+            ));
         }
         // BigInt comparisons
-        if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+        if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
             return Ok(bigint_ops::less_than(&a.value, &b.value));
         }
-        if let (JsValue::BigInt(b), JsValue::Number(n)) = (&lprim, &rprim) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if *n == f64::INFINITY {
-                return Ok(Some(true));
-            }
-            if *n == f64::NEG_INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if b.value < n_floor {
-                return Ok(Some(true));
-            }
-            if b.value > n_floor {
-                return Ok(Some(false));
-            }
-            // n_floor == b.value, so result depends on fractional part
-            return Ok(Some(n_trunc < *n));
+        if let (Some(b), Some(n)) = (lprim.as_bigint(), rprim.as_number()) {
+            return Ok(compare_bigint_number(&b.value, n, true));
         }
-        if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lprim, &rprim) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if *n == f64::NEG_INFINITY {
-                return Ok(Some(true));
-            }
-            if *n == f64::INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if n_floor < b.value {
-                return Ok(Some(true));
-            }
-            if n_floor > b.value {
-                return Ok(Some(false));
-            }
-            // n_floor == b.value, so result depends on fractional part
-            return Ok(Some(*n < n_trunc));
+        if let (Some(n), Some(b)) = (lprim.as_number(), rprim.as_bigint()) {
+            return Ok(compare_bigint_number(&b.value, n, false));
         }
         // BigInt vs String: try parsing via StringToBigInt
-        if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
-                return self
-                    .abstract_relational(&lprim, &JsValue::BigInt(JsBigInt { value: parsed }));
+        if lprim.is_bigint()
+            && let Some(s) = rprim.as_string()
+        {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
+                return self.abstract_relational(&lprim, &JsValue::bigint(JsBigInt::new(parsed)));
             }
             return Ok(None);
         }
-        if let (JsValue::String(s), JsValue::BigInt(_)) = (&lprim, &rprim) {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
-                return self
-                    .abstract_relational(&JsValue::BigInt(JsBigInt { value: parsed }), &rprim);
+        if let Some(s) = lprim.as_string()
+            && rprim.is_bigint()
+        {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
+                return self.abstract_relational(&JsValue::bigint(JsBigInt::new(parsed)), &rprim);
             }
             return Ok(None);
         }
         // ToNumeric: convert non-BigInt primitives to Number, keep BigInt as BigInt
-        if matches!(lprim, JsValue::Symbol(_)) || matches!(rprim, JsValue::Symbol(_)) {
+        if (lprim).is_symbol() || (rprim).is_symbol() {
             return Err(self.create_type_error("Cannot convert a Symbol value to a number"));
         }
-        let lnum = if matches!(lprim, JsValue::BigInt(_)) {
+        let lnum = if (lprim).is_bigint() {
             lprim
         } else {
-            JsValue::Number(to_number(&lprim))
+            JsValue::number(to_number(&lprim))
         };
-        let rnum = if matches!(rprim, JsValue::BigInt(_)) {
+        let rnum = if (rprim).is_bigint() {
             rprim
         } else {
-            JsValue::Number(to_number(&rprim))
+            JsValue::number(to_number(&rprim))
         };
         // After ToNumeric, re-check BigInt vs Number cases
-        if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
+        if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
             return Ok(bigint_ops::less_than(&a.value, &b.value));
         }
-        if let (JsValue::BigInt(b), JsValue::Number(n)) = (&lnum, &rnum) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if *n == f64::INFINITY {
-                return Ok(Some(true));
-            }
-            if *n == f64::NEG_INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if b.value < n_floor {
-                return Ok(Some(true));
-            }
-            if b.value > n_floor {
-                return Ok(Some(false));
-            }
-            return Ok(Some(n_trunc < *n));
+        if let (Some(b), Some(n)) = (lnum.as_bigint(), rnum.as_number()) {
+            return Ok(compare_bigint_number(&b.value, n, true));
         }
-        if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lnum, &rnum) {
-            if n.is_nan() {
-                return Ok(None);
-            }
-            if *n == f64::NEG_INFINITY {
-                return Ok(Some(true));
-            }
-            if *n == f64::INFINITY {
-                return Ok(Some(false));
-            }
-            let n_trunc = n.trunc();
-            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if n_floor < b.value {
-                return Ok(Some(true));
-            }
-            if n_floor > b.value {
-                return Ok(Some(false));
-            }
-            return Ok(Some(*n < n_trunc));
+        if let (Some(n), Some(b)) = (lnum.as_number(), rnum.as_bigint()) {
+            return Ok(compare_bigint_number(&b.value, n, false));
         }
-        if let (JsValue::Number(ln), JsValue::Number(rn)) = (&lnum, &rnum) {
-            return Ok(number_ops::less_than(*ln, *rn));
+        if let (Some(ln), Some(rn)) = (lnum.as_number(), rnum.as_number()) {
+            return Ok(number_ops::less_than(ln, rn));
         }
         Ok(None)
     }
@@ -1980,6 +1989,10 @@ impl Interpreter {
                 BytecodeCacheState::Ineligible => None,
                 BytecodeCacheState::Untried => match compiler::compile_body(body.as_slice()) {
                     Ok(c) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.compile_ok += 1;
+                        }
                         let rc = Rc::new(c);
                         if let Some(o) = self.get_object(func_obj_id) {
                             o.borrow_mut().bytecode_cache =
@@ -1987,7 +2000,15 @@ impl Interpreter {
                         }
                         Some(rc)
                     }
-                    Err(_) => {
+                    Err(_e) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
+                                reason,
+                            ) = _e;
+                            let (name, seq) = self.perf_body_name(func_obj_id);
+                            self.perf.record_bail(reason, name, seq);
+                        }
                         if let Some(o) = self.get_object(func_obj_id) {
                             o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
                         }
@@ -1996,37 +2017,55 @@ impl Interpreter {
                 },
             };
             if let Some(chunk) = chunk {
-                return vm::run_chunk(self, &chunk, exec_env, this_val.clone());
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.body_compiled += 1;
+                }
+                let prev = self.enter_ic_body(body);
+                let result = vm::run_chunk(self, &chunk, exec_env, this_val.clone());
+                self.leave_ic_body(prev);
+                return result;
             }
         }
-        // #72: cache the hoisting *name collection* for this function body,
-        // keyed by the body's Rc pointer identity. The body Rc is stable across
-        // function-object clones, so repeated calls reuse the analysis. ASTs are
-        // immutable post-parse, so the cache cannot go stale.
-        let key = Rc::as_ptr(&body.statements);
-        let analysis = match self.hoist_cache.get(&key) {
-            Some(a) => a.clone(),
-            None => {
-                let mut var_set = std::collections::HashSet::new();
-                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_set);
-                let mut names = Vec::new();
-                let mut blocked = Vec::new();
-                Self::collect_annexb_function_names(body.as_slice(), &mut names, &mut blocked);
-                let a = Rc::new(HoistAnalysis {
-                    var_names: var_set.into_iter().collect(),
-                    annexb_names: names,
-                    _body: body.statements.clone(),
-                });
-                self.hoist_cache.insert(key, a.clone());
-                a
-            }
-        };
-        let handle = self.ic_store.for_body(body);
-        let prev = self.current_ic_handle;
-        self.current_ic_handle = handle;
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_ast += 1;
+            let (name, seq) = self.perf_body_name(func_obj_id);
+            self.perf.enter_ast_body(name, seq, true);
+        }
+        // #72: the declared-name collection for this Body is memoised, bounded
+        // per #165.
+        let analysis = self.hoist_cache.analysis_for(body);
+        let prev = self.enter_ic_body(body);
         let result = self.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis));
-        self.current_ic_handle = prev;
+        self.leave_ic_body(prev);
+        #[cfg(feature = "perf-counters")]
+        self.perf.leave_ast_body();
         result
+    }
+
+    /// A stable label for a function body in counter output (issue #526).
+    /// Interned per object id so ranking millions of dispatches does not
+    /// allocate a fresh `String` each time.
+    #[cfg(feature = "perf-counters")]
+    fn perf_body_name(&mut self, func_obj_id: u64) -> (std::rc::Rc<str>, u64) {
+        if let Some(cached) = self.perf_name_cache.get(&func_obj_id) {
+            return cached.clone();
+        }
+        let name = self
+            .get_object(func_obj_id)
+            .and_then(|o| match o.borrow().callable {
+                Some(JsFunction::User { ref name, .. }) => name.clone(),
+                _ => None,
+            })
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| format!("<anonymous#{func_obj_id}>"));
+        let interned: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
+        let seq = self.perf_next_body_seq;
+        self.perf_next_body_seq += 1;
+        self.perf_name_cache
+            .insert(func_obj_id, (interned.clone(), seq));
+        (interned, seq)
     }
 
     pub(super) fn eval_binary(
@@ -2036,57 +2075,51 @@ impl Interpreter {
         right: &JsValue,
     ) -> Completion {
         // Fast path: both operands are Number — skip ToPrimitive/ToNumeric/BigInt checks
-        if let (JsValue::Number(ln), JsValue::Number(rn)) = (left, right) {
+        if let (Some(ln), Some(rn)) = (left.as_number(), right.as_number()) {
             return match op {
-                BinaryOp::Add => Completion::Normal(JsValue::Number(number_ops::add(*ln, *rn))),
-                BinaryOp::Sub => {
-                    Completion::Normal(JsValue::Number(number_ops::subtract(*ln, *rn)))
-                }
-                BinaryOp::Mul => {
-                    Completion::Normal(JsValue::Number(number_ops::multiply(*ln, *rn)))
-                }
-                BinaryOp::Div => Completion::Normal(JsValue::Number(number_ops::divide(*ln, *rn))),
-                BinaryOp::Mod => {
-                    Completion::Normal(JsValue::Number(number_ops::remainder(*ln, *rn)))
-                }
+                BinaryOp::Add => Completion::Normal(JsValue::number(number_ops::add(ln, rn))),
+                BinaryOp::Sub => Completion::Normal(JsValue::number(number_ops::subtract(ln, rn))),
+                BinaryOp::Mul => Completion::Normal(JsValue::number(number_ops::multiply(ln, rn))),
+                BinaryOp::Div => Completion::Normal(JsValue::number(number_ops::divide(ln, rn))),
+                BinaryOp::Mod => Completion::Normal(JsValue::number(number_ops::remainder(ln, rn))),
                 BinaryOp::Exp => {
-                    Completion::Normal(JsValue::Number(number_ops::exponentiate(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::exponentiate(ln, rn)))
                 }
                 BinaryOp::LShift => {
-                    Completion::Normal(JsValue::Number(number_ops::left_shift(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::left_shift(ln, rn)))
                 }
                 BinaryOp::RShift => {
-                    Completion::Normal(JsValue::Number(number_ops::signed_right_shift(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::signed_right_shift(ln, rn)))
                 }
                 BinaryOp::URShift => {
-                    Completion::Normal(JsValue::Number(number_ops::unsigned_right_shift(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::unsigned_right_shift(ln, rn)))
                 }
                 BinaryOp::BitAnd => {
-                    Completion::Normal(JsValue::Number(number_ops::bitwise_and(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::bitwise_and(ln, rn)))
                 }
                 BinaryOp::BitOr => {
-                    Completion::Normal(JsValue::Number(number_ops::bitwise_or(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::bitwise_or(ln, rn)))
                 }
                 BinaryOp::BitXor => {
-                    Completion::Normal(JsValue::Number(number_ops::bitwise_xor(*ln, *rn)))
+                    Completion::Normal(JsValue::number(number_ops::bitwise_xor(ln, rn)))
                 }
-                BinaryOp::Lt => Completion::Normal(JsValue::Boolean(
-                    number_ops::less_than(*ln, *rn) == Some(true),
+                BinaryOp::Lt => Completion::Normal(JsValue::boolean(
+                    number_ops::less_than(ln, rn) == Some(true),
                 )),
-                BinaryOp::Gt => Completion::Normal(JsValue::Boolean(
-                    number_ops::less_than(*rn, *ln) == Some(true),
+                BinaryOp::Gt => Completion::Normal(JsValue::boolean(
+                    number_ops::less_than(rn, ln) == Some(true),
                 )),
-                BinaryOp::LtEq => Completion::Normal(JsValue::Boolean(
-                    number_ops::less_than(*rn, *ln) == Some(false),
+                BinaryOp::LtEq => Completion::Normal(JsValue::boolean(
+                    number_ops::less_than(rn, ln) == Some(false),
                 )),
-                BinaryOp::GtEq => Completion::Normal(JsValue::Boolean(
-                    number_ops::less_than(*ln, *rn) == Some(false),
+                BinaryOp::GtEq => Completion::Normal(JsValue::boolean(
+                    number_ops::less_than(ln, rn) == Some(false),
                 )),
                 BinaryOp::Eq | BinaryOp::StrictEq => {
-                    Completion::Normal(JsValue::Boolean(number_ops::equal(*ln, *rn)))
+                    Completion::Normal(JsValue::boolean(number_ops::equal(ln, rn)))
                 }
                 BinaryOp::NotEq | BinaryOp::StrictNotEq => {
-                    Completion::Normal(JsValue::Boolean(!number_ops::equal(*ln, *rn)))
+                    Completion::Normal(JsValue::boolean(!number_ops::equal(ln, rn)))
                 }
                 // In, Instanceof — fall through to general path
                 _ => self.eval_binary_slow(op, left, right),
@@ -2106,31 +2139,34 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if matches!(lprim, JsValue::Symbol(_)) || matches!(rprim, JsValue::Symbol(_)) {
+                if (lprim).is_symbol() || (rprim).is_symbol() {
                     return Completion::Throw(
                         self.create_type_error("Cannot convert a Symbol value to a string"),
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    let mut code_units = match lprim {
-                        JsValue::String(s) => s.into_vec(),
-                        ref other => js_value_to_code_units(other),
+                    let mut code_units = if lprim.is_string() {
+                        lprim.into_string().expect("kind checked").into_vec()
+                    } else {
+                        js_value_to_code_units(&lprim)
                     };
-                    match rprim {
-                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
-                        ref other => code_units.extend(js_value_to_code_units(other)),
-                    };
-                    Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
-                } else if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
-                    Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: bigint_ops::add(&a.value, &b.value),
-                    }))
+                    if rprim
+                        .with_string(|s| code_units.extend_from_slice(s))
+                        .is_none()
+                    {
+                        code_units.extend(js_value_to_code_units(&rprim));
+                    }
+                    Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
+                    Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
+                        &a.value, &b.value,
+                    ))))
                 } else if lprim.is_bigint() || rprim.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
                     ))
                 } else {
-                    Completion::Normal(JsValue::Number(number_ops::add(
+                    Completion::Normal(JsValue::number(number_ops::add(
                         to_number(&lprim),
                         to_number(&rprim),
                     )))
@@ -2146,28 +2182,28 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
+                if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
                     match op {
-                        BinaryOp::Sub => Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: bigint_ops::subtract(&a.value, &b.value),
-                        })),
-                        BinaryOp::Mul => Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: bigint_ops::multiply(&a.value, &b.value),
-                        })),
+                        BinaryOp::Sub => Completion::Normal(JsValue::bigint(JsBigInt::new(
+                            bigint_ops::subtract(&a.value, &b.value),
+                        ))),
+                        BinaryOp::Mul => Completion::Normal(JsValue::bigint(JsBigInt::new(
+                            bigint_ops::multiply(&a.value, &b.value),
+                        ))),
                         BinaryOp::Div => match bigint_ops::divide(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
                             Err(_) => Completion::Throw(
                                 self.create_error("RangeError", "Division by zero"),
                             ),
                         },
                         BinaryOp::Mod => match bigint_ops::remainder(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
                             Err(_) => Completion::Throw(
                                 self.create_error("RangeError", "Division by zero"),
                             ),
                         },
                         BinaryOp::Exp => match bigint_ops::exponentiate(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
                             Err(_) => Completion::Throw(
                                 self.create_error("RangeError", "Exponent must be positive"),
                             ),
@@ -2179,17 +2215,17 @@ impl Interpreter {
                         "Cannot mix BigInt and other types, use explicit conversions",
                     ))
                 } else {
-                    let ln = if let JsValue::Number(n) = &lnum {
-                        *n
+                    let ln = if let Some(n) = lnum.as_number() {
+                        n
                     } else {
                         to_number(&lnum)
                     };
-                    let rn = if let JsValue::Number(n) = &rnum {
-                        *n
+                    let rn = if let Some(n) = rnum.as_number() {
+                        n
                     } else {
                         to_number(&rnum)
                     };
-                    Completion::Normal(JsValue::Number(match op {
+                    Completion::Normal(JsValue::number(match op {
                         BinaryOp::Sub => number_ops::subtract(ln, rn),
                         BinaryOp::Mul => number_ops::multiply(ln, rn),
                         BinaryOp::Div => number_ops::divide(ln, rn),
@@ -2200,33 +2236,33 @@ impl Interpreter {
                 }
             }
             BinaryOp::Eq => match self.abstract_equality(left, right) {
-                Ok(b) => Completion::Normal(JsValue::Boolean(b)),
+                Ok(b) => Completion::Normal(JsValue::boolean(b)),
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::NotEq => match self.abstract_equality(left, right) {
-                Ok(b) => Completion::Normal(JsValue::Boolean(!b)),
+                Ok(b) => Completion::Normal(JsValue::boolean(!b)),
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::StrictEq => {
-                Completion::Normal(JsValue::Boolean(strict_equality(left, right)))
+                Completion::Normal(JsValue::boolean(strict_equality(left, right)))
             }
             BinaryOp::StrictNotEq => {
-                Completion::Normal(JsValue::Boolean(!strict_equality(left, right)))
+                Completion::Normal(JsValue::boolean(!strict_equality(left, right)))
             }
             BinaryOp::Lt => match self.abstract_relational(left, right) {
-                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(true))),
+                Ok(r) => Completion::Normal(JsValue::boolean(r == Some(true))),
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::Gt => match self.abstract_relational_inner(right, left, false) {
-                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(true))),
+                Ok(r) => Completion::Normal(JsValue::boolean(r == Some(true))),
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::LtEq => match self.abstract_relational_inner(right, left, false) {
-                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(false))),
+                Ok(r) => Completion::Normal(JsValue::boolean(r == Some(false))),
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::GtEq => match self.abstract_relational(left, right) {
-                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(false))),
+                Ok(r) => Completion::Normal(JsValue::boolean(r == Some(false))),
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::LShift | BinaryOp::RShift | BinaryOp::URShift => {
@@ -2244,33 +2280,29 @@ impl Interpreter {
                             "Cannot mix BigInt and other types, use explicit conversions",
                         ));
                     }
-                    if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
-                        Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: match op {
-                                BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
-                                BinaryOp::RShift => {
-                                    bigint_ops::signed_right_shift(&a.value, &b.value)
-                                }
-                                _ => unreachable!(),
-                            },
-                        }))
+                    if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
+                        Completion::Normal(JsValue::bigint(JsBigInt::new(match op {
+                            BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
+                            BinaryOp::RShift => bigint_ops::signed_right_shift(&a.value, &b.value),
+                            _ => unreachable!(),
+                        })))
                     } else {
                         Completion::Throw(self.create_type_error(
                             "Cannot mix BigInt and other types, use explicit conversions",
                         ))
                     }
                 } else {
-                    let ln = if let JsValue::Number(n) = &lnum {
-                        *n
+                    let ln = if let Some(n) = lnum.as_number() {
+                        n
                     } else {
                         to_number(&lnum)
                     };
-                    let rn = if let JsValue::Number(n) = &rnum {
-                        *n
+                    let rn = if let Some(n) = rnum.as_number() {
+                        n
                     } else {
                         to_number(&rnum)
                     };
-                    Completion::Normal(JsValue::Number(match op {
+                    Completion::Normal(JsValue::number(match op {
                         BinaryOp::LShift => number_ops::left_shift(ln, rn),
                         BinaryOp::RShift => number_ops::signed_right_shift(ln, rn),
                         BinaryOp::URShift => number_ops::unsigned_right_shift(ln, rn),
@@ -2287,31 +2319,29 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
-                    Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: match op {
-                            BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
-                            BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
-                            BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
-                            _ => unreachable!(),
-                        },
-                    }))
+                if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
+                    Completion::Normal(JsValue::bigint(JsBigInt::new(match op {
+                        BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
+                        BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
+                        BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
+                        _ => unreachable!(),
+                    })))
                 } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
                     ))
                 } else {
-                    let ln = if let JsValue::Number(n) = &lnum {
-                        *n
+                    let ln = if let Some(n) = lnum.as_number() {
+                        n
                     } else {
                         to_number(&lnum)
                     };
-                    let rn = if let JsValue::Number(n) = &rnum {
-                        *n
+                    let rn = if let Some(n) = rnum.as_number() {
+                        n
                     } else {
                         to_number(&rnum)
                     };
-                    Completion::Normal(JsValue::Number(match op {
+                    Completion::Normal(JsValue::number(match op {
                         BinaryOp::BitAnd => number_ops::bitwise_and(ln, rn),
                         BinaryOp::BitOr => number_ops::bitwise_or(ln, rn),
                         BinaryOp::BitXor => number_ops::bitwise_xor(ln, rn),
@@ -2320,13 +2350,13 @@ impl Interpreter {
                 }
             }
             BinaryOp::In => {
-                if let JsValue::Object(o) = &right {
+                if let Some(o) = right.as_object_id().map(|id| crate::types::JsObject { id }) {
                     let key = match self.to_property_key(left) {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),
                     };
                     match self.proxy_has_property(o.id, &key) {
-                        Ok(result) => Completion::Normal(JsValue::Boolean(result)),
+                        Ok(result) => Completion::Normal(JsValue::boolean(result)),
                         Err(e) => Completion::Throw(e),
                     }
                 } else {
@@ -2389,22 +2419,22 @@ impl Interpreter {
         op: UpdateOp,
     ) -> Result<(JsValue, JsValue), JsValue> {
         // ToNumeric: ToPrimitive(number) then check for BigInt
-        let numeric = if matches!(raw_val, JsValue::Object(_)) {
+        let numeric = if (raw_val).is_object() {
             self.to_primitive(raw_val, "number")?
         } else {
             raw_val.clone()
         };
-        if let JsValue::BigInt(ref b) = numeric {
+        if let Some(b) = (numeric).as_bigint() {
             use num_bigint::BigInt;
             let one = BigInt::from(1);
             let new_bigint = match op {
-                UpdateOp::Increment => &b.value + &one,
-                UpdateOp::Decrement => &b.value - &one,
+                UpdateOp::Increment => &*b.value + &one,
+                UpdateOp::Decrement => &*b.value - &one,
             };
-            let old_val = JsValue::BigInt(b.clone());
-            let new_val = JsValue::BigInt(JsBigInt { value: new_bigint });
+            let old_val = JsValue::bigint(b.clone());
+            let new_val = JsValue::bigint(JsBigInt::new(new_bigint));
             Ok((old_val, new_val))
-        } else if let JsValue::Symbol(_) = numeric {
+        } else if (numeric).as_symbol().is_some() {
             Err(self.create_type_error("Cannot convert a Symbol value to a number"))
         } else {
             let old_num = to_number(&numeric);
@@ -2412,8 +2442,104 @@ impl Interpreter {
                 UpdateOp::Increment => old_num + 1.0,
                 UpdateOp::Decrement => old_num - 1.0,
             };
-            Ok((JsValue::Number(old_num), JsValue::Number(new_num)))
+            Ok((JsValue::number(old_num), JsValue::number(new_num)))
         }
+    }
+
+    pub(super) fn get_identifier_value_by_ref(
+        &mut self,
+        name: &str,
+        id_ref: &IdentifierRef,
+        env: &EnvRef,
+    ) -> Completion {
+        let strict = env.borrow().strict;
+        match id_ref {
+            IdentifierRef::WithObject(obj_id) => self.with_get_binding_value(*obj_id, name, strict),
+            IdentifierRef::Unresolvable => {
+                Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
+            }
+            IdentifierRef::SpecificEnv(specific_env) => {
+                let (indirect, has_binding) = {
+                    let specific = specific_env.borrow();
+                    (
+                        specific.resolve_indirect_binding(name),
+                        specific.bindings.contains_key(name),
+                    )
+                };
+                if let Some(resolved) = indirect {
+                    match resolved {
+                        Some(value) => Completion::Normal(value),
+                        None => Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        ))),
+                    }
+                } else if has_binding {
+                    match self.env_get(specific_env, name) {
+                        Some(value) => Completion::Normal(value),
+                        None => Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        ))),
+                    }
+                } else if let Some(result) = self.resolve_global_getter(name, specific_env) {
+                    result
+                } else {
+                    Completion::Throw(
+                        self.create_reference_error(&format!("{name} is not defined")),
+                    )
+                }
+            }
+        }
+    }
+
+    pub(super) fn eval_identifier_update(
+        &mut self,
+        op: UpdateOp,
+        prefix: bool,
+        name: &str,
+        env: &EnvRef,
+    ) -> Completion {
+        // Fast path: identifier is a Number in the local scope chain (no with/module)
+        {
+            let env_borrow = env.borrow();
+            if env_borrow.with_object.is_none()
+                && let Some(binding) = env_borrow.bindings.get(name)
+                && binding.initialized
+                && binding.kind != BindingKind::Const
+                && binding.kind != BindingKind::FunctionName
+                && binding.kind != BindingKind::ImmutableValue
+                && let Some(n) = binding.value.as_number()
+            {
+                let old_num = n;
+                let new_num = match op {
+                    UpdateOp::Increment => old_num + 1.0,
+                    UpdateOp::Decrement => old_num - 1.0,
+                };
+                let new_val = JsValue::number(new_num);
+                drop(env_borrow);
+                if let Err(e) = self.env_set(env, name, new_val) {
+                    return Completion::Throw(e);
+                }
+                return Completion::Normal(JsValue::number(if prefix { new_num } else { old_num }));
+            }
+        }
+
+        let id_ref = match self.resolve_identifier_ref(name, env) {
+            Ok(r) => r,
+            Err(e) => return Completion::Throw(e),
+        };
+        let raw_val = match self.get_identifier_value_by_ref(name, &id_ref, env) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
+            Ok(pair) => pair,
+            Err(e) => return Completion::Throw(e),
+        };
+        match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+            Completion::Normal(_) => {}
+            other => return other,
+        }
+        Completion::Normal(if prefix { new_val } else { old_val })
     }
 
     fn eval_update(
@@ -2424,79 +2550,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
-            // Fast path: identifier is a Number in the local scope chain (no with/module)
-            {
-                let env_borrow = env.borrow();
-                if env_borrow.with_object.is_none()
-                    && let Some(binding) = env_borrow.bindings.get(name)
-                    && binding.initialized
-                    && binding.kind != BindingKind::Const
-                    && binding.kind != BindingKind::FunctionName
-                    && binding.kind != BindingKind::ImmutableValue
-                    && let JsValue::Number(n) = &binding.value
-                {
-                    let old_num = *n;
-                    let new_num = match op {
-                        UpdateOp::Increment => old_num + 1.0,
-                        UpdateOp::Decrement => old_num - 1.0,
-                    };
-                    let new_val = JsValue::Number(new_num);
-                    drop(env_borrow);
-                    if let Err(e) = self.env_set(env, name, new_val) {
-                        return Completion::Throw(e);
-                    }
-                    return Completion::Normal(JsValue::Number(if prefix {
-                        new_num
-                    } else {
-                        old_num
-                    }));
-                }
-            }
-
-            let strict = env.borrow().strict;
-            let id_ref = match self.resolve_identifier_ref(name, env) {
-                Ok(r) => r,
-                Err(e) => return Completion::Throw(e),
-            };
-            let raw_val = match &id_ref {
-                IdentifierRef::WithObject(obj_id) => {
-                    match self.with_get_binding_value(*obj_id, name, strict) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                }
-                IdentifierRef::Unresolvable => {
-                    return Completion::Throw(
-                        self.create_reference_error(&format!("{name} is not defined")),
-                    );
-                }
-                IdentifierRef::SpecificEnv(_) => {
-                    if let Some(result) = self.resolve_global_getter(name, env) {
-                        match result {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        }
-                    } else {
-                        match self.env_get(env, name) {
-                            Some(v) => v,
-                            None => {
-                                let err =
-                                    self.create_reference_error(&format!("{name} is not defined"));
-                                return Completion::Throw(err);
-                            }
-                        }
-                    }
-                }
-            };
-            let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
-                Ok(pair) => pair,
-                Err(e) => return Completion::Throw(e),
-            };
-            match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
-                Completion::Normal(_) => {}
-                other => return other,
-            }
-            Completion::Normal(if prefix { new_val } else { old_val })
+            self.eval_identifier_update(op, prefix, name, env)
         } else if let Expression::Member(obj_expr, prop, _) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)
@@ -2508,12 +2562,12 @@ impl Interpreter {
                         "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                     ));
                 }
-                let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
 
                 // Evaluate key expression (raw)
                 let raw_key = match prop {
                     MemberProperty::Dot(name) => {
-                        JsValue::String(crate::types::JsString::from_str(name))
+                        JsValue::string(crate::types::JsString::from_str(name))
                     }
                     MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
                         Completion::Normal(v) => v,
@@ -2569,45 +2623,41 @@ impl Interpreter {
                 other => return other,
             };
             if let MemberProperty::Private(name) = prop {
-                let branded = self.resolve_private_name(name, env);
-                return match &obj_val {
-                    JsValue::Object(o) => {
-                        if let Some(obj) = self.get_object(o.id) {
-                            let elem = obj.borrow().private_fields.get(&branded).cloned();
-                            match elem {
-                                Some(PrivateElement::Field(cur)) => {
-                                    let (old_val, new_val) =
-                                        match self.apply_update_numeric(&cur, op) {
-                                            Ok(pair) => pair,
-                                            Err(e) => return Completion::Throw(e),
-                                        };
-                                    obj.borrow_mut()
-                                        .private_fields
-                                        .insert(branded, PrivateElement::Field(new_val.clone()));
-                                    Completion::Normal(if prefix { new_val } else { old_val })
-                                }
-                                _ => Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot update private member #{name}"
-                                ))),
-                            }
-                        } else {
-                            Completion::Normal(JsValue::Number(f64::NAN))
-                        }
+                // §13.4 UpdateExpression on a private reference desugars to
+                // PrivateGet -> ToNumeric -> PrivateSet, so accessor-backed
+                // privates read through their getter and write through their
+                // setter just like a data field does. The receiver has to stay
+                // rooted across all three steps: ToNumeric runs a user
+                // `valueOf` that can reach a GC safepoint while `obj_val`
+                // exists only as a Rust local, invisible to the collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    let old = match self.private_get(&obj_val, name, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let (old_val, new_val) = match self.apply_update_numeric(&old, op) {
+                        Ok(pair) => pair,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let Err(e) = self.set_private_field(&obj_val, name, new_val.clone(), env) {
+                        return Completion::Throw(e);
                     }
-                    _ => Completion::Throw(
-                        self.create_type_error("Cannot read private member from a non-object"),
-                    ),
-                };
+                    Completion::Normal(if prefix { new_val } else { old_val })
+                })();
+                self.gc_unroot_frame(gc_frame);
+                return result;
             }
             let key = match prop {
-                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(expr) => {
                     let v = match self.eval_expr(expr, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
                     // ToObject(base) must precede ToPropertyKey(prop) per spec
-                    if matches!(&obj_val, JsValue::Null | JsValue::Undefined) {
+                    if obj_val.is_nullish() {
                         let err = self.create_type_error(&format!(
                             "Cannot read properties of {obj_val} (reading property)"
                         ));
@@ -2621,12 +2671,12 @@ impl Interpreter {
                 MemberProperty::Private(_) => unreachable!(),
             };
             // Get current value
-            let cur_val = match &obj_val {
-                JsValue::Object(o) => match self.get_object_property(o.id, &key, &obj_val) {
+            let cur_val = match obj_val.as_object_id() {
+                Some(id) => match self.get_object_property(id, &key, &obj_val) {
                     Completion::Normal(v) => v,
                     other => return other,
                 },
-                _ => {
+                None => {
                     // Primitive member access — use eval_member logic indirectly
                     match self.eval_expr(arg, env) {
                         Completion::Normal(v) => v,
@@ -2655,7 +2705,7 @@ impl Interpreter {
                 ),
             )
         } else {
-            Completion::Normal(JsValue::Number(f64::NAN))
+            Completion::Normal(JsValue::number(f64::NAN))
         }
     }
 
@@ -2670,7 +2720,7 @@ impl Interpreter {
                 // Handle super.prop / super[expr] assignment
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(cexpr) => {
                             let v = match self.eval_expr(cexpr, env) {
                                 Completion::Normal(v) => v,
@@ -2686,7 +2736,7 @@ impl Interpreter {
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
                     let strict = env.borrow().strict;
                     return match super_base_id {
                         Some(base_id) => {
@@ -2706,171 +2756,44 @@ impl Interpreter {
                     _ => return Ok(()),
                 };
                 if let MemberProperty::Private(name) = prop {
-                    let branded = self.resolve_private_name(name, env);
-                    return match &obj_val {
-                        JsValue::Object(o) => {
-                            if let Some(obj) = self.get_object_cell(o.id) {
-                                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                match elem {
-                                    Some(PrivateElement::Field(_)) => {
-                                        obj.borrow_mut().private_fields.insert(
-                                            branded,
-                                            PrivateElement::Field(value),
-                                        );
-                                        Ok(())
-                                    }
-                                    Some(PrivateElement::Method(_)) => Err(self
-                                        .create_type_error(&format!(
-                                            "Cannot assign to private method #{name}"
-                                        ))),
-                                    Some(PrivateElement::Accessor { set, .. }) => {
-                                        if let Some(setter) = set {
-                                            let obj_val2 = obj_val.clone();
-                                            match self.call_function(
-                                                &setter,
-                                                &obj_val2,
-                                                std::slice::from_ref(&value),
-                                            ) {
-                                                Completion::Throw(e) => Err(e),
-                                                _ => Ok(()),
-                                            }
-                                        } else {
-                                            Err(self.create_type_error(&format!(
-                                                "Cannot set private member #{name} which has no setter"
-                                            )))
-                                        }
-                                    }
-                                    None => Err(self.create_type_error(&format!(
-                                        "Cannot write private member #{name} to an object whose class did not declare it"
-                                    ))),
-                                }
-                            } else {
-                                Ok(())
-                            }
+                    return self.set_private_field(&obj_val, name, value, env);
+                }
+                // The base Reference and the value being written must survive
+                // the computed-key evaluation (arbitrary user code, plus
+                // ToPropertyKey) and PutValue. Both can reach a GC safepoint
+                // while these exist only as Rust locals, invisible to the
+                // tracing collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                self.gc_root_value(&value);
+                let result = (|| {
+                    let key = match prop {
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                        MemberProperty::Computed(cexpr) => {
+                            let v = match self.eval_expr(cexpr, env) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Err(e),
+                                _ => return Ok(()),
+                            };
+                            self.to_property_key(&v)?
                         }
-                        _ => Err(self.create_type_error(&format!(
-                            "Cannot write private member #{name} to a non-object"
-                        ))),
+                        MemberProperty::Private(_) => unreachable!(),
                     };
-                }
-                let key = match prop {
-                    MemberProperty::Dot(name) => name.clone(),
-                    MemberProperty::Computed(cexpr) => {
-                        let v = match self.eval_expr(cexpr, env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(e),
-                            _ => return Ok(()),
-                        };
-                        // Fast path: non-negative integer index on typed array
-                        if let JsValue::Number(index) = &v
-                            && let JsValue::Object(ref o) = obj_val
-                            && let Some(obj) = self.get_object(o.id)
-                            && obj.borrow().typed_array_info().is_some()
-                        {
-                            let obj_ref = obj.borrow();
-                            let ta = obj_ref.typed_array_info().unwrap();
-                            if is_valid_integer_index(ta, *index) {
-                                let is_bigint = ta.kind.is_bigint();
-                                let ta_clone = ta.clone();
-                                drop(obj_ref);
-                                let num_val = if is_bigint {
-                                    self.to_bigint_value(&value)?
-                                } else {
-                                    JsValue::Number(self.to_number_value(&value)?)
-                                };
-                                typed_array_set_index(&ta_clone, *index as usize, &num_val);
-                                return Ok(());
+                    if obj_val.is_null() || obj_val.is_undefined() {
+                        return Err(self.create_type_error(&format!(
+                            "Cannot set properties of {} (setting '{key}')",
+                            if obj_val.is_null() {
+                                "null"
+                            } else {
+                                "undefined"
                             }
-                            // Invalid index (e.g. -0, NaN, fractional) — fall through
-                            // to to_property_key which may canonicalize the key
-                        }
-                        self.to_property_key(&v)?
+                        )));
                     }
-                    MemberProperty::Private(_) => unreachable!(),
-                };
-                if obj_val.is_null() || obj_val.is_undefined() {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot set properties of {} (setting '{key}')",
-                        if obj_val.is_null() {
-                            "null"
-                        } else {
-                            "undefined"
-                        }
-                    )));
-                }
-                if let JsValue::Object(ref o) = obj_val
-                    && let Some(obj) = self.get_object(o.id)
-                {
-                    // TypedArray [[Set]]
-                    let is_ta = obj.borrow().typed_array_info().is_some();
-                    if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
-                        let is_bigint = obj
-                            .borrow()
-                            .typed_array_info()
-                            .map(|ta| ta.kind.is_bigint())
-                            .unwrap_or(false);
-                        let num_val = if is_bigint {
-                            self.to_bigint_value(&value)?
-                        } else {
-                            JsValue::Number(self.to_number_value(&value)?)
-                        };
-                        let obj_ref = obj.borrow();
-                        let ta = obj_ref.typed_array_info().unwrap();
-                        if is_valid_integer_index(ta, index) {
-                            let ta_clone = ta.clone();
-                            drop(obj_ref);
-                            typed_array_set_index(&ta_clone, index as usize, &num_val);
-                        }
-                        return Ok(());
-                    }
-                    // Check own setter
-                    let desc = obj.borrow().get_own_property_full(&key);
-                    if let Some(ref d) = desc
-                        && let Some(ref setter) = d.set
-                        && !matches!(setter, JsValue::Undefined)
-                    {
-                        let setter = setter.clone();
-                        let this = obj_val.clone();
-                        return match self.call_function(
-                            &setter,
-                            &this,
-                            std::slice::from_ref(&value),
-                        ) {
-                            Completion::Throw(e) => Err(e),
-                            _ => Ok(()),
-                        };
-                    }
-                    // OrdinarySet: walk prototype chain for setters
-                    if !obj.borrow().has_own_property(&key) {
-                        let mut proto_opt = obj.borrow().prototype_id;
-                        while let Some(proto_id) = proto_opt {
-                            let inherited = self.get_property_descriptor_on_id(proto_id, &key);
-                            if let Some(ref inherited_desc) = inherited {
-                                if inherited_desc.is_accessor_descriptor() {
-                                    if let Some(ref setter) = inherited_desc.set
-                                        && !matches!(setter, JsValue::Undefined)
-                                    {
-                                        let setter = setter.clone();
-                                        let this = obj_val.clone();
-                                        return match self.call_function(
-                                            &setter,
-                                            &this,
-                                            std::slice::from_ref(&value),
-                                        ) {
-                                            Completion::Throw(e) => Err(e),
-                                            _ => Ok(()),
-                                        };
-                                    }
-                                    return Ok(());
-                                }
-                                break;
-                            }
-                            proto_opt = self.get_object_cell_expect(proto_id).borrow().prototype_id;
-                        }
-                    }
-                    obj.borrow_mut().set_property_value(&key, value);
-                }
-                Ok(())
+                    let strict = env.borrow().strict;
+                    self.set_object_with_key(obj_val, &key, value, strict)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             _ => Ok(()),
         }
@@ -3037,12 +2960,12 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
 
                     // Evaluate key expression (raw, no ToPropertyKey yet)
                     let raw_key = match prop {
                         MemberProperty::Dot(name) => {
-                            JsValue::String(crate::types::JsString::from_str(name))
+                            JsValue::string(crate::types::JsString::from_str(name))
                         }
                         MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
@@ -3108,97 +3031,60 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let MemberProperty::Private(name) = prop {
-                    let branded = self.resolve_private_name(name, env);
-                    let rval = match self.eval_expr(right, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    return match &obj_val {
-                        JsValue::Object(o) => {
-                            if let Some(obj) = self.get_object(o.id) {
-                                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                match elem {
-                                    Some(PrivateElement::Field(_)) => {
-                                        let final_val = if op == AssignOp::Assign {
-                                            rval
-                                        } else {
-                                            let lval = if let Some(PrivateElement::Field(v)) = obj.borrow().private_fields.get(&branded) {
-                                                v.clone()
-                                            } else {
-                                                JsValue::Undefined
-                                            };
-                                            match self.apply_compound_assign(op, lval, rval) {
-                                                Completion::Normal(v) => v,
-                                                other => return other,
-                                            }
-                                        };
-                                        obj.borrow_mut()
-                                            .private_fields
-                                            .insert(branded.clone(), PrivateElement::Field(final_val.clone()));
-                                        Completion::Normal(final_val)
-                                    }
-                                    Some(PrivateElement::Method(_)) => {
-                                        Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot assign to private method #{name}"
-                                        )))
-                                    }
-                                    Some(PrivateElement::Accessor { get, set }) => {
-                                        if let Some(setter) = &set {
-                                            let final_val = if op == AssignOp::Assign {
-                                                rval
-                                            } else {
-                                                let lval = if let Some(ref getter) = get {
-                                                    match self.call_function(getter, &obj_val, &[]) {
-                                                        Completion::Normal(v) => v,
-                                                        other => return other,
-                                                    }
-                                                } else {
-                                                    JsValue::Undefined
-                                                };
-                                                match self.apply_compound_assign(op, lval, rval) {
-                                                    Completion::Normal(v) => v,
-                                                    other => return other,
-                                                }
-                                            };
-                                            let setter = setter.clone();
-                                            if let Completion::Throw(e) = self.call_function(&setter, &obj_val, std::slice::from_ref(&final_val)) { return Completion::Throw(e) }
-                                            Completion::Normal(final_val)
-                                        } else {
-                                            Completion::Throw(self.create_type_error(&format!(
-                                                "Cannot set private member #{name} which has no setter"
-                                            )))
-                                        }
-                                    }
-                                    None => {
-                                        Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot write private member #{name} to an object whose class did not declare it"
-                                        )))
-                                    }
-                                }
-                            } else {
-                                Completion::Normal(JsValue::Undefined)
-                            }
-                        }
-                        _ => Completion::Throw(self.create_type_error(&format!(
-                            "Cannot write private member #{name} to a non-object"
-                        ))),
-                    };
-                }
-                // Evaluate computed key expression before RHS
-                let key_val = match prop {
-                    MemberProperty::Computed(expr) => {
-                        let v = match self.eval_expr(expr, env) {
+                // The base Reference must survive computed-key/RHS evaluation
+                // and PutValue. Those operations can hit GC safepoints while
+                // `obj_val` otherwise exists only as a Rust local, invisible to
+                // the tracing collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    if let MemberProperty::Private(name) = prop {
+                        // The RHS is evaluated first (preserving jsse's existing
+                        // evaluation order). A plain `= ` performs PrivateSet with
+                        // no preceding PrivateGet; every compound operator desugars
+                        // to PrivateGet -> op -> PrivateSet, so accessor-backed
+                        // privates read through the getter and write through the
+                        // setter exactly as a data field does.
+                        let rval = match self.eval_expr(right, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        Some(v)
+                        if op == AssignOp::Assign {
+                            if let Err(e) =
+                                self.set_private_field(&obj_val, name, rval.clone(), env)
+                            {
+                                return Completion::Throw(e);
+                            }
+                            return Completion::Normal(rval);
+                        }
+                        let lval = match self.private_get(&obj_val, name, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let final_val = match self.apply_compound_assign(op, lval, rval) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let Err(e) =
+                            self.set_private_field(&obj_val, name, final_val.clone(), env)
+                        {
+                            return Completion::Throw(e);
+                        }
+                        return Completion::Normal(final_val);
                     }
-                    _ => None,
-                };
-                // For compound ops, compute property key and get current value before RHS
-                let (key, lval_for_compound) =
-                    if op != AssignOp::Assign {
+                    // Evaluate computed key expression before RHS
+                    let key_val = match prop {
+                        MemberProperty::Computed(expr) => {
+                            let v = match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            Some(v)
+                        }
+                        _ => None,
+                    };
+                    // For compound ops, compute property key and get current value before RHS
+                    let (key, lval_for_compound) = if op != AssignOp::Assign {
                         // §6.2.5.5 GetValue: if base is null/undefined, throw TypeError
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
@@ -3213,7 +3099,7 @@ impl Interpreter {
                             )));
                         }
                         let key = match prop {
-                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
                                 match self.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
@@ -3222,7 +3108,10 @@ impl Interpreter {
                             }
                             MemberProperty::Private(_) => unreachable!(),
                         };
-                        let lval = if let JsValue::Object(ref o) = obj_val {
+                        let lval = if let Some(o) = (obj_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
+                        {
                             match self.get_object_property(o.id, &key, &obj_val) {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -3230,59 +3119,59 @@ impl Interpreter {
                         } else {
                             match self.to_object(&obj_val) {
                                 Completion::Normal(wrapped) => {
-                                    if let JsValue::Object(ref o) = wrapped {
+                                    if let Some(o) = (wrapped)
+                                        .as_object_id()
+                                        .map(|id| crate::types::JsObject { id })
+                                    {
                                         match self.get_object_property(o.id, &key, &obj_val) {
                                             Completion::Normal(v) => v,
                                             other => return other,
                                         }
                                     } else {
-                                        JsValue::Undefined
+                                        JsValue::UNDEFINED
                                     }
                                 }
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             }
                         };
                         (key, Some(lval))
                     } else {
-                        (String::new(), None) // key computed after RHS for simple assign
+                        (JsPropertyKey::from_str(""), None) // key computed after RHS for simple assign
                     };
-                // Now evaluate RHS
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                // For simple assign, compute key now
-                let key = if op == AssignOp::Assign {
-                    match prop {
-                        MemberProperty::Dot(name) => name.clone(),
-                        MemberProperty::Computed(_) => {
-                            match self.to_property_key(key_val.as_ref().unwrap()) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
+                    // Now evaluate RHS
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    // For simple assign, compute key now
+                    let key = if op == AssignOp::Assign {
+                        match prop {
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                            MemberProperty::Computed(_) => {
+                                match self.to_property_key(key_val.as_ref().unwrap()) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
                             }
+                            MemberProperty::Private(_) => unreachable!(),
                         }
-                        MemberProperty::Private(_) => unreachable!(),
-                    }
-                } else {
-                    key
-                };
-                // Note: super[key] = val is handled by the early return above
-                // Throw for null/undefined base
-                if obj_val.is_null() || obj_val.is_undefined() {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot set properties of {} (setting '{}')",
-                        if obj_val.is_null() {
-                            "null"
-                        } else {
-                            "undefined"
-                        },
+                    } else {
                         key
-                    )));
-                }
-                if let JsValue::Object(ref o) = obj_val
-                    && let Some(obj) = self.get_object(o.id)
-                {
+                    };
+                    // Note: super[key] = val is handled by the early return above
+                    // Throw for null/undefined base
+                    if obj_val.is_null() || obj_val.is_undefined() {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot set properties of {} (setting '{}')",
+                            if obj_val.is_null() {
+                                "null"
+                            } else {
+                                "undefined"
+                            },
+                            key
+                        )));
+                    }
                     let final_val = if op == AssignOp::Assign {
                         rval
                     } else {
@@ -3298,7 +3187,7 @@ impl Interpreter {
                     // -writable-length, non-extensible, proxies, or shadowed
                     // indices so strict-throw and exotic behaviour stay correct.
                     //
-                    // NB: in this engine `JsValue::Undefined` in `array_elements`
+                    // NB: in this engine `JsValue::UNDEFINED` in `array_elements`
                     // (with no `properties` entry) is the HOLE sentinel (see
                     // `has_own_property`/`get_own_property_full`). The fast path
                     // therefore must not (a) treat an `Undefined` slot as a live
@@ -3306,8 +3195,14 @@ impl Interpreter {
                     // element without the `properties` presence marker the slow
                     // path adds — doing either materialises/leaves a hole with the
                     // wrong own-property state. Both cases bail to the slow path.
-                    if let Some(idx_u32) = parse_array_index(&key)
-                        && !matches!(final_val, JsValue::Undefined)
+                    //
+                    // The key and value tests gate the arena lookup: both are
+                    // pure and allocation-free, so a non-index write never pays
+                    // for an object handle it would immediately drop.
+                    if !(final_val).is_undefined()
+                        && let Some(idx_u32) = parse_array_index(&key)
+                        && let Some(obj_id) = obj_val.as_object_id()
+                        && let Some(obj) = self.get_object(obj_id)
                     {
                         let fast = {
                             let b = obj.borrow();
@@ -3321,18 +3216,11 @@ impl Interpreter {
                                 let idx = idx_u32 as usize;
                                 // Overwrite is only sound on a genuinely live slot
                                 // (not the hole sentinel).
-                                let slot_is_hole =
-                                    idx < elems_len && matches!(elems[idx], JsValue::Undefined);
+                                let slot_is_hole = idx < elems_len && (elems[idx]).is_undefined();
                                 let len_desc = b.properties.get("length");
                                 let cur_len = len_desc
                                     .and_then(|d| d.value.as_ref())
-                                    .and_then(|v| {
-                                        if let JsValue::Number(n) = v {
-                                            Some(*n as u32)
-                                        } else {
-                                            None
-                                        }
-                                    })
+                                    .and_then(|v| (v).as_number().map(|n| n as u32))
                                     .unwrap_or(0);
                                 let length_writable =
                                     len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
@@ -3365,28 +3253,27 @@ impl Interpreter {
                                     final_val.clone();
                                 return Completion::Normal(final_val);
                             } else if idx == elems_len
-                                && idx_u32 >= cur_len
-                                && cur_len as usize == elems_len
-                                && extensible
-                                && length_writable
-                                && idx_u32 < 0xFFFF_FFFF
-                                // OrdinarySet walks the prototype chain when the
-                                // receiver has no own property for this index.
-                                // If the index ToString is inherited (setter or
-                                // data), or a Proxy sits anywhere in the chain,
-                                // we must honour the proto via the slow path's
-                                // OrdinarySet/proxy_set — a bare Proxy exposes no
-                                // own descriptor here, so check it explicitly.
-                                && !proto_id.is_some_and(|pid| {
-                                    self.has_proxy_in_prototype_chain(pid)
-                                        || self.get_property_descriptor_on_id(pid, &key).is_some()
-                                })
-                            {
+                            && idx_u32 >= cur_len
+                            && cur_len as usize == elems_len
+                            && extensible
+                            && length_writable
+                            && idx_u32 < 0xFFFF_FFFF
+                            // OrdinarySet walks the prototype chain when the
+                            // receiver has no own property for this index.
+                            // If the index ToString is inherited (setter or
+                            // data), or a Proxy sits anywhere in the chain,
+                            // we must honour the proto via the slow path's
+                            // OrdinarySet/proxy_set — a bare Proxy exposes no
+                            // own descriptor here, so check it explicitly.
+                            && !proto_id.is_some_and(|pid| {
+                                self.has_proxy_in_prototype_chain(pid)
+                                    || self.get_property_descriptor_on_id(pid, &key).is_some()
+                            }) {
                                 // Append at end: push and bump length + shape.
                                 let mut b = obj.borrow_mut();
                                 b.array_elements_mut().unwrap().push(final_val.clone());
                                 if let Some(len_desc) = b.properties.get_mut("length") {
-                                    len_desc.value = Some(JsValue::Number((idx_u32 + 1) as f64));
+                                    len_desc.value = Some(JsValue::number((idx_u32 + 1) as f64));
                                 }
                                 b.shape_id = crate::interpreter::types::fresh_shape_id();
                                 return Completion::Normal(final_val);
@@ -3396,275 +3283,33 @@ impl Interpreter {
                             // inherited index): fall through to the slow path.
                         }
                     }
-                    // Proxy set trap
-                    if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                        let receiver = obj_val.clone();
-                        match self.proxy_set(o.id, &key, final_val.clone(), &receiver) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Completion::Normal(final_val);
-                            }
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    let strict = env.borrow().strict;
+                    let set_outcome = match self.set_object_with_key_result(
+                        obj_val.clone(),
+                        &key,
+                        final_val.clone(),
+                        false,
+                    ) {
+                        Ok(succeeded) => succeeded,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if !set_outcome.succeeded() && strict {
+                        return Completion::Throw(self.member_assignment_error(&obj_val, &key));
                     }
-                    // Module namespace [[Set]] always returns false (§10.4.6.5)
-                    if obj.borrow().module_namespace().is_some() {
-                        if env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}' of object '[object Module]'"
-                            )));
-                        }
-                        return Completion::Normal(final_val);
-                    }
-                    // Check for setter — only own properties (prototype chain walked below with proxy support)
-                    let desc = obj.borrow().get_own_property_full(&key);
-                    if let Some(ref d) = desc
-                        && let Some(ref setter) = d.set
-                        && !matches!(setter, JsValue::Undefined)
+                    // The realm test comes before `as_str`, which validates the
+                    // whole key as UTF-8: it is both cheaper and false for
+                    // essentially every write in a real program.
+                    if let Some(obj_id) = obj_val.as_object_id()
+                        && set_outcome.wrote_own_data_property_on(obj_id)
+                        && self.is_realm_global_object(obj_id)
+                        && let Some(key_str) = key.as_str()
                     {
-                        let setter = setter.clone();
-                        let this = obj_val.clone();
-                        return match self.call_function(
-                            &setter,
-                            &this,
-                            std::slice::from_ref(&final_val),
-                        ) {
-                            Completion::Normal(_) => Completion::Normal(final_val),
-                            other => other,
-                        };
+                        self.sync_global_object_binding(obj_id, key_str, &final_val);
                     }
-                    if desc
-                        .as_ref()
-                        .map(|d| d.is_accessor_descriptor())
-                        .unwrap_or(false)
-                    {
-                        if env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot set property '{key}' which has only a getter"
-                            )));
-                        }
-                        return Completion::Normal(final_val);
-                    }
-                    // TypedArray [[Set]]: ToNumber/ToBigInt before index check
-                    {
-                        let is_ta = obj.borrow().typed_array_info().is_some();
-                        if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
-                            let is_bigint = obj
-                                .borrow()
-                                .typed_array_info()
-                                .map(|ta| ta.kind.is_bigint())
-                                .unwrap_or(false);
-                            // Convert value first (may throw)
-                            let num_val = if is_bigint {
-                                match self.to_bigint_value(&final_val) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            } else {
-                                match self.to_number_value(&final_val) {
-                                    Ok(n) => JsValue::Number(n),
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            };
-                            let obj_ref = obj.borrow();
-                            let ta = obj_ref.typed_array_info().unwrap();
-                            if is_valid_integer_index(ta, index) {
-                                let ta_clone = ta.clone();
-                                drop(obj_ref);
-                                typed_array_set_index(&ta_clone, index as usize, &num_val);
-                            }
-                            return Completion::Normal(final_val);
-                        }
-                    }
-                    // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
-                    if !obj.borrow().has_own_property(&key) {
-                        let mut proto_opt = obj.borrow().prototype_id;
-                        while let Some(proto_rc) = proto_opt {
-                            let proto_id = proto_rc;
-                            // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
-                            {
-                                let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
-                                if let Some(ta) = proto_borrow.typed_array_info()
-                                    && let Some(index) = canonical_numeric_index_string(&key)
-                                    && !is_valid_integer_index(ta, index)
-                                {
-                                    return Completion::Normal(final_val);
-                                }
-                                // Valid index: fall through to data descriptor path below
-                            }
-                            if self.has_proxy_in_prototype_chain(proto_id) {
-                                let receiver = obj_val.clone();
-                                match self.proxy_set(proto_id, &key, final_val.clone(), &receiver) {
-                                    Ok(success) => {
-                                        if !success && env.borrow().strict {
-                                            return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot assign to read only property '{key}'"
-                                                ),
-                                            ));
-                                        }
-                                        return Completion::Normal(final_val);
-                                    }
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
-                            let proto_id = proto_rc;
-                            let inherited = self.get_property_descriptor_on_id(proto_id, &key);
-                            if let Some(ref inherited_desc) = inherited {
-                                if inherited_desc.is_data_descriptor() {
-                                    if inherited_desc.writable == Some(false) {
-                                        if env.borrow().strict {
-                                            return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot assign to read only property '{key}'"
-                                                ),
-                                            ));
-                                        }
-                                        return Completion::Normal(final_val);
-                                    }
-                                    break;
-                                }
-                                if inherited_desc.is_accessor_descriptor() {
-                                    if let Some(ref setter) = inherited_desc.set
-                                        && !matches!(setter, JsValue::Undefined)
-                                    {
-                                        let setter = setter.clone();
-                                        let this = obj_val.clone();
-                                        return match self.call_function(
-                                            &setter,
-                                            &this,
-                                            std::slice::from_ref(&final_val),
-                                        ) {
-                                            Completion::Normal(_) => Completion::Normal(final_val),
-                                            other => other,
-                                        };
-                                    }
-                                    if env.borrow().strict {
-                                        return Completion::Throw(self.create_type_error(
-                                            &format!(
-                                                "Cannot set property '{key}' which has only a getter"
-                                            ),
-                                        ));
-                                    }
-                                    return Completion::Normal(final_val);
-                                }
-                                break;
-                            }
-                            proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
-                        }
-                    }
-                    // ArraySetLength §10.4.2.4 via [[Set]]
-                    if key == "length" && obj.borrow().class_name == "Array" {
-                        let desc = PropertyDescriptor {
-                            value: Some(final_val.clone()),
-                            writable: None,
-                            enumerable: None,
-                            configurable: None,
-                            get: None,
-                            set: None,
-                        };
-                        match self.array_set_length(o.id as usize, desc) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(
-                                        "Cannot assign to read only property 'length'",
-                                    ));
-                                }
-                                let obj_rc = self.get_object_cell(o.id).unwrap();
-                                let len_val = obj_rc
-                                    .borrow()
-                                    .properties
-                                    .get("length")
-                                    .and_then(|d| d.value.clone())
-                                    .unwrap_or(JsValue::Number(0.0));
-                                return Completion::Normal(len_val);
-                            }
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
-                    if !success && env.borrow().strict {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot assign to read only property '{key}'"
-                        )));
-                    }
-                    if success {
-                        self.sync_global_object_binding(o.id, &key, &final_val);
-                    }
-                    return Completion::Normal(final_val);
-                }
-                // Primitive base: ToObject(base).[[Set]](key, val, primitiveBase)
-                // Per §6.2.5.6 PutValue + §10.1.9.2 OrdinarySet:
-                // The receiver is the original primitive. If a setter exists in
-                // the prototype chain, call it. Otherwise [[Set]] returns false
-                // (can't create own property on primitive receiver), so strict
-                // mode throws TypeError and sloppy silently returns.
-                let final_val = if op == AssignOp::Assign {
-                    rval
-                } else {
-                    match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                };
-                let strict = env.borrow().strict;
-                let wrapper = match self.to_object(&obj_val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(final_val),
-                };
-                if let JsValue::Object(ref o) = wrapper {
-                    // Walk prototype chain looking for setter or proxy set trap
-                    let desc = self.get_property_descriptor_on_id(o.id, &key);
-                    if let Some(ref d) = desc
-                        && let Some(ref setter) = d.set
-                        && !matches!(setter, JsValue::Undefined)
-                    {
-                        let setter = setter.clone();
-                        return match self.call_function(
-                            &setter,
-                            &obj_val,
-                            std::slice::from_ref(&final_val),
-                        ) {
-                            Completion::Normal(_) => Completion::Normal(final_val),
-                            other => other,
-                        };
-                    }
-                    // Check for proxy in prototype chain
-                    if let Some(obj) = self.get_object_cell(o.id) {
-                        let mut proto_opt = obj.borrow().prototype_id;
-                        while let Some(proto_rc) = proto_opt {
-                            let proto_id = proto_rc;
-                            if self.get_proxy_info(proto_id).is_some() {
-                                match self.proxy_set(proto_id, &key, final_val.clone(), &obj_val) {
-                                    Ok(success) => {
-                                        if !success && strict {
-                                            return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot create property '{key}' on {obj_val}"
-                                                ),
-                                            ));
-                                        }
-                                        return Completion::Normal(final_val);
-                                    }
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
-                            proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
-                        }
-                    }
-                }
-                // No setter found — [[Set]] returns false for primitive receiver
-                if strict {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot create property '{key}' on {obj_val}"
-                    )));
-                }
-                Completion::Normal(final_val)
+                    Completion::Normal(final_val)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Expression::Array(elements, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
@@ -3676,7 +3321,7 @@ impl Interpreter {
                     other => other,
                 }
             }
-            Expression::Object(props) if op == AssignOp::Assign => {
+            Expression::Object(props, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -3786,112 +3431,60 @@ impl Interpreter {
                 self.put_value_by_ref(name, rval, &id_ref, env)
             }
             Expression::Member(obj_expr, MemberProperty::Private(name), _) => {
-                let branded = self.resolve_private_name(name, env);
                 let obj_val = match self.eval_expr(obj_expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let lval = match &obj_val {
-                    JsValue::Object(o) => {
-                        if let Some(obj) = self.get_object_cell(o.id) {
-                            let elem = obj.borrow().private_fields.get(&branded).cloned();
-                            match elem {
-                                Some(PrivateElement::Field(v)) => v,
-                                Some(PrivateElement::Method(v)) => v,
-                                Some(PrivateElement::Accessor { get, .. }) => {
-                                    if let Some(ref getter) = get {
-                                        match self.call_function(getter, &obj_val, &[]) {
-                                            Completion::Normal(v) => v,
-                                            other => return other,
-                                        }
-                                    } else {
-                                        JsValue::Undefined
-                                    }
-                                }
-                                None => {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot read private member #{name} from an object whose class did not declare it"
-                                    )));
-                                }
-                            }
-                        } else {
-                            JsValue::Undefined
-                        }
+                // The receiver has to survive PrivateGet (which may call a
+                // user getter) and the right-hand side evaluation before
+                // PrivateSet writes through the setter. Both steps run user
+                // code that can reach a GC safepoint while `obj_val` exists
+                // only as a Rust local, invisible to the collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    let lval = match self.private_get(&obj_val, name, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let should_assign = match op {
+                        AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                        AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
+                        AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                        _ => unreachable!(),
+                    };
+                    if !should_assign {
+                        return Completion::Normal(lval);
                     }
-                    _ => {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot read private member #{name} from a non-object"
-                        )));
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if let Err(e) = self.set_private_field(&obj_val, name, rval.clone(), env) {
+                        return Completion::Throw(e);
                     }
-                };
-                let should_assign = match op {
-                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
-                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
-                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
-                    _ => unreachable!(),
-                };
-                if !should_assign {
-                    return Completion::Normal(lval);
-                }
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                match &obj_val {
-                    JsValue::Object(o) => {
-                        if let Some(obj) = self.get_object_cell(o.id) {
-                            let elem = obj.borrow().private_fields.get(&branded).cloned();
-                            match elem {
-                                Some(PrivateElement::Field(_)) => {
-                                    obj.borrow_mut().private_fields.insert(
-                                        branded.clone(),
-                                        PrivateElement::Field(rval.clone()),
-                                    );
-                                }
-                                Some(PrivateElement::Method(_)) => {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot assign to private method #{name}"
-                                    )));
-                                }
-                                Some(PrivateElement::Accessor { set, .. }) => {
-                                    if let Some(setter) = &set {
-                                        let setter = setter.clone();
-                                        self.call_function(
-                                            &setter,
-                                            &obj_val,
-                                            std::slice::from_ref(&rval),
-                                        );
-                                    } else {
-                                        return Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot set private member #{name} which has no setter"
-                                        )));
-                                    }
-                                }
-                                None => {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot write private member #{name} to an object whose class did not declare it"
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot write private member #{name} to a non-object"
-                        )));
-                    }
-                }
-                Completion::Normal(rval)
+                    Completion::Normal(rval)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Expression::Member(obj_expr, prop, _) => {
                 // Super property logical assignment: super.p &&= / ||= / ??=
                 if matches!(obj_expr.as_ref(), Expression::Super)
                     && !matches!(prop, MemberProperty::Private(_))
                 {
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    // §13.3.7.3 step 2: GetThisEnvironment().GetThisBinding()
+                    // runs before the key expression and throws for an
+                    // uninitialized `this` in a derived constructor.
+                    if Self::this_is_in_tdz(env) {
+                        return Completion::Throw(self.create_reference_error(
+                            "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                        ));
+                    }
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
                     let raw_key = match prop {
                         MemberProperty::Dot(name) => {
-                            JsValue::String(crate::types::JsString::from_str(name))
+                            JsValue::string(crate::types::JsString::from_str(name))
                         }
                         MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
@@ -3937,171 +3530,99 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Evaluate key expression (but defer ToPropertyKey for null/undefined base)
-                let key_expr_val = match prop {
-                    MemberProperty::Computed(expr) => {
-                        let v = match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        Some(v)
-                    }
-                    _ => None,
-                };
-                // GetValue: ToObject(base) first, then ToPropertyKey
-                let (boxed_obj, key) = if let JsValue::Object(ref _o) = obj_val {
-                    let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
-                        MemberProperty::Computed(_) => {
-                            match self.to_property_key(key_expr_val.as_ref().unwrap()) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                // The base Reference — and, for a primitive base, the ToObject
+                // wrapper GetValue and PutValue share — must survive the
+                // computed-key evaluation, the getter, the right-hand side, and
+                // the write-back. Each of those can hit a GC safepoint while
+                // these values exist only as Rust locals, invisible to the
+                // tracing collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    // Evaluate key expression (but defer ToPropertyKey for null/undefined base)
+                    let key_expr_val = match prop {
+                        MemberProperty::Computed(expr) => {
+                            let v = match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            Some(v)
                         }
-                        MemberProperty::Private(_) => unreachable!(),
+                        _ => None,
                     };
-                    (obj_val.clone(), key)
-                } else {
-                    let boxed = match self.to_object(&obj_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(JsValue::Undefined),
-                    };
-                    let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
-                        MemberProperty::Computed(_) => {
-                            match self.to_property_key(key_expr_val.as_ref().unwrap()) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        MemberProperty::Private(_) => unreachable!(),
-                    };
-                    (boxed, key)
-                };
-                let lval = if let JsValue::Object(ref o) = boxed_obj {
-                    match self.get_object_property(o.id, &key, &obj_val) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                } else {
-                    JsValue::Undefined
-                };
-                let should_assign = match op {
-                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
-                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
-                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
-                    _ => unreachable!(),
-                };
-                if !should_assign {
-                    return Completion::Normal(lval);
-                }
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                // Write back (boxed_obj is already the ToObject result)
-                if let JsValue::Object(ref o) = boxed_obj
-                    && let Some(obj) = self.get_object_cell(o.id)
-                {
-                    if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                        let receiver = boxed_obj.clone();
-                        match self.proxy_set(o.id, &key, rval.clone(), &receiver) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Completion::Normal(rval);
-                            }
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    let desc = self.get_property_descriptor_on_id(o.id, &key);
-                    if let Some(ref d) = desc
-                        && let Some(ref setter) = d.set
-                        && !matches!(setter, JsValue::Undefined)
-                    {
-                        let setter = setter.clone();
-                        let this = boxed_obj.clone();
-                        return match self.call_function(&setter, &this, std::slice::from_ref(&rval))
-                        {
-                            Completion::Normal(_) => Completion::Normal(rval),
-                            other => other,
-                        };
-                    }
-                    if desc
-                        .as_ref()
-                        .map(|d| d.is_accessor_descriptor())
-                        .unwrap_or(false)
-                    {
-                        if env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot set property '{key}' which has only a getter"
-                            )));
-                        }
-                        return Completion::Normal(rval);
-                    }
-                    if !obj.borrow().has_own_property(&key) {
-                        let proto = obj.borrow().prototype_id;
-                        if let Some(proto_rc) = proto {
-                            let proto_id = proto_rc;
-                            if self.has_proxy_in_prototype_chain(proto_id) {
-                                let receiver = boxed_obj.clone();
-                                match self.proxy_set(proto_id, &key, rval.clone(), &receiver) {
-                                    Ok(success) => {
-                                        if !success && env.borrow().strict {
-                                            return Completion::Throw(self.create_type_error(
-                                                &format!(
-                                                    "Cannot assign to read only property '{key}'"
-                                                ),
-                                            ));
-                                        }
-                                        return Completion::Normal(rval);
-                                    }
+                    // GetValue: ToObject(base) first, then ToPropertyKey
+                    let (boxed_obj, key) = if obj_val.is_object() {
+                        let key = match prop {
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                            MemberProperty::Computed(_) => {
+                                match self.to_property_key(key_expr_val.as_ref().unwrap()) {
+                                    Ok(s) => s,
                                     Err(e) => return Completion::Throw(e),
                                 }
                             }
-                        }
-                    }
-                    // ArraySetLength §10.4.2.4 via [[Set]]
-                    if key == "length" && obj.borrow().class_name == "Array" {
-                        let desc = PropertyDescriptor {
-                            value: Some(rval.clone()),
-                            writable: None,
-                            enumerable: None,
-                            configurable: None,
-                            get: None,
-                            set: None,
+                            MemberProperty::Private(_) => unreachable!(),
                         };
-                        match self.array_set_length(o.id as usize, desc) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(
-                                        "Cannot assign to read only property 'length'",
-                                    ));
+                        (obj_val.clone(), key)
+                    } else {
+                        let boxed = match self.to_object(&obj_val) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => return Completion::Normal(JsValue::UNDEFINED),
+                        };
+                        self.gc_root_value(&boxed);
+                        let key = match prop {
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                            MemberProperty::Computed(_) => {
+                                match self.to_property_key(key_expr_val.as_ref().unwrap()) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
                                 }
-                                let obj_rc = self.get_object_cell(o.id).unwrap();
-                                let len_val = obj_rc
-                                    .borrow()
-                                    .properties
-                                    .get("length")
-                                    .and_then(|d| d.value.clone())
-                                    .unwrap_or(JsValue::Number(0.0));
-                                return Completion::Normal(len_val);
                             }
-                            Err(e) => return Completion::Throw(e),
+                            MemberProperty::Private(_) => unreachable!(),
+                        };
+                        (boxed, key)
+                    };
+                    let base_id = boxed_obj.as_object_id();
+                    let lval = if let Some(base_id) = base_id {
+                        match self.get_object_property(base_id, &key, &obj_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
                         }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    let should_assign = match op {
+                        AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                        AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
+                        AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                        _ => unreachable!(),
+                    };
+                    if !should_assign {
+                        return Completion::Normal(lval);
                     }
-                    let success = obj.borrow_mut().set_property_value(&key, rval.clone());
-                    if !success && env.borrow().strict {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot assign to read only property '{key}'"
-                        )));
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    // §6.2.5.6 PutValue: [[Set]] runs on ToObject(base) with the
+                    // original base as receiver. `boxed_obj` already is that
+                    // ToObject result, so reuse it instead of boxing again.
+                    let strict = env.borrow().strict;
+                    if let Some(base_id) = base_id
+                        && let Err(e) = self.put_value_to_property(
+                            base_id,
+                            &key,
+                            rval.clone(),
+                            &obj_val,
+                            strict,
+                        )
+                    {
+                        return Completion::Throw(e);
                     }
-                }
-                Completion::Normal(rval)
+                    Completion::Normal(rval)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Expression::Sequence(exprs)
                 if exprs.len() == 1 && matches!(&exprs[0], Expression::Identifier(_)) =>
@@ -4189,24 +3710,25 @@ impl Interpreter {
             AssignOp::AddAssign => {
                 // Fast path: both primitives and at least one is a string — avoid
                 // to_primitive/js_value_to_code_units clones in eval_binary.
-                if !matches!(&lval, JsValue::Object(_))
-                    && !matches!(&rval, JsValue::Object(_))
-                    && (matches!(&lval, JsValue::String(_)) || matches!(&rval, JsValue::String(_)))
+                if !lval.is_object() && !rval.is_object() && (lval.is_string() || rval.is_string())
                 {
-                    if matches!(&lval, JsValue::Symbol(_)) || matches!(&rval, JsValue::Symbol(_)) {
+                    if lval.is_symbol() || rval.is_symbol() {
                         return Completion::Throw(
                             self.create_type_error("Cannot convert a Symbol value to a string"),
                         );
                     }
-                    let mut code_units = match lval {
-                        JsValue::String(s) => s.into_vec(),
-                        ref other => js_value_to_code_units(other),
+                    let mut code_units = if lval.is_string() {
+                        lval.into_string().expect("kind checked").into_vec()
+                    } else {
+                        js_value_to_code_units(&lval)
                     };
-                    match rval {
-                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
-                        ref other => code_units.extend(js_value_to_code_units(other)),
-                    };
-                    return Completion::Normal(JsValue::String(JsString::from_vec(code_units)));
+                    if rval
+                        .with_string(|s| code_units.extend_from_slice(s))
+                        .is_none()
+                    {
+                        code_units.extend(js_value_to_code_units(&rval));
+                    }
+                    return Completion::Normal(JsValue::string(JsString::from_vec(code_units)));
                 }
                 self.eval_binary(BinaryOp::Add, &lval, &rval)
             }
@@ -4226,172 +3748,174 @@ impl Interpreter {
     }
 
     /// Set a property on an already-evaluated object+key pair (strict controls TypeError on failure).
-    fn set_object_with_key(
+    pub(super) fn set_object_with_key<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_val: JsValue,
-        key: &str,
+        key: &K,
         val: JsValue,
         strict: bool,
     ) -> Result<(), JsValue> {
-        // Auto-box primitives for property access
-        let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
+        self.set_object_with_key_result(obj_val, key, val, strict)
+            .map(|_| ())
+    }
+
+    fn set_object_with_key_result<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_val: JsValue,
+        key: &K,
+        val: JsValue,
+        strict: bool,
+    ) -> Result<SetOutcome, JsValue> {
+        // §6.2.5.6 PutValue: [[Set]] is invoked on ToObject(base), but the
+        // receiver argument stays the original base value. For a primitive
+        // base that means the receiver is never an object, so OrdinarySet's
+        // "Receiver is not an Object" rejection (§10.1.9.2 step 3) applies —
+        // capture it before boxing, not after.
+        let receiver = obj_val.clone();
+        // Auto-box primitives for property access. The two bail-outs below
+        // yield `true` in the sense of "no rejection to report" — [[Set]] never
+        // ran, so there is nothing for a strict caller to throw about. Neither
+        // is reachable today: `to_object` on a non-object always completes
+        // normally with an object.
+        let obj_val = if !(obj_val).is_object() {
             match self.to_object(&obj_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => return Ok(()),
+                _ => return Ok(SetOutcome::Succeeded),
             }
         } else {
             obj_val
         };
 
-        if let JsValue::Object(ref o) = obj_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            // Proxy set trap
-            if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                let receiver = obj_val.clone();
-                {
-                    let success = self.proxy_set(o.id, key, val, &receiver)?;
-                    if !success && strict {
-                        return Err(self.create_type_error(&format!(
-                            "Cannot assign to read only property '{key}'"
-                        )));
-                    }
-                    return Ok(());
-                }
+        let Some(base_id) = obj_val.as_object_id() else {
+            return Ok(SetOutcome::Succeeded);
+        };
+        self.put_value_to_property(base_id, key, val, &receiver, strict)
+    }
+
+    /// Property-Reference branch of §6.2.5.6 PutValue after ToObject and
+    /// ToPropertyKey have identified the [[Set]] holder and property key.
+    ///
+    /// `receiver` is GetThisValue(reference): the original base for an
+    /// ordinary member Reference and the actual `this` for a Super Reference.
+    fn put_value_to_property<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base_id: u64,
+        key: &K,
+        val: JsValue,
+        receiver: &JsValue,
+        strict: bool,
+    ) -> Result<SetOutcome, JsValue> {
+        // Delegate to the canonical [[Set]] entry point: proxy `set` trap,
+        // module-namespace reject, TypedArray integer-index set, accessor
+        // setters, and the OrdinarySet prototype-chain walk all live in
+        // `property.rs`. It is generic over the key, so only the error path
+        // below needs an owned `JsPropertyKey` — converting here would allocate
+        // on every write reached with a `&str` key.
+        let outcome = self.set_object_property_with_outcome(base_id, key, val, receiver)?;
+        if !outcome.succeeded() && strict {
+            let key = key.to_js_property_key();
+            // A non-object receiver never rejects because of a read-only
+            // property: OrdinarySet bails at "Receiver is not an Object", and
+            // `base_id` is only the throwaway ToObject wrapper, so describing
+            // its descriptors would be misleading.
+            if !receiver.is_object() {
+                return Err(self.non_object_receiver_error(receiver, &key));
             }
-            // Module namespace exotic: [[Set]] always returns false
-            if obj.borrow().module_namespace().is_some() {
-                if strict {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot assign to read only property '{key}' of module namespace"
-                    )));
-                }
-                return Ok(());
+            return Err(self.read_only_assignment_error(base_id, &key));
+        }
+        Ok(outcome)
+    }
+
+    /// The strict-mode TypeError for a [[Set]] rejected at OrdinarySet's
+    /// "Receiver is not an Object" step (§10.1.9.2 step 3): no own property can
+    /// be created on a primitive, so the write simply cannot land.
+    fn non_object_receiver_error(&mut self, receiver: &JsValue, key: &JsPropertyKey) -> JsValue {
+        self.create_type_error(&format!("Cannot create property '{key}' on {receiver}"))
+    }
+
+    /// Builds the strict-mode TypeError for a rejected [[Set]] on `obj_id`,
+    /// preserving the diagnostic distinctions this assignment path historically
+    /// produced: a module-namespace target, a getter-only accessor (own or
+    /// inherited), or a plain read-only data property. Descriptor re-inspection
+    /// is skipped when a proxy sits on the object or its prototype chain, so no
+    /// trap is re-invoked on the error path.
+    fn read_only_assignment_error(&mut self, obj_id: u64, key: &JsPropertyKey) -> JsValue {
+        let facts = self.set_rejection_facts(obj_id, key);
+        self.read_only_assignment_error_from(facts.as_ref(), key)
+    }
+
+    /// Reads, exactly once, every fact the two rejection formatters below
+    /// select a message from. Returns `None` when `obj_id` names no live
+    /// object, which both formatters report as the undecorated message.
+    ///
+    /// `desc` is deliberately left `None` when a proxy sits on the object or
+    /// its prototype chain, so no trap is re-invoked on the error path.
+    fn set_rejection_facts(&mut self, obj_id: u64, key: &JsPropertyKey) -> Option<SetRejection> {
+        let cell = self.get_object_cell(obj_id)?;
+        let (is_module_namespace, is_proxy, has_own) = {
+            let b = cell.borrow();
+            (
+                b.module_namespace().is_some(),
+                b.is_proxy() || b.is_proxy_revoked(),
+                b.has_own_property(key),
+            )
+        };
+        let desc = if is_proxy || self.has_proxy_in_prototype_chain(obj_id) {
+            None
+        } else {
+            self.get_property_descriptor_on_id(obj_id, key)
+        };
+        Some(SetRejection {
+            is_module_namespace,
+            has_own,
+            desc,
+        })
+    }
+
+    fn read_only_assignment_error_from(
+        &mut self,
+        facts: Option<&SetRejection>,
+        key: &JsPropertyKey,
+    ) -> JsValue {
+        match facts {
+            Some(f) if f.is_module_namespace => self.create_type_error(&format!(
+                "Cannot assign to read only property '{key}' of module namespace"
+            )),
+            Some(f) if f.desc.as_ref().is_some_and(|d| d.is_accessor_descriptor()) => self
+                .create_type_error(&format!(
+                    "Cannot set property '{key}' which has only a getter"
+                )),
+            _ => self.create_type_error(&format!("Cannot assign to read only property '{key}'")),
+        }
+    }
+
+    /// Preserve the host-compatible diagnostics historically produced by the
+    /// plain member-assignment dispatcher after canonical [[Set]] rejects.
+    /// The rejection itself and all observable descriptor/proxy work have
+    /// already happened inside `property.rs`; this only formats the TypeError.
+    fn member_assignment_error(&mut self, base: &JsValue, key: &JsPropertyKey) -> JsValue {
+        let Some(obj_id) = base.as_object_id() else {
+            return self.non_object_receiver_error(base, key);
+        };
+        let facts = self.set_rejection_facts(obj_id, key);
+        if let Some(f) = &facts {
+            if f.is_module_namespace {
+                return self.create_type_error(&format!(
+                    "Cannot assign to read only property '{key}' of object '[object Module]'"
+                ));
             }
-            // Check for setter
-            let desc = self.get_property_descriptor_on_id(o.id, key);
-            if let Some(ref d) = desc
-                && let Some(ref setter) = d.set
-                && !matches!(setter, JsValue::Undefined)
+            if !f.has_own
+                && f.desc
+                    .as_ref()
+                    .is_some_and(|d| d.is_data_descriptor() && d.writable == Some(false))
             {
-                let setter = setter.clone();
-                let this = obj_val.clone();
-                return match self.call_function(&setter, &this, &[val]) {
-                    Completion::Normal(_) => Ok(()),
-                    Completion::Throw(e) => Err(e),
-                    _ => Ok(()),
-                };
-            }
-            if desc
-                .as_ref()
-                .map(|d| d.is_accessor_descriptor())
-                .unwrap_or(false)
-            {
-                if strict {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot set property '{key}' which has only a getter"
-                    )));
-                }
-                return Ok(());
-            }
-            // TypedArray [[Set]]
-            let is_ta = obj.borrow().typed_array_info().is_some();
-            if is_ta && let Some(index) = canonical_numeric_index_string(key) {
-                let is_bigint = obj
-                    .borrow()
-                    .typed_array_info()
-                    .map(|ta| ta.kind.is_bigint())
-                    .unwrap_or(false);
-                let num_val = if is_bigint {
-                    self.to_bigint_value(&val)?
-                } else {
-                    JsValue::Number(self.to_number_value(&val)?)
-                };
-                let obj_ref = obj.borrow();
-                let ta = obj_ref.typed_array_info().unwrap();
-                if is_valid_integer_index(ta, index) {
-                    let ta_clone = ta.clone();
-                    drop(obj_ref);
-                    typed_array_set_index(&ta_clone, index as usize, &num_val);
-                }
-                return Ok(());
-            }
-            // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
-            if !obj.borrow().has_own_property(key) {
-                let mut proto_opt = obj.borrow().prototype_id;
-                while let Some(proto_rc) = proto_opt {
-                    let proto_id = proto_rc;
-                    // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
-                    {
-                        let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
-                        if let Some(ta) = proto_borrow.typed_array_info()
-                            && let Some(index) = canonical_numeric_index_string(key)
-                            && !is_valid_integer_index(ta, index)
-                        {
-                            // Not a valid integer index: TypedArray [[Set]] returns true silently
-                            return Ok(());
-                        }
-                        // Valid index: fall through to data descriptor path below
-                    }
-                    if self.get_proxy_info(proto_id).is_some() {
-                        let receiver = obj_val.clone();
-                        {
-                            let success = self.proxy_set(proto_id, key, val, &receiver)?;
-                            if !success && strict {
-                                return Err(self.create_type_error(&format!(
-                                    "Cannot assign to read only property '{key}'"
-                                )));
-                            }
-                            return Ok(());
-                        }
-                    }
-                    let proto_id = proto_rc;
-                    let inherited = self.get_property_descriptor_on_id(proto_id, key);
-                    if let Some(ref inherited_desc) = inherited {
-                        if inherited_desc.is_data_descriptor() {
-                            if inherited_desc.writable == Some(false) {
-                                if strict {
-                                    return Err(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Ok(());
-                            }
-                            break;
-                        }
-                        if inherited_desc.is_accessor_descriptor() {
-                            if let Some(ref setter) = inherited_desc.set
-                                && !matches!(setter, JsValue::Undefined)
-                            {
-                                let setter = setter.clone();
-                                let this = obj_val.clone();
-                                return match self.call_function(&setter, &this, &[val]) {
-                                    Completion::Normal(_) => Ok(()),
-                                    Completion::Throw(e) => Err(e),
-                                    _ => Ok(()),
-                                };
-                            }
-                            if strict {
-                                return Err(self.create_type_error(&format!(
-                                    "Cannot set property '{key}' which has only a getter"
-                                )));
-                            }
-                            return Ok(());
-                        }
-                        break;
-                    }
-                    proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
-                }
-            }
-            let success = obj.borrow_mut().set_property_value(key, val);
-            if !success && strict {
-                return Err(
-                    self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
-                );
+                return self.create_type_error(&format!(
+                    "Cannot assign to read only property '{key}' of object '#<Object>'"
+                ));
             }
         }
-        Ok(())
+        self.read_only_assignment_error_from(facts.as_ref(), key)
     }
 
     fn set_member_property(
@@ -4404,7 +3928,7 @@ impl Interpreter {
         // Handle super.prop / super[expr]
         if matches!(obj_expr, Expression::Super) {
             let key = match prop {
-                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(cexpr) => {
                     let v = match self.eval_expr(cexpr, env) {
                         Completion::Normal(v) => v,
@@ -4418,7 +3942,7 @@ impl Interpreter {
                 }
             };
             let super_base_id = self.get_super_base_id(env);
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return match super_base_id {
                 Some(base_id) => {
@@ -4439,6 +3963,42 @@ impl Interpreter {
         self.set_member_property_with_base(obj_val, prop, val, env)
     }
 
+    /// PrivateGet ( O, P ) — §7.3.28. Resolves the private name `name` in `env`
+    /// and performs the private-element MOP: a data field or method returns its
+    /// stored value; an accessor invokes its getter, or throws a TypeError when
+    /// it has none; a private name the object's class never declared, and a
+    /// non-object receiver, both throw a TypeError. This is the single read
+    /// operation that every `o.#x` reference form routes through.
+    fn private_get(&mut self, obj_val: &JsValue, name: &str, env: &EnvRef) -> Completion {
+        let branded = self.resolve_private_name(name, env);
+        let Some(obj_id) = obj_val.as_object_id() else {
+            return Completion::Throw(self.create_type_error(&format!(
+                "Cannot read private member #{name} from a non-object"
+            )));
+        };
+        let Some(obj) = self.get_object_cell(obj_id) else {
+            return Completion::Normal(JsValue::UNDEFINED);
+        };
+        let elem = obj.borrow().private_fields.get(&branded).cloned();
+        match elem {
+            Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
+                Completion::Normal(v)
+            }
+            Some(PrivateElement::Accessor { get, .. }) => {
+                if let Some(getter) = get {
+                    self.call_function(&getter, obj_val, &[])
+                } else {
+                    Completion::Throw(self.create_type_error(&format!(
+                        "Cannot read private member #{name} which has no getter"
+                    )))
+                }
+            }
+            None => Completion::Throw(self.create_type_error(&format!(
+                "Cannot read private member #{name} from an object whose class did not declare it"
+            ))),
+        }
+    }
+
     fn set_private_field(
         &mut self,
         obj_val: &JsValue,
@@ -4447,9 +4007,9 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let branded = self.resolve_private_name(name, env);
-        match obj_val {
-            JsValue::Object(o) => {
-                if let Some(obj) = self.get_object_cell(o.id) {
+        match obj_val.as_object_id() {
+            Some(id) => {
+                if let Some(obj) = self.get_object_cell(id) {
                     let elem = obj.borrow().private_fields.get(&branded).cloned();
                     match elem {
                         Some(PrivateElement::Field(_)) => {
@@ -4484,7 +4044,7 @@ impl Interpreter {
                     Ok(())
                 }
             }
-            _ => Err(self.create_type_error(&format!(
+            None => Err(self.create_type_error(&format!(
                 "Cannot write private member #{name} to a non-object"
             ))),
         }
@@ -4501,22 +4061,34 @@ impl Interpreter {
             return self.set_private_field(&obj_val, name, val, env);
         }
 
-        let key = match prop {
-            MemberProperty::Dot(name) => name.clone(),
-            MemberProperty::Computed(expr) => {
-                let v = match self.eval_expr(expr, env) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => return Ok(()),
-                };
-                self.to_property_key(&v)?
-            }
-            MemberProperty::Private(_) => unreachable!(),
-        };
+        // The base Reference and the value being written must survive the
+        // computed-key evaluation (arbitrary user code, plus ToPropertyKey) and
+        // PutValue. Both can reach a GC safepoint while these exist only as
+        // Rust locals, invisible to the tracing collector.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&obj_val);
+        self.gc_root_value(&val);
+        let result = (|| {
+            let key = match prop {
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                MemberProperty::Computed(expr) => {
+                    let v = match self.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => return Ok(()),
+                    };
+                    self.to_property_key(&v)?
+                }
+                MemberProperty::Private(_) => unreachable!(),
+            };
 
-        let strict = env.borrow().strict;
-        self.set_object_with_key(obj_val, &key, val, strict)
+            let strict = env.borrow().strict;
+            self.set_object_with_key(obj_val, &key, val, strict)
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
+
     pub(crate) fn assign_to_for_pattern(
         &mut self,
         pat: &crate::ast::Pattern,
@@ -4577,7 +4149,7 @@ impl Interpreter {
                         },
                     })
                     .collect();
-                Expression::Object(obj_props)
+                Expression::Object(obj_props, false)
             }
             Pattern::Assign(inner, default) => Expression::Assign(
                 AssignOp::Assign,
@@ -4604,20 +4176,20 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 match self.put_value_by_ref(name, val, &id_ref, env) {
-                    Completion::Normal(_) => Completion::Normal(JsValue::Undefined),
+                    Completion::Normal(_) => Completion::Normal(JsValue::UNDEFINED),
                     other => other,
                 }
             }
             Expression::Member(obj_expr, prop, _) => {
                 match self.set_member_property(obj_expr, prop, val, env) {
-                    Ok(()) => Completion::Normal(JsValue::Undefined),
+                    Ok(()) => Completion::Normal(JsValue::UNDEFINED),
                     Err(e) => Completion::Throw(e),
                 }
             }
             Expression::Array(elements, _) => {
                 self.destructure_array_assignment(elements, &val, env)
             }
-            Expression::Object(props) => self.destructure_object_assignment(props, &val, env),
+            Expression::Object(props, _) => self.destructure_object_assignment(props, &val, env),
             Expression::Assign(AssignOp::Assign, inner_target, default) => {
                 let v = if val.is_undefined() {
                     match self.eval_expr(default, env) {
@@ -4634,7 +4206,7 @@ impl Interpreter {
                 };
                 self.put_value_to_target(inner_target, v, env)
             }
-            _ => Completion::Normal(JsValue::Undefined),
+            _ => Completion::Normal(JsValue::UNDEFINED),
         };
         if matches!(result, Completion::Yield(_)) {
             self.destructuring_yield = true;
@@ -4642,36 +4214,42 @@ impl Interpreter {
         result
     }
 
-    /// Evaluate a member expression as an LHS reference (base object + key string).
-    /// Returns Ok(Some((base, key))) for member expressions,
-    /// Ok(None) for non-member expressions (handled lazily),
-    /// Err(e) if evaluation throws.
-    /// Sets *yield_val if a yield is encountered.
+    /// Root every object a destructuring lRef depends on until PutValue.
+    /// The base, the raw key awaiting ToPropertyKey, and a super reference's
+    /// receiver are all held only by Rust locals across arbitrary user code.
+    fn gc_root_destruct_lref(&mut self, lref: &DestructLRef) {
+        match lref {
+            DestructLRef::Member(base, raw_key) => {
+                self.gc_root_value(base);
+                self.gc_root_value(raw_key);
+            }
+            DestructLRef::Private(base, _) => self.gc_root_value(base),
+            DestructLRef::Super(_, _, this_val, _) => self.gc_root_value(this_val),
+        }
+    }
+
     /// Evaluate a member expression as an lref (Reference) for destructuring.
-    /// Returns base + key info — ToPropertyKey is deferred to PutValue time per spec.
+    /// Returns base + key info or suspension explicitly; ToPropertyKey is
+    /// deferred to PutValue time per spec.
     fn eval_member_lhs_ref(
         &mut self,
         target: &Expression,
         env: &EnvRef,
-        yield_val: &mut Option<JsValue>,
-    ) -> Result<Option<DestructLRef>, JsValue> {
+    ) -> Result<MemberLhsRef, JsValue> {
         let Expression::Member(obj_expr, prop, _) = target else {
-            return Ok(None);
+            return Ok(MemberLhsRef::Ref(None));
         };
 
         // Handle super.prop / super[expr]
         if matches!(obj_expr.as_ref(), Expression::Super) {
             let key = match prop {
-                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(key_expr) => {
                     let raw_key = match self.eval_expr(key_expr, env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),
-                        Completion::Yield(v) => {
-                            *yield_val = Some(v);
-                            return Ok(None);
-                        }
-                        _ => return Ok(None),
+                        Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
+                        _ => return Ok(MemberLhsRef::Ref(None)),
                     };
                     self.to_property_key(&raw_key)?
                 }
@@ -4682,44 +4260,50 @@ impl Interpreter {
             let super_base_id = self
                 .get_super_base_id(env)
                 .ok_or_else(|| self.create_type_error("No super class"))?;
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
-            return Ok(Some(DestructLRef::Super(
+            return Ok(MemberLhsRef::Ref(Some(DestructLRef::Super(
                 super_base_id,
                 key,
                 this_val,
                 strict,
-            )));
+            ))));
         }
 
         let base = match self.eval_expr(obj_expr, env) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
-            Completion::Yield(v) => {
-                *yield_val = Some(v);
-                return Ok(None);
-            }
-            _ => return Ok(None),
+            Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
+            _ => return Ok(MemberLhsRef::Ref(None)),
         };
 
         match prop {
-            MemberProperty::Dot(name) => Ok(Some(DestructLRef::Member(
+            MemberProperty::Dot(name) => Ok(MemberLhsRef::Ref(Some(DestructLRef::Member(
                 base,
-                JsValue::String(JsString::from_str(name)),
-            ))),
+                JsValue::string(JsString::from_str(name)),
+            )))),
             MemberProperty::Computed(key_expr) => {
-                let raw_key = match self.eval_expr(key_expr, env) {
+                // The base becomes the Reference Record's [[Base]], so it must
+                // survive arbitrary user code while the computed key is
+                // evaluated. Callers cannot root it until this function has
+                // finished constructing the reference.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&base);
+                let key_result = self.eval_expr(key_expr, env);
+                self.gc_unroot_frame(gc_frame);
+
+                let raw_key = match key_result {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    Completion::Yield(v) => {
-                        *yield_val = Some(v);
-                        return Ok(None);
-                    }
-                    _ => return Ok(None),
+                    Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
+                    _ => return Ok(MemberLhsRef::Ref(None)),
                 };
-                Ok(Some(DestructLRef::Member(base, raw_key)))
+                Ok(MemberLhsRef::Ref(Some(DestructLRef::Member(base, raw_key))))
             }
-            MemberProperty::Private(name) => Ok(Some(DestructLRef::Private(base, name.clone()))),
+            MemberProperty::Private(name) => Ok(MemberLhsRef::Ref(Some(DestructLRef::Private(
+                base,
+                name.clone(),
+            )))),
         }
     }
 
@@ -4733,7 +4317,10 @@ impl Interpreter {
             Ok(v) => v,
             Err(e) => return Completion::Throw(e),
         };
-        if let JsValue::Object(o) = &iterator {
+        if let Some(o) = iterator
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             self.gc_temp_roots.push(o.id);
         }
         let mut done = false;
@@ -4758,44 +4345,58 @@ impl Interpreter {
                 }
                 Some(Expression::Spread(inner)) => {
                     // §13.15.5.4 AssignmentRestElement: evaluate LHS ref BEFORE collecting
-                    let precomp = match self.eval_member_lhs_ref(inner, env, &mut yield_val) {
-                        Ok(r) => r,
+                    let precomp = match self.eval_member_lhs_ref(inner, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => {
+                            yield_val = Some(v);
+                            break;
+                        }
                         Err(e) => {
                             error = Some(e);
                             break;
                         }
                     };
-                    if yield_val.is_some() {
-                        break;
+
+                    // Keep the lRef's base, pending key, and receiver alive
+                    // through iterator collection and the eventual PutValue.
+                    let gc_frame = self.gc_root_frame();
+                    if let Some(lref) = &precomp {
+                        self.gc_root_destruct_lref(lref);
                     }
 
-                    // Collect remaining iterator values into rest array
-                    let mut rest = Vec::new();
-                    if !done {
-                        loop {
-                            match self.iterator_step(&iterator) {
-                                Ok(Some(result)) => match self.iterator_value(&result) {
-                                    Ok(v) => rest.push(v),
-                                    Err(e) => {
+                    let result = (|| {
+                        // Collect remaining iterator values into rest array
+                        let mut rest = Vec::new();
+                        if !done {
+                            loop {
+                                match self.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                        Ok(v) => {
+                                            // Later steps run user code; the
+                                            // Vec is invisible to the GC.
+                                            self.gc_root_value(&v);
+                                            rest.push(v);
+                                        }
+                                        Err(e) => {
+                                            done = true;
+                                            return Completion::Throw(e);
+                                        }
+                                    },
+                                    Ok(None) => {
                                         done = true;
-                                        error = Some(e);
                                         break;
                                     }
-                                },
-                                Ok(None) => {
-                                    done = true;
-                                    break;
-                                }
-                                Err(e) => {
-                                    done = true;
-                                    error = Some(e);
-                                    break;
+                                    Err(e) => {
+                                        done = true;
+                                        return Completion::Throw(e);
+                                    }
                                 }
                             }
                         }
-                    }
-                    if error.is_none() {
+
                         let arr = self.create_array(rest);
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&arr);
                         match precomp {
                             Some(DestructLRef::Member(base, raw_key)) => {
                                 match self.to_property_key(&raw_key) {
@@ -4804,37 +4405,46 @@ impl Interpreter {
                                         if let Err(e) =
                                             self.set_object_with_key(base, &key, arr, strict)
                                         {
-                                            error = Some(e);
+                                            return Completion::Throw(e);
                                         }
                                     }
                                     Err(e) => {
-                                        error = Some(e);
+                                        return Completion::Throw(e);
                                     }
                                 }
                             }
                             Some(DestructLRef::Private(base, ref name)) => {
                                 if let Err(e) = self.set_private_field(&base, name, arr, env) {
-                                    error = Some(e);
+                                    return Completion::Throw(e);
                                 }
                             }
                             Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
                                 if let Completion::Throw(e) =
                                     self.super_set_property(base_id, key, arr, this_val, strict)
                                 {
-                                    error = Some(e)
+                                    return Completion::Throw(e);
                                 }
                             }
                             None => match self.put_value_to_target(inner, arr, env) {
                                 Completion::Normal(_) | Completion::Empty => {}
                                 Completion::Throw(e) => {
-                                    error = Some(e);
+                                    return Completion::Throw(e);
                                 }
                                 Completion::Yield(v) => {
-                                    yield_val = Some(v);
+                                    return Completion::Yield(v);
                                 }
                                 _ => {}
                             },
                         }
+                        Completion::Empty
+                    })();
+                    self.gc_unroot_frame(gc_frame);
+
+                    match result {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Throw(e) => error = Some(e),
+                        Completion::Yield(v) => yield_val = Some(v),
+                        other => return other,
                     }
                     break;
                 }
@@ -4848,120 +4458,131 @@ impl Interpreter {
                         };
 
                     // §13.15.5.4: evaluate LHS reference BEFORE stepping the iterator
-                    let precomp = match self.eval_member_lhs_ref(target, env, &mut yield_val) {
-                        Ok(r) => r,
+                    let precomp = match self.eval_member_lhs_ref(target, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => {
+                            yield_val = Some(v);
+                            break;
+                        }
                         Err(e) => {
                             error = Some(e);
                             break;
                         }
                     };
-                    if yield_val.is_some() {
-                        break;
+
+                    // The target was evaluated before iterator/default user
+                    // code; its lRef must survive until PutValue.
+                    let gc_frame = self.gc_root_frame();
+                    if let Some(lref) = &precomp {
+                        self.gc_root_destruct_lref(lref);
                     }
 
-                    let item = if done {
-                        JsValue::Undefined
-                    } else {
-                        match self.iterator_step(&iterator) {
-                            Ok(Some(result)) => match self.iterator_value(&result) {
-                                Ok(v) => v,
+                    let result = (|| {
+                        let item = if done {
+                            JsValue::UNDEFINED
+                        } else {
+                            match self.iterator_step(&iterator) {
+                                Ok(Some(result)) => match self.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        done = true;
+                                        return Completion::Throw(e);
+                                    }
+                                },
+                                Ok(None) => {
+                                    done = true;
+                                    JsValue::UNDEFINED
+                                }
                                 Err(e) => {
                                     done = true;
-                                    error = Some(e);
-                                    break;
+                                    return Completion::Throw(e);
                                 }
-                            },
-                            Ok(None) => {
-                                done = true;
-                                JsValue::Undefined
                             }
-                            Err(e) => {
-                                done = true;
-                                error = Some(e);
-                                break;
-                            }
-                        }
-                    };
+                        };
 
-                    let val = if item.is_undefined() {
-                        if let Some(default) = default_expr {
-                            match self.eval_expr(default, env) {
-                                Completion::Normal(v) => {
-                                    if let Expression::Identifier(name) = target
-                                        && default.is_anonymous_function_definition()
-                                    {
-                                        self.set_function_name(&v, name);
+                        let val = if item.is_undefined() {
+                            if let Some(default) = default_expr {
+                                match self.eval_expr(default, env) {
+                                    Completion::Normal(v) => {
+                                        if let Expression::Identifier(name) = target
+                                            && default.is_anonymous_function_definition()
+                                        {
+                                            self.set_function_name(&v, name);
+                                        }
+                                        v
                                     }
-                                    v
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    Completion::Yield(v) => return Completion::Yield(v),
+                                    other => return other,
                                 }
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    break;
-                                }
-                                Completion::Yield(v) => {
-                                    yield_val = Some(v);
-                                    break;
-                                }
-                                other => return other,
+                            } else {
+                                item
                             }
                         } else {
                             item
-                        }
-                    } else {
-                        item
-                    };
+                        };
 
-                    match precomp {
-                        Some(DestructLRef::Member(base, raw_key)) => {
-                            match self.to_property_key(&raw_key) {
-                                Ok(key) => {
-                                    let strict = env.borrow().strict;
-                                    if let Err(e) =
-                                        self.set_object_with_key(base, &key, val, strict)
-                                    {
-                                        error = Some(e);
-                                        break;
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&val);
+                        match precomp {
+                            Some(DestructLRef::Member(base, raw_key)) => {
+                                match self.to_property_key(&raw_key) {
+                                    Ok(key) => {
+                                        let strict = env.borrow().strict;
+                                        if let Err(e) =
+                                            self.set_object_with_key(base, &key, val, strict)
+                                        {
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        return Completion::Throw(e);
                                     }
                                 }
-                                Err(e) => {
-                                    error = Some(e);
-                                    break;
+                            }
+                            Some(DestructLRef::Private(base, ref name)) => {
+                                if let Err(e) = self.set_private_field(&base, name, val, env) {
+                                    return Completion::Throw(e);
                                 }
                             }
+                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
+                                if let Completion::Throw(e) =
+                                    self.super_set_property(base_id, key, val, this_val, strict)
+                                {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            None => match self.put_value_to_target(target, val, env) {
+                                Completion::Normal(_) | Completion::Empty => {}
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Yield(v) => return Completion::Yield(v),
+                                _ => {}
+                            },
                         }
-                        Some(DestructLRef::Private(base, ref name)) => {
-                            if let Err(e) = self.set_private_field(&base, name, val, env) {
-                                error = Some(e);
-                                break;
-                            }
+                        Completion::Empty
+                    })();
+                    self.gc_unroot_frame(gc_frame);
+
+                    match result {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Throw(e) => {
+                            error = Some(e);
+                            break;
                         }
-                        Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                            if let Completion::Throw(e) =
-                                self.super_set_property(base_id, key, val, this_val, strict)
-                            {
-                                error = Some(e);
-                                break;
-                            }
+                        Completion::Yield(v) => {
+                            yield_val = Some(v);
+                            break;
                         }
-                        None => match self.put_value_to_target(target, val, env) {
-                            Completion::Normal(_) | Completion::Empty => {}
-                            Completion::Throw(e) => {
-                                error = Some(e);
-                                break;
-                            }
-                            Completion::Yield(v) => {
-                                yield_val = Some(v);
-                                break;
-                            }
-                            _ => {}
-                        },
+                        other => return other,
                     }
                 }
             }
         }
 
         let unroot = |s: &mut Self| {
-            if let JsValue::Object(o) = &iterator
+            if let Some(o) = iterator
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
             {
                 s.gc_temp_roots.remove(pos);
@@ -4987,7 +4608,7 @@ impl Interpreter {
             let r = self.iterator_close_result(&iterator);
             unroot(self);
             return match r {
-                Ok(()) => Completion::Normal(JsValue::Undefined),
+                Ok(()) => Completion::Normal(JsValue::UNDEFINED),
                 Err(e) => Completion::Throw(e),
             };
         }
@@ -4996,7 +4617,7 @@ impl Interpreter {
         if let Some(err) = error {
             return Completion::Throw(err);
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(JsValue::UNDEFINED)
     }
 
     fn destructure_object_assignment(
@@ -5017,150 +4638,187 @@ impl Interpreter {
             _ => unreachable!(),
         };
 
-        let mut excluded_keys: Vec<String> = Vec::new();
+        // Computed keys, getters, initializers, rest copying, and target writes
+        // can all run user code while the ToObject result lives only here.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&obj_val);
 
-        for prop in props {
-            // Handle rest: {...rest} = obj
-            if let Expression::Spread(inner) = &prop.value {
-                let rest_obj_id = self.create_object_id();
-                if let JsValue::Object(o) = &obj_val {
-                    let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys) {
-                        Ok(p) => p,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    for (k, v) in pairs {
-                        self.get_object_cell_expect(rest_obj_id)
-                            .borrow_mut()
-                            .insert_value(k, v);
-                    }
-                }
-                let rest_id = rest_obj_id;
-                let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
-                match self.put_value_to_target(inner, rest_val, env) {
-                    Completion::Normal(_) | Completion::Empty => {}
-                    other => return other,
-                }
-                continue;
-            }
+        let result = (|| {
+            let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
 
-            match &prop.kind {
-                PropertyKind::Init => {
-                    let key = match &prop.key {
-                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
-                        PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(k) => k,
-                                Err(e) => return Completion::Throw(e),
-                            },
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            Completion::Yield(v) => return Completion::Yield(v),
-                            other => return other,
-                        },
-                        PropertyKey::Private(_) => {
-                            return Completion::Throw(self.create_type_error(
-                                "Private names are not valid in object patterns",
-                            ));
-                        }
-                    };
-                    excluded_keys.push(key.clone());
-
-                    // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
-                    let (target, default_expr) = if let Expression::Assign(
-                        AssignOp::Assign,
-                        target,
-                        default,
-                    ) = &prop.value
+            for prop in props {
+                // Handle rest: {...rest} = obj
+                if let Expression::Spread(inner) = &prop.value {
+                    let rest_obj_id = self.create_object_id();
+                    if let Some(o) = obj_val
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                     {
-                        (target.as_ref(), Some(default.as_ref()))
-                    } else {
-                        (&prop.value, None)
-                    };
-
-                    // §13.15.5.6 step 1: evaluate lref (base + key expression)
-                    // before GetV. ToPropertyKey is deferred to PutValue time.
-                    let mut yield_val: Option<JsValue> = None;
-                    let pre_ref = match self.eval_member_lhs_ref(target, env, &mut yield_val) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    if let Some(yv) = yield_val {
-                        return Completion::Yield(yv);
-                    }
-
-                    // Get property via get_object_property (invokes getters/Proxy)
-                    let val = if let JsValue::Object(o) = &obj_val {
-                        match self.get_object_property(o.id, &key, &obj_val) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            Completion::Yield(v) => return Completion::Yield(v),
-                            _ => JsValue::Undefined,
+                        let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys)
+                        {
+                            Ok(p) => p,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        for (k, v) in pairs {
+                            self.get_object_cell_expect(rest_obj_id)
+                                .borrow_mut()
+                                .insert_value(k, v);
                         }
-                    } else {
-                        JsValue::Undefined
-                    };
+                    }
+                    let rest_id = rest_obj_id;
+                    let rest_val = JsValue::object(rest_id);
+                    match self.put_value_to_target(inner, rest_val, env) {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        other => return other,
+                    }
+                    continue;
+                }
 
-                    let val = if val.is_undefined() {
-                        if let Some(default) = default_expr {
-                            match self.eval_expr(default, env) {
-                                Completion::Normal(v) => {
-                                    if let Expression::Identifier(name) = target
-                                        && default.is_anonymous_function_definition()
-                                    {
-                                        self.set_function_name(&v, name);
-                                    }
-                                    v
-                                }
+                match &prop.kind {
+                    PropertyKind::Init => {
+                        let key = match &prop.key {
+                            PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                            PropertyKey::String(s) => {
+                                JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
+                            }
+                            PropertyKey::Number(n) => {
+                                JsPropertyKey::from(to_js_string(&JsValue::number(*n)))
+                            }
+                            PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                    Ok(k) => k,
+                                    Err(e) => return Completion::Throw(e),
+                                },
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 Completion::Yield(v) => return Completion::Yield(v),
                                 other => return other,
+                            },
+                            PropertyKey::Private(_) => {
+                                return Completion::Throw(self.create_type_error(
+                                    "Private names are not valid in object patterns",
+                                ));
                             }
-                        } else {
-                            val
-                        }
-                    } else {
-                        val
-                    };
+                        };
+                        excluded_keys.push(key.clone());
 
-                    if let Some(lref) = pre_ref {
-                        match lref {
-                            DestructLRef::Member(base_val, raw_key) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
+                        // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
+                        let (target, default_expr) =
+                            if let Expression::Assign(AssignOp::Assign, target, default) =
+                                &prop.value
+                            {
+                                (target.as_ref(), Some(default.as_ref()))
+                            } else {
+                                (&prop.value, None)
+                            };
+
+                        // §13.15.5.6 step 1: evaluate lref (base + key expression)
+                        // before GetV. ToPropertyKey is deferred to PutValue time.
+                        let pre_ref = match self.eval_member_lhs_ref(target, env) {
+                            Ok(MemberLhsRef::Ref(r)) => r,
+                            Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
+                            Err(e) => return Completion::Throw(e),
+                        };
+
+                        // GetV and an initializer can run user code after the
+                        // target is evaluated, so retain the whole lRef.
+                        let gc_frame = self.gc_root_frame();
+                        if let Some(lref) = &pre_ref {
+                            self.gc_root_destruct_lref(lref);
+                        }
+
+                        let result = (|| {
+                            // Get property via get_object_property (invokes getters/Proxy)
+                            let val = if let Some(o) = obj_val
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
+                            {
+                                match self.get_object_property(o.id, &key, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    Completion::Yield(v) => return Completion::Yield(v),
+                                    _ => JsValue::UNDEFINED,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+
+                            let val = if val.is_undefined() {
+                                if let Some(default) = default_expr {
+                                    match self.eval_expr(default, env) {
+                                        Completion::Normal(v) => {
+                                            if let Expression::Identifier(name) = target
+                                                && default.is_anonymous_function_definition()
+                                            {
+                                                self.set_function_name(&v, name);
+                                            }
+                                            v
+                                        }
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        Completion::Yield(v) => return Completion::Yield(v),
+                                        other => return other,
+                                    }
+                                } else {
+                                    val
+                                }
+                            } else {
+                                val
+                            };
+
+                            // ToPropertyKey and the write itself can run user code.
+                            self.gc_root_value(&val);
+                            if let Some(lref) = pre_ref {
+                                match lref {
+                                    DestructLRef::Member(base_val, raw_key) => {
+                                        match self.to_property_key(&raw_key) {
+                                            Ok(key) => {
+                                                let strict = env.borrow().strict;
+                                                if let Err(e) = self.set_object_with_key(
+                                                    base_val, &key, val, strict,
+                                                ) {
+                                                    return Completion::Throw(e);
+                                                }
+                                            }
+                                            Err(e) => return Completion::Throw(e),
+                                        }
+                                    }
+                                    DestructLRef::Private(base_val, ref name) => {
                                         if let Err(e) =
-                                            self.set_object_with_key(base_val, &key, val, strict)
+                                            self.set_private_field(&base_val, name, val, env)
                                         {
                                             return Completion::Throw(e);
                                         }
                                     }
-                                    Err(e) => return Completion::Throw(e),
+                                    DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
+                                        if let Completion::Throw(e) = self
+                                            .super_set_property(base_id, key, val, this_val, strict)
+                                        {
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                }
+                            } else {
+                                match self.put_value_to_target(target, val, env) {
+                                    Completion::Normal(_) | Completion::Empty => {}
+                                    other => return other,
                                 }
                             }
-                            DestructLRef::Private(base_val, ref name) => {
-                                if let Err(e) = self.set_private_field(&base_val, name, val, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, val, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                        }
-                    } else {
-                        match self.put_value_to_target(target, val, env) {
+                            Completion::Empty
+                        })();
+                        self.gc_unroot_frame(gc_frame);
+
+                        match result {
                             Completion::Normal(_) | Completion::Empty => {}
                             other => return other,
                         }
                     }
+                    _ => continue,
                 }
-                _ => continue,
             }
-        }
-        Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
+        })();
+
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     fn eval_call(
@@ -5177,25 +4835,28 @@ impl Interpreter {
         if matches!(callee, Expression::Super) {
             // §13.3.7.2 GetSuperConstructor: dynamically resolve via activeFunction.__proto__
             let super_ctor = if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
-                if let JsValue::Object(o) = &ctor_func {
+                if let Some(o) = ctor_func
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     if let Some(obj_rc) = self.get_object_cell(o.id) {
                         if let Some(proto) = &obj_rc.borrow().prototype_id {
                             if let Some(id) = Some(*proto) {
-                                JsValue::Object(crate::types::JsObject { id })
+                                JsValue::object(id)
                             } else {
-                                JsValue::Undefined
+                                JsValue::UNDEFINED
                             }
                         } else {
-                            JsValue::Null
+                            JsValue::NULL
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     }
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 }
             } else {
-                env.borrow().get("__super__").unwrap_or(JsValue::Undefined)
+                env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED)
             };
             let gc_frame = self.gc_root_frame();
             let arg_vals = match self.eval_spread_args(args, env) {
@@ -5245,7 +4906,7 @@ impl Interpreter {
                     other => return other,
                 };
                 let key = match prop {
-                    MemberProperty::Dot(name) => name.clone(),
+                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(expr) => {
                         let v = match self.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
@@ -5258,7 +4919,9 @@ impl Interpreter {
                     }
                     MemberProperty::Private(name) => {
                         let branded = self.resolve_private_name(name, env);
-                        if let JsValue::Object(ref o) = obj_val
+                        if let Some(o) = (obj_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
                             && let Some(obj) = self.get_object_cell(o.id)
                         {
                             let elem = obj.borrow().private_fields.get(&branded).cloned();
@@ -5283,32 +4946,31 @@ impl Interpreter {
                                         )));
                                 }
                             };
-                            let mut evaluated_args = Vec::new();
-                            for arg in args {
-                                match arg {
-                                    Expression::Spread(inner) => {
-                                        let spread_val = match self.eval_expr(inner, env) {
-                                            Completion::Normal(v) => v,
-                                            other => return other,
-                                        };
-                                        if let Ok(items) = self.iterate_to_vec(&spread_val) {
-                                            evaluated_args.extend(items);
-                                        }
-                                    }
-                                    _ => match self.eval_expr(arg, env) {
-                                        Completion::Normal(v) => evaluated_args.push(v),
-                                        other => return other,
-                                    },
+                            // Evaluate the call arguments through the shared spread
+                            // seam so a non-iterable spread throws (rather than being
+                            // silently dropped) and every argument is GC-rooted, exactly
+                            // as the ordinary member-call path does.
+                            let gc_frame = self.gc_root_frame();
+                            self.gc_root_value(&func_val);
+                            self.gc_root_value(&obj_val);
+                            let evaluated_args = match self.eval_spread_args(args, env) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    self.gc_unroot_frame(gc_frame);
+                                    return Completion::Throw(e);
                                 }
-                            }
+                            };
                             if saved_tail {
+                                self.gc_unroot_frame(gc_frame);
                                 return Completion::TailCall {
                                     func: func_val,
                                     this: obj_val,
                                     args: evaluated_args,
                                 };
                             }
-                            return self.call_function(&func_val, &obj_val, &evaluated_args);
+                            let result = self.call_function(&func_val, &obj_val, &evaluated_args);
+                            self.gc_unroot_frame(gc_frame);
+                            return result;
                         }
                         return Completion::Throw(self.create_type_error(&format!(
                             "Cannot read private member #{name} from a non-object"
@@ -5323,11 +4985,11 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
                     let home = env.borrow().get("__home_object__");
-                    if let Some(JsValue::Object(ref ho)) = home {
+                    if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id) {
                         let proto_id = self
-                            .get_object_cell(ho.id)
+                            .get_object_cell(home_id)
                             .and_then(|ho_obj| ho_obj.borrow().prototype_id.as_ref().copied());
                         if let Some(pid) = proto_id {
                             let method = self.get_property_on_id(pid, &key);
@@ -5337,33 +4999,42 @@ impl Interpreter {
                                 "Cannot read properties of null (reading '{key}')"
                             )));
                         }
-                    } else if let JsValue::Object(ref o) = obj_val {
+                    } else if let Some(o) = (obj_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                    {
                         // Fallback: __super__.prototype for class super
                         let proto_val = self.get_property_on_id(o.id, "prototype");
-                        if let JsValue::Object(ref p) = proto_val {
+                        if let Some(p) = (proto_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
+                        {
                             let method = self.get_property_on_id(p.id, &key);
                             (method, this_val)
                         } else {
-                            (JsValue::Undefined, JsValue::Undefined)
+                            (JsValue::UNDEFINED, JsValue::UNDEFINED)
                         }
                     } else {
-                        (JsValue::Undefined, JsValue::Undefined)
+                        (JsValue::UNDEFINED, JsValue::UNDEFINED)
                     }
-                } else if let JsValue::Object(ref o) = obj_val {
+                } else if let Some(o) = (obj_val)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     let oid = o.id;
                     let ov = obj_val.clone();
                     match self.get_object_property(oid, &key, &ov) {
                         Completion::Normal(method) => (method, obj_val),
                         other => return other,
                     }
-                } else if let JsValue::String(_) = &obj_val {
+                } else if obj_val.as_string().is_some() {
                     if let Some(sp_id) = self.realm().string_prototype {
                         let method = self.get_property_on_id(sp_id, &key);
                         (method, obj_val)
                     } else {
-                        (JsValue::Undefined, obj_val)
+                        (JsValue::UNDEFINED, obj_val)
                     }
-                } else if matches!(&obj_val, JsValue::Number(_)) {
+                } else if obj_val.is_number() {
                     let pid_opt = self
                         .realm()
                         .number_prototype
@@ -5372,9 +5043,9 @@ impl Interpreter {
                         let method = self.get_property_on_id(pid, &key);
                         (method, obj_val)
                     } else {
-                        (JsValue::Undefined, obj_val)
+                        (JsValue::UNDEFINED, obj_val)
                     }
-                } else if matches!(&obj_val, JsValue::Boolean(_)) {
+                } else if obj_val.is_boolean() {
                     let pid_opt = self
                         .realm()
                         .boolean_prototype
@@ -5383,9 +5054,9 @@ impl Interpreter {
                         let method = self.get_property_on_id(pid, &key);
                         (method, obj_val)
                     } else {
-                        (JsValue::Undefined, obj_val)
+                        (JsValue::UNDEFINED, obj_val)
                     }
-                } else if matches!(&obj_val, JsValue::Symbol(_)) {
+                } else if obj_val.is_symbol() {
                     if let Some(pid) = self.realm().symbol_prototype {
                         let desc = self.get_property_descriptor_on_id(pid, &key);
                         let method = match desc {
@@ -5396,14 +5067,14 @@ impl Interpreter {
                                     other => return other,
                                 }
                             }
-                            Some(ref d) => d.value.clone().unwrap_or(JsValue::Undefined),
-                            None => JsValue::Undefined,
+                            Some(ref d) => d.value.clone().unwrap_or(JsValue::UNDEFINED),
+                            None => JsValue::UNDEFINED,
                         };
                         (method, obj_val)
                     } else {
-                        (JsValue::Undefined, obj_val)
+                        (JsValue::UNDEFINED, obj_val)
                     }
-                } else if matches!(&obj_val, JsValue::BigInt(_)) {
+                } else if obj_val.is_bigint() {
                     let pid_opt = self
                         .realm()
                         .bigint_prototype
@@ -5412,15 +5083,15 @@ impl Interpreter {
                         let method = self.get_property_on_id(pid, &key);
                         (method, obj_val)
                     } else {
-                        (JsValue::Undefined, obj_val)
+                        (JsValue::UNDEFINED, obj_val)
                     }
-                } else if matches!(&obj_val, JsValue::Undefined | JsValue::Null) {
+                } else if obj_val.is_nullish() {
                     let err = self.create_type_error(&format!(
                         "Cannot read properties of {obj_val} (reading '{key}')"
                     ));
                     return Completion::Throw(err);
                 } else {
-                    (JsValue::Undefined, obj_val)
+                    (JsValue::UNDEFINED, obj_val)
                 }
             }
             Expression::OptionalChain(oc_base, oc_chain) => {
@@ -5439,8 +5110,8 @@ impl Interpreter {
                     other => return other,
                 };
                 let this_val = match self.last_identifier_with_base.take() {
-                    Some(obj_id) => JsValue::Object(crate::types::JsObject { id: obj_id }),
-                    None => JsValue::Undefined,
+                    Some(obj_id) => JsValue::object(obj_id),
+                    None => JsValue::UNDEFINED,
                 };
                 (val, this_val)
             }
@@ -5449,7 +5120,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                (val, JsValue::Undefined)
+                (val, JsValue::UNDEFINED)
             }
         };
 
@@ -5491,17 +5162,19 @@ impl Interpreter {
                 args: evaluated_args,
             };
         }
-        // Phase 3 call-IC probe + record. Issue #71. v1 scope:
-        //  - Probe HIT increments call_ic_hit_count; dispatch is unchanged
-        //    (the fast path that skips proxy/wrapped/class-ctor checks is a
-        //    follow-up — see plan Step 15).
+        // Phase 3 call-IC probe + record. Issue #71.
+        //  - Probe HIT increments call_ic_hit_count and dispatches through
+        //    call_function_ic_validated, which skips the proxy/wrapped/
+        //    class-ctor entry checks (9a6246f, #71 Phase-3 follow-up).
         //  - Probe MISS classifies the callable; if it's a plain native or
         //    user function (no proxy, no wrapped, not a class ctor without
         //    `new`, not bound), records Mono. Otherwise transitions to
         //    Megamorphic. State machine identical to PropIcSlot.
         if site_id != CallSiteId::UNASSIGNED
             && self.with_scope_depth == 0
-            && let JsValue::Object(o) = &func_val
+            && let Some(o) = func_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
         {
             use crate::interpreter::ic::CallIcSlot;
             let slot = *self.call_slot(site_id);
@@ -5565,7 +5238,11 @@ impl Interpreter {
     /// `CallIcSlot::Mono { kind: ... }` ready for caching, or `None` if the
     /// site is not IC-able under the v1 narrow scope (proxy, wrapped, bound,
     /// or class-ctor-without-new). Phase 3, plan Step 14.
-    fn classify_for_call_ic(
+    ///
+    /// `pub(super)` so the bytecode VM's `Call`/`ReturnCall` handling
+    /// (`bytecode::vm`) can share this classification with the tree-walker's
+    /// probe in `eval_call` (issue #432).
+    pub(super) fn classify_for_call_ic(
         &self,
         callee_obj_id: u64,
     ) -> Option<crate::interpreter::ic::CallIcSlot> {
@@ -5590,6767 +5267,43 @@ impl Interpreter {
         })
     }
 
-    pub(crate) fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
-        let JsValue::Object(o) = this else {
-            let err = self.create_type_error("Generator.prototype.next called on non-object");
-            return Completion::Throw(err);
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            let err = self.create_type_error("Generator.prototype.next called on non-object");
-            return Completion::Throw(err);
-        };
-
-        // Extract state (must release borrow before executing body)
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::Generator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            let err = self.create_type_error("not a generator object");
-            return Completion::Throw(err);
-        };
-
-        // Determine target_yield and previous sent values based on execution state
-        let (target_yield, prev_sent, is_suspended_start) = match &execution_state {
-            GeneratorExecutionState::Completed => {
-                return Completion::Normal(
-                    self.create_iter_result_object(JsValue::Undefined, true),
-                );
-            }
-            GeneratorExecutionState::Executing => {
-                return Completion::Throw(self.create_type_error("Generator is already executing"));
-            }
-            GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
-            GeneratorExecutionState::SuspendedYield {
-                target_yield,
-                prev_sent,
-            } => (*target_yield, prev_sent.clone(), false),
-        };
-
-        // Build the full prev_sent_values for this call by appending the current sent_value.
-        // prev_sent_values[k] = the value that yield k evaluates to when fast-forwarded.
-        // Yield (target_yield-1) evaluates to the current sent_value (since we're resuming from it).
-        // NOTE: For SuspendedStart (first call), sent_value is irrelevant (no yield to resume from).
-        let mut new_prev_sent = prev_sent.clone();
-        if !is_suspended_start {
-            new_prev_sent.push(sent_value.clone());
-        }
-
-        // Mark as executing
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                body: body.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: GeneratorExecutionState::Executing,
-            });
-
-        // Set generator context - for yield* delegation and sent values
-        self.generator_context = Some(GeneratorContext {
-            target_yield,
-            current_yield: 0,
-            prev_sent_values: new_prev_sent.clone(),
-            is_async: false,
-            resume_kind: GeneratorResumeKind::Next,
-        });
-
-        let caller_realm = self.current_realm_id;
-        if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
-            self.current_realm_id = gen_realm;
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        self.call_stack_envs.push(func_env.clone());
-        let result = self.exec_body(&body, &func_env);
-        self.call_stack_envs.pop();
-        let _ctx = self.generator_context.take();
-
-        self.current_realm_id = caller_realm;
-        match result {
-            Completion::Yield(v) => {
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body: body.clone(),
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::SuspendedYield {
-                            target_yield: target_yield + 1,
-                            prev_sent: new_prev_sent,
-                        },
-                    });
-                Completion::Normal(self.create_iter_result_object(v, false))
-            }
-            Completion::Return(v) => {
-                // §14.4.8: DisposeResources when generator completes
-                let disp = self.dispose_resources(&func_env, Completion::Return(v));
-                let v = match disp {
-                    Completion::Return(v) => v,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        return Completion::Throw(e);
-                    }
-                    _ => JsValue::Undefined,
+    fn bind_function_parameters(
+        &mut self,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+        has_simple_params: bool,
+    ) -> Result<(), JsValue> {
+        if has_simple_params {
+            let mut env = func_env.borrow_mut();
+            for (index, param) in params.iter().enumerate() {
+                let Pattern::Identifier(name) = param else {
+                    unreachable!("simple parameter metadata must match the parameter list");
                 };
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    });
-                Completion::Normal(self.create_iter_result_object(v, true))
-            }
-            Completion::Normal(_) | Completion::Empty => {
-                // §14.4.8: DisposeResources when generator completes
-                let disp =
-                    self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
-                if let Completion::Throw(e) = disp {
-                    obj_rc.borrow_mut().kind =
-                        crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                            body,
-                            func_env,
-                            is_strict,
-                            execution_state: GeneratorExecutionState::Completed,
-                        });
-                    return Completion::Throw(e);
-                }
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    });
-                Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
-            }
-            Completion::Throw(e) => {
-                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    });
-                match disp {
-                    Completion::Throw(e) => Completion::Throw(e),
-                    _ => {
-                        Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
-                    }
-                }
-            }
-            other => other,
-        }
-    }
-
-    pub(crate) fn generator_return(&mut self, this: &JsValue, value: JsValue) -> Completion {
-        let JsValue::Object(o) = this else {
-            let err = self.create_type_error("Generator.prototype.return called on non-object");
-            return Completion::Throw(err);
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            let err = self.create_type_error("Generator.prototype.return called on non-object");
-            return Completion::Throw(err);
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::Generator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            return Completion::Throw(
-                self.create_type_error(
-                    "Generator.prototype.return called on incompatible receiver",
-                ),
-            );
-        };
-
-        match execution_state {
-            GeneratorExecutionState::Completed => {
-                Completion::Normal(self.create_iter_result_object(value, true))
-            }
-            GeneratorExecutionState::Executing => {
-                Completion::Throw(self.create_type_error("Generator is already executing"))
-            }
-            GeneratorExecutionState::SuspendedStart => {
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    });
-                Completion::Normal(self.create_iter_result_object(value, true))
-            }
-            GeneratorExecutionState::SuspendedYield {
-                target_yield,
-                prev_sent,
-            } => {
-                // target_yield in SuspendedYield is the NEXT yield index.
-                // For return/throw, inject at the yield we were suspended at
-                // (target_yield - 1), so fast-forward yields 0..target_yield-2.
-                let inject_at = target_yield - 1;
-
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body: body.clone(),
-                        func_env: func_env.clone(),
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Executing,
-                    });
-
-                self.generator_context = Some(GeneratorContext {
-                    target_yield: inject_at,
-                    current_yield: 0,
-                    prev_sent_values: prev_sent.clone(),
-                    is_async: false,
-                    resume_kind: GeneratorResumeKind::Return(value.clone()),
-                });
-
-                let caller_realm = self.current_realm_id;
-                if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
-                    self.current_realm_id = gen_realm;
-                }
-
-                func_env.borrow_mut().strict = is_strict;
-                self.call_stack_envs.push(func_env.clone());
-                let result = self.exec_body(&body, &func_env);
-                self.call_stack_envs.pop();
-                let _ctx = self.generator_context.take();
-
-                self.current_realm_id = caller_realm;
-                match result {
-                    Completion::Yield(v) => {
-                        // A yield in a finally block suspends the generator
-                        let new_yield_index = inject_at + 1;
-                        let mut new_prev_sent = prev_sent.clone();
-                        // Pad prev_sent to cover the inject point
-                        while new_prev_sent.len() < new_yield_index {
-                            new_prev_sent.push(JsValue::Undefined);
-                        }
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body: body.clone(),
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::SuspendedYield {
-                                    target_yield: new_yield_index + 1,
-                                    prev_sent: new_prev_sent,
-                                },
-                            },
-                        );
-                        Completion::Normal(self.create_iter_result_object(v, false))
-                    }
-                    Completion::Return(v) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        Completion::Normal(self.create_iter_result_object(v, true))
-                    }
-                    Completion::Normal(_) | Completion::Empty => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
-                    }
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        Completion::Throw(e)
-                    }
-                    other => other,
-                }
-            }
-        }
-    }
-
-    pub(crate) fn generator_throw(&mut self, this: &JsValue, exception: JsValue) -> Completion {
-        let JsValue::Object(o) = this else {
-            let err = self.create_type_error("Generator.prototype.throw called on non-object");
-            return Completion::Throw(err);
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            let err = self.create_type_error("Generator.prototype.throw called on non-object");
-            return Completion::Throw(err);
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::Generator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.throw called on incompatible receiver"),
-            );
-        };
-
-        match execution_state {
-            GeneratorExecutionState::Completed | GeneratorExecutionState::SuspendedStart => {
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    });
-                Completion::Throw(exception)
-            }
-            GeneratorExecutionState::Executing => {
-                Completion::Throw(self.create_type_error("Generator is already executing"))
-            }
-            GeneratorExecutionState::SuspendedYield {
-                target_yield,
-                prev_sent,
-            } => {
-                let inject_at = target_yield - 1;
-
-                obj_rc.borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(IteratorState::Generator {
-                        body: body.clone(),
-                        func_env: func_env.clone(),
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Executing,
-                    });
-
-                self.generator_context = Some(GeneratorContext {
-                    target_yield: inject_at,
-                    current_yield: 0,
-                    prev_sent_values: prev_sent.clone(),
-                    is_async: false,
-                    resume_kind: GeneratorResumeKind::Throw(exception),
-                });
-
-                let caller_realm = self.current_realm_id;
-                if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
-                    self.current_realm_id = gen_realm;
-                }
-
-                func_env.borrow_mut().strict = is_strict;
-                self.call_stack_envs.push(func_env.clone());
-                let result = self.exec_body(&body, &func_env);
-                self.call_stack_envs.pop();
-                let _ctx = self.generator_context.take();
-
-                self.current_realm_id = caller_realm;
-                match result {
-                    Completion::Yield(v) => {
-                        let new_yield_index = inject_at + 1;
-                        let mut new_prev_sent = prev_sent.clone();
-                        while new_prev_sent.len() < new_yield_index {
-                            new_prev_sent.push(JsValue::Undefined);
-                        }
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body: body.clone(),
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::SuspendedYield {
-                                    target_yield: new_yield_index + 1,
-                                    prev_sent: new_prev_sent,
-                                },
-                            },
-                        );
-                        Completion::Normal(self.create_iter_result_object(v, false))
-                    }
-                    Completion::Return(v) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        Completion::Normal(self.create_iter_result_object(v, true))
-                    }
-                    Completion::Normal(_) | Completion::Empty => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
-                    }
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::Generator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        Completion::Throw(e)
-                    }
-                    other => other,
-                }
-            }
-        }
-    }
-
-    pub(crate) fn generator_next_state_machine(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-    ) -> Completion {
-        let caller_realm = self.current_realm_id;
-        if let JsValue::Object(o) = this
-            && let Some(obj_rc) = self.get_object(o.id)
-            && let Some(realm_id) = obj_rc.borrow().generator_realm_id
-        {
-            self.current_realm_id = realm_id;
-        }
-        let result = self.generator_next_state_machine_impl(this, sent_value);
-        self.current_realm_id = caller_realm;
-        result
-    }
-
-    fn generator_next_state_machine_impl(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-    ) -> Completion {
-        use crate::interpreter::generator_transform::StateTerminator;
-
-        let JsValue::Object(o) = this else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.next called on non-object"),
-            );
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.next called on non-object"),
-            );
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            execution_state,
-            try_stack,
-            pending_binding,
-            delegated_iterator,
-            pending_exception: stored_pending_exception,
-            pending_return: stored_pending_return,
-            ..
-        }) = state
-        else {
-            return Completion::Throw(self.create_type_error("not a state machine generator"));
-        };
-
-        if let Some(ref deleg_info) = delegated_iterator {
-            let iterator = deleg_info.iterator.clone();
-            let next_method = deleg_info.next_method.clone();
-            let resume_state = deleg_info.resume_state;
-            let binding = deleg_info.sent_value_binding.clone();
-
-            let result = match self.call_function(
-                &next_method,
-                &iterator,
-                std::slice::from_ref(&sent_value),
-            ) {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
-                Completion::Normal(_) => {
-                    Err(self.create_type_error("Iterator result is not an object"))
-                }
-                Completion::Throw(e) => Err(e),
-                _ => Err(self.create_type_error("Iterator next failed")),
-            };
-            match result {
-                Ok(iter_result) => {
-                    let done = match self.iterator_complete(&iter_result) {
-                        Ok(d) => d,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    if done {
-                        let value = match self.iterator_value(&iter_result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        if let Some(ref bind) = binding {
-                            use crate::interpreter::generator_transform::SentValueBindingKind;
-                            match &bind.kind {
-                                SentValueBindingKind::Variable(name) => {
-                                    let mut env = func_env.borrow_mut();
-                                    let needs_init = env
-                                        .bindings
-                                        .get(name.as_str())
-                                        .is_some_and(|b| !b.initialized);
-                                    if needs_init {
-                                        env.initialize_binding(name, value.clone());
-                                    } else {
-                                        env.set(name, value.clone()).ok();
-                                    }
-                                }
-                                SentValueBindingKind::Pattern(pattern) => {
-                                    let _ = self.bind_pattern(
-                                        pattern,
-                                        value.clone(),
-                                        BindingKind::Var,
-                                        &func_env,
-                                    );
-                                }
-                                SentValueBindingKind::Discard
-                                | SentValueBindingKind::InlineYield { .. } => {}
-                            }
-                        }
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return self.generator_next_state_machine(this, JsValue::Undefined);
-                    } else {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack,
-                                pending_binding: None,
-                                delegated_iterator: Some(
-                                    crate::interpreter::types::DelegatedIteratorInfo {
-                                        iterator,
-                                        next_method: next_method.clone(),
-                                        resume_state,
-                                        sent_value_binding: binding,
-                                    },
-                                ),
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        // Per spec §14.4.14: yield innerResult directly
-                        return Completion::Normal(iter_result);
-                    }
-                }
-                Err(e) => {
-                    // Clear delegation and propagate error through generator's
-                    // try-stack so the generator's own catch/finally can handle it
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine: state_machine.clone(),
-                            func_env: func_env.clone(),
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: try_stack.clone(),
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    return self.generator_throw_state_machine(this, e);
-                }
-            }
-        }
-
-        let current_state_id = match &execution_state {
-            StateMachineExecutionState::Completed => {
-                return Completion::Normal(
-                    self.create_iter_result_object(JsValue::Undefined, true),
-                );
-            }
-            StateMachineExecutionState::Executing => {
-                return Completion::Throw(self.create_type_error("Generator is already executing"));
-            }
-            StateMachineExecutionState::SuspendedStart => 0,
-            StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
-        };
-
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::StateMachineGenerator {
-                state_machine: state_machine.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: StateMachineExecutionState::Executing,
-                _sent_value: sent_value.clone(),
-                try_stack: try_stack.clone(),
-                pending_binding: None,
-                delegated_iterator: None,
-                pending_exception: None,
-                pending_return: None,
-            });
-
-        use crate::interpreter::generator_transform::SentValueBindingKind;
-        let mut initial_inline_yield_target: Option<usize> = None;
-        let mut initial_inline_yield_sent: Option<JsValue> = None;
-        let mut initial_inline_yield_prev_sent: Option<Vec<JsValue>> = None;
-        if let Some(binding) = pending_binding {
-            match &binding.kind {
-                SentValueBindingKind::Variable(name) => {
-                    let mut env = func_env.borrow_mut();
-                    let needs_init = env
-                        .bindings
-                        .get(name.as_str())
-                        .is_some_and(|b| !b.initialized);
-                    if needs_init {
-                        env.initialize_binding(name, sent_value.clone());
-                    } else {
-                        env.set(name, sent_value.clone()).ok();
-                    }
-                }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
-                }
-                SentValueBindingKind::Discard => {}
-                SentValueBindingKind::InlineYield {
-                    yield_target,
-                    prev_sent,
-                } => {
-                    initial_inline_yield_target = Some(*yield_target);
-                    initial_inline_yield_sent = Some(sent_value.clone());
-                    let mut new_prev = prev_sent.clone();
-                    new_prev.push(sent_value.clone());
-                    initial_inline_yield_prev_sent = Some(new_prev);
-                }
-            }
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        let saved_in_state_machine = self.in_state_machine;
-        self.in_state_machine = true;
-        let mut current_id = current_state_id;
-        let mut current_try_stack = try_stack;
-        let mut pending_exception: Option<JsValue> = stored_pending_exception;
-        let mut pending_return: Option<JsValue> = stored_pending_return;
-        let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
-        let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
-        let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
-
-        loop {
-            let terminator = state_machine.states[current_id].terminator.clone();
-
-            let is_inline_replay = inline_yield_target.is_some();
-            if let Some(target) = inline_yield_target.take() {
-                let _sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
-                let prev = inline_yield_prev_sent.take().unwrap_or_default();
-                self.generator_context = Some(GeneratorContext {
-                    target_yield: target,
-                    current_yield: 0,
-                    prev_sent_values: prev,
-                    is_async: false,
-                    resume_kind: GeneratorResumeKind::Next,
-                });
-            }
-
-            self.in_state_machine = true;
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &func_env);
-            self.in_state_machine = saved_in_state_machine;
-            while let Completion::TailCall { func, this, args } = stmt_result {
-                stmt_result = self.call_function(&func, &this, &args);
-            }
-            let ctx_after = if is_inline_replay {
-                self.generator_context.take()
-            } else {
-                None
-            };
-
-            if let Completion::Yield(yield_val) = stmt_result {
-                self.destructuring_yield = false;
-                let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
-                let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
-                // Save any iterators that need IteratorClose if generator.return() is called
-                let pending = std::mem::take(&mut self.pending_iter_close);
-                if pending.is_empty() {
-                    self.generator_inline_iters.remove(&o.id);
-                } else {
-                    self.generator_inline_iters.insert(o.id, pending);
-                }
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineGenerator {
-                        state_machine: state_machine.clone(),
-                        func_env: func_env.clone(),
-                        is_strict,
-                        execution_state: StateMachineExecutionState::SuspendedAtState {
-                            state_id: current_id,
-                        },
-                        _sent_value: JsValue::Undefined,
-                        try_stack: current_try_stack.clone(),
-                        pending_binding: Some(
-                            crate::interpreter::generator_transform::SentValueBinding {
-                                kind: SentValueBindingKind::InlineYield {
-                                    yield_target: yield_count,
-                                    prev_sent: inline_prev,
-                                },
-                            },
-                        ),
-                        delegated_iterator: None,
-                        pending_exception: pending_exception.take(),
-                        pending_return: pending_return.take(),
+                env.bindings.insert(
+                    name.clone(),
+                    Binding {
+                        value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+                        kind: BindingKind::Var,
+                        initialized: true,
+                        deletable: false,
                     },
                 );
-                return Completion::Normal(self.create_iter_result_object(yield_val, false));
             }
-            if let Completion::Exit(code) = stmt_result {
-                // `__host_exit` (issue #242) is uncatchable and immediate:
-                // complete the generator without routing through its
-                // catch/finally states or disposing, and propagate the exit.
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                self.generator_inline_iters.remove(&o.id);
-                return Completion::Exit(code);
-            }
-            if let Completion::Throw(e) = stmt_result {
-                // Route genuine throws through the generator body's
-                // catch/finally states (a `Completion::Exit` was handled
-                // above and never reaches here).
-                if let Some(try_info) = current_try_stack.pop() {
-                    if let Some(catch_state) = try_info.catch_state {
-                        pending_exception = Some(e);
-                        current_id = catch_state;
-                        continue;
-                    } else if let Some(finally_state) = try_info.finally_state {
-                        current_id = finally_state;
-                        continue;
-                    }
-                }
-                // §27.5.3.3: DisposeResources when generator throws
-                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                self.generator_inline_iters.remove(&o.id);
-                return disp;
-            }
-            if let Completion::Return(v) = stmt_result {
-                // Check try_stack for enclosing finally blocks before completing
-                let mut ret_val_opt = Some(v);
-                for i in (0..current_try_stack.len()).rev() {
-                    if !current_try_stack[i].entered_finally
-                        && current_try_stack[i].finally_state.is_some()
-                    {
-                        pending_return = ret_val_opt.take();
-                        let finally_state = current_try_stack[i].finally_state.unwrap();
-                        current_try_stack = current_try_stack[..i].to_vec();
-                        current_id = finally_state;
-                        break;
-                    }
-                }
-                if ret_val_opt.is_none() {
-                    continue;
-                }
-                let v = ret_val_opt.unwrap();
-                // §27.5.3.3: DisposeResources when generator returns
-                let disp = self.dispose_resources(&func_env, Completion::Return(v));
-                let ret_val = match disp {
-                    Completion::Return(v) => v,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        self.generator_inline_iters.remove(&o.id);
-                        return Completion::Throw(e);
-                    }
-                    _ => JsValue::Undefined,
-                };
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                self.generator_inline_iters.remove(&o.id);
-                return Completion::Normal(self.create_iter_result_object(ret_val, true));
-            }
-
-            match &terminator {
-                StateTerminator::Yield {
-                    value,
-                    is_delegate,
-                    resume_state,
-                    sent_value_binding,
-                } => {
-                    let yield_val = if let Some(expr) = value {
-                        let mut _result = self.eval_expr(expr, &func_env);
-                        while let Completion::TailCall { func, this, args } = _result {
-                            _result = self.call_function(&func, &this, &args);
-                        }
-                        match _result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                // Route genuine throws through the try-stack for
-                                // catch/finally handling (a `Completion::Exit`
-                                // takes the `other` arm below and never reaches
-                                // here — issue #242).
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return Completion::Throw(e);
-                            }
-                            other => return other,
-                        }
-                    } else {
-                        JsValue::Undefined
-                    };
-
-                    if *is_delegate {
-                        let iterator = match self.get_iterator(&yield_val) {
-                            Ok(it) => it,
-                            Err(e) => {
-                                if let Some(try_info) = current_try_stack.last()
-                                    && let Some(catch_state) = try_info.catch_state
-                                {
-                                    let new_try_stack =
-                                        current_try_stack[..current_try_stack.len() - 1].to_vec();
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: new_try_stack,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self
-                                        .generator_next_state_machine(this, JsValue::Undefined);
-                                }
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return Completion::Throw(e);
-                            }
-                        };
-
-                        let next_method = if let JsValue::Object(io) = &iterator {
-                            if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
-                                cached
-                            } else {
-                                match self.get_object_property(io.id, "next", &iterator) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => {
-                                        // Route through try-stack
-                                        if let Some(try_info) = current_try_stack.last()
-                                            && let Some(catch_state) = try_info.catch_state
-                                        {
-                                            let new_try_stack = current_try_stack
-                                                [..current_try_stack.len() - 1]
-                                                .to_vec();
-                                            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: new_try_stack,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            });
-                                            return self.generator_next_state_machine(
-                                                this,
-                                                JsValue::Undefined,
-                                            );
-                                        }
-                                        return Completion::Throw(e);
-                                    }
-                                    _ => JsValue::Undefined,
-                                }
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-
-                        let iter_result = match self.call_function(
-                            &next_method,
-                            &iterator,
-                            &[JsValue::Undefined],
-                        ) {
-                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
-                            Completion::Normal(_) => {
-                                Err(self.create_type_error("Iterator result is not an object"))
-                            }
-                            Completion::Throw(e) => Err(e),
-                            _ => Err(self.create_type_error("Iterator next failed")),
-                        };
-                        let iter_result = match iter_result {
-                            Ok(r) => r,
-                            Err(e) => {
-                                // Propagate through generator's try-stack
-                                if let Some(try_info) = current_try_stack.last()
-                                    && let Some(catch_state) = try_info.catch_state
-                                {
-                                    pending_exception = Some(e);
-                                    let new_try_stack =
-                                        current_try_stack[..current_try_stack.len() - 1].to_vec();
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: new_try_stack,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: pending_exception.take(),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self
-                                        .generator_next_state_machine(this, JsValue::Undefined);
-                                }
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return Completion::Throw(e);
-                            }
-                        };
-
-                        let done = match self.iterator_complete(&iter_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                if let Some(try_info) = current_try_stack.last()
-                                    && let Some(catch_state) = try_info.catch_state
-                                {
-                                    let new_try_stack =
-                                        current_try_stack[..current_try_stack.len() - 1].to_vec();
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: new_try_stack,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self
-                                        .generator_next_state_machine(this, JsValue::Undefined);
-                                }
-                                return Completion::Throw(e);
-                            }
-                        };
-
-                        if done {
-                            let value = match self.iterator_value(&iter_result) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    if let Some(try_info) = current_try_stack.last()
-                                        && let Some(catch_state) = try_info.catch_state
-                                    {
-                                        let new_try_stack = current_try_stack
-                                            [..current_try_stack.len() - 1]
-                                            .to_vec();
-                                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: new_try_stack,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            });
-                                        return self.generator_next_state_machine(
-                                            this,
-                                            JsValue::Undefined,
-                                        );
-                                    }
-                                    return Completion::Throw(e);
-                                }
-                            };
-                            use crate::interpreter::generator_transform::SentValueBindingKind;
-                            if let Some(binding) = sent_value_binding {
-                                match &binding.kind {
-                                    SentValueBindingKind::Variable(name) => {
-                                        self.env_set(&func_env, name, value.clone()).ok();
-                                    }
-                                    SentValueBindingKind::Pattern(pattern) => {
-                                        let _ = self.bind_pattern(
-                                            pattern,
-                                            value.clone(),
-                                            BindingKind::Var,
-                                            &func_env,
-                                        );
-                                    }
-                                    SentValueBindingKind::Discard
-                                    | SentValueBindingKind::InlineYield { .. } => {}
-                                }
-                            }
-                            current_id = *resume_state;
-                            continue;
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: *resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: current_try_stack,
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state: *resume_state,
-                                                sent_value_binding: sent_value_binding.clone(),
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            // Per spec §14.4.14: yield innerResult directly (don't extract value)
-                            return Completion::Normal(iter_result);
-                        }
-                    }
-
-                    // Save any iterators that need IteratorClose if generator.return() is called
-                    let pending = std::mem::take(&mut self.pending_iter_close);
-                    if pending.is_empty() {
-                        self.generator_inline_iters.remove(&o.id);
-                    } else {
-                        self.generator_inline_iters.insert(o.id, pending);
-                    }
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: *resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: current_try_stack,
-                            pending_binding: sent_value_binding.clone(),
-                            delegated_iterator: None,
-                            pending_exception: pending_exception.take(),
-                            pending_return: pending_return.take(),
-                        },
-                    );
-                    return Completion::Normal(self.create_iter_result_object(yield_val, false));
-                }
-
-                StateTerminator::Return(expr) => {
-                    let ret_val = if let Some(e) = expr {
-                        let mut result = self.eval_expr(e, &func_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(err) => {
-                                let disp =
-                                    self.dispose_resources(&func_env, Completion::Throw(err));
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                self.generator_inline_iters.remove(&o.id);
-                                return disp;
-                            }
-                            other => return other,
-                        }
-                    } else {
-                        JsValue::Undefined
-                    };
-
-                    // Check try_stack for enclosing finally blocks before completing
-                    let mut ret_val_opt = Some(ret_val);
-                    for i in (0..current_try_stack.len()).rev() {
-                        if !current_try_stack[i].entered_finally
-                            && current_try_stack[i].finally_state.is_some()
-                        {
-                            pending_return = ret_val_opt.take();
-                            let finally_state = current_try_stack[i].finally_state.unwrap();
-                            current_try_stack = current_try_stack[..i].to_vec();
-                            current_id = finally_state;
-                            break;
-                        }
-                    }
-                    if ret_val_opt.is_none() {
-                        continue;
-                    }
-                    let ret_val = ret_val_opt.unwrap();
-
-                    // §27.5.3.3: DisposeResources when generator completes via return
-                    let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
-                    let ret_val = match disp {
-                        Completion::Return(v) => v,
-                        Completion::Throw(e) => {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            self.generator_inline_iters.remove(&o.id);
-                            return Completion::Throw(e);
-                        }
-                        _ => JsValue::Undefined,
-                    };
-
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    self.generator_inline_iters.remove(&o.id);
-                    return Completion::Normal(self.create_iter_result_object(ret_val, true));
-                }
-
-                StateTerminator::Throw(expr) => {
-                    let throw_val = {
-                        let mut result = self.eval_expr(expr, &func_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => e,
-                            other => return other,
-                        }
-                    };
-
-                    if let Some(try_info) = current_try_stack.pop()
-                        && let Some(catch_state) = try_info.catch_state
-                    {
-                        current_id = catch_state;
-                        continue;
-                    }
-
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    self.generator_inline_iters.remove(&o.id);
-                    return Completion::Throw(throw_val);
-                }
-
-                StateTerminator::Goto(next_state) => {
-                    current_id = *next_state;
-                }
-
-                StateTerminator::ConditionalGoto {
-                    condition,
-                    true_state,
-                    false_state,
-                } => {
-                    let cond_val = match self.eval_expr(condition, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                        other => return other,
-                    };
-                    current_id = if self.to_boolean_val(&cond_val) {
-                        *true_state
-                    } else {
-                        *false_state
-                    };
-                }
-
-                StateTerminator::TryEnter {
-                    try_state,
-                    catch_state,
-                    finally_state,
-                    after_state,
-                } => {
-                    current_try_stack.push(TryContextInfo {
-                        catch_state: catch_state.as_ref().map(|c| c.state),
-                        finally_state: *finally_state,
-                        _after_state: *after_state,
-                        entered_catch: false,
-                        entered_finally: false,
-                    });
-                    current_id = *try_state;
-                }
-
-                StateTerminator::TryExit { after_state } => {
-                    current_try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        // Re-throw pending exception after finally completes
-                        if let Some(try_info) = current_try_stack.pop() {
-                            if let Some(catch_state) = try_info.catch_state {
-                                pending_exception = Some(exc);
-                                current_id = catch_state;
-                                continue;
-                            } else if let Some(finally_state) = try_info.finally_state {
-                                pending_exception = Some(exc);
-                                current_id = finally_state;
-                                continue;
-                            }
-                        }
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return Completion::Throw(exc);
-                    }
-                    if let Some(ret_val) = pending_return.take() {
-                        // Check for more enclosing try-finally blocks
-                        let mut ret_val_opt = Some(ret_val);
-                        for i in (0..current_try_stack.len()).rev() {
-                            if !current_try_stack[i].entered_finally
-                                && current_try_stack[i].finally_state.is_some()
-                            {
-                                pending_return = ret_val_opt.take();
-                                let finally_state = current_try_stack[i].finally_state.unwrap();
-                                current_try_stack = current_try_stack[..i].to_vec();
-                                current_id = finally_state;
-                                break;
-                            }
-                        }
-                        if ret_val_opt.is_none() {
-                            continue;
-                        }
-                        let ret_val = ret_val_opt.unwrap();
-                        // No more finally blocks — complete the generator
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return Completion::Normal(self.create_iter_result_object(ret_val, true));
-                    }
-                    current_id = *after_state;
-                }
-
-                StateTerminator::EnterCatch { body_state, param } => {
-                    if let Some(ctx) = current_try_stack.last_mut() {
-                        ctx.entered_catch = true;
-                    }
-                    let exception_val = pending_exception.take().unwrap_or(JsValue::Undefined);
-                    if let Some(pattern) = param {
-                        let _ =
-                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &func_env);
-                    }
-                    current_id = *body_state;
-                }
-
-                StateTerminator::EnterFinally { body_state } => {
-                    if let Some(ctx) = current_try_stack.last_mut() {
-                        ctx.entered_finally = true;
-                    }
-                    current_id = *body_state;
-                }
-
-                StateTerminator::SwitchDispatch {
-                    discriminant,
-                    cases,
-                    default_state,
-                    after_state,
-                } => {
-                    let disc_val = match self.eval_expr(discriminant, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                        other => return other,
-                    };
-
-                    let mut matched = false;
-                    for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &func_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return Completion::Throw(e);
-                            }
-                            other => return other,
-                        };
-                        if strict_equality(&disc_val, &case_val) {
-                            current_id = case.state;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if !matched {
-                        current_id = default_state.unwrap_or(*after_state);
-                    }
-                }
-
-                StateTerminator::ForOfInit {
-                    iterable,
-                    iter_var,
-                    next_var: _,
-                    left: _,
-                    head_state,
-                    after_state: _,
-                    is_await: _,
-                } => {
-                    let iterable_val = match self.eval_expr(iterable, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                        other => return other,
-                    };
-                    let iterator = match self.get_iterator(&iterable_val) {
-                        Ok(iter) => iter,
-                        Err(e) => {
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                    };
-                    self.gc_root_value(&iterator);
-                    func_env.borrow_mut().bindings.insert(
-                        iter_var.clone(),
-                        crate::interpreter::types::Binding {
-                            value: iterator,
-                            kind: crate::interpreter::types::BindingKind::Let,
-                            initialized: true,
-                            deletable: false,
-                        },
-                    );
-                    current_id = *head_state;
-                }
-
-                StateTerminator::ForOfHead {
-                    iter_var,
-                    next_var: _,
-                    left,
-                    body_state,
-                    after_state,
-                    is_await: _,
-                } => {
-                    let iterator = func_env
-                        .borrow()
-                        .bindings
-                        .get(iter_var)
-                        .map(|b| b.value.clone())
-                        .unwrap_or(JsValue::Undefined);
-                    let step_result = match self.iterator_next(&iterator) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.gc_unroot_value(&iterator);
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                    };
-                    match self.iterator_complete(&step_result) {
-                        Ok(true) => {
-                            self.gc_unroot_value(&iterator);
-                            if let JsValue::Object(o) = &iterator {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let JsValue::Object(ov) = v {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
-                            current_id = *after_state;
-                        }
-                        Ok(false) => {
-                            let val = match self.iterator_value(&step_result) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    self.gc_unroot_value(&iterator);
-                                    if let Some(try_info) = current_try_stack.pop() {
-                                        if let Some(catch_state) = try_info.catch_state {
-                                            pending_exception = Some(e);
-                                            current_id = catch_state;
-                                            continue;
-                                        } else if let Some(finally_state) = try_info.finally_state {
-                                            current_id = finally_state;
-                                            continue;
-                                        }
-                                    }
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineGenerator {
-                                                state_machine,
-                                                func_env,
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::Completed,
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: vec![],
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return Completion::Throw(e);
-                                }
-                            };
-                            match left {
-                                ForInOfLeft::Variable(decl) => {
-                                    let kind = match decl.kind {
-                                        VarKind::Var => crate::interpreter::types::BindingKind::Var,
-                                        VarKind::Let => crate::interpreter::types::BindingKind::Let,
-                                        VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                            crate::interpreter::types::BindingKind::Const
-                                        }
-                                    };
-                                    if let Some(d) = decl.declarations.first()
-                                        && let Err(e) =
-                                            self.bind_pattern(&d.pattern, val, kind, &func_env)
-                                    {
-                                        self.iterator_close(&iterator, e.clone());
-                                        self.gc_unroot_value(&iterator);
-                                        if let Some(try_info) = current_try_stack.pop() {
-                                            if let Some(catch_state) = try_info.catch_state {
-                                                pending_exception = Some(e);
-                                                current_id = catch_state;
-                                                continue;
-                                            } else if let Some(finally_state) =
-                                                try_info.finally_state
-                                            {
-                                                current_id = finally_state;
-                                                continue;
-                                            }
-                                        }
-                                        obj_rc.borrow_mut().kind =
-                                            crate::interpreter::types::ObjectKind::Iterator(
-                                                IteratorState::StateMachineGenerator {
-                                                    state_machine,
-                                                    func_env,
-                                                    is_strict,
-                                                    execution_state:
-                                                        StateMachineExecutionState::Completed,
-                                                    _sent_value: JsValue::Undefined,
-                                                    try_stack: vec![],
-                                                    pending_binding: None,
-                                                    delegated_iterator: None,
-                                                    pending_exception: None,
-                                                    pending_return: None,
-                                                },
-                                            );
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                                ForInOfLeft::Pattern(pat) => {
-                                    match self.assign_to_for_pattern(pat, val, &func_env) {
-                                        Completion::Normal(_) | Completion::Empty => {}
-                                        Completion::Throw(e) => {
-                                            self.iterator_close(&iterator, e.clone());
-                                            self.gc_unroot_value(&iterator);
-                                            if let Some(try_info) = current_try_stack.pop() {
-                                                if let Some(catch_state) = try_info.catch_state {
-                                                    pending_exception = Some(e);
-                                                    current_id = catch_state;
-                                                    continue;
-                                                } else if let Some(finally_state) =
-                                                    try_info.finally_state
-                                                {
-                                                    current_id = finally_state;
-                                                    continue;
-                                                }
-                                            }
-                                            obj_rc.borrow_mut().kind =
-                                                crate::interpreter::types::ObjectKind::Iterator(
-                                                    IteratorState::StateMachineGenerator {
-                                                        state_machine,
-                                                        func_env,
-                                                        is_strict,
-                                                        execution_state:
-                                                            StateMachineExecutionState::Completed,
-                                                        _sent_value: JsValue::Undefined,
-                                                        try_stack: vec![],
-                                                        pending_binding: None,
-                                                        delegated_iterator: None,
-                                                        pending_exception: None,
-                                                        pending_return: None,
-                                                    },
-                                                );
-                                            return Completion::Throw(e);
-                                        }
-                                        _other => {}
-                                    }
-                                }
-                                ForInOfLeft::Expression(_) => {
-                                    // for-of with expression LHS is handled via assignment
-                                }
-                            }
-                            // Add iterator to pending_iter_close so generator.return() can close it
-                            let already_pending = if let JsValue::Object(o) = &iterator {
-                                let id = o.id;
-                                self.pending_iter_close.iter().any(|v| {
-                                    if let JsValue::Object(ov) = v {
-                                        ov.id == id
-                                    } else {
-                                        false
-                                    }
-                                })
-                            } else {
-                                false
-                            };
-                            if !already_pending {
-                                self.pending_iter_close.push(iterator);
-                            }
-                            current_id = *body_state;
-                        }
-                        Err(e) => {
-                            self.gc_unroot_value(&iterator);
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                    }
-                }
-
-                StateTerminator::Completed => {
-                    let has_pending_return = pending_return.is_some();
-                    let ret_val = pending_return.take().unwrap_or(JsValue::Undefined);
-                    // §27.5.3.3 GeneratorStart: DisposeResources when generator completes
-                    let disp = if has_pending_return {
-                        self.dispose_resources(&func_env, Completion::Return(ret_val.clone()))
-                    } else {
-                        self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined))
-                    };
-                    let final_val = match disp {
-                        Completion::Return(v) => v,
-                        Completion::Throw(e) => {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return Completion::Throw(e);
-                        }
-                        _ => ret_val,
-                    };
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    return Completion::Normal(self.create_iter_result_object(final_val, true));
-                }
-
-                StateTerminator::Await { .. } => {
-                    unreachable!("Await terminator in sync generator")
-                }
-            }
-        }
-    }
-
-    pub(crate) fn generator_return_state_machine(
-        &mut self,
-        this: &JsValue,
-        value: JsValue,
-    ) -> Completion {
-        let JsValue::Object(o) = this else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.return called on non-object"),
-            );
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.return called on non-object"),
-            );
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        if let Some(IteratorState::StateMachineGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            execution_state,
-            try_stack,
-            delegated_iterator,
-            ..
-        }) = state
-        {
-            match execution_state {
-                StateMachineExecutionState::Executing => {
-                    return Completion::Throw(
-                        self.create_type_error("Generator is already running"),
-                    );
-                }
-                StateMachineExecutionState::Completed => {
-                    return Completion::Normal(self.create_iter_result_object(value, true));
-                }
-                StateMachineExecutionState::SuspendedStart => {
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    return Completion::Normal(self.create_iter_result_object(value, true));
-                }
-                StateMachineExecutionState::SuspendedAtState { .. } => {}
-            }
-
-            if let Some(ref deleg_info) = delegated_iterator {
-                let iterator = deleg_info.iterator.clone();
-                let next_method = deleg_info.next_method.clone();
-                let resume_state = deleg_info.resume_state;
-                let binding = deleg_info.sent_value_binding.clone();
-
-                match self.iterator_return(&iterator, &value) {
-                    Ok(Some(iter_result)) => {
-                        let done = match self.iterator_complete(&iter_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine: state_machine.clone(),
-                                            func_env: func_env.clone(),
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedAtState {
-                                                    state_id: resume_state,
-                                                },
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: try_stack.clone(),
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return self.generator_throw_state_machine(this, e);
-                            }
-                        };
-                        if done {
-                            let result_value = match self.iterator_value(&iter_result) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: resume_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: try_stack.clone(),
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.generator_throw_state_machine(this, e);
-                                }
-                            };
-                            // Clear delegation and propagate return through
-                            // generator's try-finally stack
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine: state_machine.clone(),
-                                        func_env: func_env.clone(),
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return self.generator_return_state_machine(this, result_value);
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state,
-                                                sent_value_binding: binding,
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            // Per spec §14.4.14: yield innerReturnResult directly
-                            return Completion::Normal(iter_result);
-                        }
-                    }
-                    Ok(None) => {
-                        // Per spec 14.4.14 step 5.c.iii: "If return is undefined,
-                        // return Completion(received)." — clear the delegation and
-                        // propagate the return through the generator's own body
-                        // (which may have try-finally).
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return self.generator_return_state_machine(this, value);
-                    }
-                    Err(e) => {
-                        // Propagate error through generator's try-catch
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return self.generator_throw_state_machine(this, e);
-                    }
-                }
-            }
-
-            // Walk the try_stack to find a try with a finally block
-            let mut finally_idx = None;
-            for i in (0..try_stack.len()).rev() {
-                if !try_stack[i].entered_finally && try_stack[i].finally_state.is_some() {
-                    finally_idx = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(idx) = finally_idx {
-                let finally_state = try_stack[idx].finally_state.unwrap();
-                // Keep try_stack entries below the one we're entering finally for
-                let remaining_stack = try_stack[..idx].to_vec();
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::SuspendedAtState {
-                            state_id: finally_state,
-                        },
-                        _sent_value: JsValue::Undefined,
-                        try_stack: remaining_stack,
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: Some(value.clone()),
-                    },
-                );
-                return self.generator_next_state_machine(this, JsValue::Undefined);
-            }
-
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::Completed,
-                    _sent_value: JsValue::Undefined,
-                    try_stack: vec![],
-                    pending_binding: None,
-                    delegated_iterator: None,
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
-            // Close any iterators that were open when generator was suspended via InlineYield
-            if let Some(iters) = self.generator_inline_iters.remove(&o.id) {
-                for iter in iters {
-                    if let Err(e) = self.iterator_close_result(&iter) {
-                        return Completion::Throw(e);
-                    }
-                }
-            }
-        }
-        Completion::Normal(self.create_iter_result_object(value, true))
-    }
-
-    pub(crate) fn generator_throw_state_machine(
-        &mut self,
-        this: &JsValue,
-        exception: JsValue,
-    ) -> Completion {
-        let JsValue::Object(o) = this else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.throw called on non-object"),
-            );
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return Completion::Throw(
-                self.create_type_error("Generator.prototype.throw called on non-object"),
-            );
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        if let Some(IteratorState::StateMachineGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            execution_state,
-            try_stack,
-            delegated_iterator,
-            pending_return: stored_pending_return,
-            ..
-        }) = state
-        {
-            match execution_state {
-                StateMachineExecutionState::Executing => {
-                    return Completion::Throw(
-                        self.create_type_error("Generator is already running"),
-                    );
-                }
-                StateMachineExecutionState::Completed
-                | StateMachineExecutionState::SuspendedStart => {
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    return Completion::Throw(exception);
-                }
-                StateMachineExecutionState::SuspendedAtState { .. } => {}
-            }
-
-            if let Some(ref deleg_info) = delegated_iterator {
-                let iterator = deleg_info.iterator.clone();
-                let next_method = deleg_info.next_method.clone();
-                let resume_state = deleg_info.resume_state;
-                let binding = deleg_info.sent_value_binding.clone();
-
-                match self.iterator_throw(&iterator, &exception) {
-                    Ok(Some(iter_result)) => {
-                        let done = match self.iterator_complete(&iter_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine: state_machine.clone(),
-                                            func_env: func_env.clone(),
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedAtState {
-                                                    state_id: resume_state,
-                                                },
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: try_stack.clone(),
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return self.generator_throw_state_machine(this, e);
-                            }
-                        };
-                        if done {
-                            let result_value = match self.iterator_value(&iter_result) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: resume_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: try_stack.clone(),
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.generator_throw_state_machine(this, e);
-                                }
-                            };
-                            use crate::interpreter::generator_transform::SentValueBindingKind;
-                            if let Some(ref bind) = binding {
-                                match &bind.kind {
-                                    SentValueBindingKind::Variable(name) => {
-                                        self.env_set(&func_env, name, result_value.clone()).ok();
-                                    }
-                                    SentValueBindingKind::Pattern(pattern) => {
-                                        let _ = self.bind_pattern(
-                                            pattern,
-                                            result_value.clone(),
-                                            BindingKind::Var,
-                                            &func_env,
-                                        );
-                                    }
-                                    SentValueBindingKind::Discard
-                                    | SentValueBindingKind::InlineYield { .. } => {}
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine: state_machine.clone(),
-                                        func_env: func_env.clone(),
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return self.generator_next_state_machine(this, JsValue::Undefined);
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state,
-                                                sent_value_binding: binding,
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            // Per spec §14.4.14: yield innerResult directly
-                            return Completion::Normal(iter_result);
-                        }
-                    }
-                    Ok(None) => {
-                        // Per §14.4.14 step 5.b.iii: close iterator with normal
-                        // completion, then throw TypeError (yield* protocol violation)
-                        if let Err(e) = self.iterator_close_result(&iterator) {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineGenerator {
-                                        state_machine: state_machine.clone(),
-                                        func_env: func_env.clone(),
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return self.generator_throw_state_machine(this, e);
-                        }
-                        let type_err = self
-                            .create_type_error("The iterator does not provide a 'throw' method");
-                        // Clear delegation and propagate throw through generator body
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return self.generator_throw_state_machine(this, type_err);
-                    }
-                    Err(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return self.generator_throw_state_machine(this, e);
-                    }
-                }
-            }
-
-            // Walk try_stack from innermost to outermost to find a handler
-            for i in (0..try_stack.len()).rev() {
-                let try_info = &try_stack[i];
-                if !try_info.entered_catch
-                    && !try_info.entered_finally
-                    && let Some(catch_state) = try_info.catch_state
-                {
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: catch_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: try_stack[..i].to_vec(),
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: Some(exception.clone()),
-                            pending_return: stored_pending_return,
-                        },
-                    );
-                    return self.generator_next_state_machine(this, JsValue::Undefined);
-                }
-                if !try_info.entered_finally
-                    && let Some(finally_state) = try_info.finally_state
-                {
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: finally_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: try_stack[..i].to_vec(),
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: Some(exception.clone()),
-                            pending_return: stored_pending_return,
-                        },
-                    );
-                    return self.generator_next_state_machine(this, JsValue::Undefined);
-                }
-            }
-
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::Completed,
-                    _sent_value: JsValue::Undefined,
-                    try_stack: vec![],
-                    pending_binding: None,
-                    delegated_iterator: None,
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
-        }
-        Completion::Throw(exception)
-    }
-
-    fn reject_with_type_error(&mut self, msg: &str) -> Completion {
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        let err = self.create_type_error(msg);
-        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-        self.drain_microtasks();
-        Completion::Normal(promise)
-    }
-
-    fn async_gen_enqueue(
-        &mut self,
-        this: &JsValue,
-        value: JsValue,
-        kind: super::AsyncGenRequestKind,
-    ) -> Completion {
-        let gen_id = if let JsValue::Object(o) = this {
-            o.id
-        } else {
-            return self.reject_with_type_error("not an async generator");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-
-        let request = super::AsyncGenRequest {
-            kind,
-            value,
-            promise: promise.clone(),
-            resolve_fn,
-            reject_fn,
-        };
-
-        // Check generator state before mutating the queue
-        let is_executing = if let Some(obj_rc) = self.get_object_cell(gen_id) {
-            matches!(
-                obj_rc.borrow().iterator_state(),
-                Some(IteratorState::StateMachineAsyncGenerator {
-                    execution_state: StateMachineExecutionState::Executing,
-                    ..
-                })
-            )
-        } else {
-            false
-        };
-
-        let queue = self.scheduler.async_gen_queue_or_default(gen_id);
-        queue.push_back(request);
-        let queue_len = queue.len();
-
-        // Per spec §27.6.3.7 step 5: if the generator is not executing,
-        // call AsyncGeneratorResume immediately (not via microtask)
-        if !is_executing && queue_len == 1 {
-            let this_clone = this.clone();
-            self.async_gen_process_queue(&this_clone);
+            return Ok(());
         }
 
-        Completion::Normal(promise)
-    }
-
-    fn async_gen_process_queue(&mut self, this: &JsValue) {
-        let gen_id = if let JsValue::Object(o) = this {
-            o.id
-        } else {
-            return;
-        };
-
-        let request = {
-            let queue = self.scheduler.async_gen_queue(gen_id);
-            match queue.and_then(|q| q.front().cloned()) {
-                Some(r) => r,
-                None => return,
+        for (index, param) in params.iter().enumerate() {
+            if let Pattern::Rest(inner) = param {
+                let rest = args.get(index..).unwrap_or(&[]).to_vec();
+                let rest_array = self.create_array(rest);
+                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                break;
             }
-        };
-        self.scheduler.set_async_gen_yield_pending(false);
-        let result = match request.kind {
-            super::AsyncGenRequestKind::Next => self
-                .async_generator_next_state_machine_with_promise(
-                    this,
-                    request.value.clone(),
-                    request.promise.clone(),
-                    request.resolve_fn.clone(),
-                    request.reject_fn.clone(),
-                ),
-            super::AsyncGenRequestKind::Return => self
-                .async_generator_return_state_machine_with_promise(
-                    this,
-                    request.value.clone(),
-                    request.promise.clone(),
-                    request.resolve_fn.clone(),
-                    request.reject_fn.clone(),
-                ),
-            super::AsyncGenRequestKind::Throw => self
-                .async_generator_throw_state_machine_with_promise(
-                    this,
-                    request.value.clone(),
-                    request.promise.clone(),
-                    request.resolve_fn.clone(),
-                    request.reject_fn.clone(),
-                ),
-        };
-
-        // If the yield suspended asynchronously (pending promise), don't pop — the
-        // fulfill/reject handler will pop and schedule the next request
-        if self.scheduler.is_async_gen_yield_pending() {
-            self.scheduler.set_async_gen_yield_pending(false);
-            let _ = result;
-            return;
+            let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
+            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
         }
-
-        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-            queue.pop_front();
-        }
-
-        // Process next request inline per spec (AsyncGeneratorDrainQueue)
-        let this_clone = this.clone();
-        self.async_gen_process_queue(&this_clone);
-
-        let _ = result;
-    }
-
-    /// Called when Await(innerResult) resolves during yield* delegation in an async generator.
-    /// Implements yield* step 8.a.iii-vi + AsyncGeneratorYield inline.
-    fn yield_star_await_inner_result_resume(
-        &mut self,
-        gen_this: &JsValue,
-        gen_id: u64,
-        awaited_result: JsValue,
-        promise: &JsValue,
-        resolve_fn: &JsValue,
-        reject_fn: &JsValue,
-        is_rejection: bool,
-    ) {
-        let obj_rc = match self.get_object(gen_id) {
-            Some(o) => o,
-            None => return,
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            try_stack,
-            delegated_iterator,
-            pending_binding,
-            ..
-        }) = state
-        else {
-            return;
-        };
-
-        let deleg_info = match delegated_iterator {
-            Some(d) => d,
-            None => return,
-        };
-
-        if is_rejection {
-            self.generator_inline_iters.remove(&gen_id);
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineAsyncGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::Completed,
-                    _sent_value: JsValue::Undefined,
-                    try_stack: vec![],
-                    pending_binding: None,
-                    delegated_iterator: None,
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
-            let _ = self.call_function(reject_fn, &JsValue::Undefined, &[awaited_result]);
-            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                queue.pop_front();
-            }
-            self.async_gen_process_queue(gen_this);
-            return;
-        }
-
-        // §15.5.5 step 8.a.iii: If innerResult is not an Object, throw TypeError
-        if !matches!(awaited_result, JsValue::Object(_)) {
-            let err = self.create_type_error("Iterator result is not an object");
-            self.generator_inline_iters.remove(&gen_id);
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineAsyncGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::Completed,
-                    _sent_value: JsValue::Undefined,
-                    try_stack: vec![],
-                    pending_binding: None,
-                    delegated_iterator: None,
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
-            let _ = self.call_function(reject_fn, &JsValue::Undefined, &[err]);
-            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                queue.pop_front();
-            }
-            self.async_gen_process_queue(gen_this);
-            return;
-        }
-
-        // §15.5.5 step 8.a.iv: done = IteratorComplete(innerResult)
-        let done = match self.iterator_complete(&awaited_result) {
-            Ok(d) => d,
-            Err(e) => {
-                self.generator_inline_iters.remove(&gen_id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
-                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                    queue.pop_front();
-                }
-                self.async_gen_process_queue(gen_this);
-                return;
-            }
-        };
-
-        // §15.5.5 step 8.a.v-vi
-        let value = match self.iterator_value(&awaited_result) {
-            Ok(v) => v,
-            Err(e) => {
-                let has_catch = try_stack
-                    .iter()
-                    .rev()
-                    .any(|tc| !tc.entered_catch && !tc.entered_finally && tc.catch_state.is_some());
-                if has_catch {
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine: state_machine.clone(),
-                            func_env: func_env.clone(),
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: deleg_info.resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: try_stack.clone(),
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: Some(e),
-                            pending_return: None,
-                        },
-                    );
-                    self.scheduler.set_async_gen_yield_pending(false);
-                    let _ = self.async_generator_next_state_machine_with_promise(
-                        gen_this,
-                        JsValue::Undefined,
-                        promise.clone(),
-                        resolve_fn.clone(),
-                        reject_fn.clone(),
-                    );
-                    if self.scheduler.is_async_gen_yield_pending() {
-                        self.scheduler.set_async_gen_yield_pending(false);
-                        return;
-                    }
-                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                        queue.pop_front();
-                    }
-                    self.async_gen_process_queue(gen_this);
-                    return;
-                }
-                self.generator_inline_iters.remove(&gen_id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
-                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                    queue.pop_front();
-                }
-                self.async_gen_process_queue(gen_this);
-                return;
-            }
-        };
-
-        if done {
-            // §15.5.5 step 8.a.v: return IteratorValue(innerResult)
-            // Bind the yield* result and resume the state machine
-            use crate::interpreter::generator_transform::SentValueBindingKind;
-            if let Some(ref binding) = pending_binding {
-                match &binding.kind {
-                    SentValueBindingKind::Variable(name) => {
-                        self.env_set(&func_env, name, value.clone()).ok();
-                    }
-                    SentValueBindingKind::Pattern(pattern) => {
-                        let _ =
-                            self.bind_pattern(pattern, value.clone(), BindingKind::Var, &func_env);
-                    }
-                    SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
-                }
-            }
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineAsyncGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::SuspendedAtState {
-                        state_id: deleg_info.resume_state,
-                    },
-                    _sent_value: JsValue::Undefined,
-                    try_stack,
-                    pending_binding: None,
-                    delegated_iterator: None,
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
-            self.scheduler.set_async_gen_yield_pending(false);
-            let _ = self.async_generator_next_state_machine_with_promise(
-                gen_this,
-                value,
-                promise.clone(),
-                resolve_fn.clone(),
-                reject_fn.clone(),
-            );
-            if self.scheduler.is_async_gen_yield_pending() {
-                self.scheduler.set_async_gen_yield_pending(false);
-                return;
-            }
-            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                queue.pop_front();
-            }
-            self.async_gen_process_queue(gen_this);
-            return;
-        }
-
-        // done=false: §27.6.3.8 AsyncGeneratorYield
-        // Step 9: AsyncGeneratorCompleteStep — resolve the .next() promise
-        let iter_result = self.create_iter_result_object(value, false);
-        let _ = self.call_function(resolve_fn, &JsValue::Undefined, &[iter_result]);
-
-        // Pop the current (Next) request from the queue
-        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-            queue.pop_front();
-        }
-
-        // Step 10-11: Check if queue has more requests (e.g. .return()/.throw())
-        // If so, process via AsyncGeneratorUnwrapYieldResumption inline
-        let next_request = self
-            .scheduler
-            .async_gen_queue(gen_id)
-            .and_then(|q| q.front().cloned());
-
-        if let Some(request) = next_request {
-            match request.kind {
-                super::AsyncGenRequestKind::Return => {
-                    // §27.6.3.7 AsyncGeneratorUnwrapYieldResumption for return
-                    // Await(returnValue) then handle yield* return protocol
-                    let ret_val = request.value.clone();
-                    let ret_promise = request.promise.clone();
-                    let ret_resolve = request.resolve_fn.clone();
-                    let ret_reject = request.reject_fn.clone();
-
-                    // Save state keeping delegated_iterator for the return handler
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: deleg_info.resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack,
-                            pending_binding: None,
-                            delegated_iterator: Some(deleg_info),
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-
-                    // §27.6.3.7 step 2: Await(resumptionValue.[[Value]])
-                    let unwrap_promise = self.promise_resolve_value(&ret_val);
-                    let unwrap_id = if let JsValue::Object(ref uo) = unwrap_promise {
-                        uo.id
-                    } else {
-                        0
-                    };
-
-                    let gen_this_r = gen_this.clone();
-                    let gen_id_r = gen_id;
-                    let ret_promise_c = ret_promise.clone();
-                    let ret_resolve_c = ret_resolve.clone();
-                    let ret_reject_c = ret_reject.clone();
-
-                    let on_fulfilled = self.create_function(JsFunction::native(
-                        "yieldStarUnwrapReturnFulfill".to_string(),
-                        1,
-                        move |interp, _this, args| {
-                            let awaited_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            interp.yield_star_return_after_unwrap(
-                                &gen_this_r,
-                                gen_id_r,
-                                awaited_val,
-                                &ret_promise_c,
-                                &ret_resolve_c,
-                                &ret_reject_c,
-                            );
-                            Completion::Normal(JsValue::Undefined)
-                        },
-                    ));
-
-                    let gen_this_r2 = gen_this.clone();
-                    let gen_id_r2 = gen_id;
-                    let ret_reject_c2 = ret_reject.clone();
-                    let on_rejected = self.create_function(JsFunction::native(
-                        "yieldStarUnwrapReturnReject".to_string(),
-                        1,
-                        move |interp, _this, args| {
-                            let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            if let Some(obj) = interp.get_object(gen_id_r2) {
-                                let mut b = obj.borrow_mut();
-                                if let Some(IteratorState::StateMachineAsyncGenerator {
-                                    execution_state,
-                                    delegated_iterator,
-                                    try_stack,
-                                    ..
-                                }) = b.iterator_state_mut()
-                                {
-                                    interp.generator_inline_iters.remove(&gen_id_r2);
-                                    *execution_state = StateMachineExecutionState::Completed;
-                                    *delegated_iterator = None;
-                                    try_stack.clear();
-                                }
-                            }
-                            let _ = interp.call_function(
-                                &ret_reject_c2,
-                                &JsValue::Undefined,
-                                &[reason],
-                            );
-                            if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id_r2) {
-                                queue.pop_front();
-                            }
-                            interp.async_gen_process_queue(&gen_this_r2);
-                            Completion::Normal(JsValue::Undefined)
-                        },
-                    ));
-
-                    let unwrap_state = self.get_promise_state(unwrap_id);
-                    match unwrap_state {
-                        Some(PromiseState::Fulfilled(v)) => {
-                            let handler = on_fulfilled;
-                            let val = v.clone();
-                            self.scheduler.enqueue_microtask((
-                                vec![val.clone(), handler.clone()],
-                                Box::new(move |interp| {
-                                    let _ =
-                                        interp.call_function(&handler, &JsValue::Undefined, &[val]);
-                                    Completion::Normal(JsValue::Undefined)
-                                }),
-                            ));
-                        }
-                        Some(PromiseState::Rejected(r)) => {
-                            let handler = on_rejected;
-                            let reason = r.clone();
-                            self.scheduler.enqueue_microtask((
-                                vec![reason.clone(), handler.clone()],
-                                Box::new(move |interp| {
-                                    let _ = interp.call_function(
-                                        &handler,
-                                        &JsValue::Undefined,
-                                        &[reason],
-                                    );
-                                    Completion::Normal(JsValue::Undefined)
-                                }),
-                            ));
-                        }
-                        Some(PromiseState::Pending) => {
-                            if let Some(obj) = self.get_object_cell(unwrap_id) {
-                                let mut ob = obj.borrow_mut();
-                                if let Some(pd) = ob.promise_data_mut() {
-                                    pd.is_handled = true;
-                                    pd.fulfill_reactions.push(PromiseReaction {
-                                        handler: Some(on_fulfilled),
-                                        promise_id: None,
-                                        resolve: JsValue::Undefined,
-                                        reject: JsValue::Undefined,
-                                        reaction_type: PromiseReactionType::Fulfill,
-                                    });
-                                    pd.reject_reactions.push(PromiseReaction {
-                                        handler: Some(on_rejected),
-                                        promise_id: None,
-                                        resolve: JsValue::Undefined,
-                                        reject: JsValue::Undefined,
-                                        reaction_type: PromiseReactionType::Reject,
-                                    });
-                                }
-                            }
-                        }
-                        None => {
-                            let handler = on_fulfilled;
-                            let val = ret_val.clone();
-                            self.scheduler.enqueue_microtask((
-                                vec![val.clone(), handler.clone()],
-                                Box::new(move |interp| {
-                                    let _ =
-                                        interp.call_function(&handler, &JsValue::Undefined, &[val]);
-                                    Completion::Normal(JsValue::Undefined)
-                                }),
-                            ));
-                        }
-                    }
-                    self.scheduler.set_async_gen_yield_pending(true);
-                }
-                _ => {
-                    // Normal/Throw: save state and let process_queue handle it
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: deleg_info.resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack,
-                            pending_binding: None,
-                            delegated_iterator: Some(deleg_info),
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    self.async_gen_process_queue(gen_this);
-                }
-            }
-        } else {
-            // Queue is empty — suspend the generator at yield
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::StateMachineAsyncGenerator {
-                    state_machine,
-                    func_env,
-                    is_strict,
-                    execution_state: StateMachineExecutionState::SuspendedAtState {
-                        state_id: deleg_info.resume_state,
-                    },
-                    _sent_value: JsValue::Undefined,
-                    try_stack,
-                    pending_binding: None,
-                    delegated_iterator: Some(deleg_info),
-                    pending_exception: None,
-                    pending_return: None,
-                },
-            );
-        }
-    }
-
-    /// Called when the Await in AsyncGeneratorUnwrapYieldResumption for a return
-    /// completion resolves during yield* delegation.
-    fn yield_star_return_after_unwrap(
-        &mut self,
-        gen_this: &JsValue,
-        gen_id: u64,
-        awaited_val: JsValue,
-        ret_promise: &JsValue,
-        ret_resolve: &JsValue,
-        ret_reject: &JsValue,
-    ) {
-        let obj_rc = match self.get_object(gen_id) {
-            Some(o) => o,
-            None => return,
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            try_stack,
-            delegated_iterator,
-            ..
-        }) = state
-        else {
-            return;
-        };
-
-        let deleg_info = match delegated_iterator {
-            Some(d) => d,
-            None => return,
-        };
-
-        let iterator = deleg_info.iterator.clone();
-
-        // yield* step 8.c: received.[[Type]] is return, received.[[Value]] = awaited_val
-        // Step 8.c.ii: GetMethod(iterator, "return")
-        match self.iterator_return(&iterator, &awaited_val) {
-            Ok(Some(inner_return_result)) => {
-                // Step 8.c.v: Await(innerReturnResult)
-                let iawait_result = match self.await_value(&inner_return_result) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&gen_id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                            queue.pop_front();
-                        }
-                        self.async_gen_process_queue(gen_this);
-                        return;
-                    }
-                    _ => inner_return_result,
-                };
-                let done = match self.iterator_complete(&iawait_result) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        self.generator_inline_iters.remove(&gen_id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                            queue.pop_front();
-                        }
-                        self.async_gen_process_queue(gen_this);
-                        return;
-                    }
-                };
-                let value = match self.iterator_value(&iawait_result) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.generator_inline_iters.remove(&gen_id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                            queue.pop_front();
-                        }
-                        self.async_gen_process_queue(gen_this);
-                        return;
-                    }
-                };
-                if done {
-                    self.generator_inline_iters.remove(&gen_id);
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let ret_promise_id = if let JsValue::Object(po) = ret_promise {
-                        po.id
-                    } else {
-                        0
-                    };
-                    let _ = self.async_generator_await_return(value, ret_promise_id);
-                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                        queue.pop_front();
-                    }
-                    self.async_gen_process_queue(gen_this);
-                } else {
-                    // Not done — yield the value and continue delegation
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: deleg_info.resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack,
-                            pending_binding: None,
-                            delegated_iterator: Some(deleg_info),
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let iter_result = self.create_iter_result_object(value, false);
-                    let _ = self.call_function(ret_resolve, &JsValue::Undefined, &[iter_result]);
-                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                        queue.pop_front();
-                    }
-                    self.async_gen_process_queue(gen_this);
-                }
-            }
-            Ok(None) => {
-                // No .return() method — §15.5.5 step 8.c.iii: Await(received.[[Value]])
-                self.generator_inline_iters.remove(&gen_id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let ret_promise_id = if let JsValue::Object(po) = ret_promise {
-                    po.id
-                } else {
-                    0
-                };
-                let _ = self.async_generator_await_return(awaited_val, ret_promise_id);
-                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                    queue.pop_front();
-                }
-                self.async_gen_process_queue(gen_this);
-            }
-            Err(e) => {
-                self.generator_inline_iters.remove(&gen_id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                    queue.pop_front();
-                }
-                self.async_gen_process_queue(gen_this);
-            }
-        }
-    }
-
-    fn async_generator_next_state_machine_with_promise(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-        promise: JsValue,
-        resolve_fn: JsValue,
-        reject_fn: JsValue,
-    ) -> Completion {
-        let caller_realm = self.current_realm_id;
-        if let JsValue::Object(o) = this
-            && let Some(obj_rc) = self.get_object(o.id)
-            && let Some(realm_id) = obj_rc.borrow().generator_realm_id
-        {
-            self.current_realm_id = realm_id;
-        }
-        let result = self.async_generator_next_state_machine_impl(
-            this, sent_value, promise, resolve_fn, reject_fn,
-        );
-        self.current_realm_id = caller_realm;
-        result
-    }
-
-    fn async_generator_next_state_machine_impl(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-        promise: JsValue,
-        resolve_fn: JsValue,
-        reject_fn: JsValue,
-    ) -> Completion {
-        use crate::interpreter::generator_transform::StateTerminator;
-
-        let JsValue::Object(o) = this else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            execution_state,
-            try_stack,
-            pending_binding,
-            delegated_iterator,
-            pending_exception: stored_pending_exception,
-            pending_return: stored_pending_return,
-            ..
-        }) = state
-        else {
-            return self.reject_with_type_error("not a state machine async generator");
-        };
-
-        if let Some(ref deleg_info) = delegated_iterator {
-            let iterator = deleg_info.iterator.clone();
-            let next_method = deleg_info.next_method.clone();
-            let resume_state = deleg_info.resume_state;
-            let binding = deleg_info.sent_value_binding.clone();
-
-            // Handle .return() during yield* delegation
-            if let Some(ret_val) = stored_pending_return {
-                match self.iterator_return(&iterator, &ret_val) {
-                    Ok(Some(iter_result)) => {
-                        let awaited_result = match self.await_value(&iter_result) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            _ => iter_result,
-                        };
-                        let done = match self.iterator_complete(&awaited_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        let value = match self.iterator_value(&awaited_result) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                // IteratorValue threw — route through try/catch stack
-                                // per spec §15.5.5 step 7.c.ix: ? IteratorValue(innerReturnResult)
-                                // Route through the state machine's try/catch handling
-                                let has_catch = try_stack.iter().rev().any(|tc| {
-                                    !tc.entered_catch
-                                        && !tc.entered_finally
-                                        && tc.catch_state.is_some()
-                                });
-                                if has_catch {
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: resume_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: try_stack.clone(),
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.async_generator_next_state_machine_with_promise(
-                                        this,
-                                        JsValue::Undefined,
-                                        promise,
-                                        resolve_fn,
-                                        reject_fn,
-                                    );
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        if done {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let promise_id = if let JsValue::Object(ref po) = promise {
-                                po.id
-                            } else {
-                                0
-                            };
-                            return self.async_generator_await_return(value, promise_id);
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack,
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state,
-                                                sent_value_binding: binding,
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let iter_result = self.create_iter_result_object(value, false);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::Undefined,
-                                &[iter_result],
-                            );
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    }
-                    Ok(None) => {
-                        // No .return() method — complete the generator
-                        // §15.5.5 step 7.c.iii.1: Await(received.[[Value]])
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let promise_id = if let JsValue::Object(ref po) = promise {
-                            po.id
-                        } else {
-                            0
-                        };
-                        return self.async_generator_await_return(ret_val, promise_id);
-                    }
-                    Err(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                }
-            }
-
-            // Handle .throw() during yield* delegation
-            if let Some(exc) = stored_pending_exception {
-                match self.iterator_throw(&iterator, &exc) {
-                    Ok(Some(iter_result)) => {
-                        let awaited_result = match self.await_value(&iter_result) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            _ => iter_result,
-                        };
-                        let done = match self.iterator_complete(&awaited_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        let value = match self.iterator_value(&awaited_result) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                // IteratorValue threw — route through try/catch stack
-                                // per spec §15.5.5 step 7.b.ii.7: ? IteratorValue(innerResult)
-                                let has_catch = try_stack.iter().rev().any(|tc| {
-                                    !tc.entered_catch
-                                        && !tc.entered_finally
-                                        && tc.catch_state.is_some()
-                                });
-                                if has_catch {
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: resume_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: try_stack.clone(),
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.async_generator_next_state_machine_with_promise(
-                                        this,
-                                        JsValue::Undefined,
-                                        promise,
-                                        resolve_fn,
-                                        reject_fn,
-                                    );
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        if done {
-                            if let Some(ref bind) = binding {
-                                use crate::interpreter::generator_transform::SentValueBindingKind;
-                                match &bind.kind {
-                                    SentValueBindingKind::Variable(name) => {
-                                        self.env_set(&func_env, name, value.clone()).ok();
-                                    }
-                                    SentValueBindingKind::Pattern(pattern) => {
-                                        let _ = self.bind_pattern(
-                                            pattern,
-                                            value.clone(),
-                                            BindingKind::Var,
-                                            &func_env,
-                                        );
-                                    }
-                                    SentValueBindingKind::Discard
-                                    | SentValueBindingKind::InlineYield { .. } => {}
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine: state_machine.clone(),
-                                        func_env: func_env.clone(),
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return self.async_generator_next_state_machine_with_promise(
-                                this,
-                                JsValue::Undefined,
-                                promise,
-                                resolve_fn,
-                                reject_fn,
-                            );
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack,
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state,
-                                                sent_value_binding: binding,
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let iter_result = self.create_iter_result_object(value, false);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::Undefined,
-                                &[iter_result],
-                            );
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    }
-                    Ok(None) => {
-                        // No .throw() method — close iterator and throw TypeError
-                        let _ = self.iterator_close(&iterator, exc.clone());
-                        let type_err =
-                            self.create_type_error("The iterator does not provide a throw method");
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[type_err]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    Err(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                }
-            }
-
-            let result = match self.call_function(
-                &next_method,
-                &iterator,
-                std::slice::from_ref(&sent_value),
-            ) {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
-                Completion::Normal(_) => {
-                    Err(self.create_type_error("Iterator result is not an object"))
-                }
-                Completion::Throw(e) => Err(e),
-                _ => Err(self.create_type_error("Iterator next failed")),
-            };
-            match result {
-                Ok(iter_result) => {
-                    // Await the iterator result (inner async iterators return promises)
-                    let awaited_result = match self.await_value(&iter_result) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        _ => iter_result,
-                    };
-                    let done = match self.iterator_complete(&awaited_result) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    };
-                    let value = match self.iterator_value(&awaited_result) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            // Propagate through generator's try/catch stack
-                            let mut ts = try_stack.clone();
-                            for i in (0..ts.len()).rev() {
-                                if !ts[i].entered_catch
-                                    && !ts[i].entered_finally
-                                    && let Some(catch_state) = ts[i].catch_state
-                                {
-                                    ts.truncate(i);
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: ts,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.async_generator_next_state_machine_with_promise(
-                                        this,
-                                        JsValue::Undefined,
-                                        promise,
-                                        resolve_fn,
-                                        reject_fn,
-                                    );
-                                }
-                            }
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    };
-                    if done {
-                        if let Some(ref bind) = binding {
-                            use crate::interpreter::generator_transform::SentValueBindingKind;
-                            match &bind.kind {
-                                SentValueBindingKind::Variable(name) => {
-                                    let mut env = func_env.borrow_mut();
-                                    let needs_init = env
-                                        .bindings
-                                        .get(name.as_str())
-                                        .is_some_and(|b| !b.initialized);
-                                    if needs_init {
-                                        env.initialize_binding(name, value.clone());
-                                    } else {
-                                        env.set(name, value.clone()).ok();
-                                    }
-                                }
-                                SentValueBindingKind::Pattern(pattern) => {
-                                    let _ = self.bind_pattern(
-                                        pattern,
-                                        value.clone(),
-                                        BindingKind::Var,
-                                        &func_env,
-                                    );
-                                }
-                                SentValueBindingKind::Discard
-                                | SentValueBindingKind::InlineYield { .. } => {}
-                            }
-                        }
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        // Reuse the same promise — don't create a new one
-                        return self.async_generator_next_state_machine_with_promise(
-                            this,
-                            JsValue::Undefined,
-                            promise,
-                            resolve_fn,
-                            reject_fn,
-                        );
-                    } else {
-                        // Per spec §14.4.13 step 7.a.vi: for async generators,
-                        // yield the value directly without awaiting (AsyncGeneratorYield)
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack,
-                                pending_binding: None,
-                                delegated_iterator: Some(
-                                    crate::interpreter::types::DelegatedIteratorInfo {
-                                        iterator,
-                                        next_method: next_method.clone(),
-                                        resume_state,
-                                        sent_value_binding: binding,
-                                    },
-                                ),
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let iter_result = self.create_iter_result_object(value, false);
-                        let _ =
-                            self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                }
-                Err(e) => {
-                    self.generator_inline_iters.remove(&o.id);
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                    self.drain_microtasks();
-                    return Completion::Normal(promise);
-                }
-            }
-        }
-
-        let current_state_id = match &execution_state {
-            StateMachineExecutionState::Completed => {
-                let result = self.create_iter_result_object(JsValue::Undefined, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            StateMachineExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            StateMachineExecutionState::SuspendedStart => 0,
-            StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
-        };
-
-        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-            IteratorState::StateMachineAsyncGenerator {
-                state_machine: state_machine.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: StateMachineExecutionState::Executing,
-                _sent_value: sent_value.clone(),
-                try_stack: try_stack.clone(),
-                pending_binding: None,
-                delegated_iterator: None,
-                pending_exception: None,
-                pending_return: None,
-            },
-        );
-
-        use crate::interpreter::generator_transform::SentValueBindingKind;
-        let mut initial_inline_yield_target: Option<usize> = None;
-        let mut initial_inline_yield_sent: Option<JsValue> = None;
-        let mut initial_inline_yield_prev_sent: Option<Vec<JsValue>> = None;
-        if let Some(binding) = pending_binding {
-            match &binding.kind {
-                SentValueBindingKind::Variable(name) => {
-                    let mut env = func_env.borrow_mut();
-                    let needs_init = env
-                        .bindings
-                        .get(name.as_str())
-                        .is_some_and(|b| !b.initialized);
-                    if needs_init {
-                        env.initialize_binding(name, sent_value.clone());
-                    } else {
-                        env.set(name, sent_value.clone()).ok();
-                    }
-                }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
-                }
-                SentValueBindingKind::Discard => {}
-                SentValueBindingKind::InlineYield {
-                    yield_target,
-                    prev_sent,
-                } => {
-                    initial_inline_yield_target = Some(*yield_target);
-                    initial_inline_yield_sent = Some(sent_value.clone());
-                    let mut new_prev = prev_sent.clone();
-                    new_prev.push(sent_value.clone());
-                    initial_inline_yield_prev_sent = Some(new_prev);
-                }
-            }
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        let saved_in_state_machine = self.in_state_machine;
-        self.in_state_machine = true;
-        let mut current_id = current_state_id;
-        let mut current_try_stack = try_stack;
-        let check_abrupt_on_resume =
-            stored_pending_exception.is_some() || stored_pending_return.is_some();
-        let mut pending_exception: Option<JsValue> = stored_pending_exception;
-        let mut pending_return: Option<JsValue> = stored_pending_return;
-        let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
-        let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
-        let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
-        let mut check_abrupt_on_resume = check_abrupt_on_resume;
-        loop {
-            if check_abrupt_on_resume {
-                check_abrupt_on_resume = false;
-                // Check pending_exception before executing state (handles .throw() with no try/catch)
-                if let Some(exc) = pending_exception.take() {
-                    let mut handled = false;
-                    for i in (0..current_try_stack.len()).rev() {
-                        if !current_try_stack[i].entered_catch
-                            && !current_try_stack[i].entered_finally
-                        {
-                            if let Some(catch_state) = current_try_stack[i].catch_state {
-                                pending_exception = Some(exc.clone());
-                                current_id = catch_state;
-                                handled = true;
-                                break;
-                            } else if let Some(finally_state) = current_try_stack[i].finally_state {
-                                pending_exception = Some(exc.clone());
-                                current_id = finally_state;
-                                handled = true;
-                                break;
-                            }
-                        }
-                    }
-                    if handled {
-                        continue;
-                    }
-                    let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
-                    let exc = match disp {
-                        Completion::Throw(e) => e,
-                        _ => unreachable!(),
-                    };
-                    self.generator_inline_iters.remove(&o.id);
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
-                    self.drain_microtasks();
-                    return Completion::Normal(promise);
-                }
-                // Check pending_return before executing state (handles .return() with no try/catch)
-                if let Some(ret_val) = pending_return.take() {
-                    if current_try_stack.is_empty() {
-                        if let Some(iters) = self.generator_inline_iters.remove(&o.id) {
-                            for iter in iters {
-                                if let Err(e) = self.iterator_close_result(&iter) {
-                                    self.generator_inline_iters.remove(&o.id);
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine,
-                                                func_env,
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::Completed,
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: vec![],
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    let _ =
-                                        self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    self.drain_microtasks();
-                                    return Completion::Normal(promise);
-                                }
-                            }
-                        }
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let promise_id = if let JsValue::Object(ref po) = promise {
-                            po.id
-                        } else {
-                            0
-                        };
-                        return self.async_generator_await_return(ret_val, promise_id);
-                    }
-                    // Has try/finally — route to finally handler
-                    let mut return_handled = false;
-                    for i in (0..current_try_stack.len()).rev() {
-                        if !current_try_stack[i].entered_finally
-                            && let Some(finally_state) = current_try_stack[i].finally_state
-                        {
-                            pending_return = Some(ret_val.clone());
-                            current_id = finally_state;
-                            return_handled = true;
-                            break;
-                        }
-                    }
-                    if return_handled {
-                        continue;
-                    }
-                    // No finally — just propagate
-                    pending_return = Some(ret_val);
-                }
-            } // end if check_abrupt_on_resume
-
-            let terminator = state_machine.states[current_id].terminator.clone();
-
-            let is_inline_replay = inline_yield_target.is_some();
-            if let Some(target) = inline_yield_target.take() {
-                let _sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
-                let prev = inline_yield_prev_sent.take().unwrap_or_default();
-                self.generator_context = Some(GeneratorContext {
-                    target_yield: target,
-                    current_yield: 0,
-                    prev_sent_values: prev,
-                    is_async: true,
-                    resume_kind: GeneratorResumeKind::Next,
-                });
-            }
-
-            self.in_state_machine = true;
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &func_env);
-            self.in_state_machine = saved_in_state_machine;
-            while let Completion::TailCall { func, this, args } = stmt_result {
-                stmt_result = self.call_function(&func, &this, &args);
-            }
-            let ctx_after = if is_inline_replay {
-                self.generator_context.take()
-            } else {
-                None
-            };
-
-            if let Completion::Exit(code) = stmt_result {
-                // `__host_exit` (issue #242) is uncatchable and immediate:
-                // complete the async generator without routing to its
-                // catch/finally states, disposing, or settling the result
-                // promise, and propagate the exit.
-                self.generator_inline_iters.remove(&o.id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                return Completion::Exit(code);
-            }
-            if let Completion::Throw(e) = stmt_result {
-                // Route genuine throws through the async generator body's
-                // catch/finally states (a `Completion::Exit` was handled above
-                // and never reaches here).
-                if let Some(try_info) = current_try_stack.pop() {
-                    if let Some(catch_state) = try_info.catch_state {
-                        pending_exception = Some(e);
-                        current_id = catch_state;
-                        continue;
-                    } else if let Some(finally_state) = try_info.finally_state {
-                        current_id = finally_state;
-                        continue;
-                    }
-                }
-                // §27.6.3.3: DisposeResources when async generator throws
-                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
-                let e = match disp {
-                    Completion::Throw(e) => e,
-                    _ => unreachable!(),
-                };
-                self.generator_inline_iters.remove(&o.id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            if let Completion::Return(v) = stmt_result {
-                // §27.6.3.3: DisposeResources when async generator returns
-                let disp = self.dispose_resources(&func_env, Completion::Return(v));
-                let v = match disp {
-                    Completion::Return(v) => v,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    _ => JsValue::Undefined,
-                };
-                let awaited = match self.await_value(&v) {
-                    Completion::Normal(av) => av,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    _ => JsValue::Undefined,
-                };
-                self.generator_inline_iters.remove(&o.id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let iter_result = self.create_iter_result_object(awaited, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            if let Completion::Yield(yield_val) = stmt_result {
-                let _is_destructuring = self.destructuring_yield;
-                self.destructuring_yield = false;
-                let awaited_val = match self.await_value(&yield_val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    _ => yield_val,
-                };
-                let pending = std::mem::take(&mut self.pending_iter_close);
-                if pending.is_empty() {
-                    self.generator_inline_iters.remove(&o.id);
-                } else {
-                    self.generator_inline_iters.insert(o.id, pending);
-                }
-                // Any Completion::Yield from exec_statements is an inline yield:
-                // it came from a loop body or complex control flow that isn't
-                // decomposed by the state machine transformer. Use InlineYield
-                // to re-enter the same state and fast-forward past previous yields.
-                {
-                    let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
-                    let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine: state_machine.clone(),
-                            func_env: func_env.clone(),
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: current_id,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: current_try_stack.clone(),
-                            pending_binding: Some(
-                                crate::interpreter::generator_transform::SentValueBinding {
-                                    kind: SentValueBindingKind::InlineYield {
-                                        yield_target: yield_count,
-                                        prev_sent: inline_prev,
-                                    },
-                                },
-                            ),
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                }
-                let iter_result = self.create_iter_result_object(awaited_val, false);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-
-            match &terminator {
-                StateTerminator::Yield {
-                    value,
-                    is_delegate,
-                    resume_state,
-                    sent_value_binding,
-                } => {
-                    let yield_val = if let Some(expr) = value {
-                        match self.eval_expr(expr, &func_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                // Route genuine throws through the try-stack for
-                                // catch/finally handling (a `Completion::Exit`
-                                // takes the `other` arm below and never reaches
-                                // here — issue #242).
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            }
-                        }
-                    } else {
-                        JsValue::Undefined
-                    };
-
-                    if *is_delegate {
-                        let iterator = match self.get_async_iterator(&yield_val) {
-                            Ok(it) => it,
-                            Err(e) => match self.get_iterator(&yield_val) {
-                                Ok(it) => it,
-                                Err(_) => {
-                                    self.generator_inline_iters.remove(&o.id);
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine,
-                                                func_env,
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::Completed,
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: vec![],
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    let _ =
-                                        self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    self.drain_microtasks();
-                                    return Completion::Normal(promise);
-                                }
-                            },
-                        };
-
-                        let next_method = if let JsValue::Object(io) = &iterator {
-                            if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
-                                cached
-                            } else {
-                                match self.get_object_property(io.id, "next", &iterator) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => {
-                                        self.generator_inline_iters.remove(&o.id);
-                                        obj_rc.borrow_mut().kind =
-                                            crate::interpreter::types::ObjectKind::Iterator(
-                                                IteratorState::StateMachineAsyncGenerator {
-                                                    state_machine,
-                                                    func_env,
-                                                    is_strict,
-                                                    execution_state:
-                                                        StateMachineExecutionState::Completed,
-                                                    _sent_value: JsValue::Undefined,
-                                                    try_stack: vec![],
-                                                    pending_binding: None,
-                                                    delegated_iterator: None,
-                                                    pending_exception: None,
-                                                    pending_return: None,
-                                                },
-                                            );
-                                        let _ = self.call_function(
-                                            &reject_fn,
-                                            &JsValue::Undefined,
-                                            &[e],
-                                        );
-                                        self.drain_microtasks();
-                                        return Completion::Normal(promise);
-                                    }
-                                    _ => JsValue::Undefined,
-                                }
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-
-                        let iter_result = match self.call_function(
-                            &next_method,
-                            &iterator,
-                            &[JsValue::Undefined],
-                        ) {
-                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
-                            Completion::Normal(_) => {
-                                Err(self.create_type_error("Iterator result is not an object"))
-                            }
-                            Completion::Throw(e) => Err(e),
-                            _ => Err(self.create_type_error("Iterator next failed")),
-                        };
-                        let iter_result = match iter_result {
-                            Ok(r) => r,
-                            Err(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-
-                        // §15.5.5 step 8.a.ii: Await(innerResult)
-                        // Must suspend the generator properly (not drain microtasks)
-                        // so that microtasks enqueued before it.next() get a chance
-                        // to fire before the generator resumes.
-                        let wrapped = self.promise_resolve_value(&iter_result);
-                        let wrapped_id = if let JsValue::Object(ref wo) = wrapped {
-                            wo.id
-                        } else {
-                            0
-                        };
-
-                        // Save state with delegated_iterator for resumption
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: *resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: current_try_stack,
-                                pending_binding: sent_value_binding.clone(),
-                                delegated_iterator: Some(
-                                    crate::interpreter::types::DelegatedIteratorInfo {
-                                        iterator: iterator.clone(),
-                                        next_method: next_method.clone(),
-                                        resume_state: *resume_state,
-                                        sent_value_binding: sent_value_binding.clone(),
-                                    },
-                                ),
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-
-                        let promise_c = promise.clone();
-                        let resolve_fn_c = resolve_fn.clone();
-                        let reject_fn_c = reject_fn.clone();
-                        let gen_this = this.clone();
-                        let gen_id = o.id;
-
-                        // Fulfillment handler: called when Await(innerResult) resolves.
-                        // Implements yield* step 8.a.iii-vi + AsyncGeneratorYield.
-                        let fulfill_handler = self.create_function(JsFunction::native(
-                            "yieldStarAwaitFulfill".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let awaited_result =
-                                    args.first().cloned().unwrap_or(JsValue::Undefined);
-                                interp.yield_star_await_inner_result_resume(
-                                    &gen_this,
-                                    gen_id,
-                                    awaited_result,
-                                    &promise_c,
-                                    &resolve_fn_c,
-                                    &reject_fn_c,
-                                    false,
-                                );
-                                Completion::Normal(JsValue::Undefined)
-                            },
-                        ));
-
-                        let promise_c2 = promise.clone();
-                        let reject_fn_c2 = reject_fn.clone();
-                        let gen_this2 = this.clone();
-                        let gen_id2 = o.id;
-                        let reject_handler = self.create_function(JsFunction::native(
-                            "yieldStarAwaitReject".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                interp.yield_star_await_inner_result_resume(
-                                    &gen_this2,
-                                    gen_id2,
-                                    reason,
-                                    &promise_c2,
-                                    &JsValue::Undefined,
-                                    &reject_fn_c2,
-                                    true,
-                                );
-                                Completion::Normal(JsValue::Undefined)
-                            },
-                        ));
-
-                        let wrapped_state = self.get_promise_state(wrapped_id);
-                        match wrapped_state {
-                            Some(PromiseState::Fulfilled(v)) => {
-                                let handler = fulfill_handler;
-                                let val = v.clone();
-                                self.scheduler.enqueue_microtask((
-                                    vec![val.clone(), handler.clone()],
-                                    Box::new(move |interp| {
-                                        let _ = interp.call_function(
-                                            &handler,
-                                            &JsValue::Undefined,
-                                            &[val],
-                                        );
-                                        Completion::Normal(JsValue::Undefined)
-                                    }),
-                                ));
-                            }
-                            Some(PromiseState::Rejected(r)) => {
-                                let handler = reject_handler;
-                                let reason = r.clone();
-                                self.scheduler.enqueue_microtask((
-                                    vec![reason.clone(), handler.clone()],
-                                    Box::new(move |interp| {
-                                        let _ = interp.call_function(
-                                            &handler,
-                                            &JsValue::Undefined,
-                                            &[reason],
-                                        );
-                                        Completion::Normal(JsValue::Undefined)
-                                    }),
-                                ));
-                            }
-                            Some(PromiseState::Pending) => {
-                                if let Some(obj) = self.get_object_cell(wrapped_id) {
-                                    let mut ob = obj.borrow_mut();
-                                    if let Some(pd) = ob.promise_data_mut() {
-                                        pd.is_handled = true;
-                                        pd.fulfill_reactions.push(PromiseReaction {
-                                            handler: Some(fulfill_handler),
-                                            promise_id: None,
-                                            resolve: JsValue::Undefined,
-                                            reject: JsValue::Undefined,
-                                            reaction_type: PromiseReactionType::Fulfill,
-                                        });
-                                        pd.reject_reactions.push(PromiseReaction {
-                                            handler: Some(reject_handler),
-                                            promise_id: None,
-                                            resolve: JsValue::Undefined,
-                                            reject: JsValue::Undefined,
-                                            reaction_type: PromiseReactionType::Reject,
-                                        });
-                                    }
-                                }
-                            }
-                            None => {
-                                // Not a promise — treat as immediately fulfilled
-                                let handler = fulfill_handler;
-                                let val = iter_result.clone();
-                                self.scheduler.enqueue_microtask((
-                                    vec![val.clone(), handler.clone()],
-                                    Box::new(move |interp| {
-                                        let _ = interp.call_function(
-                                            &handler,
-                                            &JsValue::Undefined,
-                                            &[val],
-                                        );
-                                        Completion::Normal(JsValue::Undefined)
-                                    }),
-                                ));
-                            }
-                        }
-
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    }
-
-                    // Check if yield value is a pending promise — need async suspension
-                    let wrapped = self.promise_resolve_value(&yield_val);
-                    let wrapped_id = if let JsValue::Object(ref wo) = wrapped {
-                        wo.id
-                    } else {
-                        0
-                    };
-                    let wrapped_state = self.get_promise_state(wrapped_id);
-
-                    if matches!(wrapped_state, Some(PromiseState::Pending)) {
-                        let pending = std::mem::take(&mut self.pending_iter_close);
-                        if pending.is_empty() {
-                            self.generator_inline_iters.remove(&o.id);
-                        } else {
-                            self.generator_inline_iters.insert(o.id, pending);
-                        }
-                        // Suspend generator and register callbacks for when promise resolves
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: *resume_state,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: current_try_stack,
-                                pending_binding: sent_value_binding.clone(),
-                                delegated_iterator: None,
-                                pending_exception: pending_exception.take(),
-                                pending_return: pending_return.take(),
-                            },
-                        );
-
-                        let resolve_fn_c = resolve_fn.clone();
-                        let reject_fn_c = reject_fn.clone();
-                        let gen_this = this.clone();
-                        let gen_id = o.id;
-
-                        let fulfill_handler = self.create_function(JsFunction::native(
-                            "asyncGenYieldFulfill".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let v = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                let iter_result = interp.create_iter_result_object(v, false);
-                                let _ = interp.call_function(
-                                    &resolve_fn_c,
-                                    &JsValue::Undefined,
-                                    &[iter_result],
-                                );
-                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id) {
-                                    queue.pop_front();
-                                }
-                                interp.async_gen_process_queue(&gen_this);
-                                Completion::Normal(JsValue::Undefined)
-                            },
-                        ));
-
-                        let gen_this2 = this.clone();
-                        let gen_id2 = o.id;
-                        let reject_handler = self.create_function(JsFunction::native(
-                            "asyncGenYieldReject".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let e = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                let _ =
-                                    interp.call_function(&reject_fn_c, &JsValue::Undefined, &[e]);
-                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id2) {
-                                    queue.pop_front();
-                                }
-                                interp.async_gen_process_queue(&gen_this2);
-                                Completion::Normal(JsValue::Undefined)
-                            },
-                        ));
-
-                        if let Some(obj) = self.get_object_cell(wrapped_id) {
-                            let mut ob = obj.borrow_mut();
-                            if let Some(pd) = ob.promise_data_mut() {
-                                pd.is_handled = true;
-                                pd.fulfill_reactions.push(PromiseReaction {
-                                    handler: Some(fulfill_handler),
-                                    promise_id: None,
-                                    resolve: JsValue::Undefined,
-                                    reject: JsValue::Undefined,
-                                    reaction_type: PromiseReactionType::Fulfill,
-                                });
-                                pd.reject_reactions.push(PromiseReaction {
-                                    handler: Some(reject_handler),
-                                    promise_id: None,
-                                    resolve: JsValue::Undefined,
-                                    reject: JsValue::Undefined,
-                                    reaction_type: PromiseReactionType::Reject,
-                                });
-                            }
-                        }
-
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    }
-
-                    // Already-resolved path: value is not a pending promise.
-                    // Per spec §27.6.3.8 AsyncGeneratorYield, we must still go through
-                    // a microtask boundary (Await always creates a PromiseReactionJob).
-                    let awaited_val = if let Some(PromiseState::Fulfilled(v)) = wrapped_state {
-                        v
-                    } else if let Some(PromiseState::Rejected(e)) = wrapped_state {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let reject_fn_c2 = reject_fn.clone();
-                        let gen_this3 = this.clone();
-                        let gen_id3 = o.id;
-                        self.scheduler.enqueue_microtask((
-                            vec![e.clone(), reject_fn_c2.clone(), gen_this3.clone()],
-                            Box::new(move |interp| {
-                                let _ =
-                                    interp.call_function(&reject_fn_c2, &JsValue::Undefined, &[e]);
-                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id3) {
-                                    queue.pop_front();
-                                }
-                                interp.async_gen_process_queue(&gen_this3);
-                                Completion::Normal(JsValue::Undefined)
-                            }),
-                        ));
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    } else {
-                        yield_val
-                    };
-
-                    let pending = std::mem::take(&mut self.pending_iter_close);
-                    if pending.is_empty() {
-                        self.generator_inline_iters.remove(&o.id);
-                    } else {
-                        self.generator_inline_iters.insert(o.id, pending);
-                    }
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: *resume_state,
-                            },
-                            _sent_value: JsValue::Undefined,
-                            try_stack: current_try_stack,
-                            pending_binding: sent_value_binding.clone(),
-                            delegated_iterator: None,
-                            pending_exception: pending_exception.take(),
-                            pending_return: pending_return.take(),
-                        },
-                    );
-
-                    // Schedule resolution via microtask to ensure proper interleaving
-                    let resolve_fn_c2 = resolve_fn.clone();
-                    let gen_this3 = this.clone();
-                    let gen_id3 = o.id;
-                    self.scheduler.enqueue_microtask((
-                        vec![
-                            awaited_val.clone(),
-                            resolve_fn_c2.clone(),
-                            gen_this3.clone(),
-                        ],
-                        Box::new(move |interp| {
-                            let iter_result = interp.create_iter_result_object(awaited_val, false);
-                            let _ = interp.call_function(
-                                &resolve_fn_c2,
-                                &JsValue::Undefined,
-                                &[iter_result],
-                            );
-                            if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id3) {
-                                queue.pop_front();
-                            }
-                            // Process next queue item inline (not via microtask) per spec
-                            interp.async_gen_process_queue(&gen_this3);
-                            Completion::Normal(JsValue::Undefined)
-                        }),
-                    ));
-                    self.scheduler.set_async_gen_yield_pending(true);
-                    return Completion::Normal(promise);
-                }
-
-                StateTerminator::Return(expr) => {
-                    if let Some(e) = expr {
-                        // return expr; — §13.10.1 step 3: Await(exprValue)
-                        let mut result = self.eval_expr(e, &func_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        let ret_val = match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(err) => {
-                                let disp =
-                                    self.dispose_resources(&func_env, Completion::Throw(err));
-                                let err = match disp {
-                                    Completion::Throw(e) => e,
-                                    _ => unreachable!(),
-                                };
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                                return Completion::Normal(promise);
-                            }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            }
-                        };
-
-                        // §27.6.3.3: DisposeResources
-                        let disp =
-                            self.dispose_resources(&func_env, Completion::Return(ret_val.clone()));
-                        match disp {
-                            Completion::Return(_) => {}
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => {}
-                        }
-
-                        // Microtask-based Await: wrap in PromiseResolve, schedule via PerformPromiseThen
-                        let wrapper = self.promise_resolve_value(&ret_val);
-
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-
-                        let gen_id = o.id;
-                        let gen_this_f = this.clone();
-                        let gen_this_r = this.clone();
-                        let resolve_fn_c = resolve_fn.clone();
-                        let reject_fn_c = reject_fn.clone();
-
-                        let on_fulfilled =
-                            self.create_function(JsFunction::native("".to_string(), 1, {
-                                move |interp, _this, args| {
-                                    let v = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                    let iter_result = interp.create_iter_result_object(v, true);
-                                    let _ = interp.call_function(
-                                        &resolve_fn_c,
-                                        &JsValue::Undefined,
-                                        &[iter_result],
-                                    );
-                                    if let Some(queue) =
-                                        interp.scheduler.async_gen_queue_mut(gen_id)
-                                    {
-                                        queue.pop_front();
-                                    }
-                                    interp.async_gen_process_queue(&gen_this_f);
-                                    Completion::Normal(JsValue::Undefined)
-                                }
-                            }));
-
-                        let on_rejected =
-                            self.create_function(JsFunction::native("".to_string(), 1, {
-                                let gen_id2 = gen_id;
-                                move |interp, _this, args| {
-                                    let e = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                    let _ = interp.call_function(
-                                        &reject_fn_c,
-                                        &JsValue::Undefined,
-                                        &[e],
-                                    );
-                                    if let Some(queue) =
-                                        interp.scheduler.async_gen_queue_mut(gen_id2)
-                                    {
-                                        queue.pop_front();
-                                    }
-                                    interp.async_gen_process_queue(&gen_this_r);
-                                    Completion::Normal(JsValue::Undefined)
-                                }
-                            }));
-
-                        let chain_promise = self.create_promise_object();
-                        let cp_id = if let JsValue::Object(ref po) = chain_promise {
-                            po.id
-                        } else {
-                            0
-                        };
-                        let (cp_resolve, cp_reject) = self.create_resolving_functions(cp_id);
-                        let _ = self.perform_promise_then(
-                            &wrapper,
-                            &on_fulfilled,
-                            &on_rejected,
-                            chain_promise,
-                            cp_resolve,
-                            cp_reject,
-                        );
-
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    } else {
-                        // return; — no expression, no Await per §13.10.1
-                        let disp = self
-                            .dispose_resources(&func_env, Completion::Return(JsValue::Undefined));
-                        match disp {
-                            Completion::Return(_) => {}
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => {}
-                        }
-
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let iter_result = self.create_iter_result_object(JsValue::Undefined, true);
-                        let _ =
-                            self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-                        return Completion::Normal(promise);
-                    }
-                }
-
-                StateTerminator::Throw(expr) => {
-                    let throw_val = {
-                        let mut result = self.eval_expr(expr, &func_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => e,
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            }
-                        }
-                    };
-
-                    if let Some(try_info) = current_try_stack.pop()
-                        && let Some(catch_state) = try_info.catch_state
-                    {
-                        pending_exception = Some(throw_val);
-                        current_id = catch_state;
-                        continue;
-                    }
-
-                    self.generator_inline_iters.remove(&o.id);
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[throw_val]);
-                    return Completion::Normal(promise);
-                }
-
-                StateTerminator::Goto(next_state) => {
-                    current_id = *next_state;
-                }
-
-                StateTerminator::ConditionalGoto {
-                    condition,
-                    true_state,
-                    false_state,
-                } => {
-                    let cond_val = match self.eval_expr(condition, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::Undefined
-                            }
-                        }
-                    };
-                    current_id = if self.to_boolean_val(&cond_val) {
-                        *true_state
-                    } else {
-                        *false_state
-                    };
-                }
-
-                StateTerminator::TryEnter {
-                    try_state,
-                    catch_state,
-                    finally_state,
-                    after_state,
-                } => {
-                    current_try_stack.push(TryContextInfo {
-                        catch_state: catch_state.as_ref().map(|c| c.state),
-                        finally_state: *finally_state,
-                        _after_state: *after_state,
-                        entered_catch: false,
-                        entered_finally: false,
-                    });
-                    current_id = *try_state;
-                }
-
-                StateTerminator::TryExit { after_state } => {
-                    current_try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        // Re-throw pending exception after finally completes
-                        if let Some(try_info) = current_try_stack.pop() {
-                            if let Some(catch_state) = try_info.catch_state {
-                                pending_exception = Some(exc);
-                                current_id = catch_state;
-                                continue;
-                            } else if let Some(finally_state) = try_info.finally_state {
-                                pending_exception = Some(exc);
-                                current_id = finally_state;
-                                continue;
-                            }
-                        }
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    if let Some(ret_val) = pending_return.take() {
-                        if current_try_stack.is_empty() {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let iter_result = self.create_iter_result_object(ret_val, true);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::Undefined,
-                                &[iter_result],
-                            );
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        pending_return = Some(ret_val);
-                    }
-                    current_id = *after_state;
-                }
-
-                StateTerminator::EnterCatch { body_state, param } => {
-                    if let Some(ctx) = current_try_stack.last_mut() {
-                        ctx.entered_catch = true;
-                    }
-                    let exception_val = pending_exception.take().unwrap_or(JsValue::Undefined);
-                    if let Some(pattern) = param {
-                        let _ =
-                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &func_env);
-                    }
-                    current_id = *body_state;
-                }
-
-                StateTerminator::EnterFinally { body_state } => {
-                    if let Some(ctx) = current_try_stack.last_mut() {
-                        ctx.entered_finally = true;
-                    }
-                    current_id = *body_state;
-                }
-
-                StateTerminator::SwitchDispatch {
-                    discriminant,
-                    cases,
-                    default_state,
-                    after_state,
-                } => {
-                    let disc_val = match self.eval_expr(discriminant, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::Undefined
-                            }
-                        }
-                    };
-
-                    let mut matched = false;
-                    for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &func_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            }
-                        };
-                        if strict_equality(&disc_val, &case_val) {
-                            current_id = case.state;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if !matched {
-                        current_id = default_state.unwrap_or(*after_state);
-                    }
-                }
-
-                StateTerminator::ForOfInit {
-                    iterable,
-                    iter_var,
-                    next_var: _,
-                    left: _,
-                    head_state,
-                    after_state: _,
-                    is_await,
-                } => {
-                    let iterable_val = match self.eval_expr(iterable, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::Undefined
-                            }
-                        }
-                    };
-                    let iterator = if *is_await {
-                        match self.get_async_iterator(&iterable_val) {
-                            Ok(iter) => iter,
-                            Err(e) => {
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        }
-                    } else {
-                        match self.get_iterator(&iterable_val) {
-                            Ok(iter) => iter,
-                            Err(e) => {
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        }
-                    };
-                    self.gc_root_value(&iterator);
-                    func_env.borrow_mut().bindings.insert(
-                        iter_var.clone(),
-                        crate::interpreter::types::Binding {
-                            value: iterator,
-                            kind: crate::interpreter::types::BindingKind::Let,
-                            initialized: true,
-                            deletable: false,
-                        },
-                    );
-                    current_id = *head_state;
-                }
-
-                StateTerminator::ForOfHead {
-                    iter_var,
-                    next_var: _,
-                    left,
-                    body_state,
-                    after_state,
-                    is_await,
-                } => {
-                    let iterator = func_env
-                        .borrow()
-                        .bindings
-                        .get(iter_var)
-                        .map(|b| b.value.clone())
-                        .unwrap_or(JsValue::Undefined);
-                    let step_result = match self.iterator_next(&iterator) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.gc_unroot_value(&iterator);
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    };
-                    let step_result = if *is_await {
-                        match self.await_value(&step_result) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.gc_unroot_value(&iterator);
-                                if let Some(try_info) = current_try_stack.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
-                                        pending_exception = Some(e);
-                                        current_id = catch_state;
-                                        continue;
-                                    } else if let Some(finally_state) = try_info.finally_state {
-                                        current_id = finally_state;
-                                        continue;
-                                    }
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state: StateMachineExecutionState::Completed,
-                                            _sent_value: JsValue::Undefined,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            }
-                        }
-                    } else {
-                        step_result
-                    };
-                    match self.iterator_complete(&step_result) {
-                        Ok(true) => {
-                            self.gc_unroot_value(&iterator);
-                            if let JsValue::Object(o) = &iterator {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let JsValue::Object(ov) = v {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
-                            current_id = *after_state;
-                        }
-                        Ok(false) => {
-                            let val = match self.iterator_value(&step_result) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    self.gc_unroot_value(&iterator);
-                                    if let Some(try_info) = current_try_stack.pop() {
-                                        if let Some(catch_state) = try_info.catch_state {
-                                            pending_exception = Some(e);
-                                            current_id = catch_state;
-                                            continue;
-                                        } else if let Some(finally_state) = try_info.finally_state {
-                                            current_id = finally_state;
-                                            continue;
-                                        }
-                                    }
-                                    self.generator_inline_iters.remove(&o.id);
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine,
-                                                func_env,
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::Completed,
-                                                _sent_value: JsValue::Undefined,
-                                                try_stack: vec![],
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: None,
-                                                pending_return: None,
-                                            },
-                                        );
-                                    let _ =
-                                        self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    self.drain_microtasks();
-                                    return Completion::Normal(promise);
-                                }
-                            };
-                            match left {
-                                ForInOfLeft::Variable(decl) => {
-                                    let kind = match decl.kind {
-                                        VarKind::Var => crate::interpreter::types::BindingKind::Var,
-                                        VarKind::Let => crate::interpreter::types::BindingKind::Let,
-                                        VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                            crate::interpreter::types::BindingKind::Const
-                                        }
-                                    };
-                                    if let Some(d) = decl.declarations.first()
-                                        && let Err(e) =
-                                            self.bind_pattern(&d.pattern, val, kind, &func_env)
-                                    {
-                                        self.iterator_close(&iterator, e.clone());
-                                        self.gc_unroot_value(&iterator);
-                                        if let Some(try_info) = current_try_stack.pop() {
-                                            if let Some(catch_state) = try_info.catch_state {
-                                                pending_exception = Some(e);
-                                                current_id = catch_state;
-                                                continue;
-                                            } else if let Some(finally_state) =
-                                                try_info.finally_state
-                                            {
-                                                current_id = finally_state;
-                                                continue;
-                                            }
-                                        }
-                                        self.generator_inline_iters.remove(&o.id);
-                                        obj_rc.borrow_mut().kind =
-                                            crate::interpreter::types::ObjectKind::Iterator(
-                                                IteratorState::StateMachineAsyncGenerator {
-                                                    state_machine,
-                                                    func_env,
-                                                    is_strict,
-                                                    execution_state:
-                                                        StateMachineExecutionState::Completed,
-                                                    _sent_value: JsValue::Undefined,
-                                                    try_stack: vec![],
-                                                    pending_binding: None,
-                                                    delegated_iterator: None,
-                                                    pending_exception: None,
-                                                    pending_return: None,
-                                                },
-                                            );
-                                        let _ = self.call_function(
-                                            &reject_fn,
-                                            &JsValue::Undefined,
-                                            &[e],
-                                        );
-                                        self.drain_microtasks();
-                                        return Completion::Normal(promise);
-                                    }
-                                }
-                                ForInOfLeft::Pattern(pat) => {
-                                    match self.assign_to_for_pattern(pat, val, &func_env) {
-                                        Completion::Normal(_) | Completion::Empty => {}
-                                        Completion::Throw(e) => {
-                                            self.iterator_close(&iterator, e.clone());
-                                            self.gc_unroot_value(&iterator);
-                                            if let Some(try_info) = current_try_stack.pop() {
-                                                if let Some(catch_state) = try_info.catch_state {
-                                                    pending_exception = Some(e);
-                                                    current_id = catch_state;
-                                                    continue;
-                                                } else if let Some(finally_state) =
-                                                    try_info.finally_state
-                                                {
-                                                    current_id = finally_state;
-                                                    continue;
-                                                }
-                                            }
-                                            self.generator_inline_iters.remove(&o.id);
-                                            obj_rc.borrow_mut().kind =
-                                                crate::interpreter::types::ObjectKind::Iterator(
-                                                    IteratorState::StateMachineAsyncGenerator {
-                                                        state_machine,
-                                                        func_env,
-                                                        is_strict,
-                                                        execution_state:
-                                                            StateMachineExecutionState::Completed,
-                                                        _sent_value: JsValue::Undefined,
-                                                        try_stack: vec![],
-                                                        pending_binding: None,
-                                                        delegated_iterator: None,
-                                                        pending_exception: None,
-                                                        pending_return: None,
-                                                    },
-                                                );
-                                            let _ = self.call_function(
-                                                &reject_fn,
-                                                &JsValue::Undefined,
-                                                &[e],
-                                            );
-                                            self.drain_microtasks();
-                                            return Completion::Normal(promise);
-                                        }
-                                        _other => {}
-                                    }
-                                }
-                                ForInOfLeft::Expression(_) => {}
-                            }
-                            let already_pending = if let JsValue::Object(o) = &iterator {
-                                let id = o.id;
-                                self.pending_iter_close.iter().any(|v| {
-                                    if let JsValue::Object(ov) = v {
-                                        ov.id == id
-                                    } else {
-                                        false
-                                    }
-                                })
-                            } else {
-                                false
-                            };
-                            if !already_pending {
-                                self.pending_iter_close.push(iterator);
-                            }
-                            current_id = *body_state;
-                        }
-                        Err(e) => {
-                            self.gc_unroot_value(&iterator);
-                            if let Some(try_info) = current_try_stack.pop() {
-                                if let Some(catch_state) = try_info.catch_state {
-                                    pending_exception = Some(e);
-                                    current_id = catch_state;
-                                    continue;
-                                } else if let Some(finally_state) = try_info.finally_state {
-                                    current_id = finally_state;
-                                    continue;
-                                }
-                            }
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::Completed,
-                                        _sent_value: JsValue::Undefined,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    }
-                }
-
-                StateTerminator::Completed => {
-                    // §27.6.3.3: DisposeResources when async generator completes
-                    let disp =
-                        self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
-                    if let Completion::Throw(e) = disp {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        return Completion::Normal(promise);
-                    }
-                    self.generator_inline_iters.remove(&o.id);
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: vec![],
-                            pending_binding: None,
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let iter_result = self.create_iter_result_object(JsValue::Undefined, true);
-                    let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-                    return Completion::Normal(promise);
-                }
-
-                StateTerminator::Await {
-                    value,
-                    resume_state,
-                    sent_value_binding,
-                } => {
-                    let await_val = match self.eval_expr(value, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            check_abrupt_on_resume = true;
-                            current_id = *resume_state;
-                            continue;
-                        }
-                        _ => JsValue::Undefined,
-                    };
-
-                    // §27.7.5.3 Await: always suspend and schedule continuation
-                    // via PerformPromiseThen, even for already-resolved promises
-                    let p = self.promise_resolve_value(&await_val);
-                    let _p_id = if let JsValue::Object(ref o) = p {
-                        o.id
-                    } else {
-                        0
-                    };
-
-                    {
-                        let binding_clone = sent_value_binding.clone();
-                        let resume_id = *resume_state;
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_id,
-                                },
-                                _sent_value: JsValue::Undefined,
-                                try_stack: current_try_stack.clone(),
-                                pending_binding: binding_clone.clone(),
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: pending_return.take(),
-                            },
-                        );
-
-                        let this_clone = this.clone();
-                        let promise_c = promise.clone();
-                        let resolve_c = resolve_fn.clone();
-                        let reject_c = reject_fn.clone();
-                        let gen_id = if let JsValue::Object(o) = this {
-                            o.id
-                        } else {
-                            0
-                        };
-
-                        let this_f = this_clone.clone();
-                        let promise_f = promise_c.clone();
-                        let resolve_f = resolve_c.clone();
-                        let reject_f = reject_c.clone();
-                        let fulfill_handler = self.create_function(JsFunction::native(
-                            "asyncGenAwaitFulfill".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let v = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                interp.async_gen_await_resume(
-                                    &this_f, v, false, &promise_f, &resolve_f, &reject_f, gen_id,
-                                );
-                                Completion::Normal(JsValue::Undefined)
-                            },
-                        ));
-
-                        let this_r = this_clone.clone();
-                        let promise_r = promise_c;
-                        let resolve_r = resolve_c;
-                        let reject_r = reject_c;
-                        let reject_handler = self.create_function(JsFunction::native(
-                            "asyncGenAwaitReject".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let e = args.first().cloned().unwrap_or(JsValue::Undefined);
-                                interp.async_gen_await_resume(
-                                    &this_r, e, true, &promise_r, &resolve_r, &reject_r, gen_id,
-                                );
-                                Completion::Normal(JsValue::Undefined)
-                            },
-                        ));
-
-                        let _ = self.promise_then(&p, &fulfill_handler, &reject_handler);
-
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    }
-                }
-            }
-        }
-    }
-
-    fn apply_sent_value_binding(
-        &mut self,
-        binding: &crate::interpreter::generator_transform::SentValueBinding,
-        value: &JsValue,
-        env: &EnvRef,
-    ) {
-        use crate::interpreter::generator_transform::SentValueBindingKind;
-        match &binding.kind {
-            SentValueBindingKind::Variable(name) => {
-                self.env_set(env, name, value.clone()).ok();
-            }
-            SentValueBindingKind::Pattern(pattern) => {
-                let _ = self.bind_pattern(pattern, value.clone(), BindingKind::Var, env);
-            }
-            SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
-        }
-    }
-
-    fn async_gen_await_resume(
-        &mut self,
-        this: &JsValue,
-        value: JsValue,
-        is_reject: bool,
-        promise: &JsValue,
-        resolve_fn: &JsValue,
-        reject_fn: &JsValue,
-        gen_id: u64,
-    ) {
-        let Some(obj_rc) = self.get_object_cell(gen_id) else {
-            return;
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            func_env,
-            pending_binding,
-            ..
-        }) = &state
-        else {
-            return;
-        };
-
-        if is_reject {
-            // Set pending_exception so the executor routes through try_stack
-            if let Some(obj) = self.get_object_cell(gen_id) {
-                let mut o = obj.borrow_mut();
-                if let Some(IteratorState::StateMachineAsyncGenerator {
-                    pending_exception, ..
-                }) = o.iterator_state_mut()
-                {
-                    *pending_exception = Some(value);
-                }
-            }
-        } else if let Some(b) = pending_binding {
-            self.apply_sent_value_binding(b, &value, func_env);
-            // Clear the pending_binding
-            if let Some(obj) = self.get_object(gen_id) {
-                let mut o = obj.borrow_mut();
-                if let Some(IteratorState::StateMachineAsyncGenerator {
-                    pending_binding, ..
-                }) = o.iterator_state_mut()
-                {
-                    *pending_binding = None;
-                }
-            }
-        }
-
-        self.scheduler.set_async_gen_yield_pending(false);
-        let _ = self.async_generator_next_state_machine_with_promise(
-            this,
-            JsValue::Undefined,
-            promise.clone(),
-            resolve_fn.clone(),
-            reject_fn.clone(),
-        );
-        if self.scheduler.is_async_gen_yield_pending() {
-            self.scheduler.set_async_gen_yield_pending(false);
-            return;
-        }
-
-        // Pop the queue entry and process next
-        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-            queue.pop_front();
-        }
-        let this_clone = this.clone();
-        if self
-            .scheduler
-            .async_gen_queue(gen_id)
-            .is_some_and(|q| !q.is_empty())
-        {
-            self.scheduler.enqueue_microtask((
-                vec![this_clone.clone()],
-                Box::new(move |interp| {
-                    interp.async_gen_process_queue(&this_clone);
-                    Completion::Normal(JsValue::Undefined)
-                }),
-            ));
-        }
-    }
-
-    pub(crate) fn async_generator_next(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-    ) -> Completion {
-        let JsValue::Object(o) = this else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
-        };
-
-        let state = obj_rc.borrow().iterator_state().cloned();
-        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
-            return self.async_gen_enqueue(this, sent_value, super::AsyncGenRequestKind::Next);
-        }
-        let Some(IteratorState::AsyncGenerator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            return self.reject_with_type_error("not an async generator object");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-
-        // Determine target_yield and previous sent values based on execution state
-        let (target_yield, prev_sent, is_suspended_start) = match &execution_state {
-            GeneratorExecutionState::Completed => {
-                let result = self.create_iter_result_object(JsValue::Undefined, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            GeneratorExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
-            GeneratorExecutionState::SuspendedYield {
-                target_yield,
-                prev_sent,
-            } => (*target_yield, prev_sent.clone(), false),
-        };
-
-        // Build the full prev_sent_values for this call by appending the current sent_value.
-        // For SuspendedStart (first call), sent_value is irrelevant (no yield to resume from).
-        let mut new_prev_sent = prev_sent.clone();
-        if !is_suspended_start {
-            new_prev_sent.push(sent_value.clone());
-        }
-
-        // Mark as executing
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::AsyncGenerator {
-                body: body.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: GeneratorExecutionState::Executing,
-            });
-
-        self.generator_context = Some(GeneratorContext {
-            target_yield,
-            current_yield: 0,
-            prev_sent_values: new_prev_sent.clone(),
-            is_async: true,
-            resume_kind: GeneratorResumeKind::Next,
-        });
-
-        let caller_realm = self.current_realm_id;
-        if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
-            self.current_realm_id = gen_realm;
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        self.call_stack_envs.push(func_env.clone());
-        let result = self.exec_body(&body, &func_env);
-        self.call_stack_envs.pop();
-        let _ctx = self.generator_context.take();
-
-        self.current_realm_id = caller_realm;
-        match result {
-            Completion::Yield(v) => {
-                let awaited = match self.await_value(&v) {
-                    Completion::Normal(av) => av,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::AsyncGenerator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    other => {
-                        if let Completion::Yield(yv) = other {
-                            yv
-                        } else {
-                            JsValue::Undefined
-                        }
-                    }
-                };
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::SuspendedYield {
-                            target_yield: target_yield + 1,
-                            prev_sent: new_prev_sent,
-                        },
-                    },
-                );
-                let iter_result = self.create_iter_result_object(awaited, false);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-            }
-            Completion::Return(v) => {
-                let awaited = match self.await_value(&v) {
-                    Completion::Normal(av) => av,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::AsyncGenerator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    other => {
-                        if let Completion::Yield(yv) = other {
-                            yv
-                        } else {
-                            JsValue::Undefined
-                        }
-                    }
-                };
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                let iter_result = self.create_iter_result_object(awaited, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-            }
-            Completion::Normal(_) => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                let iter_result = self.create_iter_result_object(JsValue::Undefined, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-            }
-            Completion::Throw(e) => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-            }
-            _ => {}
-        }
-        self.drain_microtasks();
-        Completion::Normal(promise)
-    }
-
-    /// Per spec §27.6.3.9 step 10.a: AsyncGenerator awaiting-return
-    /// Wraps the return value in Promise.resolve(value).then(onFulfilled, onRejected)
-    /// where onFulfilled resolves the response promise with {value: v, done: true}
-    /// and onRejected rejects the response promise.
-    fn async_generator_await_return(
-        &mut self,
-        value: JsValue,
-        response_promise_id: u64,
-    ) -> Completion {
-        let response_promise = JsValue::Object(crate::types::JsObject {
-            id: response_promise_id,
-        });
-
-        // Create Promise.resolve(value) — wraps value in a promise
-        let wrapper_promise = self.create_promise_object();
-        let wrapper_id = if let JsValue::Object(ref o) = wrapper_promise {
-            o.id
-        } else {
-            0
-        };
-        let (wrapper_resolve, _wrapper_reject) = self.create_resolving_functions(wrapper_id);
-        let _ = self.call_function(&wrapper_resolve, &JsValue::Undefined, &[value]);
-        self.drain_microtasks();
-
-        let (resp_resolve, resp_reject) = self.create_resolving_functions(response_promise_id);
-
-        let on_fulfilled = self.create_function(JsFunction::native("".to_string(), 1, {
-            let resolve = resp_resolve;
-            move |interp, _this, args| {
-                let v = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let iter_result = interp.create_iter_result_object(v, true);
-                let _ = interp.call_function(&resolve, &JsValue::Undefined, &[iter_result]);
-                Completion::Normal(JsValue::Undefined)
-            }
-        }));
-
-        let on_rejected = self.create_function(JsFunction::native("".to_string(), 1, {
-            let reject = resp_reject;
-            move |interp, _this, args| {
-                let e = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let _ = interp.call_function(&reject, &JsValue::Undefined, &[e]);
-                Completion::Normal(JsValue::Undefined)
-            }
-        }));
-
-        // Chain: PerformPromiseThen(wrapper_promise, onFulfilled, onRejected, responseCap)
-        let (rp_resolve, rp_reject) = self.create_resolving_functions(response_promise_id);
-        let _ = self.perform_promise_then(
-            &wrapper_promise,
-            &on_fulfilled,
-            &on_rejected,
-            response_promise.clone(),
-            rp_resolve,
-            rp_reject,
-        );
-        self.drain_microtasks();
-
-        Completion::Normal(response_promise)
-    }
-
-    pub(crate) fn async_generator_return(&mut self, this: &JsValue, value: JsValue) -> Completion {
-        let JsValue::Object(o) = this else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-        let state = obj_rc.borrow().iterator_state().cloned();
-
-        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
-            return self.async_gen_enqueue(this, value, super::AsyncGenRequestKind::Return);
-        }
-
-        // Non-state-machine IteratorState::AsyncGenerator path is below
-        self.async_generator_return_legacy(this, value)
-    }
-
-    fn async_generator_return_state_machine_with_promise(
-        &mut self,
-        this: &JsValue,
-        value: JsValue,
-        promise: JsValue,
-        resolve_fn: JsValue,
-        reject_fn: JsValue,
-    ) -> Completion {
-        let JsValue::Object(o) = this else {
-            return Completion::Normal(promise);
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return Completion::Normal(promise);
-        };
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            execution_state,
-            try_stack,
-            delegated_iterator,
-            ..
-        }) = state
-        else {
-            return Completion::Normal(promise);
-        };
-
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-
-        match execution_state {
-            StateMachineExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
-                self.generator_inline_iters.remove(&o.id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                return self.async_generator_await_return(value, promise_id);
-            }
-            StateMachineExecutionState::SuspendedAtState { .. } => {}
-        }
-
-        // For Promise values, check if PromiseResolve would throw (e.g. broken .constructor)
-        // Skip for non-promise values to avoid spurious "then" getter access
-        if self.is_promise(&value) {
-            let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.promise_resolve_with_constructor(&promise_ctor, &value) {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state,
-                        _sent_value: JsValue::Undefined,
-                        try_stack,
-                        pending_binding: None,
-                        delegated_iterator,
-                        pending_exception: Some(e),
-                        pending_return: None,
-                    },
-                );
-                return self.async_generator_next_state_machine_with_promise(
-                    this,
-                    JsValue::Undefined,
-                    promise,
-                    resolve_fn,
-                    reject_fn,
-                );
-            }
-        }
-
-        // Route through the existing next_state_machine with pending_return
-        // The Await (which calls PromiseResolve) happens inside the yield handler
-        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-            IteratorState::StateMachineAsyncGenerator {
-                state_machine,
-                func_env,
-                is_strict,
-                execution_state,
-                _sent_value: JsValue::Undefined,
-                try_stack,
-                pending_binding: None,
-                delegated_iterator,
-                pending_exception: None,
-                pending_return: Some(value),
-            },
-        );
-        self.async_generator_next_state_machine_with_promise(
-            this,
-            JsValue::Undefined,
-            promise,
-            resolve_fn,
-            reject_fn,
-        )
-    }
-
-    fn async_generator_throw_state_machine_with_promise(
-        &mut self,
-        this: &JsValue,
-        exception: JsValue,
-        promise: JsValue,
-        resolve_fn: JsValue,
-        reject_fn: JsValue,
-    ) -> Completion {
-        let JsValue::Object(o) = this else {
-            return Completion::Normal(promise);
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return Completion::Normal(promise);
-        };
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            state_machine,
-            func_env,
-            is_strict,
-            execution_state,
-            try_stack,
-            delegated_iterator,
-            ..
-        }) = state
-        else {
-            return Completion::Normal(promise);
-        };
-
-        match execution_state {
-            StateMachineExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
-                self.generator_inline_iters.remove(&o.id);
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        _sent_value: JsValue::Undefined,
-                        try_stack: vec![],
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    },
-                );
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            StateMachineExecutionState::SuspendedAtState { .. } => {}
-        }
-
-        // Route through next_state_machine with pending_exception set
-        // This handles delegation and try/catch stack
-        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-            IteratorState::StateMachineAsyncGenerator {
-                state_machine,
-                func_env,
-                is_strict,
-                execution_state,
-                _sent_value: JsValue::Undefined,
-                try_stack,
-                pending_binding: None,
-                delegated_iterator,
-                pending_exception: Some(exception),
-                pending_return: None,
-            },
-        );
-        self.async_generator_next_state_machine_with_promise(
-            this,
-            JsValue::Undefined,
-            promise,
-            resolve_fn,
-            reject_fn,
-        )
-    }
-
-    fn async_generator_return_legacy(&mut self, this: &JsValue, value: JsValue) -> Completion {
-        let JsValue::Object(o) = this else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-        let state = obj_rc.borrow().iterator_state().cloned();
-
-        // NOTE: The old state machine path has been removed since it now routes through the queue.
-        // Only the legacy IteratorState::AsyncGenerator path remains here.
-
-        let Some(IteratorState::AsyncGenerator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            return self.reject_with_type_error("not an async generator object");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-
-        match &execution_state {
-            GeneratorExecutionState::SuspendedStart | GeneratorExecutionState::Completed => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                self.async_generator_await_return(value, promise_id)
-            }
-            GeneratorExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                self.drain_microtasks();
-                Completion::Normal(promise)
-            }
-            GeneratorExecutionState::SuspendedYield { .. } => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                self.async_generator_await_return(value, promise_id)
-            }
-        }
-    }
-
-    pub(crate) fn async_generator_throw(
-        &mut self,
-        this: &JsValue,
-        exception: JsValue,
-    ) -> Completion {
-        let JsValue::Object(o) = this else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
-        };
-
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
-        };
-        let state = obj_rc.borrow().iterator_state().cloned();
-
-        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
-            return self.async_gen_enqueue(this, exception, super::AsyncGenRequestKind::Throw);
-        }
-
-        // Non-state-machine path (legacy)
-        let Some(IteratorState::AsyncGenerator {
-            body,
-            func_env,
-            is_strict,
-            ..
-        }) = state
-        else {
-            return self.reject_with_type_error("not an async generator object");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (_, reject_fn) = self.create_resolving_functions(promise_id);
-
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::AsyncGenerator {
-                body,
-                func_env,
-                is_strict,
-                execution_state: GeneratorExecutionState::Completed,
-            });
-        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
-        self.drain_microtasks();
-        Completion::Normal(promise)
+        Ok(())
     }
 
     pub(crate) fn call_function(
@@ -12492,7 +5445,9 @@ impl Interpreter {
         args: &[JsValue],
         skip_entry_checks: bool,
     ) -> Completion {
-        if let JsValue::Object(o) = func_val
+        if let Some(o) = (func_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             // Single borrow to check proxy/wrapped/class-ctor status. Skipped
@@ -12566,6 +5521,10 @@ impl Interpreter {
                 };
                 let result = match func {
                     JsFunction::Native(_, _, f, _) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.calls_to_native += 1;
+                        }
                         let caller_realm = self.current_realm_id;
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
                             self.current_realm_id = fn_realm;
@@ -12578,11 +5537,7 @@ impl Interpreter {
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
-                        // Unroot only what we pushed. A bulk truncate would also
-                        // drop persistent roots pushed by the builtin itself
-                        // (e.g. Atomics.waitAsync / $262.agent.getReportAsync
-                        // root resolve_fn for an async completion that runs
-                        // after this call returns).
+                        // Unroot the native call operands after the call returns.
                         for a in args.iter().rev() {
                             self.gc_unroot_value(a);
                         }
@@ -12602,6 +5557,10 @@ impl Interpreter {
                         has_simple_params,
                         ..
                     } => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.calls_to_user += 1;
+                        }
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
                         let caller_realm = self.current_realm_id;
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
@@ -12610,6 +5569,7 @@ impl Interpreter {
 
                         if is_async && !is_generator {
                             let result = self.call_async_function(
+                                o.id,
                                 &params,
                                 &body,
                                 closure.clone(),
@@ -12626,7 +5586,10 @@ impl Interpreter {
                         }
                         if is_async && is_generator {
                             // Create persistent function environment
-                            let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope_with_capacity(
+                                Some(closure.clone()),
+                                params.len().saturating_add(2),
+                            );
                             func_env.borrow_mut().strict = is_strict;
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
@@ -12676,28 +5639,14 @@ impl Interpreter {
                                 func_env.borrow_mut().has_parameter_expressions = true;
                             }
                             // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            for (i, param) in params.iter().enumerate() {
-                                if let Pattern::Rest(inner) = param {
-                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                    let rest_arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(
-                                        inner,
-                                        rest_arr,
-                                        BindingKind::Var,
-                                        &func_env,
-                                    ) {
-                                        self.current_realm_id = caller_realm;
-                                        return Completion::Throw(e);
-                                    }
-                                    break;
-                                }
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                if let Err(e) =
-                                    self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
+                            if let Err(error) = self.bind_function_parameters(
+                                &params,
+                                args,
+                                &func_env,
+                                is_simple_ag,
+                            ) {
+                                self.current_realm_id = caller_realm;
+                                return Completion::Throw(error);
                             }
                             // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
@@ -12705,10 +5654,12 @@ impl Interpreter {
                             if let Some(func_obj_rc) = self.get_object_cell(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val {
+                                if let Some(proto_id) =
+                                    proto_val.as_ref().and_then(JsValue::as_object_id)
+                                {
                                     self.get_object_cell_expect(gen_obj_id)
                                         .borrow_mut()
-                                        .prototype_id = Some(p.id);
+                                        .prototype_id = Some(proto_id);
                                     proto_set = true;
                                 }
                             }
@@ -12743,7 +5694,7 @@ impl Interpreter {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
-                                            .unwrap_or(JsValue::Undefined);
+                                            .unwrap_or(JsValue::UNDEFINED);
                                         let _ = self.env_set(&body_env, name, val);
                                     }
                                 }
@@ -12753,8 +5704,14 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_async_generator;
-                            let state_machine =
-                                Rc::new(transform_async_generator(body.as_slice(), &params));
+                            let state_machine = transform_async_generator(body.as_slice(), &params);
+                            #[cfg(feature = "perf-counters")]
+                            let state_machine = {
+                                let mut state_machine = state_machine;
+                                state_machine.perf_key = Some(self.perf_body_name(o.id));
+                                state_machine
+                            };
+                            let state_machine = Rc::new(state_machine);
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -12785,7 +5742,7 @@ impl Interpreter {
                                         func_env: exec_env,
                                         is_strict,
                                         execution_state: StateMachineExecutionState::SuspendedStart,
-                                        _sent_value: JsValue::Undefined,
+                                        _sent_value: JsValue::UNDEFINED,
                                         try_stack: vec![],
                                         pending_binding: None,
                                         delegated_iterator: None,
@@ -12799,24 +5756,25 @@ impl Interpreter {
                                     Some(self.current_realm_id);
                             }
                             self.current_realm_id = caller_realm;
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: gen_id,
-                            }));
+                            return Completion::Normal(JsValue::object(gen_id));
                         }
                         if is_generator {
                             // Create persistent function environment
-                            let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope_with_capacity(
+                                Some(closure.clone()),
+                                params.len().saturating_add(2),
+                            );
                             let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
                             let effective_this = if !is_strict && !closure_strict {
-                                if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
+                                if (_this_val).is_nullish() {
                                     self.realm()
                                         .global_env
                                         .borrow()
                                         .get("this")
                                         .unwrap_or(_this_val.clone())
-                                } else if !matches!(_this_val, JsValue::Object(_)) {
+                                } else if !(_this_val).is_object() {
                                     match self.to_object(_this_val) {
                                         Completion::Normal(v) => v,
                                         _ => _this_val.clone(),
@@ -12875,28 +5833,11 @@ impl Interpreter {
                                 func_env.borrow_mut().has_parameter_expressions = true;
                             }
                             // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            for (i, param) in params.iter().enumerate() {
-                                if let Pattern::Rest(inner) = param {
-                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                    let rest_arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(
-                                        inner,
-                                        rest_arr,
-                                        BindingKind::Var,
-                                        &func_env,
-                                    ) {
-                                        self.current_realm_id = caller_realm;
-                                        return Completion::Throw(e);
-                                    }
-                                    break;
-                                }
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                if let Err(e) =
-                                    self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
+                            if let Err(error) =
+                                self.bind_function_parameters(&params, args, &func_env, is_simple_g)
+                            {
+                                self.current_realm_id = caller_realm;
+                                return Completion::Throw(error);
                             }
                             // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
@@ -12904,10 +5845,12 @@ impl Interpreter {
                             if let Some(func_obj_rc) = self.get_object_cell(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val {
+                                if let Some(proto_id) =
+                                    proto_val.as_ref().and_then(JsValue::as_object_id)
+                                {
                                     self.get_object_cell_expect(gen_obj_id)
                                         .borrow_mut()
-                                        .prototype_id = Some(p.id);
+                                        .prototype_id = Some(proto_id);
                                     proto_set = true;
                                 }
                             }
@@ -12942,7 +5885,7 @@ impl Interpreter {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
-                                            .unwrap_or(JsValue::Undefined);
+                                            .unwrap_or(JsValue::UNDEFINED);
                                         let _ = self.env_set(&body_env, name, val);
                                     }
                                 }
@@ -12952,8 +5895,14 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine =
-                                Rc::new(transform_generator(body.as_slice(), &params));
+                            let state_machine = transform_generator(body.as_slice(), &params);
+                            #[cfg(feature = "perf-counters")]
+                            let state_machine = {
+                                let mut state_machine = state_machine;
+                                state_machine.perf_key = Some(self.perf_body_name(o.id));
+                                state_machine
+                            };
+                            let state_machine = Rc::new(state_machine);
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -12984,7 +5933,7 @@ impl Interpreter {
                                         func_env: exec_env,
                                         is_strict,
                                         execution_state: StateMachineExecutionState::SuspendedStart,
-                                        _sent_value: JsValue::Undefined,
+                                        _sent_value: JsValue::UNDEFINED,
                                         try_stack: vec![],
                                         pending_binding: None,
                                         delegated_iterator: None,
@@ -12998,24 +5947,23 @@ impl Interpreter {
                                     Some(self.current_realm_id);
                             }
                             self.current_realm_id = caller_realm;
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: gen_id,
-                            }));
+                            return Completion::Normal(JsValue::object(gen_id));
                         }
                         let closure_strict = closure.borrow().strict;
-                        let func_env = Environment::new_function_scope(Some(closure));
+                        let func_env = self
+                            .acquire_function_environment(closure, params.len().saturating_add(2));
                         if is_arrow {
                             func_env.borrow_mut().is_arrow_scope = true;
                         }
                         let is_simple = has_simple_params;
-                        let mut call_frame_args = JsValue::Null;
+                        let mut call_frame_arguments = CallFrameArguments::None;
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
                                 func_env.borrow_mut().bindings.insert(
                                     "this".to_string(),
                                     Binding {
-                                        value: JsValue::Undefined,
+                                        value: JsValue::UNDEFINED,
                                         kind: BindingKind::Const,
                                         initialized: false,
                                         deletable: false,
@@ -13025,13 +5973,13 @@ impl Interpreter {
                                 self.constructing_derived = false;
                             } else {
                                 let effective_this = if !is_strict && !closure_strict {
-                                    if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
+                                    if (_this_val).is_nullish() {
                                         self.realm()
                                             .global_env
                                             .borrow()
                                             .get("this")
                                             .unwrap_or(_this_val.clone())
-                                    } else if !matches!(_this_val, JsValue::Object(_)) {
+                                    } else if !(_this_val).is_object() {
                                         match self.to_object(_this_val) {
                                             Completion::Normal(v) => v,
                                             _ => _this_val.clone(),
@@ -13053,12 +6001,7 @@ impl Interpreter {
                                 );
                             }
                             let env_strict = func_env.borrow().strict;
-                            // Sloppy non-arrow functions need a real arguments object even
-                            // when the body doesn't reference it, because Annex B
-                            // `Function.prototype.arguments` (§B.3.7) observes the active
-                            // call frame's arguments_obj.
-                            let needs_args = uses_arguments || (!is_strict && !env_strict);
-                            if needs_args {
+                            if uses_arguments {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
                                 let param_names: Vec<String> = if use_mapped {
                                     params
@@ -13082,7 +6025,8 @@ impl Interpreter {
                                     mapped_env,
                                     &param_names,
                                 );
-                                call_frame_args = arguments_obj.clone();
+                                call_frame_arguments =
+                                    CallFrameArguments::Materialized(arguments_obj.clone());
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple {
@@ -13090,6 +6034,13 @@ impl Interpreter {
                                 }
                             } else {
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                if !is_strict && !env_strict {
+                                    call_frame_arguments = CallFrameArguments::Deferred {
+                                        args: DeferredCallArguments::new(args),
+                                        func_env: func_env.clone(),
+                                        mapped: is_simple,
+                                    };
+                                }
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -13106,25 +6057,12 @@ impl Interpreter {
                             func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
-                        for (i, param) in params.iter().enumerate() {
-                            if let Pattern::Rest(inner) = param {
-                                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                let rest_arr = self.create_array(rest);
-                                if let Err(e) =
-                                    self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
-                                break;
-                            }
-                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                            if let Err(e) =
-                                self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                            {
-                                self.current_realm_id = caller_realm;
-                                return Completion::Throw(e);
-                            }
+                        if let Err(error) =
+                            self.bind_function_parameters(&params, args, &func_env, is_simple)
+                        {
+                            self.current_realm_id = caller_realm;
+                            self.recycle_function_environment(func_env);
+                            return Completion::Throw(error);
                         }
                         let exec_env = if !is_simple {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
@@ -13140,7 +6078,7 @@ impl Interpreter {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
                                 if param_names.contains(name) || name == "arguments" {
                                     let val =
-                                        self.env_get(&func_env, name).unwrap_or(JsValue::Undefined);
+                                        self.env_get(&func_env, name).unwrap_or(JsValue::UNDEFINED);
                                     let _ = self.env_set(&body_env, name, val);
                                 }
                             }
@@ -13151,7 +6089,7 @@ impl Interpreter {
                         exec_env.borrow_mut().strict = is_strict;
                         self.call_stack_frames.push(CallFrame {
                             func_obj_id: o.id,
-                            arguments_obj: call_frame_args,
+                            arguments: call_frame_arguments,
                             is_eval: false,
                         });
                         self.call_stack_envs.push(exec_env.clone());
@@ -13167,6 +6105,8 @@ impl Interpreter {
                         let result = self.dispose_resources(&exec_env, result);
                         self.last_call_this_value = func_env.borrow().get("this");
                         self.current_realm_id = caller_realm;
+                        drop(exec_env);
+                        self.recycle_function_environment(func_env);
                         match result {
                             Completion::Return(v) => {
                                 self.last_call_had_explicit_return = true;
@@ -13178,9 +6118,9 @@ impl Interpreter {
                             }
                             Completion::Normal(_) | Completion::Empty => {
                                 self.last_call_had_explicit_return = false;
-                                Completion::Normal(JsValue::Undefined)
+                                Completion::Normal(JsValue::UNDEFINED)
                             }
-                            Completion::Yield(_) => Completion::Normal(JsValue::Undefined),
+                            Completion::Yield(_) => Completion::Normal(JsValue::UNDEFINED),
                             other => other,
                         }
                     }
@@ -13191,35 +6131,37 @@ impl Interpreter {
                 return result;
             }
         }
-        let desc = match func_val {
-            JsValue::Undefined => "undefined is not a function".to_string(),
-            JsValue::Null => "null is not a function".to_string(),
-            JsValue::Boolean(b) => format!("{} is not a function", b),
-            JsValue::Number(n) => format!("{} is not a function", n),
-            JsValue::String(s) => {
-                let preview: String = s.to_rust_string().chars().take(30).collect();
-                format!("\"{}\" is not a function", preview)
+        let desc = if func_val.is_undefined() {
+            "undefined is not a function".to_string()
+        } else if func_val.is_null() {
+            "null is not a function".to_string()
+        } else if let Some(b) = func_val.as_boolean() {
+            format!("{} is not a function", b)
+        } else if let Some(n) = func_val.as_number() {
+            format!("{} is not a function", n)
+        } else if let Some(s) = func_val.as_string() {
+            let preview: String = s.to_rust_string().chars().take(30).collect();
+            format!("\"{}\" is not a function", preview)
+        } else if let Some(id) = func_val.as_object_id() {
+            if let Some(obj) = self.get_object_cell(id) {
+                let class = obj.borrow().class_name.clone();
+                let has_callable = obj.borrow().callable.is_some();
+                let keys: Vec<JsPropertyKey> = obj
+                    .borrow()
+                    .property_order
+                    .iter()
+                    .take(10)
+                    .cloned()
+                    .collect();
+                format!(
+                    "object (class={}, callable={}, id={}, keys={:?}) is not a function",
+                    class, has_callable, id, keys
+                )
+            } else {
+                format!("object (id={}, GC'd?) is not a function", id)
             }
-            JsValue::Object(o) => {
-                if let Some(obj) = self.get_object_cell(o.id) {
-                    let class = obj.borrow().class_name.clone();
-                    let has_callable = obj.borrow().callable.is_some();
-                    let keys: Vec<Rc<str>> = obj
-                        .borrow()
-                        .property_order
-                        .iter()
-                        .take(10)
-                        .cloned()
-                        .collect();
-                    format!(
-                        "object (class={}, callable={}, id={}, keys={:?}) is not a function",
-                        class, has_callable, o.id, keys
-                    )
-                } else {
-                    format!("object (id={}, GC'd?) is not a function", o.id)
-                }
-            }
-            _ => "is not a function".to_string(),
+        } else {
+            "is not a function".to_string()
         };
         let err = self.create_type_error(&desc);
         Completion::Throw(err)
@@ -13236,7 +6178,7 @@ impl Interpreter {
                 let val = match self.eval_expr(inner, env) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
                 let items = self.iterate_to_vec(&val)?;
                 for item in &items {
@@ -13247,7 +6189,7 @@ impl Interpreter {
                 let val = match self.eval_expr(arg, env) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
                 self.gc_root_value(&val);
                 evaluated.push(val);
@@ -13257,210 +6199,13 @@ impl Interpreter {
     }
 
     fn is_builtin_eval(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val {
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
             // Direct eval must be the CURRENT realm's eval
             if let Some(eval_id) = self.realm().builtin_eval_id {
                 return o.id == eval_id;
             }
         }
         false
-    }
-
-    fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
-        stmts.iter().any(Self::stmt_contains_arguments)
-    }
-
-    fn stmt_contains_arguments(stmt: &Statement) -> bool {
-        use crate::ast::*;
-        match stmt {
-            Statement::Expression(e) => Self::expr_contains_arguments(e),
-            Statement::Variable(d) => d.declarations.iter().any(|decl| {
-                decl.init
-                    .as_ref()
-                    .is_some_and(Self::expr_contains_arguments)
-            }),
-            Statement::Block(stmts) => Self::stmts_contain_arguments(stmts),
-            Statement::If(if_stmt) => {
-                Self::expr_contains_arguments(&if_stmt.test)
-                    || Self::stmt_contains_arguments(&if_stmt.consequent)
-                    || if_stmt
-                        .alternate
-                        .as_ref()
-                        .is_some_and(|a| Self::stmt_contains_arguments(a))
-            }
-            Statement::Return(e) => e.as_ref().is_some_and(Self::expr_contains_arguments),
-            Statement::Throw(e) => Self::expr_contains_arguments(e),
-            Statement::Try(t) => {
-                Self::stmts_contain_arguments(&t.block)
-                    || t.handler
-                        .as_ref()
-                        .is_some_and(|h| Self::stmts_contain_arguments(&h.body))
-                    || t.finalizer
-                        .as_ref()
-                        .is_some_and(|f| Self::stmts_contain_arguments(f))
-            }
-            Statement::While(w) => {
-                Self::expr_contains_arguments(&w.test) || Self::stmt_contains_arguments(&w.body)
-            }
-            Statement::For(f) => {
-                f.init.as_ref().is_some_and(|i| match i {
-                    ForInit::Expression(e) => Self::expr_contains_arguments(e),
-                    ForInit::Variable(d) => d.declarations.iter().any(|decl| {
-                        decl.init
-                            .as_ref()
-                            .is_some_and(Self::expr_contains_arguments)
-                    }),
-                }) || f.test.as_ref().is_some_and(Self::expr_contains_arguments)
-                    || f.update.as_ref().is_some_and(Self::expr_contains_arguments)
-                    || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::ForIn(f) => {
-                Self::expr_contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::ForOf(f) => {
-                Self::expr_contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::Switch(s) => {
-                Self::expr_contains_arguments(&s.discriminant)
-                    || s.cases
-                        .iter()
-                        .any(|c| Self::stmts_contain_arguments(&c.consequent))
-            }
-            Statement::DoWhile(d) => {
-                Self::stmt_contains_arguments(&d.body) || Self::expr_contains_arguments(&d.test)
-            }
-            Statement::Labeled(_, s) => Self::stmt_contains_arguments(s),
-            Statement::With(e, s) => {
-                Self::expr_contains_arguments(e) || Self::stmt_contains_arguments(s)
-            }
-            // Function/class declarations create their own scope — don't recurse
-            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
-            _ => false,
-        }
-    }
-
-    fn expr_contains_arguments(expr: &Expression) -> bool {
-        use crate::ast::*;
-        match expr {
-            Expression::Identifier(name) => name == "arguments",
-            Expression::Array(elems, _) => elems
-                .iter()
-                .any(|e| e.as_ref().is_some_and(Self::expr_contains_arguments)),
-            Expression::Object(props) => props.iter().any(|p| {
-                Self::expr_contains_arguments(&p.value)
-                    || matches!(&p.key, PropertyKey::Computed(e) if Self::expr_contains_arguments(e))
-            }),
-            Expression::Member(obj, prop, _) => {
-                Self::expr_contains_arguments(obj)
-                    || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_arguments(e))
-            }
-            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-                Self::expr_contains_arguments(callee)
-                    || args.iter().any(Self::expr_contains_arguments)
-            }
-            Expression::Binary(_, l, r)
-            | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
-                Self::expr_contains_arguments(l) || Self::expr_contains_arguments(r)
-            }
-            Expression::Unary(_, e)
-            | Expression::Update(_, _, e)
-            | Expression::Spread(e)
-            | Expression::Await(e)
-            | Expression::Yield(Some(e), _) => Self::expr_contains_arguments(e),
-            Expression::Conditional(t, c, a) => {
-                Self::expr_contains_arguments(t)
-                    || Self::expr_contains_arguments(c)
-                    || Self::expr_contains_arguments(a)
-            }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(Self::expr_contains_arguments)
-            }
-            Expression::Template(tl) => tl.expressions.iter().any(Self::expr_contains_arguments),
-            Expression::TaggedTemplate(tag, tl) => {
-                Self::expr_contains_arguments(tag)
-                    || tl.expressions.iter().any(Self::expr_contains_arguments)
-            }
-            Expression::ArrowFunction(af) => match af.body.body().as_slice() {
-                [Statement::Return(Some(e))] => Self::expr_contains_arguments(e),
-                stmts => Self::stmts_contain_arguments(stmts),
-            },
-            Expression::Function(_) | Expression::Class(_) => false,
-            _ => false,
-        }
-    }
-
-    fn stmts_contain_super_call(stmts: &[Statement]) -> bool {
-        stmts.iter().any(Self::stmt_contains_super_call)
-    }
-
-    fn stmt_contains_super_call(stmt: &Statement) -> bool {
-        use crate::ast::*;
-        match stmt {
-            Statement::Expression(e) => Self::expr_contains_super_call(e),
-            Statement::Variable(d) => d.declarations.iter().any(|decl| {
-                decl.init
-                    .as_ref()
-                    .is_some_and(Self::expr_contains_super_call)
-            }),
-            Statement::Block(stmts) => Self::stmts_contain_super_call(stmts),
-            Statement::If(if_stmt) => {
-                Self::expr_contains_super_call(&if_stmt.test)
-                    || Self::stmt_contains_super_call(&if_stmt.consequent)
-                    || if_stmt
-                        .alternate
-                        .as_ref()
-                        .is_some_and(|a| Self::stmt_contains_super_call(a))
-            }
-            Statement::Return(e) => e.as_ref().is_some_and(Self::expr_contains_super_call),
-            Statement::Throw(e) => Self::expr_contains_super_call(e),
-            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
-            _ => false,
-        }
-    }
-
-    fn expr_contains_super_call(expr: &Expression) -> bool {
-        use crate::ast::*;
-        match expr {
-            Expression::Call(callee, args, _) => {
-                matches!(**callee, Expression::Super)
-                    || Self::expr_contains_super_call(callee)
-                    || args.iter().any(Self::expr_contains_super_call)
-            }
-            Expression::Array(elems, _) => elems
-                .iter()
-                .any(|e| e.as_ref().is_some_and(Self::expr_contains_super_call)),
-            Expression::Binary(_, l, r)
-            | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
-                Self::expr_contains_super_call(l) || Self::expr_contains_super_call(r)
-            }
-            Expression::Unary(_, e) | Expression::Update(_, _, e) | Expression::Spread(e) => {
-                Self::expr_contains_super_call(e)
-            }
-            Expression::Conditional(t, c, a) => {
-                Self::expr_contains_super_call(t)
-                    || Self::expr_contains_super_call(c)
-                    || Self::expr_contains_super_call(a)
-            }
-            Expression::ArrowFunction(af) => match af.body.body().as_slice() {
-                [Statement::Return(Some(e))] => Self::expr_contains_super_call(e),
-                stmts => Self::stmts_contain_super_call(stmts),
-            },
-            Expression::New(callee, args, _) => {
-                Self::expr_contains_super_call(callee)
-                    || args.iter().any(Self::expr_contains_super_call)
-            }
-            Expression::Member(obj, prop, _) => {
-                Self::expr_contains_super_call(obj)
-                    || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_super_call(e))
-            }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(Self::expr_contains_super_call)
-            }
-            Expression::Function(_) | Expression::Class(_) => false,
-            _ => false,
-        }
     }
 
     pub(crate) fn perform_eval(
@@ -13470,17 +6215,17 @@ impl Interpreter {
         direct: bool,
         caller_env: &EnvRef,
     ) -> Completion {
-        let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-        if !matches!(&arg, JsValue::String(_)) {
+        let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+        if !arg.is_string() {
             return Completion::Normal(arg);
         }
         // Use PUA mapping to preserve lone surrogates through the UTF-8 parser
-        let code = if let JsValue::String(ref s) = arg {
+        let code = if let Some(s) = (arg).as_string() {
             crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
         } else {
             to_js_string(&arg)
         };
-        let mut p = match parser::Parser::new(&code) {
+        let mut p = match parser::Parser::new_for_eval(&code) {
             Ok(p) => p,
             Err(_) => {
                 return Completion::Throw(self.create_error("SyntaxError", "Invalid eval source"));
@@ -13556,13 +6301,19 @@ impl Interpreter {
             return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
         }
         if in_field_initializer {
-            if Self::stmts_contain_arguments(program.body.as_slice()) {
+            if crate::ast::stmts_contain_matching(
+                program.body.as_slice(),
+                &crate::ast::is_arguments_reference,
+            ) {
                 return Completion::Throw(self.create_error(
                     "SyntaxError",
                     "'arguments' is not allowed in class field initializer or static block",
                 ));
             }
-            if Self::stmts_contain_super_call(program.body.as_slice()) {
+            if crate::ast::stmts_contain_matching(
+                program.body.as_slice(),
+                &crate::ast::is_super_call,
+            ) {
                 return Completion::Throw(self.create_error(
                     "SyntaxError",
                     "'super()' is not allowed in class field initializer",
@@ -13608,118 +6359,14 @@ impl Interpreter {
         // Execute statements in lex_env
         self.call_stack_frames.push(CallFrame {
             func_obj_id: 0,
-            arguments_obj: JsValue::Null,
+            arguments: CallFrameArguments::None,
             is_eval: true,
         });
         self.call_stack_envs.push(lex_env.clone());
         let result = self.exec_eval_body(&program.body, &lex_env);
         self.call_stack_envs.pop();
         self.call_stack_frames.pop();
-        self.dispose_resources(&lex_env, result.update_empty(JsValue::Undefined))
-    }
-
-    /// Collect top-level var-declared names from eval body (recursively into blocks, etc.)
-    fn collect_eval_var_names(stmts: &[Statement], names: &mut Vec<String>) {
-        for stmt in stmts {
-            Self::collect_eval_var_names_from_stmt(stmt, names);
-        }
-    }
-
-    fn collect_eval_var_names_from_stmt(stmt: &Statement, names: &mut Vec<String>) {
-        match stmt {
-            Statement::Variable(decl) if decl.kind == VarKind::Var => {
-                for d in &decl.declarations {
-                    d.pattern.bound_names(names);
-                }
-            }
-            Statement::Block(stmts) => {
-                for s in stmts {
-                    Self::collect_eval_var_names_from_stmt(s, names);
-                }
-            }
-            Statement::If(i) => {
-                Self::collect_eval_var_names_from_stmt(&i.consequent, names);
-                if let Some(alt) = &i.alternate {
-                    Self::collect_eval_var_names_from_stmt(alt, names);
-                }
-            }
-            Statement::While(w) => Self::collect_eval_var_names_from_stmt(&w.body, names),
-            Statement::DoWhile(d) => Self::collect_eval_var_names_from_stmt(&d.body, names),
-            Statement::For(f) => {
-                if let Some(ForInit::Variable(decl)) = &f.init
-                    && decl.kind == VarKind::Var
-                {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(names);
-                    }
-                }
-                Self::collect_eval_var_names_from_stmt(&f.body, names);
-            }
-            Statement::ForIn(fi) => {
-                if let ForInOfLeft::Variable(decl) = &fi.left
-                    && decl.kind == VarKind::Var
-                {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(names);
-                    }
-                }
-                Self::collect_eval_var_names_from_stmt(&fi.body, names);
-            }
-            Statement::ForOf(fo) => {
-                if let ForInOfLeft::Variable(decl) = &fo.left
-                    && decl.kind == VarKind::Var
-                {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(names);
-                    }
-                }
-                Self::collect_eval_var_names_from_stmt(&fo.body, names);
-            }
-            Statement::Switch(sw) => {
-                for case in &sw.cases {
-                    for s in &case.consequent {
-                        Self::collect_eval_var_names_from_stmt(s, names);
-                    }
-                }
-            }
-            Statement::Try(t) => {
-                for s in &t.block {
-                    Self::collect_eval_var_names_from_stmt(s, names);
-                }
-                if let Some(handler) = &t.handler {
-                    for s in &handler.body {
-                        Self::collect_eval_var_names_from_stmt(s, names);
-                    }
-                }
-                if let Some(finalizer) = &t.finalizer {
-                    for s in finalizer {
-                        Self::collect_eval_var_names_from_stmt(s, names);
-                    }
-                }
-            }
-            Statement::Labeled(_, inner) => {
-                Self::collect_eval_var_names_from_stmt(inner, names);
-            }
-            Statement::With(_, inner) => {
-                Self::collect_eval_var_names_from_stmt(inner, names);
-            }
-            _ => {}
-        }
-    }
-
-    /// Collect top-level function declarations from eval body (only top-level, not inside blocks)
-    fn collect_eval_function_decls(stmts: &[Statement]) -> Vec<FunctionDecl> {
-        let mut funcs = Vec::new();
-        for stmt in stmts {
-            if let Some(f) = Self::unwrap_labeled_function(stmt) {
-                funcs.push(f.clone());
-            }
-        }
-        // Per spec: reverse order, keep last occurrence of each name
-        funcs.reverse();
-        let mut seen = HashSet::new();
-        funcs.retain(|f| seen.insert(f.name.clone()));
-        funcs
+        self.dispose_resources(&lex_env, result.update_empty(JsValue::UNDEFINED))
     }
 
     /// EvalDeclarationInstantiation per spec 19.2.1.4
@@ -13735,13 +6382,12 @@ impl Interpreter {
         let is_global = var_env.borrow().global_object_id.is_some();
 
         // Collect function declarations to initialize
-        let functions_to_init = Self::collect_eval_function_decls(body);
+        let functions_to_init = super::hoisting::collect_function_decls(body);
         let declared_func_names: Vec<String> =
             functions_to_init.iter().map(|f| f.name.clone()).collect();
 
         // Collect var-declared names (excluding those that are also function names)
-        let mut all_var_names = Vec::new();
-        Self::collect_eval_var_names(body, &mut all_var_names);
+        let all_var_names = super::hoisting::collect_var_names(body);
         let declared_var_names: Vec<String> = {
             let mut seen = HashSet::new();
             all_var_names
@@ -13954,7 +6600,7 @@ impl Interpreter {
                             lex_env.borrow_mut().bindings.insert(
                                 name,
                                 Binding {
-                                    value: JsValue::Undefined,
+                                    value: JsValue::UNDEFINED,
                                     kind,
                                     initialized: false,
                                     deletable: false,
@@ -13967,7 +6613,7 @@ impl Interpreter {
                     lex_env.borrow_mut().bindings.insert(
                         cls.name.clone(),
                         Binding {
-                            value: JsValue::Undefined,
+                            value: JsValue::UNDEFINED,
                             kind: BindingKind::Let,
                             initialized: false,
                             deletable: false,
@@ -14103,7 +6749,10 @@ impl Interpreter {
             }
         };
         // Check if callee is a constructor
-        if let JsValue::Object(ref co) = callee_val {
+        if let Some(co) = (callee_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let is_proxy = self.get_proxy_info(co.id).is_some();
             if !is_proxy && let Some(func_obj) = self.get_object_cell(co.id) {
                 let b = func_obj.borrow();
@@ -14138,7 +6787,9 @@ impl Interpreter {
             );
         }
         // Proxy construct trap
-        if let JsValue::Object(ref co) = callee_val
+        if let Some(co) = (callee_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && self.get_proxy_info(co.id).is_some()
         {
             let target_val = self.get_proxy_target_val(co.id);
@@ -14151,7 +6802,7 @@ impl Interpreter {
                 vec![target_val.clone(), args_array, new_target.clone()],
             ) {
                 Ok(Some(v)) => {
-                    if matches!(v, JsValue::Object(_)) {
+                    if (v).is_object() {
                         return Completion::Normal(v);
                     }
                     return Completion::Throw(
@@ -14170,7 +6821,9 @@ impl Interpreter {
             }
         }
         // Bound functions: delegate to construct_with_new_target which handles new_target resolution
-        if let JsValue::Object(ref co) = callee_val
+        if let Some(co) = (callee_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(co.id)
             && func_obj.borrow().bound().is_some()
         {
@@ -14182,7 +6835,9 @@ impl Interpreter {
             );
         }
         // Check if this is a derived class constructor
-        let is_derived = if let JsValue::Object(o) = &callee_val
+        let is_derived = if let Some(o) = callee_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow().is_derived_class_constructor()
@@ -14193,7 +6848,9 @@ impl Interpreter {
         // Fast path for default derived constructor: bypass the synthetic body to avoid
         // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
         if is_derived {
-            let is_default_derived = if let JsValue::Object(o) = &callee_val
+            let is_default_derived = if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 func_obj.borrow().is_default_derived_constructor()
@@ -14202,16 +6859,18 @@ impl Interpreter {
             };
             if is_default_derived {
                 // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
-                let super_ctor = if let JsValue::Object(o) = &callee_val
+                let super_ctor = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(func_obj) = self.get_object_cell(o.id)
                 {
                     if let Some(id) = func_obj.borrow().prototype_id {
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(id)
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     }
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 };
                 let prev_new_target = self.new_target.take();
                 self.new_target = Some(callee_val.clone());
@@ -14244,23 +6903,23 @@ impl Interpreter {
             self.constructing_derived = true;
             self.calling_as_construct = true;
             let (result, had_explicit_return, final_this) =
-                self.call_constructor_body(&callee_val, &JsValue::Undefined, &evaluated_args);
+                self.call_constructor_body(&callee_val, &JsValue::UNDEFINED, &evaluated_args);
             self.gc_unroot_frame(gc_frame);
             self.constructing_derived = prev_constructing_derived;
             self.new_target = prev_new_target;
             match result {
-                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
                 }
-                Completion::Normal(ref v) if had_explicit_return && !matches!(v, JsValue::Undefined) => {
+                Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
                     Completion::Throw(self.create_type_error(
                         "Derived constructors may only return object or undefined",
                     ))
                 }
                 Completion::Normal(_) | Completion::Empty => {
                     match final_this {
-                        Some(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
-                        Some(v) if !matches!(v, JsValue::Undefined) => Completion::Normal(v),
+                        Some(v) if (v).is_object() => Completion::Normal(v),
+                        Some(v) if !(v).is_undefined() => Completion::Normal(v),
                         _ => {
                             Completion::Throw(self.create_reference_error(
                                 "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
@@ -14273,27 +6932,33 @@ impl Interpreter {
         } else {
             // Base constructor: create this object as before
             let new_obj_id = self.create_object_id();
-            if let JsValue::Object(o) = &callee_val
+            if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(JsValue::Object(proto_obj)) = proto {
+                if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
                     self.get_object_cell_expect(new_obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(proto_obj.id);
+                        .prototype_id = Some(proto_id);
                 }
             }
-            let instance_field_defs = if let JsValue::Object(o) = &callee_val
+            let instance_field_defs = if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 func_obj.borrow().class_instance_field_defs.clone()
             } else {
                 Vec::new()
             };
-            let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+            let this_val = JsValue::object(new_obj_id);
             // Use constructor's closure (class_env) so the class name binding
             // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-            let init_parent = if let JsValue::Object(o) = &callee_val
+            let init_parent = if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(o.id)
                 && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
             {
@@ -14307,7 +6972,9 @@ impl Interpreter {
                 .borrow_mut()
                 .initialize_binding("this", this_val.clone());
             init_env.borrow_mut().is_field_initializer = true;
-            if let JsValue::Object(o) = &callee_val
+            if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
@@ -14319,7 +6986,7 @@ impl Interpreter {
                 // Set __home_object__ for super property access in field initializers.
                 let func_obj_id = func_obj.borrow().id.unwrap();
                 let proto_val = self.get_property_on_id(func_obj_id, "prototype");
-                if matches!(&proto_val, JsValue::Object(_)) {
+                if proto_val.is_object() {
                     init_env.borrow_mut().bindings.insert(
                         "__home_object__".to_string(),
                         Binding {
@@ -14392,7 +7059,7 @@ impl Interpreter {
                                 other => return other,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
                         if let Some(obj) = self.get_object_cell(new_obj_id) {
                             if !obj.borrow().extensible {
@@ -14422,7 +7089,7 @@ impl Interpreter {
                                 other => return other,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
                         match crate::interpreter::builtins::array::create_data_property_or_throw(
                             self, &this_val, key, val,
@@ -14438,7 +7105,7 @@ impl Interpreter {
                                 other => return other,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
                         if let Some(obj) = self.get_object_cell(new_obj_id) {
                             obj.borrow_mut()
@@ -14460,7 +7127,7 @@ impl Interpreter {
             let final_this = captured_this.unwrap_or(this_val.clone());
             self.new_target = prev_new_target;
             match result {
-                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
                 }
                 Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
@@ -14481,7 +7148,10 @@ impl Interpreter {
         args: &[JsValue],
         new_target: JsValue,
     ) -> Completion {
-        let co = if let JsValue::Object(co) = constructor {
+        let co = if let Some(co) = (constructor)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             co.clone()
         } else {
             return Completion::Throw(self.create_type_error("not a constructor"));
@@ -14498,7 +7168,7 @@ impl Interpreter {
                 vec![target_val.clone(), args_array, nt],
             ) {
                 Ok(Some(v)) => {
-                    if matches!(v, JsValue::Object(_)) {
+                    if (v).is_object() {
                         return Completion::Normal(v);
                     }
                     return Completion::Throw(
@@ -14565,22 +7235,22 @@ impl Interpreter {
             self.constructing_derived = true;
             self.calling_as_construct = true;
             let (result, had_explicit_return, final_this) =
-                self.call_constructor_body(constructor, &JsValue::Undefined, args);
+                self.call_constructor_body(constructor, &JsValue::UNDEFINED, args);
             self.constructing_derived = prev_constructing_derived;
             self.new_target = prev_new_target;
             match result {
-                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
                 }
-                Completion::Normal(ref v) if had_explicit_return && !matches!(v, JsValue::Undefined) => {
+                Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
                     Completion::Throw(self.create_type_error(
                         "Derived constructors may only return object or undefined",
                     ))
                 }
                 Completion::Normal(_) | Completion::Empty => {
                     match final_this {
-                        Some(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
-                        Some(v) if !matches!(v, JsValue::Undefined) => Completion::Normal(v),
+                        Some(v) if (v).is_object() => Completion::Normal(v),
+                        Some(v) if !(v).is_undefined() => Completion::Normal(v),
                         _ => {
                             Completion::Throw(self.create_reference_error(
                                 "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
@@ -14601,29 +7271,34 @@ impl Interpreter {
             };
 
             let (this_val, new_obj_id) = if deferred {
-                (JsValue::Undefined, 0)
+                (JsValue::UNDEFINED, 0)
             } else {
                 let new_obj_id = self.create_object_id();
                 // Use new_target's .prototype for the new object's [[Prototype]]
                 // Must use get_object_property to invoke proxy get traps
-                if let JsValue::Object(nt_o) = &new_target {
+                if let Some(nt_o) = new_target
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     let nt_val = new_target.clone();
                     let proto = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    if let JsValue::Object(proto_obj) = proto {
+                    if let Some(proto_obj) = (proto)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                    {
                         self.get_object_cell_expect(new_obj_id)
                             .borrow_mut()
                             .prototype_id = Some(proto_obj.id);
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                        let nt_realm_id =
-                            match self.get_function_realm(&JsValue::Object(nt_o.clone())) {
-                                Ok(r) => r,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                        let nt_realm_id = match self.get_function_realm(&JsValue::object(nt_o.id)) {
+                            Ok(r) => r,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let op_id = self.realms[nt_realm_id].object_prototype;
                         if let Some(proto_rc) = op_id {
                             self.get_object_cell_expect(new_obj_id)
@@ -14633,11 +7308,13 @@ impl Interpreter {
                     }
                 }
                 let id = new_obj_id;
-                (JsValue::Object(crate::types::JsObject { id }), id)
+                (JsValue::object(id), id)
             };
 
             // Initialize instance fields from the constructor's class_instance_field_defs.
-            let instance_field_defs = if let JsValue::Object(co) = constructor
+            let instance_field_defs = if let Some(co) = (constructor)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(func_obj) = self.get_object_cell(co.id)
             {
                 func_obj.borrow().class_instance_field_defs.clone()
@@ -14645,7 +7322,9 @@ impl Interpreter {
                 Vec::new()
             };
             if !instance_field_defs.is_empty() {
-                let (class_pn, proto_val, outer_env) = if let JsValue::Object(co) = constructor
+                let (class_pn, proto_val, outer_env) = if let Some(co) = (constructor)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(func_obj) = self.get_object_cell(co.id)
                 {
                     let (pn, oe) = if let Some(JsFunction::User { ref closure, .. }) =
@@ -14660,7 +7339,7 @@ impl Interpreter {
                     let pv = self.get_property_on_id(func_obj_id, "prototype");
                     (pn, pv, oe)
                 } else {
-                    (None, JsValue::Undefined, None)
+                    (None, JsValue::UNDEFINED, None)
                 };
                 let init_parent =
                     outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
@@ -14671,7 +7350,7 @@ impl Interpreter {
                     .initialize_binding("this", this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 init_env.borrow_mut().class_private_names = class_pn;
-                if matches!(&proto_val, JsValue::Object(_)) {
+                if proto_val.is_object() {
                     init_env.borrow_mut().bindings.insert(
                         "__home_object__".to_string(),
                         Binding {
@@ -14723,7 +7402,7 @@ impl Interpreter {
                                     other => return other,
                                 }
                             } else {
-                                JsValue::Undefined
+                                JsValue::UNDEFINED
                             };
                             if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut()
@@ -14743,7 +7422,7 @@ impl Interpreter {
                                     other => return other,
                                 }
                             } else {
-                                JsValue::Undefined
+                                JsValue::UNDEFINED
                             };
                             if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut().insert_value(key.clone(), val);
@@ -14756,7 +7435,7 @@ impl Interpreter {
                                     other => return other,
                                 }
                             } else {
-                                JsValue::Undefined
+                                JsValue::UNDEFINED
                             };
                             if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut()
@@ -14779,7 +7458,7 @@ impl Interpreter {
             let final_this = captured_this.unwrap_or(this_val.clone());
             self.new_target = prev_new_target;
             match result {
-                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
                 }
                 Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
@@ -14801,7 +7480,7 @@ impl Interpreter {
         F: Fn(&crate::interpreter::types::Realm) -> Option<u64>,
     {
         if let Some(ref nt) = self.new_target.clone()
-            && let JsValue::Object(nt_o) = nt
+            && let Some(nt_o) = (nt).as_object_id().map(|id| crate::types::JsObject { id })
         {
             let nt_proto_id = if let Some(nt_obj) = self.get_object_cell(nt_o.id) {
                 nt_obj.borrow().id
@@ -14819,14 +7498,15 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     _ => return,
                 };
-                if let JsValue::Object(po) = proto_val
+                if let Some(po) = (proto_val)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(obj_rc) = self.get_object_cell(obj_id)
                 {
                     obj_rc.borrow_mut().prototype_id = Some(po.id);
                 } else {
                     // proto is not an Object: GetFunctionRealm(newTarget) → realm's intrinsic
-                    let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone()))
-                    {
+                    let nt_realm_id = match self.get_function_realm(&JsValue::object(nt_o.id)) {
                         Ok(r) => r,
                         Err(_) => return,
                     };
@@ -14861,13 +7541,13 @@ impl Interpreter {
                 trap_name
             ))),
             Some((false, Some(_target_id), Some(handler_id))) => {
-                let handler_val = JsValue::Object(crate::types::JsObject { id: handler_id });
+                let handler_val = JsValue::object(handler_id);
                 let trap_val = match self.get_object_property(handler_id, trap_name, &handler_val) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
-                if matches!(trap_val, JsValue::Undefined | JsValue::Null) {
+                if (trap_val).is_nullish() {
                     return Ok(None); // No trap, fall through to target
                 }
                 if !self.is_callable(&trap_val) {
@@ -14879,7 +7559,7 @@ impl Interpreter {
                 match self.call_function(&trap_val, &handler_val, &args) {
                     Completion::Normal(v) => Ok(Some(v)),
                     Completion::Throw(e) => Err(e),
-                    _ => Ok(Some(JsValue::Undefined)),
+                    _ => Ok(Some(JsValue::UNDEFINED)),
                 }
             }
             Some((false, _, _)) => Err(self.create_type_error(&format!(
@@ -14894,9 +7574,9 @@ impl Interpreter {
         if let Some(obj) = self.get_object_cell(proxy_id)
             && let Some(tid) = obj.borrow().proxy_target_id()
         {
-            return JsValue::Object(crate::types::JsObject { id: tid });
+            return JsValue::object(tid);
         }
-        JsValue::Undefined
+        JsValue::UNDEFINED
     }
 
     pub(crate) fn validate_ownkeys_invariant(
@@ -14906,9 +7586,13 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
 
-        let trap_keys: Vec<String> = if let JsValue::Object(arr) = trap_result {
-            let len = match self.get_property_on_id(arr.id, "length") {
-                JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+        let trap_keys: Vec<JsPropertyKey> = if let Some(arr) = (trap_result)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
+            let len_value = self.get_property_on_id(arr.id, "length");
+            let len = match len_value.as_number() {
+                Some(n) if n.is_finite() && n > 0.0 => {
                     let len = n.floor() as usize;
                     if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
                         return Err(self.create_type_error(
@@ -14923,20 +7607,22 @@ impl Interpreter {
             (0..len)
                 .map(|i| {
                     let v = self.get_property_on_id(arr_id, &i.to_string());
-                    to_js_string(&v)
+                    to_property_key_string(&v)
                 })
                 .collect()
         } else {
             return Ok(());
         };
 
-        if let JsValue::Object(t) = target_val
+        if let Some(t) = (target_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(tobj) = self.get_object_cell(t.id)
         {
             let target_extensible = tobj.borrow().extensible;
-            let (target_nonconfig, target_config): (Vec<String>, Vec<String>) = {
+            let (target_nonconfig, target_config): (Vec<JsPropertyKey>, Vec<JsPropertyKey>) = {
                 let b = tobj.borrow();
-                let nc: Vec<String> = b
+                let nc: Vec<JsPropertyKey> = b
                     .property_order
                     .iter()
                     .filter(|k| {
@@ -14944,9 +7630,9 @@ impl Interpreter {
                             .get(k)
                             .is_some_and(|d| d.configurable == Some(false))
                     })
-                    .map(|k| k.to_string())
+                    .cloned()
                     .collect();
-                let c: Vec<String> = b
+                let c: Vec<JsPropertyKey> = b
                     .property_order
                     .iter()
                     .filter(|k| {
@@ -14954,14 +7640,14 @@ impl Interpreter {
                             .get(k)
                             .is_some_and(|d| d.configurable != Some(false))
                     })
-                    .map(|k| k.to_string())
+                    .cloned()
                     .collect();
                 (nc, c)
             };
-            let trap_set: HashSet<&str> = trap_keys.iter().map(|s| s.as_str()).collect();
+            let trap_set: HashSet<&[u8]> = trap_keys.iter().map(|s| s.as_bytes()).collect();
 
             for key in &target_nonconfig {
-                if !trap_set.contains(key.as_str()) {
+                if !trap_set.contains(key.as_bytes()) {
                     return Err(self.create_type_error(
                         "'ownKeys' on proxy: trap result did not include all non-configurable own keys of the proxy target",
                     ));
@@ -14969,13 +7655,13 @@ impl Interpreter {
             }
 
             if !target_extensible {
-                let target_keys: HashSet<&str> = target_nonconfig
+                let target_keys: HashSet<&[u8]> = target_nonconfig
                     .iter()
                     .chain(target_config.iter())
-                    .map(|s| s.as_str())
+                    .map(|s| s.as_bytes())
                     .collect();
                 for key in &trap_keys {
-                    if !target_keys.contains(key.as_str()) {
+                    if !target_keys.contains(key.as_bytes()) {
                         return Err(self.create_type_error(
                             "'ownKeys' on proxy: trap returned extra keys for non-extensible proxy target",
                         ));
@@ -14994,14 +7680,13 @@ impl Interpreter {
     }
 
     fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
-        if !matches!(right, JsValue::Object(_)) {
+        if !(right).is_object() {
             return Completion::Throw(
                 self.create_type_error("Right-hand side of instanceof is not an object"),
             );
         }
-        let rhs_obj = match right {
-            JsValue::Object(o) => o.clone(),
-            _ => unreachable!(),
+        let rhs_obj = crate::types::JsObject {
+            id: right.as_object_id().expect("object checked"),
         };
         let sym_key = self
             .cached_has_instance_key
@@ -15012,7 +7697,7 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 other => return other,
             };
-            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+            if !(method).is_nullish() {
                 if !self.is_callable(&method) {
                     return Completion::Throw(
                         self.create_type_error("@@hasInstance is not callable"),
@@ -15021,7 +7706,7 @@ impl Interpreter {
                 let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {
                     Completion::Normal(v) => {
-                        Completion::Normal(JsValue::Boolean(self.to_boolean_val(&v)))
+                        Completion::Normal(JsValue::boolean(self.to_boolean_val(&v)))
                     }
                     other => other,
                 };
@@ -15037,55 +7722,70 @@ impl Interpreter {
 
     pub(crate) fn ordinary_has_instance(&mut self, ctor: &JsValue, obj: &JsValue) -> Completion {
         // Step 2: bound function → recurse with target
-        if let JsValue::Object(co) = ctor
+        if let Some(co) = (ctor)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj_data) = self.get_object(co.id)
             && let Some(target) = obj_data.borrow().bound().map(|b| b.target.clone())
         {
             return self.eval_instanceof(obj, &target);
         }
         if !self.is_callable(ctor) {
-            return Completion::Normal(JsValue::Boolean(false));
+            return Completion::Normal(JsValue::boolean(false));
         }
         // Step 3: If Type(O) is not Object, return false
-        let JsValue::Object(lhs) = obj else {
-            return Completion::Normal(JsValue::Boolean(false));
+        let Some(lhs) = (obj).as_object_id().map(|id| crate::types::JsObject { id }) else {
+            return Completion::Normal(JsValue::boolean(false));
         };
         let Some(_inst_obj) = self.get_object_cell(lhs.id) else {
-            return Completion::Normal(JsValue::Boolean(false));
+            return Completion::Normal(JsValue::boolean(false));
         };
-        let ctor_obj_ref = match ctor {
-            JsValue::Object(o) => o.clone(),
-            _ => return Completion::Normal(JsValue::Boolean(false)),
+        let ctor_obj_ref = match ctor.as_object_id() {
+            Some(id) => crate::types::JsObject { id },
+            None => return Completion::Normal(JsValue::boolean(false)),
         };
         // Step 4: Let P be Get(C, "prototype")
         let proto_val = match self.get_object_property(ctor_obj_ref.id, "prototype", ctor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         // Step 5: If P is not Object, throw TypeError
-        let JsValue::Object(_proto_ref) = &proto_val else {
+        let Some(_proto_ref) = proto_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        else {
             return Completion::Throw(
                 self.create_type_error("Function has non-object prototype in instanceof check"),
             );
         };
         // Step 6: Walk O.[[GetPrototypeOf]]() chain (proxy-aware)
         let mut current_val = obj.clone();
-        while let JsValue::Object(ref current_obj) = current_val {
+        let mut proxy_depth = 0;
+        while let Some(current_obj) = current_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let current_id = current_obj.id;
+            if self.get_proxy_info(current_id).is_some() {
+                proxy_depth = match self.advance_proxy_chain_depth(proxy_depth) {
+                    Ok(depth) => depth,
+                    Err(e) => return Completion::Throw(e),
+                };
+            }
             let next = match self.proxy_get_prototype_of(current_id) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            if matches!(next, JsValue::Null) {
-                return Completion::Normal(JsValue::Boolean(false));
+            if (next).is_null() {
+                return Completion::Normal(JsValue::boolean(false));
             }
             if same_value(&next, &proto_val) {
-                return Completion::Normal(JsValue::Boolean(true));
+                return Completion::Normal(JsValue::boolean(true));
             }
             current_val = next;
         }
-        Completion::Normal(JsValue::Boolean(false))
+        Completion::Normal(JsValue::boolean(false))
     }
 
     /// Resolve an identifier to a reference (for capturing before RHS evaluation).
@@ -15144,6 +7844,14 @@ impl Interpreter {
             Ok(()) => Completion::Normal(value),
             Err(_) => Completion::Throw(self.create_type_error("Assignment to constant variable.")),
         }
+    }
+
+    /// Whether `obj_id` is some realm's global object — the only case in which
+    /// a property write has a global environment binding to mirror.
+    fn is_realm_global_object(&self, obj_id: u64) -> bool {
+        self.realms
+            .iter()
+            .any(|realm| realm.global_object == Some(obj_id))
     }
 
     /// Sync a property set on an object to the corresponding global env binding,
@@ -15207,7 +7915,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                                 _ => {}
                             }
-                            let receiver = JsValue::Object(crate::types::JsObject { id: gid });
+                            let receiver = JsValue::object(gid);
                             match self.proxy_set(gid, name, value.clone(), &receiver) {
                                 Ok(_) => Completion::Normal(value),
                                 Err(e) => Completion::Throw(e),
@@ -15242,7 +7950,7 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                     Ok(true) => {}
                                 }
-                                let receiver = JsValue::Object(crate::types::JsObject { id: gid });
+                                let receiver = JsValue::object(gid);
                                 match self.proxy_set(gid, name, value.clone(), &receiver) {
                                     Ok(_) => {
                                         self.sync_global_object_binding(gid, name, &value);
@@ -15345,17 +8053,17 @@ impl Interpreter {
                         .and_then(|o| o.borrow().get_own_property(name));
                     if let Some(ref desc) = own_prop {
                         if desc.get.is_some() {
-                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                            let this_val = JsValue::object(gid);
                             return self.get_object_property(gid, name, &this_val);
                         }
                         return Completion::Normal(
-                            desc.value.clone().unwrap_or(JsValue::Undefined),
+                            desc.value.clone().unwrap_or(JsValue::UNDEFINED),
                         );
                     }
                     // Check prototype chain
                     match self.proxy_has_property(gid, name) {
                         Ok(true) => {
-                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                            let this_val = JsValue::object(gid);
                             return self.get_object_property(gid, name, &this_val);
                         }
                         Ok(false) => {}
@@ -15397,19 +8105,19 @@ impl Interpreter {
                     .and_then(|o| o.borrow().get_own_property(name));
                 if let Some(ref desc) = own_prop {
                     if desc.get.is_some() {
-                        let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                        let this_val = JsValue::object(gid);
                         return Some(self.get_object_property(gid, name, &this_val));
                     }
                     // Data property — slim Environment::get no longer falls
                     // through to the global object, so return the value here.
                     return Some(Completion::Normal(
-                        desc.value.clone().unwrap_or(JsValue::Undefined),
+                        desc.value.clone().unwrap_or(JsValue::UNDEFINED),
                     ));
                 }
                 // Not own — check prototype chain (handles Proxy has/get traps)
                 match self.proxy_has_property(gid, name) {
                     Ok(true) => {
-                        let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                        let this_val = JsValue::object(gid);
                         return Some(self.get_object_property(gid, name, &this_val));
                     }
                     Ok(false) => return None,
@@ -15426,154 +8134,46 @@ impl Interpreter {
     /// falls back to __super__.prototype.
     fn get_super_base_id(&self, env: &EnvRef) -> Option<u64> {
         let home = env.borrow().get("__home_object__");
-        if let Some(JsValue::Object(ref ho)) = home
-            && let Some(home_obj) = self.get_object_cell(ho.id)
+        if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id)
+            && let Some(home_obj) = self.get_object_cell(home_id)
         {
             return home_obj.borrow().prototype_id;
         }
         // Fallback: __super__.prototype_id
-        let obj_val = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
-        if let JsValue::Object(ref o) = obj_val {
+        let obj_val = env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED);
+        if let Some(o) = (obj_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let proto_val = self.get_property_on_id(o.id, "prototype");
-            if let JsValue::Object(ref p) = proto_val {
+            if let Some(p) = (proto_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 return Some(p.id);
             }
         }
         None
     }
 
-    /// OrdinarySet (§10.1.9) starting at `base_id` with a separate `receiver`.
-    /// Used for super property assignment: `super[key] = val`.
-    fn super_set_property(
+    /// PutValue for a Super Reference, whose [[Set]] holder and receiver differ.
+    fn super_set_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         base_id: u64,
-        key: &str,
+        key: &K,
         val: JsValue,
         receiver: &JsValue,
         strict: bool,
     ) -> Completion {
-        // Find the property descriptor starting from base_id, walking prototype chain.
-        // If we encounter a Proxy, delegate to proxy_set.
-        let mut current_id = Some(base_id);
-        let mut desc: Option<PropertyDescriptor> = None;
-        while let Some(id) = current_id {
-            if self.get_proxy_info(id).is_some() {
-                match self.proxy_set(id, key, val.clone(), receiver) {
-                    Ok(success) => {
-                        if !success && strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot set property '{key}' on proxy"
-                            )));
-                        }
-                        return Completion::Normal(val);
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            if let Some(obj) = self.get_object_cell(id) {
-                desc = obj.borrow().get_own_property_full(key);
-                if desc.is_some() {
-                    break;
-                }
-                current_id = obj.borrow().prototype_id.as_ref().copied();
-            } else {
-                break;
-            }
-        }
-
-        match &desc {
-            Some(d) if d.is_accessor_descriptor() => {
-                if let Some(ref setter) = d.set
-                    && !matches!(setter, JsValue::Undefined)
-                {
-                    let setter = setter.clone();
-                    let recv = receiver.clone();
-                    return match self.call_function(&setter, &recv, std::slice::from_ref(&val)) {
-                        Completion::Normal(_) => Completion::Normal(val),
-                        other => other,
-                    };
-                }
-                if strict {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot set property '{key}' which has only a getter"
-                    )));
-                }
-                Completion::Normal(val)
-            }
-            Some(d) if d.is_data_descriptor() && d.writable == Some(false) => {
-                if strict {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot assign to read only property '{key}'"
-                    )));
-                }
-                Completion::Normal(val)
-            }
-            _ => {
-                // §10.1.9.2 OrdinarySetWithOwnDescriptor: set on Receiver
-                if let JsValue::Object(o) = receiver
-                    && let Some(obj) = self.get_object_cell(o.id)
-                {
-                    // Module namespace exotic receiver (§10.4.6):
-                    // OrdinarySetWithOwnDescriptor calls Receiver.[[GetOwnProperty]] before
-                    // attempting [[DefineOwnProperty]]. For a module namespace, that
-                    // [[GetOwnProperty]] (a) triggers deferred-module evaluation for
-                    // non-symbol-like keys, and (b) throws ReferenceError if the export
-                    // binding is uninitialized (TDZ). After both checks pass, [[Set]]
-                    // returns false (TypeError in strict).
-                    let is_ns = obj.borrow().module_namespace().is_some();
-                    if is_ns {
-                        if let Err(e) = self.check_namespace_tdz(o.id, key) {
-                            return Completion::Throw(e);
-                        }
-                        if strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}' of module namespace"
-                            )));
-                        }
-                        return Completion::Normal(val);
-                    }
-                    let existing = obj.borrow().get_own_property_full(key);
-                    match &existing {
-                        Some(ed) if ed.is_accessor_descriptor() => {
-                            if strict {
-                                return Completion::Throw(
-                                    self.create_type_error(&format!("Cannot set property '{key}'")),
-                                );
-                            }
-                            return Completion::Normal(val);
-                        }
-                        Some(ed) if ed.writable == Some(false) => {
-                            if strict {
-                                return Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot assign to read only property '{key}'"
-                                )));
-                            }
-                            return Completion::Normal(val);
-                        }
-                        Some(_) => {
-                            let _ = obj.borrow_mut().set_property_value(key, val.clone());
-                        }
-                        None => {
-                            // CreateDataProperty: checks extensibility
-                            if !obj.borrow().extensible {
-                                if strict {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot add property '{key}', object is not extensible"
-                                    )));
-                                }
-                                return Completion::Normal(val);
-                            }
-                            let _ = obj.borrow_mut().set_property_value(key, val.clone());
-                        }
-                    }
-                }
-                Completion::Normal(val)
-            }
+        match self.put_value_to_property(base_id, key, val.clone(), receiver, strict) {
+            Ok(_) => Completion::Normal(val),
+            Err(e) => Completion::Throw(e),
         }
     }
 
     fn call_async_function(
         &mut self,
+        _func_obj_id: u64,
         params: &[Pattern],
         body: &Body,
         closure: EnvRef,
@@ -15587,7 +8187,10 @@ impl Interpreter {
     ) -> Completion {
         let gc_frame = self.gc_root_frame();
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref o) = promise {
+        let promise_id = if let Some(o) = (promise)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             o.id
         } else {
             0
@@ -15598,7 +8201,10 @@ impl Interpreter {
         self.gc_root_value(&reject_fn);
 
         let closure_strict = closure.borrow().strict;
-        let func_env = Environment::new_function_scope(Some(closure));
+        let func_env = Environment::new_function_scope_with_capacity(
+            Some(closure),
+            params.len().saturating_add(2),
+        );
         if is_arrow {
             func_env.borrow_mut().is_arrow_scope = true;
         }
@@ -15606,13 +8212,13 @@ impl Interpreter {
         // default parameter expressions can reference `arguments`.
         if !is_arrow {
             let effective_this = if !is_strict && !closure_strict {
-                if matches!(this_val, JsValue::Undefined | JsValue::Null) {
+                if (this_val).is_nullish() {
                     self.realm()
                         .global_env
                         .borrow()
                         .get("this")
                         .unwrap_or(this_val.clone())
-                } else if !matches!(this_val, JsValue::Object(_)) {
+                } else if !(this_val).is_object() {
                     match self.to_object(this_val) {
                         Completion::Normal(v) => v,
                         _ => this_val.clone(),
@@ -15673,50 +8279,48 @@ impl Interpreter {
                 func_env.borrow_mut().has_parameter_expressions = true;
             }
         }
-        for (i, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                let rest_arr = self.create_array(rest);
-                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                    self.drain_microtasks();
-                    self.gc_unroot_frame(gc_frame);
-                    // A default-param expression may have called `__host_exit`
-                    // (issue #229): return abrupt so the caller unwinds.
-                    if self.pending_exit.is_some() {
-                        return Completion::Throw(JsValue::Undefined);
-                    }
-                    return Completion::Normal(promise);
-                }
-                break;
+        if let Err(error) =
+            self.bind_function_parameters(params, args, &func_env, has_simple_params)
+        {
+            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+            self.drain_microtasks();
+            self.gc_unroot_frame(gc_frame);
+            // A default-param expression may have called `__host_exit`
+            // (issue #229): return abrupt so the caller unwinds.
+            if self.pending_exit.is_some() {
+                return Completion::Throw(JsValue::UNDEFINED);
             }
-            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                self.drain_microtasks();
-                self.gc_unroot_frame(gc_frame);
-                // See above: a default-param `__host_exit` must unwind abruptly.
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
-                }
-                return Completion::Normal(promise);
-            }
+            return Completion::Normal(promise);
         }
 
         func_env.borrow_mut().strict = is_strict;
         self.in_tail_position = false;
 
-        let sm = Rc::new(
-            crate::interpreter::generator_transform::transform_async_function(
-                body.as_slice(),
-                params,
-            ),
+        let sm = crate::interpreter::generator_transform::transform_async_function(
+            body.as_slice(),
+            params,
         );
+        #[cfg(feature = "perf-counters")]
+        let sm = {
+            let mut sm = sm;
+            sm.perf_key = Some(self.perf_body_name(_func_obj_id));
+            sm
+        };
+        let sm = Rc::new(sm);
 
         for tv in &sm.temp_vars {
             func_env.borrow_mut().declare(tv, BindingKind::Var);
         }
         for lv in &sm.local_vars {
+            if matches!(
+                lv.kind,
+                VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+            ) && lv.scope_depth > 0
+            {
+                // Nested lexical bindings are created by their transformed
+                // runtime scopes and must not leak into the function scope.
+                continue;
+            }
             if !func_env.borrow().bindings.contains_key(&lv.name) {
                 func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
             }
@@ -15734,16 +8338,17 @@ impl Interpreter {
                 try_stack: vec![],
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: None,
                 saved_finally_exception: None,
+                pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
-                for_of_iter_env: None,
                 module_path: None,
             },
         );
 
-        let resume = self.async_function_resume(async_id, JsValue::Undefined, false);
+        let resume = self.async_function_resume(async_id, JsValue::UNDEFINED, false);
 
         self.gc_unroot_frame(gc_frame);
         // If the body ran `__host_exit` synchronously (before any await, issue
@@ -15767,10 +8372,12 @@ impl Interpreter {
         sent_value: JsValue,
         is_error: bool,
     ) -> Completion {
-        use crate::interpreter::generator_transform::{SentValueBindingKind, StateTerminator};
+        use crate::interpreter::generator_transform::{
+            LoopControlTarget, SentValueBindingKind, StateTerminator,
+        };
 
         let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
-            return Completion::Normal(JsValue::Undefined);
+            return Completion::Normal(JsValue::UNDEFINED);
         };
 
         let AsyncFunctionState {
@@ -15781,16 +8388,33 @@ impl Interpreter {
             mut try_stack,
             pending_binding,
             pending_return: saved_pending_return,
+            pending_loop_control: restored_pending_loop_control,
             saved_finally_exception: restored_saved_finally_exception,
+            pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
             reject_fn,
             for_of_stack: saved_for_of_stack,
-            for_of_iter_env: saved_for_of_iter_env,
             module_path: async_module_path,
         } = state;
 
         if let Some(ref mp) = async_module_path {
             self.current_module_path = Some(mp.clone());
+        }
+
+        // §14.7.5.6 step 6.b: `Await(nextResult)` rejecting sets the iterator
+        // record's [[Done]] and returns without performing IteratorClose. The
+        // `<iter>__await` temp is only ever bound by a `for await` head, so a
+        // rejection resumed into it identifies that loop's protocol failure.
+        let mut for_of_protocol_failure: Option<String> = None;
+        if is_error
+            && let Some(ref binding) = pending_binding
+            && let SentValueBindingKind::Variable(name) = &binding.kind
+            && let Some(iter_var) = name.strip_suffix("__await")
+            && saved_for_of_stack
+                .iter()
+                .any(|loop_state| loop_state.iter_var == iter_var)
+        {
+            for_of_protocol_failure = Some(iter_var.to_string());
         }
 
         if let Some(binding) = pending_binding {
@@ -15829,11 +8453,12 @@ impl Interpreter {
                 try_stack: try_stack.clone(),
                 pending_binding: None,
                 pending_return: None,
+                pending_loop_control: restored_pending_loop_control,
                 saved_finally_exception: None,
+                pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: saved_for_of_stack.clone(),
-                for_of_iter_env: saved_for_of_iter_env.clone(),
                 module_path: async_module_path.clone(),
             },
         );
@@ -15843,33 +8468,117 @@ impl Interpreter {
         self.in_state_machine = true;
         let mut current_id = current_state;
         let mut pending_return: Option<JsValue> = saved_pending_return;
+        let mut pending_loop_control = restored_pending_loop_control;
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
-        let mut for_of_stack: Vec<(String, usize, usize)> = saved_for_of_stack; // (iter_var, head_state, after_state)
-        let mut for_of_iter_env: Option<Rc<RefCell<Environment>>> = saved_for_of_iter_env;
+        let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
+        // An abrupt completion may need to visit a catch/finally inside an
+        // enclosing loop before that loop itself can be closed. Keep that
+        // obligation across suspension until the handler completes normally.
+        let mut pending_for_of_unwind = restored_pending_for_of_unwind;
+
+        // Helper: close the for-of loops from `$from` inward, surfacing an
+        // abrupt completion from a disposer or an iterator `return` method.
+        macro_rules! unwind_for_of {
+            ($from:expr) => {
+                let unwind_from = $from;
+                let mut unwind_completion = Completion::Empty;
+                while for_of_stack.len() > unwind_from {
+                    let Some(loop_state) = for_of_stack.pop() else {
+                        break;
+                    };
+                    // Handlers entered inside this loop have already completed
+                    // before its IteratorClose runs. Handlers surrounding the
+                    // loop remain available for a close failure.
+                    try_stack.truncate(loop_state.try_depth);
+                    unwind_completion =
+                        self.close_for_of_loop(loop_state, &func_env, unwind_completion, None);
+                    match &unwind_completion {
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(*code);
+                        }
+                        Completion::Throw(_) => {
+                            let handler_depth =
+                                try_stack
+                                    .iter()
+                                    .enumerate()
+                                    .rev()
+                                    .find_map(|(depth, handler)| {
+                                        if !handler.entered_catch
+                                            && !handler.entered_finally
+                                            && handler.catch_state.is_some()
+                                        {
+                                            Some(depth)
+                                        } else if !handler.entered_finally
+                                            && handler.finally_state.is_some()
+                                        {
+                                            Some(depth)
+                                        } else {
+                                            None
+                                        }
+                                    });
+                            let reached_unwind_boundary = for_of_stack.len() == unwind_from;
+                            let handler_precedes_next_loop = !reached_unwind_boundary
+                                && for_of_stack.last().is_some_and(|next_loop| {
+                                    handler_depth.is_some_and(|depth| depth >= next_loop.try_depth)
+                                });
+                            if reached_unwind_boundary || handler_precedes_next_loop {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Completion::Throw(error) = unwind_completion {
+                    pending_for_of_unwind = Some(PendingForOfUnwind {
+                        clear_at_state: None,
+                    });
+                    pending_exception = Some(error);
+                    continue;
+                }
+            };
+        }
 
         // Helper: route a return through finally blocks in try_stack
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
-                let mut routed = false;
+                // A return produced by a finalizer replaces any loop-control
+                // completion that originally entered it.
+                pending_loop_control = None;
+                let mut routed_to = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        pending_return = Some(ret_val.clone());
-                        current_id = finally_state;
-                        routed = true;
+                        routed_to = Some((i, finally_state));
                         break;
                     }
                 }
-                if !routed {
+                // §14.7.5.6: a return completion leaving a for-of closes its
+                // iterator and disposes its iteration environment. Only the
+                // loops nested inside the intercepting `finally` unwind now —
+                // a `finally` lexically inside a loop runs first, and that
+                // loop closes once the return resumes past it.
+                let unwind_from = match routed_to {
+                    Some((depth, _)) => for_of_stack
+                        .iter()
+                        .position(|loop_state| loop_state.try_depth > depth)
+                        .unwrap_or(for_of_stack.len()),
+                    None => 0,
+                };
+                unwind_for_of!(unwind_from);
+                if let Some((_, finally_state)) = routed_to {
+                    pending_return = Some(ret_val);
+                    current_id = finally_state;
+                } else {
                     let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
                     match disp {
                         Completion::Return(v) => {
                             self.scheduler.remove_async_function_state(async_id);
-                            let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
-                            return Completion::Normal(JsValue::Undefined);
+                            let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[v]);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         Completion::Throw(e) => {
                             pending_exception = Some(e);
@@ -15882,6 +8591,54 @@ impl Interpreter {
                         }
                         _ => {}
                     }
+                }
+            }};
+        }
+
+        // Helper: route an abrupt break/continue edge through every finally
+        // between its source and target. The target records the lexical stacks
+        // that remain active there, so iterator closing never depends on state
+        // id equality.
+        macro_rules! route_loop_control {
+            ($target:expr) => {{
+                let target = $target;
+
+                // A loop-control completion produced by a finalizer replaces
+                // the return, throw, or earlier loop-control completion that
+                // originally entered it.
+                pending_return = None;
+                saved_finally_exception = None;
+                pending_for_of_unwind = None;
+                pending_loop_control = Some(target);
+
+                let mut routed_to = None;
+                for i in (target.try_depth..try_stack.len()).rev() {
+                    if !try_stack[i].entered_finally
+                        && let Some(finally_state) = try_stack[i].finally_state
+                    {
+                        routed_to = Some((i, finally_state));
+                        break;
+                    }
+                }
+
+                // Loops nested inside the selected finally close before it;
+                // loops containing that finally remain until routing resumes.
+                // Never retain more loops than the target itself retains.
+                let handler_boundary = routed_to.map_or(target.for_of_depth, |(depth, _)| {
+                    for_of_stack
+                        .iter()
+                        .position(|loop_state| loop_state.try_depth > depth)
+                        .unwrap_or(for_of_stack.len())
+                        .max(target.for_of_depth)
+                });
+                debug_assert!(handler_boundary <= for_of_stack.len());
+                unwind_for_of!(handler_boundary.min(for_of_stack.len()));
+
+                if let Some((_, finally_state)) = routed_to {
+                    current_id = finally_state;
+                } else {
+                    pending_loop_control = None;
+                    current_id = target.target_state;
                 }
             }};
         }
@@ -15902,14 +8659,15 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_return.take(),
+                    pending_loop_control.take(),
                     saved_finally_exception.take(),
+                    pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
-                    &JsValue::Undefined,
+                    &JsValue::UNDEFINED,
                     &for_of_stack,
-                    for_of_iter_env.clone(),
                 );
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
 
             if current_id >= state_machine.states.len() {
@@ -15924,36 +8682,114 @@ impl Interpreter {
                     terminator,
                     StateTerminator::EnterCatch { .. } | StateTerminator::EnterFinally { .. }
                 )
-                && let Some(exc) = pending_exception.take()
+                && let Some(mut exc) = pending_exception.take()
             {
+                // §14.7.5.6 steps 6.b–6.g: an abrupt completion raised by the
+                // iterator protocol itself (IteratorStep, `Await(nextResult)`,
+                // IteratorValue) sets [[Done]] and skips IteratorClose, so drop
+                // that loop's entry without calling its `return` method.
+                if let Some(failed_iter_var) = for_of_protocol_failure.take()
+                    && let Some(pos) = for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == failed_iter_var)
+                {
+                    let loop_state = for_of_stack.remove(pos);
+                    let iterator = func_env.borrow().get(&loop_state.iter_var);
+                    if let Some(iterator) = iterator {
+                        self.unroot_for_of_iterator(&iterator);
+                    }
+                }
+
+                // A throw produced while an intervening finally was handling
+                // another abrupt completion replaces that completion.
+                let pending_return_was_replaced = pending_return.take().is_some();
+                let pending_loop_control_was_replaced = pending_loop_control.take().is_some();
+                let pending_completion_was_replaced =
+                    pending_return_was_replaced || pending_loop_control_was_replaced;
+                // §14.7.5.6: any abrupt body completion leaving a for-of closes
+                // its iterator, so every still-active loop crossed on the way to
+                // the handler unwinds — not just the ones a previous unwind
+                // retained.
+                let needs_for_of_unwind = !for_of_stack.is_empty();
                 // Genuine throws route through the async body's catch/finally
                 // handlers here. A `Completion::Exit` (issue #242) never becomes
                 // a `pending_exception`, so it is not routed and cannot be
                 // caught — it is handled at the body-execution site below.
-                let mut handled = false;
+                let mut handler = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_catch
                         && !try_stack[i].entered_finally
                         && let Some(catch_state) = try_stack[i].catch_state
                     {
-                        try_stack.truncate(i);
-                        pending_exception = Some(exc.clone());
-                        current_id = catch_state;
-                        handled = true;
+                        handler = Some((i, catch_state, true, try_stack[i]._after_state));
                         break;
                     }
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        pending_exception = Some(exc.clone());
-                        current_id = finally_state;
-                        handled = true;
+                        handler = Some((i, finally_state, false, try_stack[i]._after_state));
                         break;
                     }
                 }
-                if handled {
+
+                if needs_for_of_unwind {
+                    // A return-replacing throw or an IteratorClose failure can
+                    // retain enclosing loops until an intervening handler has
+                    // run. Close only the loops crossed before the next handler.
+                    let unwind_from = handler.map_or(0, |(depth, _, _, _)| {
+                        for_of_stack
+                            .iter()
+                            .position(|loop_state| loop_state.try_depth > depth)
+                            .unwrap_or(for_of_stack.len())
+                    });
+                    match self.unwind_async_for_of_loops(
+                        &mut for_of_stack,
+                        unwind_from,
+                        &func_env,
+                        Completion::Throw(exc),
+                    ) {
+                        Completion::Throw(error) => exc = error,
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        _ => unreachable!("unwinding a throw must stay abrupt"),
+                    }
+                }
+
+                if needs_for_of_unwind {
+                    pending_for_of_unwind = if for_of_stack.is_empty() {
+                        None
+                    } else {
+                        handler.map(|(_, _, _, after_state)| PendingForOfUnwind {
+                            clear_at_state: Some(after_state),
+                        })
+                    };
+                }
+
+                if let Some((depth, state, is_catch, _)) = handler {
+                    if is_catch {
+                        // A catch-only context is finished once its handler is
+                        // selected, but try-catch-finally must retain this
+                        // context so abrupt control from the catch still routes
+                        // through its attached finalizer. EnterCatch marks it
+                        // entered, preventing the catch from handling itself.
+                        let retained_depth = if try_stack[depth].finally_state.is_some() {
+                            depth + 1
+                        } else {
+                            depth
+                        };
+                        try_stack.truncate(retained_depth);
+                    } else if pending_completion_was_replaced {
+                        // Drop the completed inner finally contexts so
+                        // EnterFinally marks the handler selected above.
+                        try_stack.truncate(depth + 1);
+                    }
+                    pending_exception = Some(exc);
+                    current_id = state;
                     continue;
                 }
+
                 let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
                 // A disposer that called `__host_exit` (issue #242) propagates
                 // out uncatchably instead of rejecting the promise.
@@ -15963,16 +8799,23 @@ impl Interpreter {
                 }
                 let exc = match disp {
                     Completion::Throw(e) => e,
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
                 self.scheduler.remove_async_function_state(async_id);
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
-                return Completion::Normal(JsValue::Undefined);
+                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exc]);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
 
             self.in_state_machine = true;
-            let exec_env = for_of_iter_env.as_ref().unwrap_or(&func_env);
-            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, exec_env);
+            let term_env = for_of_stack
+                .last()
+                .map_or(&func_env, ForOfLoopState::effective_env)
+                .clone();
+            let mut stmt_result = self.exec_state_machine_body(
+                &state_machine.states[current_id].body,
+                &term_env,
+                &state_machine,
+            );
             self.in_state_machine = saved_in_state_machine;
             // `__host_exit` in the async body (issue #242) propagates out as
             // `Completion::Exit` instead of settling the result promise; the
@@ -16010,68 +8853,33 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Return(v) => {
-                    let v = v.clone();
-                    // Close any active for-of iterators on return
-                    for (iv, _, _) in for_of_stack.drain(..) {
-                        if let Some(iter) = func_env.borrow().get(&iv) {
-                            let _ = self.iterator_close_result(&iter);
-                            self.gc_unroot_value(&iter);
-                            if let JsValue::Object(o) = &iter {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let JsValue::Object(ov) = v {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    route_return!(v);
+                    // route_return! closes the active for-of iterators first.
+                    route_return!(v.clone());
                     continue;
                 }
                 Completion::Break(label, _) => {
                     // Close iterator for the innermost matching for-of loop
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let (iv, _, after) = for_of_stack.remove(pos);
-                        if let Some(iter) = func_env.borrow().get(&iv) {
-                            if let Err(e) = self.iterator_close_result(&iter) {
-                                pending_exception = Some(e);
-                                self.gc_unroot_value(&iter);
-                                if let JsValue::Object(o) = &iter {
-                                    let id = o.id;
-                                    self.pending_iter_close.retain(|v| {
-                                        if let JsValue::Object(ov) = v {
-                                            ov.id != id
-                                        } else {
-                                            true
-                                        }
-                                    });
-                                }
-                                continue;
-                            }
-                            self.gc_unroot_value(&iter);
-                            if let JsValue::Object(o) = &iter {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let JsValue::Object(ov) = v {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
-                        }
-                        current_id = after;
+                        let after_state = for_of_stack[pos].after_state;
+                        unwind_for_of!(pos);
+                        current_id = after_state;
                         continue;
                     }
                 }
                 Completion::Continue(label, _) => {
-                    // Jump to head_state for the innermost matching for-of loop
-                    if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let (_, head, _) = for_of_stack[pos].clone();
-                        current_id = head;
+                    // An inline statement can surface continue directly rather
+                    // than through a LoopControl terminator. Route it through
+                    // intervening finalizers before returning to the loop head.
+                    if let Some(pos) = for_of_stack.iter().rposition(|loop_state| {
+                        loop_state.matches_continue_target(label.as_deref())
+                    }) {
+                        let loop_state = &for_of_stack[pos];
+                        let target = LoopControlTarget {
+                            target_state: loop_state.head_state,
+                            try_depth: loop_state.try_depth,
+                            for_of_depth: pos + 1,
+                        };
+                        route_loop_control!(target);
                         continue;
                     }
                 }
@@ -16091,17 +8899,17 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_return.take(),
+                    pending_loop_control.take(),
                     saved_finally_exception.take(),
+                    pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
                     &yield_val,
                     &for_of_stack,
-                    for_of_iter_env.clone(),
                 );
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            let term_env = for_of_iter_env.as_ref().unwrap_or(&func_env).clone();
             match terminator {
                 StateTerminator::Await {
                     value,
@@ -16124,16 +8932,17 @@ impl Interpreter {
                                 &try_stack,
                                 sent_value_binding.clone(),
                                 pending_return.take(),
+                                pending_loop_control.take(),
                                 saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
                                 &v,
                                 &for_of_stack,
-                                for_of_iter_env.clone(),
                             );
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
 
                     self.async_fn_suspend_at_await(
@@ -16145,14 +8954,15 @@ impl Interpreter {
                         &try_stack,
                         sent_value_binding.clone(),
                         pending_return.take(),
+                        pending_loop_control.take(),
                         saved_finally_exception.take(),
+                        pending_for_of_unwind.take(),
                         &resolve_fn,
                         &reject_fn,
                         &await_val,
                         &for_of_stack,
-                        for_of_iter_env.clone(),
                     );
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
 
                 StateTerminator::Return(ref expr) => {
@@ -16167,10 +8977,10 @@ impl Interpreter {
                                 pending_exception = Some(e);
                                 continue;
                             }
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
 
                     route_return!(ret_val);
@@ -16181,14 +8991,24 @@ impl Interpreter {
                     let throw_val = match self.eval_expr(expr, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => e,
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     pending_exception = Some(throw_val);
                     continue;
                 }
 
                 StateTerminator::Goto(next) => {
+                    if pending_for_of_unwind
+                        .as_ref()
+                        .is_some_and(|pending| pending.clear_at_state == Some(next))
+                    {
+                        pending_for_of_unwind = None;
+                    }
                     current_id = next;
+                }
+
+                StateTerminator::LoopControl(target) => {
+                    route_loop_control!(target);
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -16202,7 +9022,7 @@ impl Interpreter {
                             pending_exception = Some(e);
                             continue;
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     current_id = if self.to_boolean_val(&cond_val) {
                         true_state
@@ -16242,6 +9062,16 @@ impl Interpreter {
                         pending_exception = Some(exc);
                         continue;
                     }
+                    if let Some(target) = pending_loop_control.take() {
+                        route_loop_control!(target);
+                        continue;
+                    }
+                    if pending_for_of_unwind
+                        .as_ref()
+                        .is_some_and(|pending| pending.clear_at_state == Some(after_state))
+                    {
+                        pending_for_of_unwind = None;
+                    }
                     current_id = after_state;
                 }
 
@@ -16252,7 +9082,7 @@ impl Interpreter {
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
-                    let exc_val = pending_exception.take().unwrap_or(JsValue::Undefined);
+                    let exc_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
                     if let Some(pattern) = param {
                         let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &term_env);
                     }
@@ -16280,7 +9110,7 @@ impl Interpreter {
                             pending_exception = Some(e);
                             continue;
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     let mut matched = false;
                     for case in cases {
@@ -16291,7 +9121,7 @@ impl Interpreter {
                                 matched = true;
                                 break;
                             }
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if strict_equality(&disc_val, &case_val) {
                             current_id = case.state;
@@ -16310,6 +9140,7 @@ impl Interpreter {
                 StateTerminator::ForOfInit {
                     ref iterable,
                     ref iter_var,
+                    ref label_set,
                     ref left,
                     head_state,
                     after_state: forinit_after,
@@ -16318,43 +9149,9 @@ impl Interpreter {
                 } => {
                     // §14.7.5.12 ForIn/OfHeadEvaluation: create TDZ bindings
                     // before evaluating the iterable expression
-                    let mut tdz_names: Vec<String> = Vec::new();
-                    let mut tdz_saved: Vec<(String, Option<(JsValue, bool)>)> = Vec::new();
-                    if let ForInOfLeft::Variable(decl) = left
-                        && !matches!(decl.kind, VarKind::Var)
-                    {
-                        if let Some(d) = decl.declarations.first() {
-                            d.pattern.bound_names(&mut tdz_names);
-                        }
-                        // Save current binding state, then declare as uninitialized
-                        for name in &tdz_names {
-                            let saved = {
-                                let env = func_env.borrow();
-                                env.bindings
-                                    .get(name)
-                                    .map(|b| (b.value.clone(), b.initialized))
-                            };
-                            tdz_saved.push((name.clone(), saved));
-                            func_env.borrow_mut().declare(name, BindingKind::Let);
-                            // declare sets initialized=false for Let, creating TDZ
-                        }
-                    }
+                    let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
-                    let iterable_result = self.eval_expr(iterable, &func_env);
-
-                    // Restore bindings after iterable evaluation
-                    for (name, saved) in &tdz_saved {
-                        if let Some((val, initialized)) = saved {
-                            let mut env = func_env.borrow_mut();
-                            if let Some(b) = env.bindings.get_mut(name) {
-                                b.value = val.clone();
-                                b.initialized = *initialized;
-                                b.kind = BindingKind::Var;
-                            }
-                        } else {
-                            func_env.borrow_mut().bindings.remove(name);
-                        }
-                    }
+                    let iterable_result = self.eval_expr(iterable, &iterable_env);
 
                     let iterable_val = match iterable_result {
                         Completion::Normal(v) => v,
@@ -16362,7 +9159,7 @@ impl Interpreter {
                             pending_exception = Some(e);
                             continue;
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     let iterator = if is_await {
                         match self.get_async_iterator(&iterable_val) {
@@ -16384,7 +9181,15 @@ impl Interpreter {
                     self.gc_root_value(&iterator);
                     self.pending_iter_close.push(iterator.clone());
                     self.env_set(&func_env, iter_var, iterator).ok();
-                    for_of_stack.push((iter_var.clone(), head_state, forinit_after));
+                    for_of_stack.push(ForOfLoopState {
+                        iter_var: iter_var.clone(),
+                        label_set: label_set.clone(),
+                        head_state,
+                        after_state: forinit_after,
+                        try_depth: try_stack.len(),
+                        outer_env: term_env,
+                        iteration_env: None,
+                    });
                     current_id = head_state;
                 }
 
@@ -16396,18 +9201,41 @@ impl Interpreter {
                     is_await,
                     ..
                 } => {
+                    // A head reached without its entry would mean the driver's
+                    // unwinding dropped it; rebuild one rather than abort.
+                    let loop_pos = match for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                    {
+                        Some(pos) => pos,
+                        None => {
+                            debug_assert!(false, "for-of head without an active loop state");
+                            for_of_stack.push(ForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                label_set: vec![],
+                                head_state: current_id,
+                                after_state,
+                                try_depth: try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            for_of_stack.len() - 1
+                        }
+                    };
+
                     // Dispose resources from previous iteration (for using/await using)
-                    let disp_env = for_of_iter_env.take().unwrap_or_else(|| func_env.clone());
-                    let disp = self.dispose_resources(&disp_env, Completion::Empty);
-                    if let Completion::Exit(code) = disp {
-                        // A disposer that called `__host_exit` (issue #242)
-                        // propagates out uncatchably.
-                        self.scheduler.remove_async_function_state(async_id);
-                        return Completion::Exit(code);
-                    }
-                    if let Completion::Throw(e) = disp {
-                        pending_exception = Some(e);
-                        continue;
+                    if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take() {
+                        let disp = self.dispose_resources(&disp_env, Completion::Empty);
+                        if let Completion::Exit(code) = disp {
+                            // A disposer that called `__host_exit` (issue #242)
+                            // propagates out uncatchably.
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        if let Completion::Throw(e) = disp {
+                            pending_exception = Some(e);
+                            continue;
+                        }
                     }
 
                     // For `for await`, use a temp var to distinguish first
@@ -16416,12 +9244,12 @@ impl Interpreter {
                     let step_result = if is_await {
                         let cached = func_env.borrow().get(&await_tmp);
                         if let Some(v) = cached
-                            && !matches!(v, JsValue::Undefined)
+                            && !(v).is_undefined()
                         {
                             // Resume after await — clear the temp and use the value
                             func_env
                                 .borrow_mut()
-                                .set(&await_tmp, JsValue::Undefined)
+                                .set(&await_tmp, JsValue::UNDEFINED)
                                 .ok();
                             v
                         } else {
@@ -16429,10 +9257,11 @@ impl Interpreter {
                             let iterator = func_env
                                 .borrow()
                                 .get(iter_var)
-                                .unwrap_or(JsValue::Undefined);
+                                .unwrap_or(JsValue::UNDEFINED);
                             let raw_result = match self.iterator_next(&iterator) {
                                 Ok(v) => v,
                                 Err(e) => {
+                                    for_of_protocol_failure = Some(iter_var.clone());
                                     pending_exception = Some(e);
                                     continue;
                                 }
@@ -16456,24 +9285,26 @@ impl Interpreter {
                                 &try_stack,
                                 binding,
                                 pending_return.take(),
+                                pending_loop_control.take(),
                                 saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
                                 &raw_result,
                                 &for_of_stack,
-                                for_of_iter_env.clone(),
                             );
                             self.in_state_machine = saved_in_state_machine;
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                     } else {
                         let iterator = func_env
                             .borrow()
                             .get(iter_var)
-                            .unwrap_or(JsValue::Undefined);
+                            .unwrap_or(JsValue::UNDEFINED);
                         match self.iterator_next(&iterator) {
                             Ok(v) => v,
                             Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
                                 continue;
                             }
@@ -16482,6 +9313,7 @@ impl Interpreter {
                     let done = match self.iterator_complete(&step_result) {
                         Ok(d) => d,
                         Err(e) => {
+                            for_of_protocol_failure = Some(iter_var.clone());
                             pending_exception = Some(e);
                             continue;
                         }
@@ -16490,46 +9322,36 @@ impl Interpreter {
                         let iterator = func_env
                             .borrow()
                             .get(iter_var)
-                            .unwrap_or(JsValue::Undefined);
-                        self.gc_unroot_value(&iterator);
-                        if let JsValue::Object(o) = &iterator {
-                            let id = o.id;
-                            self.pending_iter_close.retain(|v| {
-                                if let JsValue::Object(ov) = v {
-                                    ov.id != id
-                                } else {
-                                    true
-                                }
-                            });
-                        }
-                        for_of_stack.retain(|e| e.0 != *iter_var);
+                            .unwrap_or(JsValue::UNDEFINED);
+                        self.unroot_for_of_iterator(&iterator);
+                        for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
                         let value = match self.iterator_value(&step_result) {
                             Ok(v) => v,
                             Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
                                 continue;
                             }
                         };
-                        let needs_iter_env = matches!(left, ForInOfLeft::Variable(decl) if !matches!(decl.kind, VarKind::Var));
+                        let needs_iter_env = Self::for_of_head_lexical(left).is_some();
+                        let outer_env = for_of_stack[loop_pos].outer_env.clone();
                         let bind_env = if needs_iter_env {
-                            let ie = Environment::new(Some(func_env.clone()));
-                            for_of_iter_env = Some(ie.clone());
+                            let ie = Environment::new(Some(outer_env));
+                            for_of_stack[loop_pos].iteration_env = Some(ie.clone());
                             ie
                         } else {
-                            func_env.clone()
+                            outer_env
                         };
                         let bind_result = match left {
                             ForInOfLeft::Variable(decl) => {
                                 let is_using =
                                     matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
                                 if is_using {
-                                    let hint = if decl.kind == VarKind::AwaitUsing {
-                                        crate::interpreter::types::DisposeHint::Async
-                                    } else {
-                                        crate::interpreter::types::DisposeHint::Sync
-                                    };
+                                    let hint = crate::interpreter::types::DisposeHint::for_var_kind(
+                                        decl.kind,
+                                    );
                                     if let Err(e) =
                                         self.add_disposable_resource(&bind_env, &value, hint)
                                     {
@@ -16555,13 +9377,13 @@ impl Interpreter {
                                 }
                             }
                             ForInOfLeft::Pattern(p) => {
-                                match self.assign_to_for_pattern(p, value, &func_env) {
+                                match self.assign_to_for_pattern(p, value, &bind_env) {
                                     Completion::Normal(_) | Completion::Empty => Ok(()),
                                     Completion::Throw(e) => Err(e),
                                     _ => Ok(()),
                                 }
                             }
-                            ForInOfLeft::Expression(e) => self.assign_to_expr(e, value, &func_env),
+                            ForInOfLeft::Expression(e) => self.assign_to_expr(e, value, &bind_env),
                         };
                         if let Err(e) = bind_result {
                             pending_exception = Some(e);
@@ -16582,6 +9404,134 @@ impl Interpreter {
         }
     }
 
+    /// The declaration and `BindingKind` of a lexical for-in/of head, or
+    /// `None` when the head is not lexical (`var`, or an assignment pattern).
+    /// A lexical head is exactly the case that needs a TDZ head environment
+    /// and a fresh per-iteration environment.
+    pub(crate) fn for_of_head_lexical(
+        left: &ForInOfLeft,
+    ) -> Option<(&VariableDeclaration, BindingKind)> {
+        let ForInOfLeft::Variable(decl) = left else {
+            return None;
+        };
+        let kind = match decl.kind {
+            VarKind::Var => return None,
+            VarKind::Let => BindingKind::Let,
+            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
+        };
+        Some((decl, kind))
+    }
+
+    /// §14.7.5.12 ForIn/OfHeadEvaluation steps 1-2: the lexical head's names
+    /// are in TDZ while the iterable expression is evaluated, in a temporary
+    /// environment that no loop iteration ever uses.
+    fn for_of_head_tdz_env(left: &ForInOfLeft, env: &EnvRef) -> EnvRef {
+        let Some((decl, binding_kind)) = Self::for_of_head_lexical(left) else {
+            return env.clone();
+        };
+        let head_env = Environment::new(Some(env.clone()));
+        let mut tdz_names = Vec::new();
+        if let Some(d) = decl.declarations.first() {
+            d.pattern.bound_names(&mut tdz_names);
+        }
+        for name in &tdz_names {
+            head_env.borrow_mut().declare(name, binding_kind);
+        }
+        head_env
+    }
+
+    fn unroot_for_of_iterator(&mut self, iterator: &JsValue) {
+        self.gc_unroot_value(iterator);
+        if let Some(iterator_id) = iterator.as_object_id() {
+            self.pending_iter_close
+                .retain(|value| value.as_object_id() != Some(iterator_id));
+        }
+    }
+
+    /// A transformed generator for-of is represented both by its loop-state
+    /// entry and by the inline-iterator fallback captured at suspension. Once
+    /// the loop-state unwinder closes it, discard the fallback copy so a later
+    /// `return()` does not call the iterator's `return` method twice.
+    fn remove_generator_inline_iterator(&mut self, generator_id: u64, iterator: &JsValue) {
+        let Some(iterator_id) = iterator.as_object_id() else {
+            return;
+        };
+        let remove_entry = self
+            .generator_inline_iters
+            .get_mut(&generator_id)
+            .is_some_and(|iterators| {
+                iterators.retain(|value| value.as_object_id() != Some(iterator_id));
+                iterators.is_empty()
+            });
+        if remove_entry {
+            self.generator_inline_iters.remove(&generator_id);
+        }
+    }
+
+    fn close_for_of_loop(
+        &mut self,
+        loop_state: ForOfLoopState,
+        func_env: &EnvRef,
+        completion: Completion,
+        generator_id: Option<u64>,
+    ) -> Completion {
+        let mut completion = match loop_state.iteration_env {
+            Some(env) => self.dispose_resources(&env, completion),
+            None => completion,
+        };
+
+        // The borrow must end before `iterator_close_result` runs the user's
+        // `return` method, which may write bindings in this same environment.
+        let iterator = func_env.borrow().get(&loop_state.iter_var);
+        if matches!(completion, Completion::Exit(_)) {
+            if let Some(iterator) = iterator {
+                self.unroot_for_of_iterator(&iterator);
+                if let Some(generator_id) = generator_id {
+                    self.remove_generator_inline_iterator(generator_id, &iterator);
+                }
+            }
+            return completion;
+        }
+        if let Some(iterator) = iterator {
+            let close_result = self.iterator_close_result(&iterator);
+            self.unroot_for_of_iterator(&iterator);
+            if let Some(generator_id) = generator_id {
+                self.remove_generator_inline_iterator(generator_id, &iterator);
+            }
+            if let Some(code) = self.pending_exit {
+                return Completion::Exit(code);
+            }
+            // IteratorClose preserves an existing throw completion, but a
+            // close failure replaces normal, break, continue, or return.
+            if !matches!(completion, Completion::Throw(_))
+                && let Err(error) = close_result
+            {
+                completion = Completion::Throw(error);
+            }
+        }
+
+        completion
+    }
+
+    /// Closes every active for-of loop from `from` to the innermost, inner to
+    /// outer, carrying each loop's resulting completion into the next outer
+    /// iteration disposal.
+    fn unwind_async_for_of_loops(
+        &mut self,
+        for_of_stack: &mut Vec<ForOfLoopState>,
+        from: usize,
+        func_env: &EnvRef,
+        mut completion: Completion,
+    ) -> Completion {
+        for loop_state in for_of_stack.drain(from..).rev() {
+            completion = self.close_for_of_loop(loop_state, func_env, completion, None);
+            if matches!(completion, Completion::Exit(_)) {
+                break;
+            }
+        }
+        completion
+    }
+
     fn async_fn_complete(
         &mut self,
         async_id: u64,
@@ -16589,19 +9539,19 @@ impl Interpreter {
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
     ) -> Completion {
-        let disp = self.dispose_resources(func_env, Completion::Normal(JsValue::Undefined));
+        let disp = self.dispose_resources(func_env, Completion::Normal(JsValue::UNDEFINED));
         self.scheduler.remove_async_function_state(async_id);
         match disp {
             // A disposer that called `__host_exit` (issue #242) propagates out
             // uncatchably instead of settling the result promise.
             Completion::Exit(code) => Completion::Exit(code),
             Completion::Throw(e) => {
-                let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
-                Completion::Normal(JsValue::Undefined)
+                let _ = self.call_function(reject_fn, &JsValue::UNDEFINED, &[e]);
+                Completion::Normal(JsValue::UNDEFINED)
             }
             _ => {
-                let _ = self.call_function(resolve_fn, &JsValue::Undefined, &[JsValue::Undefined]);
-                Completion::Normal(JsValue::Undefined)
+                let _ = self.call_function(resolve_fn, &JsValue::UNDEFINED, &[JsValue::UNDEFINED]);
+                Completion::Normal(JsValue::UNDEFINED)
             }
         }
     }
@@ -16616,15 +9566,19 @@ impl Interpreter {
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_return: Option<JsValue>,
+        pending_loop_control: Option<crate::interpreter::generator_transform::LoopControlTarget>,
         saved_finally_exception: Option<JsValue>,
+        pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         await_val: &JsValue,
-        for_of_stack: &[(String, usize, usize)],
-        for_of_iter_env: Option<Rc<RefCell<Environment>>>,
+        for_of_stack: &[ForOfLoopState],
     ) {
         let promise = self.promise_resolve_value(await_val);
-        let promise_id = if let JsValue::Object(ref o) = promise {
+        let promise_id = if let Some(o) = (promise)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             o.id
         } else {
             0
@@ -16641,11 +9595,12 @@ impl Interpreter {
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
                 pending_return,
+                pending_loop_control,
                 saved_finally_exception,
+                pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: for_of_stack.to_vec(),
-                for_of_iter_env,
                 module_path: self.module_async_info.get(&async_id).cloned(),
             },
         );
@@ -16681,7 +9636,7 @@ impl Interpreter {
                     // resumed body (issue #242) propagates as `Completion::Exit`
                     // through the Promise reaction to the drain loop.
                     move |interp, _this, args| {
-                        let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         interp.async_function_resume(async_id, v, false)
                     },
                 ));
@@ -16690,7 +9645,7 @@ impl Interpreter {
                     "asyncFnReject".to_string(),
                     1,
                     move |interp, _this, args| {
-                        let e = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let e = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         interp.async_function_resume(async_id, e, true)
                     },
                 ));
@@ -16709,8 +9664,8 @@ impl Interpreter {
                         pd.reject_reactions.push(PromiseReaction {
                             handler: Some(reject_handler),
                             promise_id: None,
-                            resolve: JsValue::Undefined,
-                            reject: JsValue::Undefined,
+                            resolve: JsValue::UNDEFINED,
+                            reject: JsValue::UNDEFINED,
                             reaction_type: PromiseReactionType::Reject,
                         });
                     }
@@ -16721,7 +9676,10 @@ impl Interpreter {
 
     /// Spec [[Get]] — reads a property from an object, invoking getters.
     pub(crate) fn obj_get(&mut self, obj_val: &JsValue, key: &str) -> Result<JsValue, JsValue> {
-        if let JsValue::Object(o) = obj_val {
+        if let Some(o) = (obj_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let mut current_id = Some(o.id);
             while let Some(id) = current_id {
                 if let Some(obj) = self.get_object_cell(id) {
@@ -16735,15 +9693,15 @@ impl Interpreter {
                                 return match self.call_function(&getter, &obj_val, &[]) {
                                     Completion::Normal(v) => Ok(v),
                                     Completion::Throw(e) => Err(e),
-                                    _ => Ok(JsValue::Undefined),
+                                    _ => Ok(JsValue::UNDEFINED),
                                 };
                             }
-                            return Ok(JsValue::Undefined);
+                            return Ok(JsValue::UNDEFINED);
                         }
                         if let Some(ref val) = desc.value {
                             return Ok(val.clone());
                         }
-                        return Ok(JsValue::Undefined);
+                        return Ok(JsValue::UNDEFINED);
                     }
                     current_id = b.prototype_id;
                 } else {
@@ -16751,7 +9709,7 @@ impl Interpreter {
                 }
             }
         }
-        Ok(JsValue::Undefined)
+        Ok(JsValue::UNDEFINED)
     }
 
     pub(crate) fn await_value(&mut self, val: &JsValue) -> Completion {
@@ -16760,7 +9718,10 @@ impl Interpreter {
         // §27.7.5.3 Await — every await goes through PromiseResolve and schedules
         // its continuation as a microtask, ensuring proper interleaving.
         let promise = self.promise_resolve_value(val);
-        let promise_id = if let JsValue::Object(ref o) = promise {
+        let promise_id = if let Some(o) = (promise)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             o.id
         } else {
             0
@@ -16783,7 +9744,7 @@ impl Interpreter {
                     Box::new(move |_interp| {
                         done_c.set(true);
                         *result_c.borrow_mut() = Some(Ok(value));
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     }),
                 ));
             }
@@ -16796,7 +9757,7 @@ impl Interpreter {
                     Box::new(move |_interp| {
                         done_c.set(true);
                         *result_c.borrow_mut() = Some(Err(reason));
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     }),
                 ));
             }
@@ -16810,20 +9771,20 @@ impl Interpreter {
                     "awaitFulfill".to_string(),
                     1,
                     move |_interp, _this, args| {
-                        let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         done_f.set(true);
                         *result_f.borrow_mut() = Some(Ok(v));
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     },
                 ));
                 let reject_handler = self.create_function(JsFunction::native(
                     "awaitReject".to_string(),
                     1,
                     move |_interp, _this, args| {
-                        let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         done_r.set(true);
                         *result_r.borrow_mut() = Some(Err(v));
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     },
                 ));
 
@@ -16834,15 +9795,15 @@ impl Interpreter {
                         pd.fulfill_reactions.push(PromiseReaction {
                             handler: Some(fulfill_handler),
                             promise_id: None,
-                            resolve: JsValue::Undefined,
-                            reject: JsValue::Undefined,
+                            resolve: JsValue::UNDEFINED,
+                            reject: JsValue::UNDEFINED,
                             reaction_type: PromiseReactionType::Fulfill,
                         });
                         pd.reject_reactions.push(PromiseReaction {
                             handler: Some(reject_handler),
                             promise_id: None,
-                            resolve: JsValue::Undefined,
-                            reject: JsValue::Undefined,
+                            resolve: JsValue::UNDEFINED,
+                            reject: JsValue::UNDEFINED,
                             reaction_type: PromiseReactionType::Reject,
                         });
                     }
@@ -16906,15 +9867,19 @@ impl Interpreter {
                 if remaining.is_zero() {
                     break;
                 }
+                // Timers are in-process (#254), so this loop has to fire them
+                // itself rather than wait for a completion that never comes.
+                if self.run_due_timers() {
+                    continue;
+                }
+                let wait = self.completion_wait(remaining);
                 let (ref mtx, ref cvar) = *self.agent_async_completions;
                 let lock = mtx.lock().unwrap();
                 if !lock.is_empty() {
                     drop(lock);
                     continue;
                 }
-                let _ = cvar
-                    .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
-                    .unwrap();
+                let _ = cvar.wait_timeout(lock, wait).unwrap();
                 continue;
             }
             break;
@@ -16931,7 +9896,148 @@ impl Interpreter {
         match result.borrow_mut().take() {
             Some(Ok(v)) => Completion::Normal(v),
             Some(Err(e)) => Completion::Throw(e),
-            None => Completion::Normal(JsValue::Undefined),
+            None => Completion::Normal(JsValue::UNDEFINED),
         }
+    }
+}
+
+/// §7.2.13 IsLessThan — the numeric comparison of a BigInt against a Number.
+///
+/// Both the BigInt-vs-Number and Number-vs-BigInt arms of IsLessThan reduce to
+/// this single relation; `bigint_is_left` selects the direction: `true`
+/// computes `bigint < number`, `false` computes `number < bigint`.
+///
+/// Returns `None` when `number` is `NaN` (the comparison is mathematically
+/// undefined), matching IsLessThan's "if either operand is NaN, return
+/// undefined" rule. The comparison is exact: the Number is split into its
+/// integer part (compared against the BigInt) and its fractional part (used
+/// only to break ties when the integer parts are equal), so BigInts beyond
+/// f64's 2^53 exact-integer range still compare correctly.
+fn compare_bigint_number(
+    bigint: &num_bigint::BigInt,
+    number: f64,
+    bigint_is_left: bool,
+) -> Option<bool> {
+    if number.is_nan() {
+        return None;
+    }
+    if number.is_infinite() {
+        // A finite BigInt is below +∞ and above -∞.
+        let bigint_below_number = number == f64::INFINITY;
+        return Some(if bigint_is_left {
+            bigint_below_number
+        } else {
+            !bigint_below_number
+        });
+    }
+    let trunc = number.trunc();
+    let integer_part = crate::interpreter::builtins::bigint::f64_to_bigint(trunc);
+    match bigint.cmp(&integer_part) {
+        std::cmp::Ordering::Less => Some(bigint_is_left),
+        std::cmp::Ordering::Greater => Some(!bigint_is_left),
+        std::cmp::Ordering::Equal => {
+            // Integer parts are equal; the sign of the Number's fractional part
+            // decides. `trunc < number` ⇔ positive fraction ⇔ bigint < number.
+            Some(if bigint_is_left {
+                trunc < number
+            } else {
+                number < trunc
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod relational_bigint_tests {
+    use super::compare_bigint_number;
+    use num_bigint::BigInt;
+
+    fn big(n: i64) -> BigInt {
+        BigInt::from(n)
+    }
+
+    // Expected values below were cross-checked against Node's evaluation of the
+    // corresponding `<` expressions, an independent source of truth.
+
+    #[test]
+    fn bigint_left_finite_number() {
+        // 1n < 1.5 -> true
+        assert_eq!(compare_bigint_number(&big(1), 1.5, true), Some(true));
+        // 2n < 1.5 -> false
+        assert_eq!(compare_bigint_number(&big(2), 1.5, true), Some(false));
+    }
+
+    #[test]
+    fn bigint_left_nan_is_undefined() {
+        // 1n < NaN -> undefined
+        assert_eq!(compare_bigint_number(&big(1), f64::NAN, true), None);
+    }
+
+    #[test]
+    fn bigint_left_infinities() {
+        // 1n < Infinity -> true; 1n < -Infinity -> false
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::INFINITY, true),
+            Some(true)
+        );
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::NEG_INFINITY, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn bigint_left_negative_fraction_tiebreak() {
+        // -1n < -0.5 -> true; -1n < -1.5 -> false; 0n < -0.5 -> false
+        assert_eq!(compare_bigint_number(&big(-1), -0.5, true), Some(true));
+        assert_eq!(compare_bigint_number(&big(-1), -1.5, true), Some(false));
+        assert_eq!(compare_bigint_number(&big(0), -0.5, true), Some(false));
+    }
+
+    #[test]
+    fn number_left_finite_number() {
+        // 1.5 < 2n -> true; 1.5 < 1n -> false
+        assert_eq!(compare_bigint_number(&big(2), 1.5, false), Some(true));
+        assert_eq!(compare_bigint_number(&big(1), 1.5, false), Some(false));
+    }
+
+    #[test]
+    fn number_left_equal_integer_parts() {
+        // 2.0 < 2n -> false; 1.9 < 2n -> true; -0.5 < 0n -> true
+        assert_eq!(compare_bigint_number(&big(2), 2.0, false), Some(false));
+        assert_eq!(compare_bigint_number(&big(2), 1.9, false), Some(true));
+        assert_eq!(compare_bigint_number(&big(0), -0.5, false), Some(true));
+    }
+
+    #[test]
+    fn number_left_nan_and_infinities() {
+        // NaN < 1n -> undefined; Infinity < 1n -> false; -Infinity < 1n -> true
+        assert_eq!(compare_bigint_number(&big(1), f64::NAN, false), None);
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::INFINITY, false),
+            Some(false)
+        );
+        assert_eq!(
+            compare_bigint_number(&big(1), f64::NEG_INFINITY, false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn precision_beyond_f64_integer_range() {
+        // 2^53 = 9007199254740992 is exactly representable; 2^53 + 1 is not and
+        // rounds to 2^53 as an f64 literal, but the BigInt stays exact.
+        let two_53 = 9_007_199_254_740_992.0_f64;
+        let two_53_plus_1 = big(9_007_199_254_740_993);
+        // 9007199254740993n < 9007199254740992 -> false
+        assert_eq!(
+            compare_bigint_number(&two_53_plus_1, two_53, true),
+            Some(false)
+        );
+        // 9007199254740993 (rounds to 2^53) < 9007199254740993n -> true
+        assert_eq!(
+            compare_bigint_number(&two_53_plus_1, two_53, false),
+            Some(true)
+        );
     }
 }

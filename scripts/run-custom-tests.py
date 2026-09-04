@@ -11,10 +11,15 @@ import sys
 from pathlib import Path
 
 
+def _is_fixture(p: Path) -> bool:
+    # Same convention as scripts/run-test262.py's _is_fixture().
+    return p.name.endswith(("_FIXTURE.js", "_FIXTURE.mjs"))
+
+
 def _collect_tests(root: Path) -> list[Path]:
     files = list(root.rglob("*.js")) + list(root.rglob("*.mjs"))
-    # Skip files imported as modules by other tests (named *-dep.mjs).
-    return sorted(p for p in files if not p.name.endswith("-dep.mjs"))
+    # Skip files imported as modules by other tests.
+    return sorted(p for p in files if not _is_fixture(p))
 
 
 def find_tests(test_dir: Path) -> list[Path]:
@@ -83,13 +88,13 @@ def main():
             errors.append((str(test), "TIMEOUT"))
 
     total = passed + failed
-    print(f"\n=== Custom Test Results ===")
+    print("\n=== Custom Test Results ===")
     print(f"Total: {total}")
     print(f"Pass:  {passed}")
     print(f"Fail:  {failed}")
 
     if errors:
-        print(f"\nFailed tests:")
+        print("\nFailed tests:")
         for path, err in errors:
             print(f"  FAIL {path}")
             if err:

@@ -8,33 +8,15 @@ impl Interpreter {
         let now_id = now_obj_id;
 
         // @@toStringTag = "Temporal.Now"
-        {
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Temporal.Now"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(now_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(now_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(now_obj_id, "Temporal.Now");
 
         // Temporal.Now.timeZoneId()
         let tz_fn = self.create_function(JsFunction::native(
             "timeZoneId".to_string(),
             0,
             |_interp, _this, _args| {
-                let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-                Completion::Normal(JsValue::String(JsString::from_str(&tz)))
+                let tz = super::canonicalize_iana_tz(&system_time_zone_identifier());
+                Completion::Normal(JsValue::from_str(&tz))
             },
         ));
         self.get_object_cell_expect(now_obj_id)
@@ -63,7 +45,7 @@ impl Interpreter {
                         epoch_nanoseconds: ns,
                     });
                 let id = obj_id;
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
         self.get_object_cell_expect(now_obj_id)
@@ -75,7 +57,7 @@ impl Interpreter {
             "plainDateTimeISO".to_string(),
             0,
             |interp, _this, args| {
-                let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Validate timezone argument (but still use local time)
                 match super::to_temporal_time_zone_identifier(interp, &tz_arg) {
                     Ok(_tz) => {}
@@ -97,7 +79,7 @@ impl Interpreter {
             "plainDateISO".to_string(),
             0,
             |interp, _this, args| {
-                let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 match super::to_temporal_time_zone_identifier(interp, &tz_arg) {
                     Ok(_tz) => {}
                     Err(c) => return c,
@@ -116,7 +98,7 @@ impl Interpreter {
             "plainTimeISO".to_string(),
             0,
             |interp, _this, args| {
-                let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 match super::to_temporal_time_zone_identifier(interp, &tz_arg) {
                     Ok(_tz) => {}
                     Err(c) => return c,
@@ -135,7 +117,7 @@ impl Interpreter {
             "zonedDateTimeISO".to_string(),
             0,
             |interp, _this, args| {
-                let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let tz = match super::to_temporal_time_zone_identifier(interp, &tz_arg) {
                     Ok(tz) => tz,
                     Err(c) => return c,
@@ -159,14 +141,14 @@ impl Interpreter {
                         calendar: "iso8601".to_string(),
                     });
                 let id = obj_id;
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                Completion::Normal(JsValue::object(id))
             },
         ));
         self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("zonedDateTimeISO".to_string(), zdt_fn);
 
-        let now_val = JsValue::Object(crate::types::JsObject { id: now_id });
+        let now_val = JsValue::object(now_id);
         self.get_object_cell_expect(temporal_obj_id)
             .borrow_mut()
             .insert_property(

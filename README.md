@@ -4,9 +4,11 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 **Goal: 100% test262 pass rate.**
 
+**Current result: 99,895 / 99,907 test262 scenarios passing (99.99%).**
+
 Read more: [jsse - a JavaScript engine built by an agent](https://p.ocmatos.com/blog/jsse-a-javascript-engine-built-by-an-agent.html).
 
-Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution. Current default run: **99,488 / 99,515 (99.97%)**.
+Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution. Run `uv run python scripts/run-test262.py` for the current pass rate.
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
@@ -88,6 +90,22 @@ cargo build --release
 ./target/release/jsse              # starts REPL
 ```
 
+## Development checks
+
+Install the pinned repository hooks once per checkout:
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+Run every hook against the full repository when changing hook configuration or
+tooling:
+
+```bash
+pre-commit run --all-files
+```
+
 ## Running test262
 
 ```bash
@@ -140,3 +158,53 @@ uv run python scripts/run-jetstream.py --test OfflineAssembler --iterations 1 --
 ```
 
 The runner covers pure-JS JetStream 3 workloads and skips Wasm/Worker-dependent tests.
+Each workload is measured three times by default. The reported score is derived
+from the median of the measured times, and the min-max range of the repeats is
+printed alongside it; a range above 5% is flagged `UNSTABLE`. Controlled runs
+refuse a one-minute load average above 1.5 and use the maximum-frequency CPU
+cluster when Linux cpufreq data and `taskset` are available. Use `--repeats` and
+`--idle-threshold` to tune the protocol; `--no-idle-gate` is intended only for
+diagnostic or parallel runs. JSON output includes the repeat samples and a
+host/load/topology fingerprint.
+
+A refused run exits **3** (distinct from argparse's 2) and leaves any existing
+`jetstream-results.json` untouched, so a truncated suite cannot overwrite a
+complete baseline. This protection also applies when `--json` names that file
+through an equivalent absolute or symlinked path; choose a distinct output path
+to retain partial refusal evidence. Because a single-threaded benchmark
+contributes roughly 1.0 to the one-minute average itself, the default 1.5
+threshold leaves only about 0.5 of headroom for foreign load; raise
+`--idle-threshold` on a host with unavoidable background activity rather than
+disabling the gate.
+
+To confirm the gate actually fires, run the suite against a synthetic load.
+One `yes` asymptotes the one-minute average to only ~1.0, which is *below* the
+1.5 default, so use enough burners to clear the threshold:
+
+```bash
+for _ in 1 2 3; do yes > /dev/null & done
+sleep 60   # let the 1-minute average converge
+uv run python scripts/run-jetstream.py --test Air --iterations 1
+# expect: "BUSY  Air  (loadavg1 ... exceeds idle threshold 1.50)" and exit 3
+kill %1 %2 %3
+```
+
+## Running the Node-compat library tests
+
+Beyond test262, real-world npm libraries are run as engine stress tests: each
+library's own upstream test suite is bundled with esbuild and executed on
+`target/release/jsse`, cross-checked against Node as a reference oracle.
+
+```bash
+cargo build --release
+./scripts/run-library-tests.sh <lib>          # e.g. decimal.js, acorn, zod, moment
+./scripts/run-library-tests.sh <lib> --clean  # force a fresh clone/rebuild
+./scripts/run-library-tests.sh <lib> --node   # run on Node only (reference)
+```
+
+`<lib>` is any config name under `scripts/libs/`: `acorn`, `ajv`, `big.js`,
+`bignumber.js`, `decimal.js`, `highlight.js`, `js-md5`, `js-sha256`, `lodash`,
+`luxon`, `moment`, `prismjs`, `qs`, `uglify-js`, `zod`. None of this is baked
+into jsse's globals or run in CI — it's a manual, additive-only harness that
+never affects test262. See [`scripts/README.md`](scripts/README.md) for the
+full recipe, the current per-library status table, and how to add a library.

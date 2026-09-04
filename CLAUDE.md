@@ -17,9 +17,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 2. No importing a JS parser or engine crate. Implement everything from scratch.
 3. Dependencies for parsing utilities, math, etc. are allowed.
 4. When implementing a feature, identify relevant test262 tests to validate against.
-5. After running test262, update `README.md` with pass count and percentage.
-6. The spec is the ultimate source of truth with respect to JavaScript. Use it to determine the syntax and semantics of operations.
-7. For debugging and comparison, `node` is available as a reference engine. Authority order: (1) ECMAScript spec, (2) test262, (3) node.
+5. The spec is the ultimate source of truth with respect to JavaScript. Use it to determine the syntax and semantics of operations.
+6. For debugging and comparison, `node` is available as a reference engine. Authority order: (1) ECMAScript spec, (2) test262, (3) node.
 
 ## Source Layout
 - `src/main.rs` — CLI entry point (`jsse <file>` or `jsse -e "code"`)
@@ -40,6 +39,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `exec.rs` — Statement execution (exec_statements, loops, try/switch)
   - `eval.rs` — Expression evaluation (eval_expr, eval_call, eval_new, etc.)
   - `property.rs` — Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic, chain walkers)
+  - `scheduler.rs` — Job scheduler: microtask queue, async-generator/async-function state, and the `setTimeout`/`setInterval` timer queue serviced by the event loop
   - `builtins/` — Built-in object setup
     - `mod.rs` — setup_globals, setup_object_statics, setup_reflect, setup_proxy, setup_function_prototype
     - `array.rs` — setup_array_prototype
@@ -56,6 +56,10 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - `cargo build --release` — always build in release mode for test262 runs (debug is too slow)
 - The project uses Rust nightly features (`let_chains`, etc.)
 
+## Conventions
+ - PR titles: [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+  PRs are squash-merged by default - clean-history branches.
+
 ## Testing
 - Primary validation: test262 suite
 - Custom tests: `tests/` directory
@@ -67,10 +71,63 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - We should implement new features to ensure new tests pass without regressing on previously passing tests.
 - Each test runs under a time limit (default 120s) and a memory limit (512 MB) to prevent runaway tests from crashing the system. These limits are enforced in `scripts/run-test262.py`.
 - We implement all optional test262 features including intl402 (Intl API) and Temporal. The default test runner covers `language/`, `built-ins/`, `annexB/`, and `intl402/`. Staging tests are tracked separately — run them explicitly with `uv run python scripts/run-test262.py test262/test/staging/`.
-- Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/
+- Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/. This includes regressions for engine-internal heuristics when the failure changes an observable ECMAScript value or throw; exact host-compatibility diagnostics and engine resource-limit or stress checks remain in `tests/`.
   - it should include spec part that is tested and follow the exact same patterns of test262 tests.
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
+
+## Long-Running Builds & Tests
+- Never rebuild the binary while a test262 / full-suite run is in flight; snapshot the binary to a temp path first or wait for completion.
+- Never use `pkill -9 <pattern>` — patterns have matched Claude's own shell. Kill by recorded PID only, and clean up temp files explicitly.
+- Clear stale compile caches before declaring a repro 'still failing'.
+- Long compiles exceed the default 2-minute Bash timeout: pass an explicit longer timeout up front.
+
+## Execution Counters (performance investigations)
+- Off by default and absent from the shipped binary. Build with
+  `cargo build --release --features perf-counters`; every run **that executes
+  JavaScript** then writes tab-separated counters to **stderr** at exit — file,
+  `-e`, `--prelude`, and REPL alike, including a prelude that throws (covered by
+  `tests/perf_counters_report_paths.rs`). A run that dies before any interpreter
+  exists — an unreadable main file on the no-prelude path — reports nothing,
+  deliberately: there are no counters to report, and an all-zero block would
+  read as a completed measurement of nothing.
+- Reports the compiled/tree-walker split by **work** (VM opcodes vs
+  `exec_statement`/`eval_expr` entries), not just by invocation — the two
+  disagree by an order of magnitude on real code, see
+  `docs/perf/2026-08-26/mandreel-bytecode-work-share.md`.
+- `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
+  AST variant (`statement:Labeled`), `BODY` per-function tree-walker work units
+  spent *exclusive* of nested bodies, plus GC collection counts and time.
+- Generator/async state-machine bodies do not pass through `dispatch_body`, but
+  retain their originating function identity for attribution, so their work is
+  reported under individual function names and kept off the calling function's
+  exclusive total. Top-level script, module, and `eval` bodies have no function
+  identity and remain in the synthetic `BODY` rows `<script body>`,
+  `<module body>`, and `<eval>`.
+- `BODY` rows are keyed by function *identity*, not name. Two functions sharing
+  a name render as `name#<object id>`; a unique name stays bare, so only genuine
+  ambiguity costs readability.
+- `compile_ok` and the `BAIL` table cover **script** compile attempts as well as
+  function bodies, so a script-only workload no longer reports zero for both.
+  A compiled script counts as a `body_non_function_execs` execution, never as a
+  `body_dispatch_compiled` invocation.
+- `body_dispatch_compiled` / `body_dispatch_ast` count **function invocations
+  only** — that is the split #524 published, so keep it comparable. Executions
+  of the non-`dispatch_body` paths are reported separately as
+  `body_non_function_execs`, which counts **executions, not invocations**:
+  generators replay, so one generator call with N yields registers roughly 4N
+  state-machine steps there. The execution count on each resolved
+  generator/async `BODY` row has the same state-machine-step semantics, not a
+  function-call count; replayed work is real work and is counted each time.
+- `ast_units_per_ast_body` divides **function** work by function invocations —
+  its numerator is `ast_units_in_functions`, not the run-wide `ast_work_units`,
+  which also covers script/generator/module/eval work.
+- Every count is deterministic, so a shared/loaded host does not compromise it.
+  **Never time an instrumented build** — take counts from the feature build and
+  wall times from the default build.
+- JetStream per-phase driver: `scripts/gen-mandreel-phases.py <mandreel.js> -o
+  driver.js [--subphases]`. Op-mix microbenchmark:
+  `benchmarks/scripts/bench_opmix.js`.
 
 ## Mutation Testing
 - Local-only (not in CI). Driver: `./scripts/run-mutants.sh` (forwards args to `cargo mutants`).
@@ -92,8 +149,11 @@ harness. See `scripts/README.md` for the full recipe and how to add a library.
 - Each library has a config at `scripts/libs/<lib>.sh` (pinned repo/ref, bundle entry, prepare hook, verdict). The runner clones the pinned ref, bundles with a pinned esbuild, prepends the shared JS-only Node-globals shims (`scripts/node-shim.js` for `process`/`console`, `scripts/node-buffer-shim.js` for `Buffer`/`TextEncoder`/`TextDecoder`) — never baked into jsse's globals, so test262 is unaffected — runs on jsse, and cross-checks the test count against Node. Caches live under `/tmp/jsse-libtests/<lib>/`.
 - The shim stubs are guarded so they are inert on Node, letting `--node` run the identical bundle as the reference.
 - **`Buffer`** is a pure-JS subclass of `Uint8Array` (`node-buffer-shim.js`), needing zero new engine object kinds; `instanceof Uint8Array` holds. Self-verifying fixtures live in `scripts/shim-fixtures/`; run them (jsse + Node cross-checked) with `./scripts/run-shim-fixtures.sh`.
-- **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507).
+- **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507), `prismjs` (2,563), `uglify-js` (4,233; ~15 min — full compress DSL transform/mangle/codegen corpus), `highlight.js` (731; ~30 min for the full auto-detection competition set), `uuid` (75; pinned to the browser build so v3/v5 exercise its own pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness from a `crypto.getRandomValues` shim backed by `__host_random_bytes` — see `node-crypto-shim.js`).
 - **`bignumber.js`** is wired but blocked on a jsse bug it surfaced (strict-mode `return <call-returning-non-object>` in a constructor returns that value instead of `this`, jsse#238); it goes green once that engine bug is fixed.
+- **`luxon`** is wired at 3.7.2 with an exact 1,152-test Node cross-check. Node itself fails 13/1,152 on this host (ICU/Node version drift, not a jsse bug); jsse currently passes 1,002, with the remaining Intl/system-zone gaps tracked in jsse#262–#265.
+- **`zod`** is wired at v4.4.3 in separate normal and jitless processes with an exact 2,184-case Node cross-check. Node is green; jsse runs every case with no skips and reports 2,178 passing, with the 6 residual failures tracked in jsse#313 (1 per mode) and jsse#314 (2 per mode). jsse#310's artificial `500 → 0` refinement-delay patch in `gen-zod-entry.js` is still in place.
+- **`moment`** is wired at 2.30.1 with an exact 3,871-test Node cross-check. Node is green with 162,868 assertions; jsse executes every test and records 198 visible failing assertions, tracked in jsse#311.
 
 ### Acorn (`./scripts/run-acorn-tests.sh` — thin wrapper over the harness)
 - Pinned to **acorn 8.16.0** (13,507 tests, green on jsse and Node). 8.17.0+ added a parser stack-guard test (`"[".repeat(2000)`) that expects the engine to *throw* a "stack space" error; jsse's tree-walker aborts (SIGABRT) before acorn's guard fires — a jsse deep-recursion robustness gap tracked separately. Bump the pin once that lands.
@@ -115,8 +175,8 @@ Issues live on GitHub at `pmatos/jsse` and are managed via the `gh` CLI; externa
 
 ### Triage labels
 
-Canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+Canonical triage roles map to the tracker labels `needs-triage`, `needs-info`, `agent-ready`, `human-ready`, and `wontfix`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/grill-with-docs`). See `docs/agents/domain.md`.
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.

@@ -4,7 +4,6 @@
 Produces src/emoji_strings.rs with lookup_string_property() function.
 """
 
-import re
 import sys
 from pathlib import Path
 
@@ -71,8 +70,11 @@ def main():
 
     if not seq_file.exists() or not zwj_file.exists():
         print("Missing emoji data files in scripts/.unicode_cache/", file=sys.stderr)
-        print("Run: curl -sL -o scripts/.unicode_cache/emoji-sequences.txt "
-              "https://unicode.org/Public/emoji/16.0/emoji-sequences.txt", file=sys.stderr)
+        print(
+            "Run: curl -sL -o scripts/.unicode_cache/emoji-sequences.txt "
+            "https://unicode.org/Public/emoji/16.0/emoji-sequences.txt",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Parse all property-of-strings
@@ -80,7 +82,9 @@ def main():
     flag = parse_sequences(seq_file, "RGI_Emoji_Flag_Sequence")
     tag = parse_sequences(seq_file, "RGI_Emoji_Tag_Sequence")
     modifier = parse_sequences(seq_file, "RGI_Emoji_Modifier_Sequence")
-    basic_single = parse_sequences(seq_file, "Basic_Emoji")  # single codepoints and pairs
+    basic_single = parse_sequences(
+        seq_file, "Basic_Emoji"
+    )  # single codepoints and pairs
     zwj = parse_zwj_sequences(zwj_file)
 
     # Basic_Emoji multi-codepoint sequences (the ones with FE0F presentation selector)
@@ -114,9 +118,15 @@ def main():
     print(f"// RGI_Emoji_Flag_Sequence: {len(flag)} sequences", file=sys.stderr)
     print(f"// RGI_Emoji_Tag_Sequence: {len(tag)} sequences", file=sys.stderr)
     print(f"// RGI_Emoji_Modifier_Sequence: {len(modifier)} sequences", file=sys.stderr)
-    print(f"// Basic_Emoji singles: {len(basic_singles_only)}, multi: {len(basic_multi)}", file=sys.stderr)
+    print(
+        f"// Basic_Emoji singles: {len(basic_singles_only)}, multi: {len(basic_multi)}",
+        file=sys.stderr,
+    )
     print(f"// RGI_Emoji_ZWJ_Sequence: {len(zwj)} sequences", file=sys.stderr)
-    print(f"// RGI_Emoji multi-codepoint total (deduped): {len(rgi_emoji_multi)}", file=sys.stderr)
+    print(
+        f"// RGI_Emoji multi-codepoint total (deduped): {len(rgi_emoji_multi)}",
+        file=sys.stderr,
+    )
     print(f"// RGI_Emoji single codepoints: {len(basic_singles_only)}", file=sys.stderr)
 
     # Generate Rust source
@@ -148,24 +158,48 @@ def main():
     out.append("")
 
     # Lookup function
-    out.append("/// Look up a property-of-strings name, returning (single_codepoints, multi_strings).")
-    out.append("/// single_codepoints is a list of u32 codepoints, multi_strings is a list of &str.")
-    out.append("/// Returns None if the property name is not a recognized property-of-strings.")
-    out.append("pub(crate) fn lookup_string_property(name: &str) -> Option<(&'static [u32], &'static [&'static str])> {")
+    out.append(
+        "/// Look up a property-of-strings name, returning (single_codepoints, multi_strings)."
+    )
+    out.append(
+        "/// single_codepoints is a list of u32 codepoints, multi_strings is a list of &str."
+    )
+    out.append(
+        "/// Returns None if the property name is not a recognized property-of-strings."
+    )
+    out.append(
+        "pub(crate) fn lookup_string_property(name: &str) -> Option<(&'static [u32], &'static [&'static str])> {"
+    )
     out.append("    match name {")
     out.append('        "Emoji_Keycap_Sequence" => Some((&[], EMOJI_KEYCAP_SEQUENCE)),')
-    out.append('        "RGI_Emoji_Flag_Sequence" => Some((&[], RGI_EMOJI_FLAG_SEQUENCE)),')
-    out.append('        "RGI_Emoji_Tag_Sequence" => Some((&[], RGI_EMOJI_TAG_SEQUENCE)),')
-    out.append('        "RGI_Emoji_Modifier_Sequence" => Some((&[], RGI_EMOJI_MODIFIER_SEQUENCE)),')
-    out.append('        "Basic_Emoji" => Some((BASIC_EMOJI_SINGLES, BASIC_EMOJI_MULTI)),')
-    out.append('        "RGI_Emoji_ZWJ_Sequence" => Some((&[], RGI_EMOJI_ZWJ_SEQUENCE)),')
+    out.append(
+        '        "RGI_Emoji_Flag_Sequence" => Some((&[], RGI_EMOJI_FLAG_SEQUENCE)),'
+    )
+    out.append(
+        '        "RGI_Emoji_Tag_Sequence" => Some((&[], RGI_EMOJI_TAG_SEQUENCE)),'
+    )
+    out.append(
+        '        "RGI_Emoji_Modifier_Sequence" => Some((&[], RGI_EMOJI_MODIFIER_SEQUENCE)),'
+    )
+    out.append(
+        '        "Basic_Emoji" => Some((BASIC_EMOJI_SINGLES, BASIC_EMOJI_MULTI)),'
+    )
+    out.append(
+        '        "RGI_Emoji_ZWJ_Sequence" => Some((&[], RGI_EMOJI_ZWJ_SEQUENCE)),'
+    )
     out.append('        "RGI_Emoji" => {')
-    out.append('            // RGI_Emoji is conceptually the union of all emoji properties,')
-    out.append('            // but for the regex pattern we return the multi-codepoint sequences.')
-    out.append('            // The single-codepoint part is handled via Basic_Emoji singles.')
-    out.append('            Some((BASIC_EMOJI_SINGLES, RGI_EMOJI_MULTI))')
-    out.append('        }')
-    out.append('        _ => None,')
+    out.append(
+        "            // RGI_Emoji is conceptually the union of all emoji properties,"
+    )
+    out.append(
+        "            // but for the regex pattern we return the multi-codepoint sequences."
+    )
+    out.append(
+        "            // The single-codepoint part is handled via Basic_Emoji singles."
+    )
+    out.append("            Some((BASIC_EMOJI_SINGLES, RGI_EMOJI_MULTI))")
+    out.append("        }")
+    out.append("        _ => None,")
     out.append("    }")
     out.append("}")
     out.append("")

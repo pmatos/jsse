@@ -1,7 +1,8 @@
 use super::super::super::*;
+use super::super::temporal::canonicalize_iana_tz;
 use crate::interpreter::helpers::{
-    date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time, now_ms,
-    sec_from_time, week_day, year_from_time,
+    date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time,
+    named_time_zone_offset_ms, now_ms, sec_from_time, week_day, year_from_time,
 };
 
 fn extract_unicode_extension(locale: &str, key: &str) -> Option<String> {
@@ -202,7 +203,6 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
         return total_min as f64 * 60_000.0;
     }
 
-    use chrono::{Offset, TimeZone, Utc};
     use chrono_tz::Tz;
 
     let canonical = canonicalize_timezone(tz);
@@ -212,13 +212,10 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
         tz.to_string()
     };
 
-    if let Ok(tz_parsed) = tz_str.parse::<Tz>() {
-        let epoch_secs = (epoch_ms / 1000.0).floor() as i64;
-        let nanos = ((epoch_ms % 1000.0) * 1_000_000.0).abs() as u32;
-        if let Some(dt) = Utc.timestamp_opt(epoch_secs, nanos).single() {
-            let offset = dt.with_timezone(&tz_parsed).offset().fix();
-            return offset.local_minus_utc() as f64 * 1000.0;
-        }
+    if let Ok(tz_parsed) = tz_str.parse::<Tz>()
+        && let Some(offset_ms) = named_time_zone_offset_ms(tz_parsed, epoch_ms)
+    {
+        return offset_ms;
     }
 
     // Fallback to static lookup
@@ -237,57 +234,9 @@ fn is_valid_timezone(tz: &str) -> bool {
     if parse_offset_timezone(tz).is_some() {
         return true;
     }
-    // Use canonicalize_timezone to check if it matches a known TZ
-    let canonical = canonicalize_timezone(tz);
-    if canonical.eq_ignore_ascii_case(tz) && canonical != tz {
-        return true;
-    }
-    if canonical == tz {
-        let lower_canonical = canonicalize_timezone(&tz.to_ascii_lowercase());
-        if lower_canonical != tz.to_ascii_lowercase() {
-            return true;
-        }
-        let upper_canonical = canonicalize_timezone(&tz.to_ascii_uppercase());
-        if upper_canonical != tz.to_ascii_uppercase() {
-            return true;
-        }
-    }
-    // Accept valid IANA-style patterns we might not have in our list
-    if !tz.is_ascii() {
-        return false;
-    }
-    let valid_chars = tz
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+');
-    if !valid_chars {
-        return false;
-    }
-    if tz.contains('/') {
-        let parts: Vec<&str> = tz.split('/').collect();
-        if parts.len() >= 2 && parts.len() <= 4 {
-            let region_upper = parts[0].to_uppercase();
-            return matches!(
-                region_upper.as_str(),
-                "AFRICA"
-                    | "AMERICA"
-                    | "ANTARCTICA"
-                    | "ARCTIC"
-                    | "ASIA"
-                    | "ATLANTIC"
-                    | "AUSTRALIA"
-                    | "BRAZIL"
-                    | "CANADA"
-                    | "CHILE"
-                    | "ETC"
-                    | "EUROPE"
-                    | "INDIAN"
-                    | "MEXICO"
-                    | "PACIFIC"
-                    | "US"
-            );
-        }
-    }
-    false
+    chrono_tz::TZ_VARIANTS
+        .iter()
+        .any(|known| known.name().eq_ignore_ascii_case(tz))
 }
 
 fn canonicalize_timezone(tz: &str) -> String {
@@ -896,7 +845,10 @@ fn canonicalize_timezone(tz: &str) -> String {
         }
     }
 
-    tz.to_string()
+    chrono_tz::TZ_VARIANTS
+        .iter()
+        .find(|known| known.name().eq_ignore_ascii_case(tz))
+        .map_or_else(|| tz.to_string(), |known| known.name().to_string())
 }
 
 fn default_numbering_system_for_locale(locale: &str) -> &'static str {
@@ -1438,6 +1390,879 @@ fn resolve_hour_cycle(opts: &DtfOptions) -> &str {
     locale_default_hour_cycle(&opts.locale)
 }
 
+#[derive(Default)]
+struct IcuDateTimePartsWriter {
+    parts: Vec<(String, String)>,
+    active_parts: Vec<writeable::Part>,
+}
+
+impl std::fmt::Write for IcuDateTimePartsWriter {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        let part_type = self
+            .active_parts
+            .iter()
+            .rev()
+            .find(|part| part.category == "datetime")
+            .map_or("literal", |part| part.value);
+
+        if let Some((last_type, last_value)) = self.parts.last_mut()
+            && last_type == part_type
+        {
+            last_value.push_str(value);
+        } else {
+            self.parts.push((part_type.to_string(), value.to_string()));
+        }
+        Ok(())
+    }
+}
+
+impl writeable::PartsWrite for IcuDateTimePartsWriter {
+    type SubPartsWrite = Self;
+
+    fn with_part(
+        &mut self,
+        part: writeable::Part,
+        mut write: impl FnMut(&mut Self::SubPartsWrite) -> std::fmt::Result,
+    ) -> std::fmt::Result {
+        self.active_parts.push(part);
+        let result = write(self);
+        self.active_parts.pop();
+        result
+    }
+}
+
+fn icu_datetime_length(opts: &DtfOptions) -> Option<icu::datetime::options::Length> {
+    use icu::datetime::options::Length;
+
+    let style_length = |style: &str| match style {
+        "full" | "long" => Some(Length::Long),
+        "medium" => Some(Length::Medium),
+        "short" => Some(Length::Short),
+        _ => None,
+    };
+
+    if let Some(style) = opts.date_style.as_deref() {
+        return style_length(style);
+    }
+    if let Some(style) = opts.time_style.as_deref() {
+        return style_length(style);
+    }
+
+    let text_styles = [
+        opts.weekday.as_deref(),
+        opts.era.as_deref(),
+        opts.month.as_deref(),
+    ];
+    if text_styles.contains(&Some("narrow")) {
+        return None;
+    }
+    if text_styles.contains(&Some("long")) {
+        Some(Length::Long)
+    } else if text_styles.contains(&Some("short")) {
+        Some(Length::Medium)
+    } else {
+        Some(Length::Short)
+    }
+}
+
+fn has_mixed_textual_widths(opts: &DtfOptions) -> bool {
+    let mut requested = [None; 3];
+    requested[0] = opts.weekday.as_deref();
+    requested[1] = opts.era.as_deref();
+    requested[2] = opts
+        .month
+        .as_deref()
+        .filter(|style| matches!(*style, "long" | "short" | "narrow"));
+
+    let mut widths = requested
+        .into_iter()
+        .flatten()
+        .filter(|style| matches!(*style, "long" | "short" | "narrow"));
+    let Some(first) = widths.next() else {
+        return false;
+    };
+    widths.any(|width| width != first)
+}
+
+fn legacy_icu_text_style(style: &str) -> Option<icu_datetime_legacy::options::components::Text> {
+    use icu_datetime_legacy::options::components::Text;
+
+    match style {
+        "long" => Some(Text::Long),
+        "short" => Some(Text::Short),
+        "narrow" => Some(Text::Narrow),
+        _ => None,
+    }
+}
+
+fn legacy_icu_numeric_style(
+    style: &str,
+) -> Option<icu_datetime_legacy::options::components::Numeric> {
+    use icu_datetime_legacy::options::components::Numeric;
+
+    match style {
+        "numeric" => Some(Numeric::Numeric),
+        "2-digit" => Some(Numeric::TwoDigit),
+        _ => None,
+    }
+}
+
+fn legacy_icu_pattern_string(
+    pattern: &icu_datetime_legacy::pattern::runtime::Pattern<'_>,
+    offset_style: Option<&str>,
+) -> String {
+    use icu_datetime_legacy::fields::{FieldLength, FieldSymbol};
+    use icu_datetime_legacy::pattern::PatternItem;
+
+    fn push_literal(output: &mut String, literal: &str) {
+        if literal.is_empty() {
+            return;
+        }
+        if literal
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic() || ch == '\'')
+        {
+            output.push('\'');
+            for ch in literal.chars() {
+                if ch == '\'' {
+                    output.push('\'');
+                }
+                output.push(ch);
+            }
+            output.push('\'');
+        } else {
+            output.push_str(literal);
+        }
+    }
+
+    let mut output = String::new();
+    let mut literal = String::new();
+    for item in pattern.items.iter() {
+        match item {
+            PatternItem::Literal(ch) => literal.push(ch),
+            PatternItem::Field(field) => {
+                push_literal(&mut output, &literal);
+                literal.clear();
+                // The legacy components::Bag exposes a single GmtOffset variant,
+                // so shortOffset and longOffset both resolve to the long
+                // localized-GMT token. Emit the requested localized-GMT width
+                // directly instead: `O` (short, e.g. GMT-5) or `OOOO` (long,
+                // e.g. GMT-05:00). ICU4X 2.0 honors this distinction when the
+                // generated pattern string is reparsed.
+                if let (Some(style), FieldSymbol::TimeZone(_)) = (offset_style, field.symbol) {
+                    let count = if style == "shortOffset" { 1 } else { 4 };
+                    output.extend(std::iter::repeat_n('O', count));
+                    continue;
+                }
+                let length = match field.length {
+                    FieldLength::One | FieldLength::NumericOverride(_) => 1,
+                    FieldLength::TwoDigit => 2,
+                    FieldLength::Abbreviated => 3,
+                    FieldLength::Wide => 4,
+                    FieldLength::Narrow => 5,
+                    FieldLength::Six => 6,
+                    FieldLength::Fixed(length) => usize::from(length),
+                };
+                output.extend(std::iter::repeat_n(char::from(field.symbol), length));
+            }
+        }
+    }
+    push_literal(&mut output, &literal);
+    output
+}
+
+fn legacy_icu_pattern_contains_fields(
+    pattern: &icu_datetime_legacy::pattern::runtime::Pattern<'_>,
+    requested: &[icu_datetime_legacy::fields::Field],
+) -> bool {
+    use icu_datetime_legacy::fields::{Field, FieldLength, FieldSymbol};
+    use icu_datetime_legacy::pattern::PatternItem;
+
+    fn same_kind(requested: FieldSymbol, actual: FieldSymbol) -> bool {
+        match (requested, actual) {
+            (FieldSymbol::Era, FieldSymbol::Era)
+            | (FieldSymbol::Year(_), FieldSymbol::Year(_))
+            | (FieldSymbol::Month(_), FieldSymbol::Month(_))
+            | (FieldSymbol::Week(_), FieldSymbol::Week(_))
+            | (FieldSymbol::Day(_), FieldSymbol::Day(_))
+            | (FieldSymbol::Weekday(_), FieldSymbol::Weekday(_))
+            | (FieldSymbol::DayPeriod(_), FieldSymbol::DayPeriod(_))
+            | (FieldSymbol::Hour(_), FieldSymbol::Hour(_))
+            | (FieldSymbol::Minute, FieldSymbol::Minute)
+            | (FieldSymbol::TimeZone(_), FieldSymbol::TimeZone(_)) => true,
+            (FieldSymbol::Second(requested), FieldSymbol::Second(actual)) => requested == actual,
+            _ => false,
+        }
+    }
+
+    fn normalized_length(field: Field) -> FieldLength {
+        match (field.symbol, field.length) {
+            (
+                FieldSymbol::Era | FieldSymbol::Weekday(_),
+                FieldLength::One | FieldLength::TwoDigit,
+            ) => FieldLength::Abbreviated,
+            (_, FieldLength::NumericOverride(_)) => FieldLength::One,
+            (_, length) => length,
+        }
+    }
+
+    fn requested_field_matches(requested: Field, actual: Field) -> bool {
+        same_kind(requested.symbol, actual.symbol)
+            && (matches!(requested.symbol, FieldSymbol::TimeZone(_))
+                || normalized_length(requested) == normalized_length(actual))
+    }
+
+    let actual = pattern
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            PatternItem::Field(field) => Some(field),
+            PatternItem::Literal(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let hour_requested = requested
+        .iter()
+        .any(|field| matches!(field.symbol, FieldSymbol::Hour(_)));
+
+    requested.iter().all(|requested| {
+        actual
+            .iter()
+            .any(|actual| requested_field_matches(*requested, *actual))
+    }) && actual.iter().all(|actual| {
+        requested
+            .iter()
+            .any(|requested| requested_field_matches(*requested, *actual))
+            || (hour_requested && matches!(actual.symbol, FieldSymbol::DayPeriod(_)))
+    })
+}
+
+fn icu_mixed_width_pattern(
+    opts: &DtfOptions,
+    locale: &icu::locale::Locale,
+) -> Option<icu::datetime::pattern::DateTimePattern> {
+    use icu_datetime_legacy::fields::{
+        Day, Field, FieldLength, FieldSymbol, Hour, Month, Second, TimeZone, Weekday, Year,
+    };
+    use icu_datetime_legacy::options::{components, preferences};
+    use icu_datetime_legacy::provider::calendar::{
+        DateSkeletonPatternsV1Marker, GregorianDateLengthsV1Marker,
+    };
+    use icu_datetime_legacy::skeleton::{BestSkeleton, create_best_pattern_for_fields};
+    use icu_provider_legacy::prelude::{DataProvider, DataRequest};
+
+    if !has_mixed_textual_widths(opts)
+        || opts.date_style.is_some()
+        || opts.time_style.is_some()
+        || !matches!(opts.calendar.as_str(), "gregory" | "iso8601")
+        || opts.numbering_system == "hanidec"
+        || opts.day_period.is_some()
+    {
+        return None;
+    }
+
+    let mut bag = components::Bag::default();
+    let mut fields = Vec::new();
+
+    if let Some(style) = opts.era.as_deref() {
+        let style = legacy_icu_text_style(style)?;
+        bag.era = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Era,
+            length: match style {
+                components::Text::Long => FieldLength::Wide,
+                components::Text::Short => FieldLength::Abbreviated,
+                components::Text::Narrow => FieldLength::Narrow,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.year.as_deref() {
+        bag.year = Some(match style {
+            "numeric" => components::Year::Numeric,
+            "2-digit" => components::Year::TwoDigit,
+            _ => return None,
+        });
+        fields.push(Field {
+            symbol: FieldSymbol::Year(Year::Calendar),
+            length: if style == "2-digit" {
+                FieldLength::TwoDigit
+            } else {
+                FieldLength::One
+            },
+        });
+    }
+    if let Some(style) = opts.month.as_deref() {
+        let style = match style {
+            "numeric" => components::Month::Numeric,
+            "2-digit" => components::Month::TwoDigit,
+            "long" => components::Month::Long,
+            "short" => components::Month::Short,
+            "narrow" => components::Month::Narrow,
+            _ => return None,
+        };
+        bag.month = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Month(Month::Format),
+            length: match style {
+                components::Month::Numeric => FieldLength::One,
+                components::Month::TwoDigit => FieldLength::TwoDigit,
+                components::Month::Long => FieldLength::Wide,
+                components::Month::Short => FieldLength::Abbreviated,
+                components::Month::Narrow => FieldLength::Narrow,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.day.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.day = Some(match style {
+            components::Numeric::Numeric => components::Day::NumericDayOfMonth,
+            components::Numeric::TwoDigit => components::Day::TwoDigitDayOfMonth,
+            _ => return None,
+        });
+        fields.push(Field {
+            symbol: FieldSymbol::Day(Day::DayOfMonth),
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.weekday.as_deref() {
+        let style = legacy_icu_text_style(style)?;
+        bag.weekday = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Weekday(Weekday::Format),
+            length: match style {
+                components::Text::Long => FieldLength::Wide,
+                components::Text::Short => FieldLength::One,
+                components::Text::Narrow => FieldLength::Narrow,
+                _ => return None,
+            },
+        });
+    }
+
+    let hour_cycle = match resolve_hour_cycle(opts) {
+        "h11" => preferences::HourCycle::H11,
+        "h12" => preferences::HourCycle::H12,
+        "h23" => preferences::HourCycle::H23,
+        "h24" => preferences::HourCycle::H24,
+        _ => return None,
+    };
+    bag.preferences = Some(preferences::Bag::from_hour_cycle(hour_cycle));
+    if let Some(style) = opts.hour.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.hour = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Hour(match hour_cycle {
+                preferences::HourCycle::H11 | preferences::HourCycle::H12 => Hour::H12,
+                preferences::HourCycle::H23 | preferences::HourCycle::H24 => Hour::H23,
+            }),
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.minute.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.minute = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Minute,
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.second.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.second = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Second(Second::Second),
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(digits) = opts.fractional_second_digits {
+        let digits = u8::try_from(digits).ok()?;
+        bag.fractional_second = Some(digits);
+        fields.push(Field {
+            symbol: FieldSymbol::Second(Second::FractionalSecond),
+            length: FieldLength::Fixed(digits),
+        });
+    }
+    if let Some(style) = opts.time_zone_name.as_deref() {
+        let style = match style {
+            "short" => components::TimeZoneName::ShortSpecific,
+            "long" => components::TimeZoneName::LongSpecific,
+            "shortOffset" | "longOffset" => components::TimeZoneName::GmtOffset,
+            "shortGeneric" => components::TimeZoneName::ShortGeneric,
+            "longGeneric" => components::TimeZoneName::LongGeneric,
+            _ => return None,
+        };
+        bag.time_zone_name = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::TimeZone(TimeZone::LowerV),
+            length: FieldLength::One,
+        });
+    }
+
+    let legacy_locale = locale
+        .to_string()
+        .parse::<icu_provider_legacy::DataLocale>()
+        .ok()?;
+    let request = || DataRequest {
+        locale: &legacy_locale,
+        metadata: Default::default(),
+    };
+    let lengths = <icu_datetime_legacy::provider::Baked as DataProvider<
+        GregorianDateLengthsV1Marker,
+    >>::load(&icu_datetime_legacy::provider::Baked, request())
+    .ok()?
+    .take_payload()
+    .ok()?;
+    let skeletons = <icu_datetime_legacy::provider::Baked as DataProvider<
+        DateSkeletonPatternsV1Marker,
+    >>::load(&icu_datetime_legacy::provider::Baked, request())
+    .ok()?
+    .take_payload()
+    .ok()?;
+
+    let pattern = match create_best_pattern_for_fields(
+        skeletons.get(),
+        &lengths.get().length_combinations,
+        &fields,
+        &bag,
+        false,
+    ) {
+        BestSkeleton::AllFieldsMatch(pattern) => {
+            pattern.expect_pattern("mixed-width fields do not use plural variants")
+        }
+        // ICU4X 1.5 classifies a skeleton with fractional seconds as missing a
+        // field even after create_best_pattern_for_fields appends that field to
+        // the selected seconds pattern. This is the only incomplete-match case
+        // that is safe to accept; all other cases keep the existing fallback.
+        BestSkeleton::MissingOrExtraFields(pattern) if opts.fractional_second_digits.is_some() => {
+            let pattern = pattern.expect_pattern("mixed-width fields do not use plural variants");
+            if !legacy_icu_pattern_contains_fields(&pattern, &fields) {
+                return None;
+            }
+            pattern
+        }
+        BestSkeleton::MissingOrExtraFields(_) | BestSkeleton::NoMatch => return None,
+    };
+    let offset_style = opts
+        .time_zone_name
+        .as_deref()
+        .filter(|style| matches!(*style, "shortOffset" | "longOffset"));
+    legacy_icu_pattern_string(&pattern, offset_style)
+        .parse()
+        .ok()
+}
+
+fn icu_datetime_field_set(
+    opts: &DtfOptions,
+) -> Option<icu::datetime::fieldsets::enums::CompositeFieldSet> {
+    use icu::datetime::fieldsets::builder::{DateFields, FieldSetBuilder, ZoneStyle};
+    use icu::datetime::options::{SubsecondDigits, TimePrecision, YearStyle};
+
+    if !matches!(opts.calendar.as_str(), "gregory" | "iso8601")
+        || opts.numbering_system == "hanidec"
+        || opts.day_period.is_some()
+        || (opts.date_style.is_some()
+            && matches!(
+                opts.temporal_type,
+                Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay)
+            ))
+    {
+        return None;
+    }
+
+    let mut builder = FieldSetBuilder::new();
+    builder.length = Some(icu_datetime_length(opts)?);
+
+    let date_fields = if let Some(style) = opts.date_style.as_deref() {
+        match style {
+            "full" => Some(DateFields::YMDE),
+            "long" | "medium" | "short" => Some(DateFields::YMD),
+            _ => return None,
+        }
+    } else {
+        let year = opts.year.is_some();
+        let month = opts.month.is_some();
+        let day = opts.day.is_some();
+        let weekday = opts.weekday.is_some();
+        match (year, month, day, weekday) {
+            (false, false, false, false) => None,
+            (false, false, false, true) => Some(DateFields::E),
+            (false, false, true, false) => Some(DateFields::D),
+            (false, false, true, true) => Some(DateFields::DE),
+            (false, true, false, false) => Some(DateFields::M),
+            (false, true, true, false) => Some(DateFields::MD),
+            (false, true, true, true) => Some(DateFields::MDE),
+            (true, false, false, false) => Some(DateFields::Y),
+            (true, true, false, false) => Some(DateFields::YM),
+            (true, true, true, false) => Some(DateFields::YMD),
+            (true, true, true, true) => Some(DateFields::YMDE),
+            _ => return None,
+        }
+    };
+    builder.date_fields = date_fields;
+
+    if opts.era.is_some() && opts.year.is_none() && opts.date_style.is_none() {
+        return None;
+    }
+    if opts.era.is_some() {
+        builder.year_style = Some(YearStyle::WithEra);
+    } else if opts.year.as_deref() == Some("numeric")
+        || matches!(opts.date_style.as_deref(), Some("full" | "long" | "medium"))
+    {
+        builder.year_style = Some(YearStyle::Full);
+    }
+
+    let time_precision = if let Some(style) = opts.time_style.as_deref() {
+        match style {
+            "full" | "long" | "medium" => Some(TimePrecision::Second),
+            "short" => Some(TimePrecision::Minute),
+            _ => return None,
+        }
+    } else if opts.hour.is_some() {
+        if let Some(digits) = opts.fractional_second_digits {
+            let digits = match digits {
+                1 => SubsecondDigits::S1,
+                2 => SubsecondDigits::S2,
+                3 => SubsecondDigits::S3,
+                _ => return None,
+            };
+            Some(TimePrecision::Subsecond(digits))
+        } else if opts.second.is_some() {
+            Some(TimePrecision::Second)
+        } else if opts.minute.is_some() {
+            Some(TimePrecision::Minute)
+        } else {
+            Some(TimePrecision::Hour)
+        }
+    } else if opts.minute.is_some()
+        || opts.second.is_some()
+        || opts.fractional_second_digits.is_some()
+    {
+        return None;
+    } else {
+        None
+    };
+    builder.time_precision = time_precision;
+
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    builder.zone_style = if let Some(style) = opts.time_zone_name.as_deref() {
+        Some(match style {
+            "short" => ZoneStyle::SpecificShort,
+            "long" => ZoneStyle::SpecificLong,
+            "shortOffset" => ZoneStyle::LocalizedOffsetShort,
+            "longOffset" => ZoneStyle::LocalizedOffsetLong,
+            "shortGeneric" => ZoneStyle::GenericShort,
+            "longGeneric" => ZoneStyle::GenericLong,
+            _ => return None,
+        })
+    } else if !is_plain {
+        match opts.time_style.as_deref() {
+            Some("full") => Some(ZoneStyle::SpecificLong),
+            Some("long") => Some(ZoneStyle::SpecificShort),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    builder.build_composite().ok()
+}
+
+fn set_icu_datetime_keyword(
+    locale: &mut icu::locale::Locale,
+    key: &str,
+    value: &str,
+) -> Option<()> {
+    use icu::locale::extensions::unicode::{Key, Value};
+
+    locale
+        .extensions
+        .unicode
+        .keywords
+        .set(key.parse::<Key>().ok()?, value.parse::<Value>().ok()?);
+    Some(())
+}
+
+fn icu_datetime_locale(opts: &DtfOptions) -> Option<icu::locale::Locale> {
+    let mut locale = opts.locale.parse::<icu::locale::Locale>().ok()?;
+    set_icu_datetime_keyword(&mut locale, "ca", &opts.calendar)?;
+    set_icu_datetime_keyword(&mut locale, "nu", &opts.numbering_system)?;
+
+    let hour_cycle = resolve_hour_cycle(opts);
+    if hour_cycle == "h24" {
+        return None;
+    }
+    set_icu_datetime_keyword(&mut locale, "hc", hour_cycle)?;
+    Some(locale)
+}
+
+fn collect_icu_datetime_parts(
+    formatted: &impl writeable::Writeable,
+) -> Option<Vec<(String, String)>> {
+    let mut writer = IcuDateTimePartsWriter::default();
+    formatted.write_to_parts(&mut writer).ok()?;
+    Some(writer.parts)
+}
+
+fn collect_icu_datetime_pattern_parts(
+    formatted: &impl writeable::TryWriteable,
+) -> Option<Vec<(String, String)>> {
+    let mut writer = IcuDateTimePartsWriter::default();
+    formatted.try_write_to_parts(&mut writer).ok()?.ok()?;
+    Some(writer.parts)
+}
+
+fn normalize_icu_datetime_parts(
+    parts: Vec<(String, String)>,
+    opts: &DtfOptions,
+    short_year_two_digit: bool,
+) -> Vec<(String, String)> {
+    let mut normalized = Vec::with_capacity(parts.len() + 2);
+    for (part_type, mut value) in parts {
+        let requested_style = match part_type.as_str() {
+            "year" => opts.year.as_deref(),
+            "month" => opts.month.as_deref(),
+            "day" => opts.day.as_deref(),
+            "hour" => opts.hour.as_deref(),
+            "minute" => opts.minute.as_deref(),
+            "second" => opts.second.as_deref(),
+            _ => None,
+        };
+        if part_type == "year"
+            && (short_year_two_digit || requested_style == Some("2-digit"))
+            && value.chars().count() > 2
+            && value.chars().all(char::is_numeric)
+        {
+            let mut digits = value.chars().rev().take(2).collect::<Vec<_>>();
+            digits.reverse();
+            value = digits.into_iter().collect();
+        }
+        if part_type == "hour"
+            && requested_style != Some("2-digit")
+            && matches!(opts.locale.split("-u-").next(), Some("es") | Some("es-ES"))
+            && value.chars().count() == 2
+            && value.chars().all(char::is_numeric)
+        {
+            // ICU4X 2.1's processed Spain-based Spanish time data uses HH, while
+            // the locale's ECMA-402/CLDR format record uses the unpadded H form.
+            // This covers both the language-only `es` (its base data is Spain's)
+            // and `es-ES`, but not region-carrying Latin-American tags such as
+            // `es-MX`/`es-419`, whose matched numeric-hour format legitimately
+            // has two digits. The `hour` option domain is {numeric, 2-digit,
+            // undefined}, so `!= 2-digit` un-pads both `hour: "numeric"` and the
+            // timeStyle presets (whose hour option is undefined but which use the
+            // same unpadded H record); only an explicit `hour: "2-digit"` keeps
+            // the leading zero.
+            let zero = transliterate_digits("0", &opts.numbering_system);
+            if let Some(unpadded) = value.strip_prefix(&zero) {
+                value = unpadded.to_string();
+            }
+        }
+        if requested_style == Some("2-digit")
+            && value.chars().count() == 1
+            && value.chars().all(char::is_numeric)
+        {
+            value.insert_str(0, &transliterate_digits("0", &opts.numbering_system));
+        }
+        if part_type == "timeZoneName" && parse_offset_timezone(&opts.time_zone) == Some((0, 0)) {
+            let zero_offset_suffix =
+                format!("+{}", transliterate_digits("0", &opts.numbering_system));
+            if let Some(prefix) = value.strip_suffix(&zero_offset_suffix) {
+                value = prefix.to_string();
+            }
+        }
+
+        if part_type == "second"
+            && opts.fractional_second_digits.is_some()
+            && let Some(sep_idx) = value.find(|c: char| !c.is_numeric())
+        {
+            // ICU merges the fractional second into the "second" part using the
+            // locale's decimal separator (a comma in fr-FR/de-DE, a dot
+            // elsewhere). Split on the actual separator ICU emitted rather than
+            // a fixed set. All numbering systems reaching this ICU path use
+            // decimal digits (hanidec takes the non-ICU fallback), so the first
+            // non-numeric character is the separator. ICU4X keeps the base
+            // locale's separator even under the "arab" numbering system, but
+            // ECMA-402/CLDR use the Arabic decimal separator there, so keep that
+            // one correction.
+            let (seconds, rest) = value.split_at(sep_idx);
+            let mut rest_chars = rest.chars();
+            let separator = rest_chars.next().unwrap();
+            let fraction = rest_chars.as_str();
+            let decimal = if matches!(opts.numbering_system.as_str(), "arab" | "arabext") {
+                '\u{66b}'
+            } else {
+                separator
+            };
+            normalized.push(("second".to_string(), seconds.to_string()));
+            normalized.push(("literal".to_string(), decimal.to_string()));
+            normalized.push(("fractionalSecond".to_string(), fraction.to_string()));
+            continue;
+        }
+
+        normalized.push((part_type, value));
+    }
+    normalized
+}
+
+fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> {
+    use icu::datetime::DateTimeFormatter;
+    use icu::datetime::input::{Date, DateTime, Time, ZonedDateTime};
+    use icu::time::zone::{IanaParser, UtcOffset};
+
+    let locale = icu_datetime_locale(opts)?;
+    let mixed_width_pattern = icu_mixed_width_pattern(opts, &locale);
+    let formatter = if mixed_width_pattern.is_none() {
+        let field_set = icu_datetime_field_set(opts)?;
+        Some(DateTimeFormatter::try_new(locale.clone().into(), field_set).ok()?)
+    } else {
+        None
+    };
+
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    let adjusted_ms = if is_plain {
+        ms
+    } else {
+        ms + tz_offset_ms(&opts.time_zone, ms)
+    };
+    let components = timestamp_to_components(adjusted_ms);
+    let datetime = DateTime {
+        date: Date::try_new_iso(
+            components.year,
+            components.month as u8,
+            components.day as u8,
+        )
+        .ok()?,
+        time: Time::try_new(
+            components.hour as u8,
+            components.minute as u8,
+            components.second as u8,
+            components.millisecond * 1_000_000,
+        )
+        .ok()?,
+    };
+
+    let zone = if is_plain {
+        icu::datetime::input::TimeZoneInfo::utc().at_date_time_iso(datetime)
+    } else {
+        let offset_seconds = (tz_offset_ms(&opts.time_zone, ms) / 1000.0) as i32;
+        let offset = UtcOffset::try_from_seconds(offset_seconds).ok()?;
+        let time_zone = if parse_offset_timezone(&opts.time_zone).is_some() {
+            icu::datetime::input::TimeZone::UNKNOWN
+        } else {
+            IanaParser::new().parse(&opts.time_zone)
+        };
+        time_zone
+            .with_offset(Some(offset))
+            .at_date_time_iso(datetime)
+    };
+    let parts = if let Some(pattern) = mixed_width_pattern {
+        use icu::calendar::{Date as CalendarDate, Gregorian};
+        use icu::datetime::fieldsets::enums::CompositeFieldSet;
+        use icu::datetime::pattern::FixedCalendarDateTimeNames;
+
+        let date = CalendarDate::try_new_gregorian(
+            components.year,
+            components.month as u8,
+            components.day as u8,
+        )
+        .ok()?;
+        let zoned = ZonedDateTime {
+            date,
+            time: datetime.time,
+            zone,
+        };
+        let mut names = FixedCalendarDateTimeNames::<Gregorian, CompositeFieldSet>::try_new(
+            locale.clone().into(),
+        )
+        .ok()?;
+        let pattern_formatter = names.include_for_pattern(&pattern).ok()?;
+        collect_icu_datetime_pattern_parts(&pattern_formatter.format(&zoned))?
+    } else {
+        let zoned = ZonedDateTime {
+            date: datetime.date,
+            time: datetime.time,
+            zone,
+        };
+        collect_icu_datetime_parts(&formatter.as_ref()?.format(&zoned))?
+    };
+    // For dateStyle:"short", ICU4X may expand the year to a full year outside its
+    // 2-digit-year window even for locales whose short pattern uses two digits
+    // (e.g. en-US in 1886). Node/ICU always follow the pattern width, so probe
+    // the locale's short-year width (only when the year actually came out full)
+    // and let normalization truncate it back to two digits when appropriate.
+    let short_year_two_digit = opts.date_style.as_deref() == Some("short")
+        && parts.iter().any(|(part_type, value)| {
+            part_type == "year" && value.chars().count() > 2 && value.chars().all(char::is_numeric)
+        })
+        && icu_short_year_is_two_digit(formatter.as_ref()?);
+    Some(normalize_icu_datetime_parts(
+        parts,
+        opts,
+        short_year_two_digit,
+    ))
+}
+
+/// Whether the effective locale's short-date pattern uses a two-digit year.
+///
+/// ICU4X's `YearStyle::Auto` yields a two-digit year only inside its
+/// 2-digit-year window (1950..=2049) and expands to a full year outside it,
+/// whereas ECMA-402/Node follow the locale's short-date pattern width for every
+/// year (`yy` -> two digits, `y` -> full). Formatting a reference instant inside
+/// the window exposes the pattern width without the disambiguation expansion.
+fn icu_short_year_is_two_digit(
+    formatter: &icu::datetime::DateTimeFormatter<
+        icu::datetime::fieldsets::enums::CompositeFieldSet,
+    >,
+) -> bool {
+    use icu::datetime::input::{Date, DateTime, Time, ZonedDateTime};
+
+    let (Ok(date), Ok(time)) = (Date::try_new_iso(2000, 6, 15), Time::try_new(12, 0, 0, 0)) else {
+        return false;
+    };
+    let datetime = DateTime { date, time };
+    let zone = icu::datetime::input::TimeZoneInfo::utc().at_date_time_iso(datetime);
+    let zoned = ZonedDateTime { date, time, zone };
+    match collect_icu_datetime_parts(&formatter.format(&zoned)) {
+        Some(parts) => parts.iter().any(|(part_type, value)| {
+            part_type == "year"
+                && !value.is_empty()
+                && value.chars().count() <= 2
+                && value.chars().all(char::is_numeric)
+        }),
+        None => false,
+    }
+}
+
 fn has_time_component(opts: &DtfOptions) -> bool {
     opts.hour.is_some()
         || opts.minute.is_some()
@@ -1722,6 +2547,9 @@ fn transliterate_digits(s: &str, ns: &str) -> String {
 }
 
 fn format_with_options(ms: f64, opts: &DtfOptions) -> String {
+    if let Some(parts) = format_with_icu(ms, opts) {
+        return parts.into_iter().map(|(_, value)| value).collect();
+    }
     let raw = format_with_options_raw(ms, opts);
     transliterate_digits(&raw, &opts.numbering_system)
 }
@@ -3770,6 +4598,9 @@ fn format_time_style_to_parts(
 }
 
 fn format_to_parts_with_options(ms: f64, opts: &DtfOptions) -> Vec<(String, String)> {
+    if let Some(parts) = format_with_icu(ms, opts) {
+        return parts;
+    }
     let raw = format_to_parts_with_options_raw(ms, opts);
     if opts.numbering_system == "latn" {
         return raw;
@@ -4175,9 +5006,9 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
 /// %Intl%.[[FallbackSymbol]] via the ordinary [[Get]] (so Proxy traps fire) and
 /// require the result to carry the slot; otherwise throw a TypeError.
 fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValue> {
-    if let JsValue::Object(o) = this {
+    if let Some(o) = this.as_object_id() {
         let has_slot = interp
-            .get_object_cell(o.id)
+            .get_object_cell(o)
             .map(|c| {
                 matches!(
                     c.borrow().intl_data(),
@@ -4192,25 +5023,25 @@ fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsVal
         // ? OrdinaryHasInstance(%DateTimeFormat%, this) — propagate abrupt completions.
         let is_instance = match &ctor {
             Some(c) => match interp.ordinary_has_instance(c, this) {
-                Completion::Normal(JsValue::Boolean(b)) => b,
+                Completion::Normal(v) => v.as_boolean().unwrap_or(false),
                 Completion::Throw(e) => return Err(e),
                 _ => false,
             },
             None => false,
         };
         if is_instance {
-            let key = match interp.intl_fallback_symbol() {
-                JsValue::Symbol(s) => s.to_property_key(),
-                _ => unreachable!(),
+            let key = match interp.intl_fallback_symbol().as_symbol() {
+                Some(s) => s.to_property_key(),
+                None => unreachable!(),
             };
-            let fb = match interp.get_object_property(o.id, &key, this) {
+            let fb = match interp.get_object_property(o, &key, this) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::Object(fo) = &fb {
+            if let Some(fo) = fb.as_object_id() {
                 let fb_has_slot = interp
-                    .get_object_cell(fo.id)
+                    .get_object_cell(fo)
                     .map(|c| {
                         matches!(
                             c.borrow().intl_data(),
@@ -4231,8 +5062,8 @@ fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsVal
 fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptions, JsValue> {
     let recv = unwrap_dtf(interp, this)?;
     let this = &recv;
-    if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let b = obj.borrow();
         if let Some(IntlData::DateTimeFormat {
@@ -4302,12 +5133,12 @@ fn time_clip(t: f64) -> f64 {
 }
 
 fn resolve_date_value(interp: &mut Interpreter, date_arg: &JsValue) -> Result<f64, JsValue> {
-    if matches!(date_arg, JsValue::Undefined) {
+    if date_arg.is_undefined() {
         return Ok(now_ms().floor());
     }
     // Check if it's a Temporal object
-    if let JsValue::Object(o) = date_arg
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = date_arg.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let temporal = obj.borrow().temporal_data().cloned();
         if let Some(td) = temporal {
@@ -4334,8 +5165,8 @@ enum TemporalType {
 }
 
 fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalType> {
-    if let JsValue::Object(o) = val
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let td = obj.borrow().temporal_data().cloned();
         return match td {
@@ -4353,8 +5184,8 @@ fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalT
 }
 
 fn detect_temporal_calendar(interp: &Interpreter, val: &JsValue) -> Option<String> {
-    if let JsValue::Object(o) = val
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let td = obj.borrow().temporal_data().cloned();
         return match td {
@@ -4726,7 +5557,7 @@ fn temporal_to_epoch_ms(td: &TemporalData) -> Result<f64, JsValue> {
             Ok(ms)
         }
         TemporalData::Duration { .. } => {
-            Err(JsValue::Undefined) // Duration is not a date type
+            Err(JsValue::UNDEFINED) // Duration is not a date type
         }
     }
 }
@@ -4783,19 +5614,7 @@ impl Interpreter {
             .class_name = "Intl.DateTimeFormat".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.DateTimeFormat"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.DateTimeFormat");
 
         // format getter (returns a bound function, like Collator.compare)
         let format_getter = self.create_function(JsFunction::native(
@@ -4807,14 +5626,14 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this {
+                if let Some(o) = this.as_object_id() {
                     enum Probe {
                         NotDtf,
                         Cached(JsValue),
                         Uncached,
                     }
                     let probe = interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(o)
                         .map(|cell| {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::DateTimeFormat { .. })) {
@@ -4840,7 +5659,7 @@ impl Interpreter {
                         Probe::Uncached => {}
                     }
 
-                    let opts_snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                    let opts_snapshot = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::DateTimeFormat {
                             locale,
@@ -4906,7 +5725,7 @@ impl Interpreter {
                         1,
                         move |interp2, _this2, args2| {
                             let date_arg =
-                                args2.first().cloned().unwrap_or(JsValue::Undefined);
+                                args2.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             let temporal_type = detect_temporal_type(interp2, &date_arg);
                             if matches!(temporal_type, Some(TemporalType::ZonedDateTime)) {
                                 return Completion::Throw(interp2.create_type_error(
@@ -4934,11 +5753,11 @@ impl Interpreter {
                                 ms
                             };
                             let result = format_with_options(ms, &effective_opts);
-                            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                            Completion::Normal(JsValue::from_str(&result))
                         },
                     ));
 
-                    if let Some(obj) = interp.get_object_cell(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o) {
                         obj.borrow_mut().properties.insert(
                             crate::interpreter::key_intern::intern_key("[[BoundFormat]]"),
                             PropertyDescriptor::data(format_fn.clone(), false, false, false),
@@ -4969,7 +5788,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let date_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let date_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let temporal_type = detect_temporal_type(interp, &date_arg);
                 if matches!(temporal_type, Some(TemporalType::ZonedDateTime)) {
                     return Completion::Throw(interp.create_type_error(
@@ -5016,7 +5835,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&ptype)),
+                                    JsValue::from_str(&ptype),
                                     true,
                                     true,
                                     true,
@@ -5028,14 +5847,14 @@ impl Interpreter {
                             .insert_property(
                                 "value".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&value)),
+                                    JsValue::from_str(&value),
                                     true,
                                     true,
                                     true,
                                 ),
                             );
                         let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(id)
                     })
                     .collect();
 
@@ -5056,11 +5875,10 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let start_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let end_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let start_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let end_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                if matches!(start_arg, JsValue::Undefined) || matches!(end_arg, JsValue::Undefined)
-                {
+                if start_arg.is_undefined() || end_arg.is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("startDate and endDate are required"),
                     );
@@ -5148,7 +5966,7 @@ impl Interpreter {
                     end_ms
                 };
                 let result = format_range_with_options(start_ms, end_ms, &effective_opts);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -5165,10 +5983,10 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let start_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let end_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let start_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let end_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                if matches!(start_arg, JsValue::Undefined) || matches!(end_arg, JsValue::Undefined) {
+                if start_arg.is_undefined() || end_arg.is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("startDate and endDate are required"),
                     );
@@ -5259,7 +6077,7 @@ impl Interpreter {
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "type".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&ptype)),
+                                JsValue::from_str(&ptype),
                                 true,
                                 true,
                                 true,
@@ -5268,7 +6086,7 @@ impl Interpreter {
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "value".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&value)),
+                                JsValue::from_str(&value),
                                 true,
                                 true,
                                 true,
@@ -5277,14 +6095,14 @@ impl Interpreter {
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "source".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&source)),
+                                JsValue::from_str(&source),
                                 true,
                                 true,
                                 true,
                             ),
                         );
                         let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(id)
                     })
                     .collect();
 
@@ -5315,68 +6133,59 @@ impl Interpreter {
 
                 // Properties in spec order
                 let mut props: Vec<(&str, JsValue)> = vec![
-                    ("locale", JsValue::String(JsString::from_str(&opts.locale))),
-                    (
-                        "calendar",
-                        JsValue::String(JsString::from_str(&opts.calendar)),
-                    ),
-                    (
-                        "numberingSystem",
-                        JsValue::String(JsString::from_str(&opts.numbering_system)),
-                    ),
-                    (
-                        "timeZone",
-                        JsValue::String(JsString::from_str(&opts.time_zone)),
-                    ),
+                    ("locale", JsValue::from_str(&opts.locale)),
+                    ("calendar", JsValue::from_str(&opts.calendar)),
+                    ("numberingSystem", JsValue::from_str(&opts.numbering_system)),
+                    ("timeZone", JsValue::from_str(&opts.time_zone)),
                 ];
 
                 // hourCycle and hour12 only present if hour is used
                 let has_hour = opts.hour.is_some() || opts.time_style.is_some();
                 if has_hour {
                     let hc = resolve_hour_cycle(&opts);
-                    props.push(("hourCycle", JsValue::String(JsString::from_str(hc))));
+                    props.push(("hourCycle", JsValue::from_str(hc)));
                     let h12 = hc == "h12" || hc == "h11";
-                    props.push(("hour12", JsValue::Boolean(h12)));
+                    props.push(("hour12", JsValue::boolean(h12)));
                 }
 
                 if let Some(ref v) = opts.weekday {
-                    props.push(("weekday", JsValue::String(JsString::from_str(v))));
+                    props.push(("weekday", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.era {
-                    props.push(("era", JsValue::String(JsString::from_str(v))));
+                    props.push(("era", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.year {
-                    props.push(("year", JsValue::String(JsString::from_str(v))));
+                    props.push(("year", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.month {
-                    props.push(("month", JsValue::String(JsString::from_str(v))));
+                    props.push(("month", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.day {
-                    props.push(("day", JsValue::String(JsString::from_str(v))));
+                    props.push(("day", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.day_period {
-                    props.push(("dayPeriod", JsValue::String(JsString::from_str(v))));
+                    props.push(("dayPeriod", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.hour {
-                    props.push(("hour", JsValue::String(JsString::from_str(v))));
+                    props.push(("hour", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.minute {
-                    props.push(("minute", JsValue::String(JsString::from_str(v))));
+                    props.push(("minute", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.second {
-                    props.push(("second", JsValue::String(JsString::from_str(v))));
+                    props.push(("second", JsValue::from_str(v)));
                 }
                 if let Some(v) = opts.fractional_second_digits {
-                    props.push(("fractionalSecondDigits", JsValue::Number(v as f64)));
+                    props.push(("fractionalSecondDigits", JsValue::number(v as f64)));
                 }
                 if let Some(ref v) = opts.time_zone_name {
-                    props.push(("timeZoneName", JsValue::String(JsString::from_str(v))));
+                    props.push(("timeZoneName", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.date_style {
-                    props.push(("dateStyle", JsValue::String(JsString::from_str(v))));
+                    props.push(("dateStyle", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.time_style {
-                    props.push(("timeStyle", JsValue::String(JsString::from_str(v))));
+                    props.push(("timeStyle", JsValue::from_str(v)));
                 }
 
                 for (key, val) in props {
@@ -5389,7 +6198,7 @@ impl Interpreter {
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -5399,15 +6208,15 @@ impl Interpreter {
         self.realm_mut().intl_date_time_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let dtf_ctor = self.create_function(JsFunction::constructor(
             "DateTimeFormat".to_string(),
             0,
             move |interp, _this, args| {
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -5461,16 +6270,16 @@ impl Interpreter {
                 }
 
                 // Step 12: hour12
-                let hour12_raw = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "hour12", &options) {
+                let hour12_raw = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "hour12", &options) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     }
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 };
-                let hour12 = if matches!(hour12_raw, JsValue::Undefined) {
+                let hour12 = if hour12_raw.is_undefined() {
                     None
                 } else {
                     Some(interp.to_boolean_val(&hour12_raw))
@@ -5507,7 +6316,7 @@ impl Interpreter {
                             canonicalize_timezone(&tz)
                         }
                     } else {
-                        "UTC".to_string()
+                        canonicalize_iana_tz(&system_time_zone_identifier())
                     };
 
                 // Step 36: Table 7 component options (in table order)
@@ -5819,71 +6628,68 @@ impl Interpreter {
                 // freshly-initialized formatter under %Intl%.[[FallbackSymbol]]
                 // and return the receiver instead of a fresh object.
                 if interp.new_target.is_none()
-                    && let JsValue::Object(recv) = _this
+                    && let Some(recv_id) = _this.as_object_id()
+                    && let Some(ctor) = interp.realm().intl_date_time_format_ctor.clone()
                 {
-                    let recv_id = recv.id;
-                    if let Some(ctor) = interp.realm().intl_date_time_format_ctor.clone() {
-                        // ? OrdinaryHasInstance(%DateTimeFormat%, this) — an abrupt
-                        // completion (e.g. revoked Proxy / throwing getPrototypeOf
-                        // trap) must propagate, not fall through to a fresh object.
-                        let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
-                            Completion::Normal(JsValue::Boolean(b)) => b,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => false,
+                    // ? OrdinaryHasInstance(%DateTimeFormat%, this) — an abrupt
+                    // completion (e.g. revoked Proxy / throwing getPrototypeOf
+                    // trap) must propagate, not fall through to a fresh object.
+                    let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
+                        Completion::Normal(v) => v.as_boolean().unwrap_or(false),
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => false,
+                    };
+                    if is_instance {
+                        let key = match interp.intl_fallback_symbol().as_symbol() {
+                            Some(s) => s.to_property_key(),
+                            None => unreachable!(),
                         };
-                        if is_instance {
-                            let key = match interp.intl_fallback_symbol() {
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => unreachable!(),
-                            };
-                            let desc = crate::interpreter::types::PropertyDescriptor::data(
-                                JsValue::Object(crate::types::JsObject { id: obj_id }),
-                                false,
-                                false,
-                                false,
-                            );
-                            // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
-                            // route through the receiver's [[DefineOwnProperty]] so a
-                            // Proxy's defineProperty trap fires and a later [[Get]] in
-                            // Unwrap can observe the chained formatter.
-                            let is_proxy = interp
-                                .get_object_cell(recv_id)
-                                .map(|c| {
-                                    let b = c.borrow();
-                                    b.is_proxy() || b.is_proxy_revoked()
-                                })
-                                .unwrap_or(false);
-                            let defined = if is_proxy {
-                                let desc_val = interp.from_property_descriptor(&desc);
-                                match interp.proxy_define_own_property(recv_id, key, &desc_val) {
-                                    Ok(b) => b,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            } else {
-                                interp
-                                    .get_object_cell_expect(recv_id)
-                                    .borrow_mut()
-                                    .define_own_property(key, desc)
-                            };
-                            if !defined {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Cannot define [[FallbackSymbol]] property on receiver",
-                                ));
+                        let desc = crate::interpreter::types::PropertyDescriptor::data(
+                            JsValue::object(obj_id),
+                            false,
+                            false,
+                            false,
+                        );
+                        // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
+                        // route through the receiver's [[DefineOwnProperty]] so a
+                        // Proxy's defineProperty trap fires and a later [[Get]] in
+                        // Unwrap can observe the chained formatter.
+                        let is_proxy = interp
+                            .get_object_cell(recv_id)
+                            .map(|c| {
+                                let b = c.borrow();
+                                b.is_proxy() || b.is_proxy_revoked()
+                            })
+                            .unwrap_or(false);
+                        let defined = if is_proxy {
+                            let desc_val = interp.from_property_descriptor(&desc);
+                            match interp.proxy_define_own_property(recv_id, key, &desc_val) {
+                                Ok(b) => b,
+                                Err(e) => return Completion::Throw(e),
                             }
-                            return Completion::Normal(_this.clone());
+                        } else {
+                            interp
+                                .get_object_cell_expect(recv_id)
+                                .borrow_mut()
+                                .define_own_property(key, desc)
+                        };
+                        if !defined {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot define [[FallbackSymbol]] property on receiver",
+                            ));
                         }
+                        return Completion::Normal(_this.clone());
                     }
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set DateTimeFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &dtf_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = dtf_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -5896,8 +6702,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

@@ -63,9 +63,6 @@ replaceOnce(
 // 3) Tests that cannot pass on jsse for reasons outside this harness's scope.
 //    Skip each on jsse with skipAssert(<its expect count>) so the total is
 //    preserved; Node still runs them for real. Each is tracked as a follow-up:
-//      * lodash.random / lodash.shuffle — jsse's Math.random is a deterministic
-//        0.5 stub by design (src/interpreter/builtins/mod.rs), so randomness-
-//        dependent expectations can't hold.
 //      * "extremely large arrays" — 500k-element operations run for minutes on
 //        the tree-walker (perf limitation).
 //      * lone surrogates — jsse's regex matches lone surrogates where lodash's
@@ -95,9 +92,6 @@ function skipTests(fragments, guard) {
 skipTests(
   [
     "should work with extremely large arrays",
-    "should return \\`0\\` or \\`1\\` when no arguments are given",
-    "should swap \\`min\\` and \\`max\\` when \\`min\\` > \\`max\\`",
-    "should shuffle small collections",
     "should match lone surrogates",
     "should work when hot",
   ],

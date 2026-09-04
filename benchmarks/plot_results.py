@@ -4,6 +4,7 @@
 import csv
 import os
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,13 +39,20 @@ width = 0.25
 
 for i, engine in enumerate(engines):
     bars = ax.bar(
-        x + i * width, data[engine], width,
-        label=ENGINE_LABELS[engine], color=COLORS[engine],
+        x + i * width,
+        data[engine],
+        width,
+        label=ENGINE_LABELS[engine],
+        color=COLORS[engine],
     )
     for bar, val in zip(bars, data[engine]):
         ax.text(
-            bar.get_x() + bar.get_width() / 2, bar.get_height(),
-            f"{val:.2f}s", ha="center", va="bottom", fontsize=7,
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{val:.2f}s",
+            ha="center",
+            va="bottom",
+            fontsize=7,
         )
 
 ax.set_yscale("log")
@@ -65,13 +73,20 @@ node_key = engines[0]
 for i, engine in enumerate(engines[1:], 1):
     slowdowns = [data[engine][j] / data[node_key][j] for j in range(len(benchmarks))]
     bars = ax.bar(
-        x + (i - 1) * 0.35, slowdowns, 0.35,
-        label=ENGINE_LABELS[engine], color=COLORS[engine],
+        x + (i - 1) * 0.35,
+        slowdowns,
+        0.35,
+        label=ENGINE_LABELS[engine],
+        color=COLORS[engine],
     )
     for bar, val in zip(bars, slowdowns):
         ax.text(
-            bar.get_x() + bar.get_width() / 2, bar.get_height(),
-            f"{val:.1f}x", ha="center", va="bottom", fontsize=8,
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{val:.1f}x",
+            ha="center",
+            va="bottom",
+            fontsize=8,
         )
 
 ax.set_ylabel("Slowdown vs Node.js (×)")
@@ -92,13 +107,20 @@ jsse_key = engines[2]
 
 for i, engine in enumerate([boa_key, jsse_key]):
     bars = ax.bar(
-        x + i * 0.35, data[engine], 0.35,
-        label=ENGINE_LABELS[engine], color=COLORS[engine],
+        x + i * 0.35,
+        data[engine],
+        0.35,
+        label=ENGINE_LABELS[engine],
+        color=COLORS[engine],
     )
     for bar, val in zip(bars, data[engine]):
         ax.text(
-            bar.get_x() + bar.get_width() / 2, bar.get_height(),
-            f"{val:.2f}s", ha="center", va="bottom", fontsize=8,
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{val:.2f}s",
+            ha="center",
+            va="bottom",
+            fontsize=8,
         )
 
 ax.set_yscale("log")

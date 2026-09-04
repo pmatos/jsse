@@ -886,8 +886,8 @@ fn extract_display_names_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<DisplayNamesData, JsValue> {
-    if let JsValue::Object(o) = this
-        && let Some(cell) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(cell) = interp.get_object_cell(o)
     {
         let b = cell.borrow();
         if let Some(IntlData::DisplayNames {
@@ -1079,19 +1079,7 @@ impl Interpreter {
             .class_name = "Intl.DisplayNames".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.DisplayNames"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.DisplayNames");
 
         // of(code)
         let of_fn = self.create_function(JsFunction::native(
@@ -1103,7 +1091,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let code_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let code_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code = match interp.to_string_value(&code_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
@@ -1117,10 +1105,8 @@ impl Interpreter {
                     &data.language_display,
                     &code,
                 ) {
-                    Ok(Some(name)) => {
-                        Completion::Normal(JsValue::String(JsString::from_str(&name)))
-                    }
-                    Ok(None) => Completion::Normal(JsValue::Undefined),
+                    Ok(Some(name)) => Completion::Normal(JsValue::from_str(&name)),
+                    Ok(None) => Completion::Normal(JsValue::UNDEFINED),
                     Err(_msg) => {
                         let err = interp.create_range_error(&format!("Invalid code: {}", code));
                         Completion::Throw(err)
@@ -1156,24 +1142,14 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_property(
                         "locale".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&data.locale)),
-                            true,
-                            true,
-                            true,
-                        ),
+                        PropertyDescriptor::data(JsValue::from_str(&data.locale), true, true, true),
                     );
                 interp
                     .get_object_cell_expect(result_id)
                     .borrow_mut()
                     .insert_property(
                         "style".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&data.style)),
-                            true,
-                            true,
-                            true,
-                        ),
+                        PropertyDescriptor::data(JsValue::from_str(&data.style), true, true, true),
                     );
                 interp
                     .get_object_cell_expect(result_id)
@@ -1181,7 +1157,7 @@ impl Interpreter {
                     .insert_property(
                         "type".to_string(),
                         PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&data.display_type)),
+                            JsValue::from_str(&data.display_type),
                             true,
                             true,
                             true,
@@ -1193,7 +1169,7 @@ impl Interpreter {
                     .insert_property(
                         "fallback".to_string(),
                         PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&data.fallback)),
+                            JsValue::from_str(&data.fallback),
                             true,
                             true,
                             true,
@@ -1206,16 +1182,11 @@ impl Interpreter {
                         .borrow_mut()
                         .insert_property(
                             "languageDisplay".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(ld)),
-                                true,
-                                true,
-                                true,
-                            ),
+                            PropertyDescriptor::data(JsValue::from_str(ld), true, true, true),
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1225,7 +1196,7 @@ impl Interpreter {
         self.realm_mut().intl_display_names_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let display_names_ctor = self.create_function(JsFunction::constructor(
@@ -1238,8 +1209,8 @@ impl Interpreter {
                     );
                 }
 
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -1247,7 +1218,7 @@ impl Interpreter {
                 };
 
                 // DisplayNames requires options to be an object, not undefined
-                if matches!(options_arg, JsValue::Undefined) {
+                if options_arg.is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error(
                             "Options argument is required for Intl.DisplayNames",
@@ -1356,15 +1327,14 @@ impl Interpreter {
                         language_display,
                     }));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set DisplayNames.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &display_names_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = display_names_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -1377,8 +1347,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),
