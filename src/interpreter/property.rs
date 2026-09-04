@@ -1,5 +1,23 @@
 use super::*;
 
+/// Formats `n` into `buf` and returns the digits as a `&str`, without a heap
+/// allocation. Used on the dense-array numeric-read fast path, where an
+/// owned `String` per read would defeat the point of the fast path.
+fn format_u32_stack(n: u32, buf: &mut [u8; 10]) -> &str {
+    let mut i = buf.len();
+    let mut n = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    // Safety of `unwrap`: every byte written above is one of b'0'..=b'9'.
+    std::str::from_utf8(&buf[i..]).unwrap()
+}
+
 /// The observable result of [[Set]] plus the internal write-path fact needed
 /// by the evaluator's global object-record bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,8 +168,9 @@ impl Interpreter {
             let trunc = index.trunc();
             if index == trunc && index >= 0.0 && (index as usize) < elems.len() {
                 let idx = index as usize;
-                let key_str = (idx as u32).to_string();
-                if !obj_borrow.properties.contains_key(&key_str) && !elems[idx].is_undefined() {
+                let mut buf = [0u8; 10];
+                let key_str = format_u32_stack(idx as u32, &mut buf);
+                if !obj_borrow.properties.contains_key(key_str) && !elems[idx].is_undefined() {
                     return Some(elems[idx].clone());
                 }
             }
