@@ -130,6 +130,21 @@ do identical work and no PRNG shim is needed.
 
 Wall times were taken from a **default** `cargo build --release` binary and the
 counters from a separate `--features perf-counters` build; per `CLAUDE.md`, an
-instrumented build is never timed. The projection model validates against the
-one figure already recorded in the harness config: it predicts 9.9 min for the
-fixed 200-iteration `scalarMult.base` KAT, against the "~11min" noted there.
+instrumented build is never timed.
+
+**The projection is unvalidated, and one apparent check is not one.** The
+harness was not re-run end to end for this work, so the ~22 min sampled figure
+and the ~6 h full figure are both model output: per-op costs multiplied by each
+test file's operation counts. It is tempting to check the model against the
+`~11min` the harness config records for the fixed 200-iteration
+`scalarMult.base` KAT, which the model puts at 9.9 min — but that `~11min`
+entered the config in the same commit as the `≈3.4s` per-op figure this
+measurement supersedes, and 200 × 3.4 s = 11.3 min. It is the old per-op number
+restated, not an independent observation, so agreeing with it would only mean
+agreeing with the measurement it came from. (The config comment is updated to
+~10 min alongside this report, for the same reason.)
+
+The one real bound is weak: the sampled corpus passes inside the harness's 1 h
+`LIB_TIMEOUT`, so its true runtime is under 60 min, and ~22 min is consistent
+with that. Anyone wanting a firm number should run
+`./scripts/run-library-tests.sh tweetnacl-js` and time it.

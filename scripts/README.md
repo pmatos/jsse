@@ -349,23 +349,23 @@ mechanism as upstream's unmodified browser path. `node-test-harness.js`
 supplies the tape assertion adapter on jsse; Node loads real tape as an
 independent framework oracle.
 
-Curve25519/Ed25519 point arithmetic runs roughly 140-400x slower on the
-tree-walker than on V8, per operation (re-measured 2026-09-05, min of 3 reps:
-`scalarMult.base` 2.98s here vs 14ms on Node; `sign.detached.verify` 10.8s vs
-70ms — these supersede the ≈3.4s / ≈12s figures recorded when the harness
-landed). At the full upstream vector counts (256 scalarmult, 256 box, 1024
-Ed25519 sign vectors) the complete suite projects to ~6h, the same order as
-the ~7h first estimated here, which isn't practical to run as part of landing
-the harness — a correctness smoke test first confirmed all 13 files pass
-1233/1233 with truncated vectors, byte-identical to Node, so this is pure
-interpretation overhead rather than an engine bug.
+Curve25519/Ed25519 point arithmetic runs roughly 140-390x slower on the
+tree-walker than on V8, per operation (re-measured 2026-09-05 on this shared
+buildbox, min of 3 reps: `scalarMult.base` 2.98s here vs 14ms on Node;
+`sign.detached.verify` 10.8s vs 70ms). At the full upstream vector counts
+(256 scalarmult, 256 box, 1024 Ed25519 sign vectors) the complete suite
+projects to ~6h, which isn't practical to run as part of landing the harness —
+a correctness smoke test first confirmed all 13 files pass 1233/1233 with
+truncated vectors, byte-identical to Node, so this is pure interpretation
+overhead rather than an engine bug.
 `lib_prepare` therefore evenly samples the three curve-heavy vector files
 (`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
 each (stride-sampled across the full array, not a prefix, so the subset still
 spans the vector space); every other data file (secretbox, hash,
 onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
-the first sampled corpus in this harness — every other config runs its
-library's suite unmodified.
+the only corpus here reduced by *sampling a data set*; where other configs
+drop cases they do it case-by-case (lodash's `skipAssert` list, UglifyJS's
+`expect_stdout` stage), never by thinning a vector file.
 
 Exhaustive coverage is tracked in
 [#361](https://github.com/pmatos/jsse/issues/361), and was measured against the

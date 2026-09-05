@@ -29,7 +29,7 @@
 # unmodified browser path. node-test-harness.js supplies a focused tape
 # adapter on jsse; Node loads real tape as an independent framework oracle.
 #
-# Curve25519/Ed25519 point arithmetic runs ~140-400x slower on the tree-walker
+# Curve25519/Ed25519 point arithmetic runs ~140-390x slower on the tree-walker
 # than on V8 per operation, so the full upstream counts (256 scalarmult / 256
 # box / 1024 sign) project to ~6h rather than minutes, while a correctness smoke
 # run over all 13 files with truncated vectors passed 1233/1233 byte-identical
@@ -39,8 +39,8 @@
 # (stride-sampled across the full array, not just a prefix, so the subset still
 # spans the original vector space); every other file (secretbox, hash,
 # onetimeauth — no elliptic-curve cost) stays at its full upstream count. This
-# is the first sampled corpus in this harness (every other config runs its
-# library's suite unmodified).
+# is the only corpus here reduced by sampling a data set; other configs that
+# drop cases do it case-by-case, never by thinning a vector file.
 #
 # Exhaustive coverage is issue #361. Measured 2026-09-05: --bytecode does not
 # move this workload (1.00-1.07x), because the three functions carrying 96% of
@@ -58,7 +58,7 @@ LIB_ESBUILD_EXTRA=(
 )
 LIB_SHIMS=("node-crypto-shim.js" "node-test-harness.js")
 LIB_EXPECT_COUNT="5470"   # locked: sampled corpus, equal on jsse and Node
-LIB_TIMEOUT="3600"        # 1h: the fixed 200-iteration scalarMult.base KAT loop alone is ~11min
+LIB_TIMEOUT="3600"        # 1h: the fixed 200-iteration scalarMult.base KAT loop alone is ~10min
 
 lib_prepare() {
     # Retain only the dependencies the test files themselves import; the
