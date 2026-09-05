@@ -45,6 +45,11 @@ pub(crate) struct Parser<'a> {
     pushback: Option<(Token, bool, usize, usize)>, // (token, had_line_terminator_before, token_start, token_end)
     strict: bool,
     is_module: bool,
+    /// Context depth counters. A construct that re-scopes one of these must
+    /// restore it on its **error** path too: any counter whose decrement runs
+    /// unconditionally somewhere turns a leaked zero into an underflow, which
+    /// is what issue #597 was. Adding a counter here means auditing its
+    /// decrements for that shape.
     in_function: u32,
     in_non_arrow_function: u32,
     in_generator: bool,
@@ -1561,15 +1566,19 @@ mod tests {
             "class C { static { for (;;) { function f() {",
         ];
 
+        fn assert_counters_clean(parser: &Parser<'_>, source: &str) {
+            assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
+            assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
+            assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+        }
+
         for source in SOURCES {
             let mut parser = Parser::new(source).unwrap();
             assert!(
                 parser.parse_program().is_err(),
                 "expected a parse error for {source:?}"
             );
-            assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
-            assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
-            assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+            assert_counters_clean(&parser, source);
         }
 
         // `in_non_arrow_function` is not asserted above. Eight of its nine
@@ -1591,9 +1600,7 @@ mod tests {
                 parser.parse_program_as_module().is_err(),
                 "expected a parse error for {source:?}"
             );
-            assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
-            assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
-            assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+            assert_counters_clean(&parser, source);
             assert_eq!(
                 parser.in_non_arrow_function, 0,
                 "in_non_arrow_function leaked for {source:?}"

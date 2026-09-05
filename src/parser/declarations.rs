@@ -1319,7 +1319,10 @@ impl<'a> Parser<'a> {
         // `in_iteration` in `parse_iteration_body` that way.
         let result = self
             .parse_function_body_statements(saved_param_names.as_ref())
-            .and_then(|body| self.eat(&Token::RightBrace).map(|()| body));
+            .and_then(|body| {
+                self.eat(&Token::RightBrace)?;
+                Ok(body)
+            });
 
         self.in_function -= 1;
         self.in_generator = prev_generator;

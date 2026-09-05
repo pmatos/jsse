@@ -1401,13 +1401,14 @@ impl<'a> Parser<'a> {
         self.eat(&Token::RightParen)?;
         self.eat(&Token::LeftBrace)?;
         // The decrement below is unconditional, matching `parse_iteration_body`.
-        // That is deliberate: it makes a counter that some inner construct
-        // zeroed without restoring underflow loudly here rather than silently
-        // corrupt `break`/`continue` validation further out.
+        // That is deliberate: a counter some inner construct zeroed without
+        // restoring underflows here — a panic under `overflow-checks`, which
+        // the fuzz targets and the test profile both enable — rather than
+        // silently corrupting `break`/`continue` validation further out.
         self.in_switch += 1;
-        let cases = self.parse_switch_case_block();
+        let result = self.parse_switch_case_block();
         self.in_switch -= 1;
-        let cases = cases?;
+        let cases = result?;
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Switch(SwitchStatement {
             discriminant,
@@ -1439,10 +1440,10 @@ impl<'a> Parser<'a> {
             };
             let prev_sc = self.in_switch_case;
             self.in_switch_case = true;
-            let consequent =
+            let result =
                 self.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names);
             self.in_switch_case = prev_sc;
-            let consequent = consequent?;
+            let consequent = result?;
             cases.push(SwitchCase { test, consequent });
         }
         // §14.12.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames in CaseBlock
