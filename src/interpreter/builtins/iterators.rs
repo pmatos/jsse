@@ -341,6 +341,48 @@ fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result
     }
 }
 
+// A two-slot container an iterator helper roots once and mutates in place.
+// Native-closure captures that are replaced after the helper is built cannot be
+// stored in the closure's own `Rc<RefCell<...>>` state: the collector never
+// walks it, so a replacement is unreachable and can be collected mid-iteration.
+// Pinning each replacement instead would retain every superseded value for the
+// lifetime of the helper. See `Interpreter::set_helper_gc_roots`.
+fn rooted_pair_new(interp: &mut Interpreter) -> JsValue {
+    interp.create_array(vec![JsValue::UNDEFINED, JsValue::UNDEFINED])
+}
+
+fn rooted_pair_get(interp: &Interpreter, pair: &JsValue) -> (Option<JsValue>, Option<JsValue>) {
+    let pair_id = pair
+        .as_object_id()
+        .expect("rooted pair must be an Array object");
+    let cell = interp.get_object_cell_expect(pair_id);
+    let obj = cell.borrow();
+    let elements = obj
+        .array_elements()
+        .expect("rooted pair must have Array elements");
+    (
+        elements.first().filter(|v| !v.is_undefined()).cloned(),
+        elements.get(1).filter(|v| !v.is_undefined()).cloned(),
+    )
+}
+
+fn rooted_pair_set(interp: &Interpreter, pair: &JsValue, first: JsValue, second: JsValue) {
+    let pair_id = pair
+        .as_object_id()
+        .expect("rooted pair must be an Array object");
+    let cell = interp.get_object_cell_expect(pair_id);
+    let mut obj = cell.borrow_mut();
+    let elements = obj
+        .array_elements_mut()
+        .expect("rooted pair must have Array elements");
+    elements[0] = first;
+    elements[1] = second;
+}
+
+fn rooted_pair_clear(interp: &Interpreter, pair: &JsValue) {
+    rooted_pair_set(interp, pair, JsValue::UNDEFINED, JsValue::UNDEFINED);
+}
+
 fn close_iterator_for_error(
     interp: &mut Interpreter,
     iterator: &JsValue,
@@ -2889,10 +2931,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let inner_roots = interp.create_array(vec![
-                    JsValue::UNDEFINED,
-                    JsValue::UNDEFINED,
-                ]);
+                let inner_roots = rooted_pair_new(interp);
                 // state: (outer_iter, outer_next, mapper, counter, rooted inner pair, alive, running)
                 #[allow(clippy::type_complexity)]
                 let state: Rc<
@@ -2955,26 +2994,8 @@ impl Interpreter {
                                     )
                                 };
 
-                                let (inner_iter, inner_next) = {
-                                    let roots_id = inner_roots
-                                        .as_object_id()
-                                        .expect("flatMap inner roots must be an Array object");
-                                    let roots_cell = interp.get_object_cell_expect(roots_id);
-                                    let roots = roots_cell.borrow();
-                                    let elements = roots
-                                        .array_elements()
-                                        .expect("flatMap inner roots must have Array elements");
-                                    (
-                                        elements
-                                            .first()
-                                            .filter(|value| !value.is_undefined())
-                                            .cloned(),
-                                        elements
-                                            .get(1)
-                                            .filter(|value| !value.is_undefined())
-                                            .cloned(),
-                                    )
-                                };
+                                let (inner_iter, inner_next) =
+                                    rooted_pair_get(interp, &inner_roots);
 
                                 // If we have an inner iterator, drain it
                                 if let (Some(ii), Some(in_next)) = (&inner_iter, &inner_next) {
@@ -2993,16 +3014,7 @@ impl Interpreter {
                                             );
                                         }
                                         Ok(None) => {
-                                            let roots_id = inner_roots
-                                                .as_object_id()
-                                                .expect("flatMap inner roots must be an Array object");
-                                            let roots_cell = interp.get_object_cell_expect(roots_id);
-                                            let mut roots = roots_cell.borrow_mut();
-                                            let elements = roots
-                                                .array_elements_mut()
-                                                .expect("flatMap inner roots must have Array elements");
-                                            elements[0] = JsValue::UNDEFINED;
-                                            elements[1] = JsValue::UNDEFINED;
+                                            rooted_pair_clear(interp, &inner_roots);
                                             continue;
                                         }
                                         Err(e) => {
@@ -3030,17 +3042,12 @@ impl Interpreter {
                                             Completion::Normal(mapped_val) => {
                                                 match get_iterator_flattenable(interp, &mapped_val, true) {
                                                     Ok((new_inner, inner_next_method)) => {
-                                                        let roots_id = inner_roots
-                                                            .as_object_id()
-                                                            .expect("flatMap inner roots must be an Array object");
-                                                        let roots_cell =
-                                                            interp.get_object_cell_expect(roots_id);
-                                                        let mut roots = roots_cell.borrow_mut();
-                                                        let elements = roots
-                                                            .array_elements_mut()
-                                                            .expect("flatMap inner roots must have Array elements");
-                                                        elements[0] = new_inner;
-                                                        elements[1] = inner_next_method;
+                                                        rooted_pair_set(
+                                                            interp,
+                                                            &inner_roots,
+                                                            new_inner,
+                                                            inner_next_method,
+                                                        );
                                                         continue;
                                                     }
                                                     Err(e) => {
@@ -3094,19 +3101,7 @@ impl Interpreter {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.4.clone(), s.5, s.6)
                         };
-                        let inner_iter = {
-                            let roots_id = inner_roots
-                                .as_object_id()
-                                .expect("flatMap inner roots must be an Array object");
-                            let roots_cell = interp.get_object_cell_expect(roots_id);
-                            let roots = roots_cell.borrow();
-                            roots
-                                .array_elements()
-                                .expect("flatMap inner roots must have Array elements")
-                                .first()
-                                .filter(|value| !value.is_undefined())
-                                .cloned()
-                        };
+                        let (inner_iter, _) = rooted_pair_get(interp, &inner_roots);
                         if running {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
@@ -3129,16 +3124,7 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
-                        let roots_id = inner_roots
-                            .as_object_id()
-                            .expect("flatMap inner roots must be an Array object");
-                        let roots_cell = interp.get_object_cell_expect(roots_id);
-                        let mut roots = roots_cell.borrow_mut();
-                        let elements = roots
-                            .array_elements_mut()
-                            .expect("flatMap inner roots must have Array elements");
-                        elements[0] = JsValue::UNDEFINED;
-                        elements[1] = JsValue::UNDEFINED;
+                        rooted_pair_clear(interp, &inner_roots);
                         state_ret.borrow_mut().6 = false;
                         result
                     },
@@ -3345,26 +3331,20 @@ impl Interpreter {
                     }
                 }
 
-                // state: (iterables, current_index, current_iter, current_next, alive, running)
+                let current_roots = rooted_pair_new(interp);
+                // state: (iterables, current_index, rooted current pair, alive, running)
                 #[allow(clippy::type_complexity)]
                 let state: Rc<
-                    RefCell<(
-                        Vec<(JsValue, JsValue)>,
-                        usize,
-                        Option<JsValue>,
-                        Option<JsValue>,
-                        bool,
-                        bool,
-                    )>,
-                > = Rc::new(RefCell::new((iterables, 0, None, None, true, false)));
+                    RefCell<(Vec<(JsValue, JsValue)>, usize, JsValue, bool, bool)>,
+                > = Rc::new(RefCell::new((iterables, 0, current_roots, true, false)));
 
                 let state_next = state.clone();
                 let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let alive = state_next.borrow().4;
-                        let running = state_next.borrow().5;
+                        let alive = state_next.borrow().3;
+                        let running = state_next.borrow().4;
                         if !alive {
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
@@ -3374,18 +3354,20 @@ impl Interpreter {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_next.borrow_mut().5 = true;
+                        state_next.borrow_mut().4 = true;
                         let result = (|| {
                         loop {
-                            let (ref iterables, idx, ref cur_iter, ref cur_next, alive, _running) = {
+                            let (ref iterables, idx, ref current_roots, alive) = {
                                 let s = state_next.borrow();
-                                (s.0.clone(), s.1, s.2.clone(), s.3.clone(), s.4, s.5)
+                                (s.0.clone(), s.1, s.2.clone(), s.3)
                             };
                             if !alive {
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
+                            let (ref cur_iter, ref cur_next) =
+                                rooted_pair_get(interp, current_roots);
 
                             // If we have a current iterator, try getting next
                             if let (Some(ci), Some(cn)) = (cur_iter, cur_next) {
@@ -3402,12 +3384,11 @@ impl Interpreter {
                                     Ok(None) => {
                                         // Current exhausted, move to next
                                         state_next.borrow_mut().1 = idx + 1;
-                                        state_next.borrow_mut().2 = None;
-                                        state_next.borrow_mut().3 = None;
+                                        rooted_pair_clear(interp, current_roots);
                                         continue;
                                     }
                                     Err(e) => {
-                                        state_next.borrow_mut().4 = false;
+                                        state_next.borrow_mut().3 = false;
                                         return Completion::Throw(e);
                                     }
                                 }
@@ -3415,7 +3396,7 @@ impl Interpreter {
 
                             // Open next iterable
                             if idx >= iterables.len() {
-                                state_next.borrow_mut().4 = false;
+                                state_next.borrow_mut().3 = false;
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
@@ -3425,7 +3406,7 @@ impl Interpreter {
                             match interp.call_function(iter_fn, iterable, &[]) {
                                 Completion::Normal(new_iter) => {
                                     if !new_iter.is_object() {
-                                        state_next.borrow_mut().4 = false;
+                                        state_next.borrow_mut().3 = false;
                                         let err = interp.create_type_error(
                                             "Result of Symbol.iterator is not an object",
                                         );
@@ -3435,20 +3416,24 @@ impl Interpreter {
                                         match get_iterator_direct_getter(interp, &new_iter) {
                                             Ok((_, nm)) => nm,
                                             Err(e) => {
-                                                state_next.borrow_mut().4 = false;
+                                                state_next.borrow_mut().3 = false;
                                                 return Completion::Throw(e);
                                             }
                                         };
-                                    state_next.borrow_mut().2 = Some(new_iter);
-                                    state_next.borrow_mut().3 = Some(next_method);
+                                    rooted_pair_set(
+                                        interp,
+                                        current_roots,
+                                        new_iter,
+                                        next_method,
+                                    );
                                     continue;
                                 }
                                 Completion::Throw(e) => {
-                                    state_next.borrow_mut().4 = false;
+                                    state_next.borrow_mut().3 = false;
                                     return Completion::Throw(e);
                                 }
                                 _ => {
-                                    state_next.borrow_mut().4 = false;
+                                    state_next.borrow_mut().3 = false;
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
@@ -3456,7 +3441,7 @@ impl Interpreter {
                             }
                         }
                         })();
-                        state_next.borrow_mut().5 = false;
+                        state_next.borrow_mut().4 = false;
                         result
                     },
                 ));
@@ -3466,18 +3451,17 @@ impl Interpreter {
                     "return".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let (cur_iter, alive, running) = {
+                        let (current_roots, alive, running) = {
                             let s = state_ret.borrow();
-                            (s.2.clone(), s.4, s.5)
+                            (s.2.clone(), s.3, s.4)
                         };
                         if running {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_ret.borrow_mut().5 = true; // set running
-                        state_ret.borrow_mut().4 = false;
-                        state_ret.borrow_mut().2 = None;
-                        state_ret.borrow_mut().3 = None;
+                        let (cur_iter, _) = rooted_pair_get(interp, &current_roots);
+                        state_ret.borrow_mut().4 = true; // set running
+                        state_ret.borrow_mut().3 = false;
                         let result = if alive
                             && let Some(ref ci) = cur_iter
                             && let Err(e) = iterator_close_getter(interp, ci)
@@ -3488,7 +3472,8 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
-                        state_ret.borrow_mut().5 = false; // clear running
+                        rooted_pair_clear(interp, &current_roots);
+                        state_ret.borrow_mut().4 = false; // clear running
                         result
                     },
                 ));
@@ -3496,10 +3481,9 @@ impl Interpreter {
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 {
                     let b = state.borrow();
-                    let mut roots = Vec::with_capacity(b.0.len() * 2 + 2);
+                    let mut roots = Vec::with_capacity(b.0.len() * 2 + 1);
                     for (io, nm) in &b.0 { roots.push(io.clone()); roots.push(nm.clone()); }
-                    if let Some(ref v) = b.2 { roots.push(v.clone()); }
-                    if let Some(ref v) = b.3 { roots.push(v.clone()); }
+                    roots.push(b.2.clone());
                     interp.set_helper_gc_roots(&helper, roots);
                 }
                 Completion::Normal(helper)
