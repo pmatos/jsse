@@ -18,6 +18,18 @@ open PR and correctly reported that blocker. The next stage should verify
 (`cargo test --release host_exit`, `./scripts/lint.sh`), skip re-implementing §3/§4, `git rm
 PLAN.md`, push the branch, and open the PR.
 
+**Re-verified 2026-09-05** (this planning re-run): tip is still `2dd7896` on top of the plan
+commit; `git ls-remote origin "refs/heads/sym/jsse/596*"` is still empty and
+`gh pr list --head <branch> --state all` is still `[]` — unchanged since the blocked simplify run.
+Ran `cargo test --release host_exit`: all 29 `host_exit_*` tests pass, including the three named in
+§4 (`host_exit_in_dependency_stops_sibling_import_and_parent_body`,
+`host_exit_in_top_level_await_dependency_stops_sibling_and_parent`,
+`host_exit_in_deferred_transitive_dep_stops_sibling_transitive_dep_and_caller`) — §0's
+commit-by-commit match to §3/§4 is reconfirmed, not just asserted. `EVIDENCE.md` in the workspace
+root is an untracked leftover from that blocked simplify stage (documents the same no-PR blocker);
+it is not a planning artefact, must not be `git add`ed, and the implementation stage should leave
+it out of the PR (delete or ignore it alongside the `git rm PLAN.md` step).
+
 ## 1. Problem restated
 
 `__host_exit` (jsse's Node-`process.exit`-compatible host hook, opt-in via `enable_node_host()`)
