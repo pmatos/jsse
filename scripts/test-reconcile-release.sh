@@ -28,6 +28,7 @@ set -euo pipefail
 echo "gh $*" >> "$GH_LOG"
 if [ "${1:-}" = "release" ] && [ "${2:-}" = "view" ]; then
     if [ "${GH_VIEW_EXIT:-0}" -ne 0 ]; then
+        echo "${GH_VIEW_STDERR:-release not found}" >&2
         exit "${GH_VIEW_EXIT}"
     fi
     json="${GH_VIEW_JSON:-}"
@@ -76,10 +77,10 @@ Release notes body for v1.2.3."
     done
 }
 
-# run_reconcile <repo> <view-exit> <view-json> → runs the script with a fresh
-# log dir; sets GH_LOG/PREPARE_LOG/RC.
+# run_reconcile <repo> <view-exit> <view-json> [view-stderr] → runs the script
+# with a fresh log dir; sets GH_LOG/PREPARE_LOG/RC.
 run_reconcile() {
-    local repo="$1" view_exit="$2" view_json="$3"
+    local repo="$1" view_exit="$2" view_json="$3" view_stderr="${4:-release not found}"
     GH_LOG="$WORK/gh.log"
     PREPARE_LOG="$WORK/prepare.log"
     : > "$GH_LOG"
@@ -91,6 +92,7 @@ run_reconcile() {
             GH_LOG="$GH_LOG" \
             GH_VIEW_EXIT="$view_exit" \
             GH_VIEW_JSON="$view_json" \
+            GH_VIEW_STDERR="$view_stderr" \
             PREPARE_SCRIPT="$WORK/prepare-stub.sh" \
             PREPARE_LOG="$PREPARE_LOG" \
             bash "$RECONCILE"
@@ -230,9 +232,25 @@ test_published_missing_asset() {
     echo "PASS $name"
 }
 
+# --- Slice 3b: unexpected `gh release view` failure → loud exit, no build -
+test_view_unexpected_failure() {
+    local name="view-unexpected-failure"
+    make_repo "$name" 0
+    run_reconcile "$REPO" 1 '' "HTTP 500: Internal Server Error"
+    if [ "$RC" -eq 0 ]; then
+        echo "FAIL $name: expected reconcile to exit non-zero"
+        FAIL=1
+        return
+    fi
+    assert_empty "$PREPARE_LOG" "$name" || return
+    assert_not_contains "$GH_LOG" "gh release create" "$name" || return
+    echo "PASS $name"
+}
+
 test_no_tags
 test_fully_published
 test_create_path
+test_view_unexpected_failure
 test_draft_missing_asset
 test_published_missing_asset
 

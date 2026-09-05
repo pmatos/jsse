@@ -39,9 +39,11 @@ CHECKSUMS="SHA256SUMS.txt"
 
 echo "reconcile-release: latest release tag is ${TAG}"
 
+VIEW_ERR_FILE="$(mktemp)"
+
 VIEW_JSON=""
 RELEASE_FOUND=0
-if VIEW_JSON="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
+if VIEW_JSON="$(gh release view "$TAG" --json isDraft,assets 2>"$VIEW_ERR_FILE")"; then
     RELEASE_FOUND=1
     IS_DRAFT="$(jq -r '.isDraft' <<<"$VIEW_JSON")"
     HAS_ALL_ASSETS=1
@@ -55,7 +57,13 @@ if VIEW_JSON="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null)"; then
         echo "reconcile-release: ${TAG} already published with all assets; nothing to reconcile"
         exit 0
     fi
+elif ! grep -qi "release not found" "$VIEW_ERR_FILE"; then
+    echo "reconcile-release: gh release view ${TAG} failed unexpectedly:" >&2
+    cat "$VIEW_ERR_FILE" >&2
+    rm -f "$VIEW_ERR_FILE"
+    exit 1
 fi
+rm -f "$VIEW_ERR_FILE"
 
 WORKTREE="$(mktemp -d)"
 rmdir "$WORKTREE"
