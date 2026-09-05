@@ -42,8 +42,27 @@
 # subset still spans the original vector space); every other file (secretbox,
 # hash, onetimeauth — no elliptic-curve cost) stays at its full upstream
 # count. This is the first sampled corpus in this harness (every other config
-# runs its library's suite unmodified) — exhaustive coverage is tracked in
-# issue #361, to revisit once the engine has a faster numeric path.
+# runs its library's suite unmodified).
+#
+# Exhaustive coverage is tracked in issue #361 and was measured there against
+# the bytecode VM on 2026-09-05: `--bytecode` does not move this workload —
+# 1.00x on scalarMult.base, 1.01x on scalarMult, 1.00x on sign.detached and
+# 1.07x on sign.detached.verify, all inside this host's run-to-run spread. The
+# perf-counters build says why: three functions hold 99% of the interpreter
+# work — M, the GF(2^255-19) multiply (74%), car25519 (23%) and sel25519 (2%) —
+# and all three bail out of the compiler, M on `new Float64Array(31)` (`new` is
+# not compiled) and car25519/sel25519 on compound assignment to a member target
+# (`o[i] += x`, `o[i] ^= t`; only plain `o[i] = x` compiles). The VM ends up
+# executing ~3% of the work and never touches the field arithmetic. Those two
+# gaps are issue #603.
+#
+# So the gate on raising these caps is a large multiplier, not merely the VM
+# being switched on: at the measured per-op costs the full upstream counts
+# (256/256/1024) project to ~6h against ~22min for the sampled corpus, i.e.
+# roughly 18x is needed, versus the ~1.03x on offer. Revisit when #603 has
+# landed *and* the VM is shown to speed up typed-array field arithmetic by a
+# large factor — closing #603 makes that measurable but does not by itself
+# establish it.
 LIB_REPO="https://github.com/dchest/tweetnacl-js.git"
 LIB_REF="1.0.3"   # git tag; matches the published npm 1.0.3 exactly (same commit as v1.0.2)
 LIB_ENTRY="test/jsse-entry.js"
