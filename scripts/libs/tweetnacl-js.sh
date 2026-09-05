@@ -30,28 +30,25 @@
 # adapter on jsse; Node loads real tape as an independent framework oracle.
 #
 # Curve25519/Ed25519 point arithmetic runs ~140-400x slower on the tree-walker
-# than on V8 per operation (re-measured 2026-09-05, min of 3 reps:
-# scalarMult.base 2.98s here vs 14ms on Node; sign.detached.verify 10.8s vs
-# 70ms), so the full upstream counts (256 scalarmult / 256 box / 1024 sign)
-# project to ~6h rather than minutes. A correctness smoke run against all 13
-# files with truncated vectors passed 1233/1233 on jsse, byte-identical to
-# Node, so this is pure interpretation overhead rather than an engine bug — but
-# a multi-hour harness isn't practical to actually run. lib_prepare therefore
-# evenly samples the three curve-heavy vector files (scalarmult.random/
-# box.random/sign.spec) down to 20 each (stride-sampled across the full array,
-# not just a prefix, so the subset still spans the original vector space);
-# every other file (secretbox, hash, onetimeauth — no elliptic-curve cost)
-# stays at its full upstream count. This is the first sampled corpus in this
-# harness (every other config runs its library's suite unmodified).
+# than on V8 per operation, so the full upstream counts (256 scalarmult / 256
+# box / 1024 sign) project to ~6h rather than minutes, while a correctness smoke
+# run over all 13 files with truncated vectors passed 1233/1233 byte-identical
+# to Node — pure interpretation overhead, not an engine bug, but not a practical
+# harness either. lib_prepare therefore evenly samples the three curve-heavy
+# vector files (scalarmult.random/box.random/sign.spec) down to 20 each
+# (stride-sampled across the full array, not just a prefix, so the subset still
+# spans the original vector space); every other file (secretbox, hash,
+# onetimeauth — no elliptic-curve cost) stays at its full upstream count. This
+# is the first sampled corpus in this harness (every other config runs its
+# library's suite unmodified).
 #
-# Exhaustive coverage is issue #361, measured against the bytecode VM on
-# 2026-09-05: --bytecode does not move this workload (1.00-1.07x), because the
-# three functions carrying 96% of the work — M, car25519 and sel25519 — all
-# bail out of the compiler, on `new` and on compound assignment to a member
-# target (issue #603). Raising the caps needs ~17x to hold today's ~22min, or
-# ~6x to merely stay inside LIB_TIMEOUT below; #603 is a precondition for that
-# multiplier, not a demonstration of it. Full numbers and method are in
-# scripts/README.md and on #361.
+# Exhaustive coverage is issue #361. Measured 2026-09-05: --bytecode does not
+# move this workload (1.00-1.07x), because the three functions carrying 96% of
+# the work — M, car25519, sel25519 — all bail out of the compiler, on `new` and
+# on compound assignment to a member target (issue #603). Raising the caps needs
+# ~17x to hold today's ~22min, or ~6x to stay inside LIB_TIMEOUT below; #603 is
+# a precondition for that multiplier, not a demonstration of it. Numbers, counter
+# dumps and method: docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md.
 LIB_REPO="https://github.com/dchest/tweetnacl-js.git"
 LIB_REF="1.0.3"   # git tag; matches the published npm 1.0.3 exactly (same commit as v1.0.2)
 LIB_ENTRY="test/jsse-entry.js"

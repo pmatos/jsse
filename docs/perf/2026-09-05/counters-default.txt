@@ -1,0 +1,57 @@
+PERF	vm_ops	0
+PERF	ast_stmt_execs	7812540
+PERF	ast_expr_evals	133879512
+PERF	ast_work_units	141692052
+PERF	body_dispatch_compiled	0
+PERF	body_dispatch_ast	118649
+PERF	body_non_function_execs	1
+PERF	ast_units_in_functions	141691934
+PERF	ast_units_per_ast_body	1194.21
+PERF	compile_ok	0
+PERF	compile_bail	0
+PERF	calls_from_vm	0
+PERF	calls_to_native	652358
+PERF	calls_to_user	118649
+PERF	gc_minor	7
+PERF	gc_major	7
+PERF	gc_ms	62
+BODY	X	101449340	71.60%	19405	-
+BODY	C	31336617	22.12%	38831	-
+BODY	F	2817810	1.99%	7170	-
+BODY	I	2282220	1.61%	8180	-
+BODY	V	1996524	1.41%	7156	-
+BODY	tr	301680	0.21%	1968	-
+BODY	ur	223564	0.16%	8	-
+BODY	ar	175680	0.12%	4800	-
+BODY	yr	146432	0.10%	1024	-
+BODY	<anonymous#1191>	130224	0.09%	10852	-
+BODY	ir	126720	0.09%	1920	-
+BODY	Q	98277	0.07%	3	-
+BODY	U	92273	0.07%	4	-
+BODY	pr	86190	0.06%	3	-
+BODY	R	83366	0.06%	1	-
+BODY	<anonymous#1193>	75309	0.05%	9283	-
+BODY	lr	64512	0.05%	1024	-
+BODY	H	31010	0.02%	5	-
+BODY	j	25980	0.02%	4330	-
+BODY	_r	21274	0.02%	1	-
+BODY	hr	19008	0.01%	2	-
+BODY	wr	17584	0.01%	4	-
+BODY	or	17280	0.01%	960	-
+BODY	h	12800	0.01%	1280	-
+BODY	Z	11277	0.01%	7	-
+BODY	B	9920	0.01%	160	-
+BODY	S	5712	0.00%	68	-
+BODY	fill	5386	0.00%	6	-
+BODY	k	4840	0.00%	10	-
+BODY	K	4093	0.00%	1	-
+BODY	p	3976	0.00%	56	-
+BODY	b	3168	0.00%	72	-
+BODY	O	3010	0.00%	14	-
+BODY	Ar	2602	0.00%	2	-
+BODY	<anonymous#1475>	1832	0.00%	1	-
+BODY	D	1140	0.00%	3	-
+BODY	<anonymous#1076>	861	0.00%	1	-
+BODY	<anonymous#1497>	783	0.00%	1	-
+BODY	gr	465	0.00%	1	-
+BODY	<anonymous#1505>	383	0.00%	1	-

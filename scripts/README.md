@@ -368,30 +368,24 @@ the first sampled corpus in this harness — every other config runs its
 library's suite unmodified.
 
 Exhaustive coverage is tracked in
-[#361](https://github.com/pmatos/jsse/issues/361), and was measured there
-against the bytecode VM on 2026-09-05: `--bytecode` does not move this
-workload — 1.00x on `scalarMult.base`, 1.01x on `scalarMult`, 1.00x on
-`sign.detached` and 1.07x on `sign.detached.verify`, all inside the host's
-run-to-run spread — several `--bytecode` reps came in slower than the
-default. The `perf-counters` build says why: three functions —
-`M` (the GF(2^255-19) multiply), `car25519` and `sel25519` — carry 96% of the
-tree-walker's work, and all three bail out of the compiler. `M` bails on
-`new Float64Array(31)` (`new` is not compiled), `car25519`/`sel25519` on
-compound assignment to a member target (`o[i] += x`, `o[i] ^= t`; only plain
-`o[i] = x` compiles). Their work-unit counts come out identical with and
-without `--bytecode`, which is the direct evidence the VM never reaches the
-field arithmetic: it displaces only 3% of the work, leaving those same three
-functions holding 99% of everything still on the tree-walker. Those two
-compiler gaps are [#603](https://github.com/pmatos/jsse/issues/603).
+[#361](https://github.com/pmatos/jsse/issues/361), and was measured against the
+bytecode VM on 2026-09-05: `--bytecode` does not move this workload (1.00-1.07x
+across the four curve operations, with several `--bytecode` reps slower than the
+default). The `perf-counters` build says why — three functions, `M` (the
+GF(2^255-19) multiply), `car25519` and `sel25519`, carry 96% of the tree-walker's
+work and all three bail out of the compiler, `M` on `new Float64Array(31)` and
+the other two on compound assignment to a member target (`o[i] += x`; only plain
+`o[i] = x` compiles). Their work-unit counts are identical with and without
+`--bytecode`, which is the direct evidence the VM never reaches the field
+arithmetic. Both gaps are
+[#603](https://github.com/pmatos/jsse/issues/603).
 
-The gate on raising these caps is therefore a large multiplier rather than
-the VM merely being enabled: at the measured per-op costs the full upstream
-counts project to ~6h, against a projected ~22min for the sampled corpus, so
-roughly 17x is needed to keep today's runtime (or ~6x to merely stay inside
-the 1h `LIB_TIMEOUT`), versus the 1.00-1.07x on offer. Revisit when #603 has
-landed *and* the VM is shown to speed up typed-array field arithmetic by a
-large factor — closing #603 makes that measurable but does not by itself
-establish it.
+Raising the caps therefore needs a large multiplier, not merely the VM being
+enabled: ~17x to hold today's projected ~22min, or ~6x to stay inside the 1h
+`LIB_TIMEOUT`. Closing #603 is a precondition for that, not a demonstration of
+it — what the VM delivers on typed-array field arithmetic is still unmeasured.
+Full numbers, counter dumps and method:
+[`docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md`](../docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md).
 
 ### PrismJS token-stream fixtures
 
