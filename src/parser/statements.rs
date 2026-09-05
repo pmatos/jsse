@@ -1401,6 +1401,17 @@ impl<'a> Parser<'a> {
         self.eat(&Token::RightParen)?;
         self.eat(&Token::LeftBrace)?;
         self.in_switch += 1;
+        let cases = self.parse_switch_case_block();
+        self.in_switch -= 1;
+        let cases = cases?;
+        self.eat(&Token::RightBrace)?;
+        Ok(Statement::Switch(SwitchStatement {
+            discriminant,
+            cases,
+        }))
+    }
+
+    fn parse_switch_case_block(&mut self) -> Result<Vec<SwitchCase>, ParseError> {
         let mut cases = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
         let mut func_decl_names: Vec<String> = Vec::new();
@@ -1422,24 +1433,15 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Colon)?;
                 None
             };
-            let mut consequent = Vec::new();
             let prev_sc = self.in_switch_case;
             self.in_switch_case = true;
-            while self.current != Token::RightBrace
-                && self.current != Token::Keyword(Keyword::Case)
-                && self.current != Token::Keyword(Keyword::Default)
-            {
-                let stmt = self.parse_statement_or_declaration()?;
-                Self::collect_lexical_names_with_func_names(
-                    &stmt,
-                    &mut lexical_names,
-                    &mut Some(&mut func_decl_names),
-                    self.strict,
-                )?;
-                consequent.push(stmt);
-            }
+            let consequent =
+                self.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names);
             self.in_switch_case = prev_sc;
-            cases.push(SwitchCase { test, consequent });
+            cases.push(SwitchCase {
+                test,
+                consequent: consequent?,
+            });
         }
         // §14.12.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames in CaseBlock
         if !lexical_names.is_empty() {
@@ -1457,12 +1459,29 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        self.in_switch -= 1;
-        self.eat(&Token::RightBrace)?;
-        Ok(Statement::Switch(SwitchStatement {
-            discriminant,
-            cases,
-        }))
+        Ok(cases)
+    }
+
+    fn parse_switch_case_consequent(
+        &mut self,
+        lexical_names: &mut Vec<String>,
+        func_decl_names: &mut Vec<String>,
+    ) -> Result<Vec<Statement>, ParseError> {
+        let mut consequent = Vec::new();
+        while self.current != Token::RightBrace
+            && self.current != Token::Keyword(Keyword::Case)
+            && self.current != Token::Keyword(Keyword::Default)
+        {
+            let stmt = self.parse_statement_or_declaration()?;
+            Self::collect_lexical_names_with_func_names(
+                &stmt,
+                lexical_names,
+                &mut Some(func_decl_names),
+                self.strict,
+            )?;
+            consequent.push(stmt);
+        }
+        Ok(consequent)
     }
 
     fn parse_with_statement(&mut self) -> Result<Statement, ParseError> {
