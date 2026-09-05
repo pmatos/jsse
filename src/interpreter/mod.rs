@@ -3897,6 +3897,9 @@ impl Interpreter {
         // Evaluate each dep and set up async parent relationships (spec §16.2.1.5.3.1 step 11)
         for dep_canon in evaluation_list.into_iter() {
             idx = self.inner_module_evaluation(&dep_canon, stack, idx)?;
+            if self.pending_exit.is_some() {
+                return Ok(idx);
+            }
             let dep_mod = match self.module_registry_get(&dep_canon) {
                 Some(m) => m,
                 None => continue,
@@ -3952,6 +3955,10 @@ impl Interpreter {
             }
         } else {
             self.execute_module_body_sync(&canon)?
+        }
+
+        if self.pending_exit.is_some() {
+            return Ok(idx);
         }
 
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
@@ -4296,6 +4303,9 @@ impl Interpreter {
             {
                 let mut stack = vec![];
                 let _ = self.inner_module_evaluation(&path, &mut stack, 0);
+                if self.pending_exit.is_some() {
+                    return;
+                }
             }
         }
     }
