@@ -1400,6 +1400,10 @@ impl<'a> Parser<'a> {
         let discriminant = self.parse_expression()?;
         self.eat(&Token::RightParen)?;
         self.eat(&Token::LeftBrace)?;
+        // The decrement below is unconditional, matching `parse_iteration_body`.
+        // That is deliberate: it makes a counter that some inner construct
+        // zeroed without restoring underflow loudly here rather than silently
+        // corrupt `break`/`continue` validation further out.
         self.in_switch += 1;
         let cases = self.parse_switch_case_block();
         self.in_switch -= 1;
@@ -1438,10 +1442,8 @@ impl<'a> Parser<'a> {
             let consequent =
                 self.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names);
             self.in_switch_case = prev_sc;
-            cases.push(SwitchCase {
-                test,
-                consequent: consequent?,
-            });
+            let consequent = consequent?;
+            cases.push(SwitchCase { test, consequent });
         }
         // §14.12.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames in CaseBlock
         if !lexical_names.is_empty() {

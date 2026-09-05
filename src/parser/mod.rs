@@ -1567,13 +1567,37 @@ mod tests {
                 parser.parse_program().is_err(),
                 "expected a parse error for {source:?}"
             );
-            // `in_non_arrow_function` is deliberately not asserted: every one of
-            // its decrements sits after a `?`, so a failed parse skips the
-            // decrement rather than performing an unmatched one. Only counters
-            // whose decrement still runs on the error path can underflow.
             assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
             assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
             assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+        }
+
+        // `in_non_arrow_function` is not asserted above. Eight of its nine
+        // decrements sit after a `?`, so an aborted parse skips them and simply
+        // leaves the counter elevated — untidy but harmless. The ninth,
+        // `parse_function_body_with_context`, decrements unconditionally, and
+        // `export default function` is the only way to reach it. A static block
+        // inside such a body zeroes the counter, so before the restores below
+        // were made unconditional that pairing underflowed — on a path
+        // `parse_program` cannot reach at all.
+        const MODULE_SOURCES: &[&str] = &[
+            "export default function () { class C { static {",
+            "export default function* () { class C { static {",
+        ];
+
+        for source in MODULE_SOURCES {
+            let mut parser = Parser::new(source).unwrap();
+            assert!(
+                parser.parse_program_as_module().is_err(),
+                "expected a parse error for {source:?}"
+            );
+            assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
+            assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
+            assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+            assert_eq!(
+                parser.in_non_arrow_function, 0,
+                "in_non_arrow_function leaked for {source:?}"
+            );
         }
     }
 }
