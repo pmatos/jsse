@@ -53,3 +53,11 @@ _Avoid_: root scope marker, gc stack pointer.
 **GC Root Scope**:
 The lexical scoping of a Temp-Root Frame behind the `with_gc_root_scope(|interp| …)` combinator: it captures the frame, runs the body, and truncates on every exit path (tail, early `return`, `?`) so the teardown cannot be forgotten on a branch. Prefer it to a hand-paired `gc_root_frame`/`gc_unroot_frame` for a whole-body, single-frame native; reach for the raw primitive only when frames nest or interleave across early exits.
 _Avoid_: root guard, unroot epilogue.
+
+**Pinned Native Root**:
+A `JsValue` attached to an anchor object's `gc_native_roots` list by `pin_native_root`, so it stays reachable for as long as the anchor is. Unlike a Temp-Root Frame it outlives the native call that created it, which is what a native closure's captures need. Pins only ever accumulate, so an anchor must be pinned to a *fixed* set of values, established once.
+_Avoid_: permanent root, closure root.
+
+**Rooted Slot**:
+A GC-traced container an anchor pins once and the owner then mutates in place, for a capture whose value is *replaced* over the anchor's lifetime. A native closure's own `Rc<RefCell<…>>` state is invisible to the tracer, and re-pinning each replacement would retain every superseded value, so the slot — not the value — is what gets pinned. `RootedPair` in `builtins/iterators.rs` is the two-slot case: the iterator an iterator helper is currently drawing from, plus that iterator's `next` method.
+_Avoid_: root cell, traced box, rooted buffer.
