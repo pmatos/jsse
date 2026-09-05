@@ -390,7 +390,7 @@ pub(crate) struct Interpreter {
 
 /// Soft JS call-depth limit: crossing it throws a catchable `RangeError:
 /// Maximum call stack size exceeded`. Sits well below the native capacity of
-/// the 128 MiB execution stack the engine runs on (see `main.rs`), yet far
+/// the 128 MiB execution stack the engine runs on (see `lib.rs`), yet far
 /// above the depth any real program reaches (the old 8 MiB main stack held
 /// every passing test, i.e. depths under ~1500).
 pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = 4_000;

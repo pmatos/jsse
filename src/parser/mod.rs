@@ -91,6 +91,10 @@ pub(crate) struct Parser<'a> {
 /// raising this error in debug builds — jsse#599.
 #[cfg(not(debug_assertions))]
 const MAX_PARSE_DEPTH: u32 = 4_000;
+/// Debug counterpart of [`MAX_PARSE_DEPTH`], ~10x lower for ~10x fatter frames.
+/// Reaching either limit costs about the same ~14 MB of stack, so both assume
+/// the engine stack — a parser driven on a smaller thread can still overflow
+/// first, in either profile.
 #[cfg(debug_assertions)]
 const MAX_PARSE_DEPTH: u32 = 400;
 
@@ -1430,6 +1434,18 @@ mod tests {
         Parser::new(src).unwrap().parse_program().unwrap()
     }
 
+    /// Parses `source` on the engine stack — the stack `MAX_PARSE_DEPTH` is
+    /// calibrated against — and reduces the outcome to a `bool` inside the
+    /// closure, since `Program` is not `Send` and cannot cross the boundary.
+    fn parse_on_engine_stack(
+        source: &str,
+        verdict: fn(Result<Program, ParseError>) -> bool,
+    ) -> bool {
+        crate::run_on_engine_stack(move || {
+            verdict(Parser::new(source).and_then(|mut p| p.parse_program()))
+        })
+    }
+
     #[test]
     fn parse_empty() {
         let prog = parse("");
@@ -1550,8 +1566,12 @@ mod tests {
     }
 
     /// Source nested past `MAX_PARSE_DEPTH` must raise the catchable depth
-    /// error rather than exhausting the native stack first. The shapes are the
-    /// most stack-hungry ones the parser has, so they bound every other shape.
+    /// error rather than exhausting the native stack first. These are the
+    /// shapes that spend the most native stack per depth unit, so they bound
+    /// every other shape the guard covers — but only those: source that eats
+    /// native stack without advancing the counter (a long `a.b.b…` member
+    /// chain, a long left-associative `1+1+1…` chain) is outside this guard
+    /// entirely, in both profiles.
     ///
     /// Note this cannot fail politely: if `MAX_PARSE_DEPTH` is ever raised
     /// above what the running profile's stack holds, the process aborts
@@ -1568,15 +1588,13 @@ mod tests {
             ("object literal", "({a:".repeat(reps)),
             ("object/array mix", "({a:[".repeat(reps)),
             ("template substitution", "`${".repeat(reps)),
+            ("spread element", "[...".repeat(reps)),
             ("block statement", "{".repeat(reps)),
         ] {
-            let src: &str = &source;
-            let hit_depth_limit = crate::run_on_engine_stack(move || {
-                matches!(
-                    Parser::new(src).and_then(|mut p| p.parse_program()),
-                    Err(e) if e.message.contains("nested too deeply")
-                )
-            });
+            let hit_depth_limit = parse_on_engine_stack(
+                &source,
+                |result| matches!(result, Err(e) if e.message.contains("nested too deeply")),
+            );
             assert!(
                 hit_depth_limit,
                 "{label} nested {reps} deep should hit the parse-depth guard"
@@ -1584,16 +1602,12 @@ mod tests {
         }
     }
 
-    /// The limit must not be so tight that it rejects ordinary code: nesting
-    /// an order of magnitude past test262's deepest (64 brackets) still parses
-    /// in every profile.
+    /// The limit must not be so tight that it rejects ordinary code: test262's
+    /// deepest nesting (64 brackets, ~192 units) parses in every profile.
     #[test]
     fn nesting_below_the_limit_still_parses() {
         let source = format!("{}1{}", "[".repeat(64), "]".repeat(64));
-        let src: &str = &source;
-        let parsed = crate::run_on_engine_stack(move || {
-            Parser::new(src).and_then(|mut p| p.parse_program()).is_ok()
-        });
+        let parsed = parse_on_engine_stack(&source, |result| result.is_ok());
         assert!(parsed, "64-deep array nesting should parse");
     }
 }
