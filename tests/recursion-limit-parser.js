@@ -63,9 +63,10 @@ mustThrow("exponentiation chain", "2" + "**2".repeat(200000));
 mustThrow("new-expression chain", "new ".repeat(200000) + "X");
 
 // The shapes above all reach the guard cheaply. These spend the most native
-// stack per unit of parse depth, so they are the ones that reach the native
-// limit first if the guard is set too high (jsse#599) — the object literal and
-// template forms cost several depth units per nesting level.
+// stack per unit of parse depth (kept in step with the same list in
+// `parser::tests::deep_nesting_raises_error_before_native_overflow`), so they
+// are the ones that reach the native limit first if the guard is set too high
+// (jsse#599) — object literal and template forms cost several units per level.
 mustThrow("object literal nesting", "({a:".repeat(50000));
 mustThrow("object/array mix", "({a:[".repeat(50000));
 mustThrow("template substitution nesting", "`${".repeat(50000));

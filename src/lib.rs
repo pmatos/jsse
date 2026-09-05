@@ -86,7 +86,7 @@ mod lib_tests {
         // `ast::Program` holds `Rc`s and isn't `Send`, so (matching how a real
         // fuzz target must behave) the parse result is consumed entirely
         // inside the closure; only the `bool` verdict crosses the thread.
-        let owned = "[".repeat(5000);
+        let owned = "[".repeat(parser::MAX_PARSE_DEPTH as usize * 2);
         let borrowed: &str = &owned;
         let is_err = run_on_engine_stack(move || {
             parser::Parser::new(borrowed)
@@ -116,6 +116,6 @@ mod lib_tests {
 
     #[test]
     fn fuzz_parse_bytes_deep_nesting() {
-        fuzz_parse_bytes("[".repeat(5000).as_bytes());
+        fuzz_parse_bytes("[".repeat(parser::MAX_PARSE_DEPTH as usize * 2).as_bytes());
     }
 }
