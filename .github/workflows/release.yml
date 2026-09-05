@@ -6,6 +6,11 @@ name: Release
 # binary, and publishes a GitHub Release (notes + CHANGELOG + tarball +
 # checksums). No-op if nothing releasable landed that week. Use
 # workflow_dispatch to cut a release on demand between scheduled runs.
+#
+# Self-healing: every run first reconciles the latest vX.Y.Z tag against its
+# GitHub Release (see .github/semantic-release/reconcile-release.sh) so a
+# prior run's post-tag publish/asset-upload failure is repaired against the
+# existing tag before semantic-release considers cutting a new one.
 on:
   schedule:
     - cron: "0 0 * * 0"
@@ -40,6 +45,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: lts/*
+      - name: Reconcile release assets
+        run: bash .github/semantic-release/reconcile-release.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run semantic-release
         uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
         with:
