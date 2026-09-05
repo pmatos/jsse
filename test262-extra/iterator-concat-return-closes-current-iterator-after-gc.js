@@ -7,14 +7,9 @@ info: |
   Iterator.concat ( ...items )
 
   ...
-  3. Let closure be a new Abstract Closure with no parameters that captures
-     iterables and performs the following steps when called:
+  3. Let closure be a new Abstract Closure ... :
     a. For each Record iterable of iterables, do
-      i. Let iter be ? Call(iterable.[[OpenMethod]], iterable.[[Iterable]]).
-      ...
       v. Repeat, while innerAlive is true,
-        1. Let innerValue be ? IteratorStepValue(iteratorRecord).
-        ...
         3. Else,
           a. Let completion be Completion(Yield(innerValue)).
           b. If completion is an abrupt completion, then
@@ -22,10 +17,9 @@ info: |
   ...
 
   Calling the helper's return method resumes the generator with an abrupt
-  completion, so step 3.a.v.3.b.i closes the iteratorRecord the helper is
-  currently drawing from. That iterator is reachable only through the helper,
-  so a collection between opening it and closing it must not lose it -- and it
-  must be closed exactly once.
+  completion, so step 3.a.v.3.b.i closes the iteratorRecord it is currently
+  drawing from. A collection between opening that iterator and closing it must
+  not lose it, and it must be closed exactly once.
 features: [iterator-sequencing, host-gc-required]
 ---*/
 

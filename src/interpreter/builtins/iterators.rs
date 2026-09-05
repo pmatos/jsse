@@ -342,11 +342,15 @@ fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result
 }
 
 /// The current iterator an iterator helper is drawing from, paired with that
-/// iterator's `next` method, held in a GC-traced Array so the pair can be
-/// rooted once on the helper and then replaced in place. A native closure's own
-/// `Rc<RefCell<...>>` state is invisible to the collector, so a capture that is
-/// replaced after the helper is built has to live somewhere the tracer walks.
-/// See `Interpreter::set_helper_gc_roots` for why re-pinning is not the answer.
+/// iterator's `next` method — the engine's Rooted Slot for this pair (see
+/// `CONTEXT.md`). Rooted once on the helper via
+/// `Interpreter::set_helper_gc_roots`, then replaced in place.
+///
+/// The backing store is a real arena object, not a Rust container: writes go
+/// through `ObjectHandle::borrow_mut`, which runs the generational write
+/// barrier, so an old helper that takes on a young iterator is remembered for
+/// the next minor collection. A container the arena does not own would be both
+/// untraced and unbarriered.
 ///
 /// Slot 0 alone decides occupancy: the spec opens an iterator before reading
 /// its `next` method and does not check that the method is callable, so slot 1
@@ -361,8 +365,8 @@ impl RootedPair {
     }
 
     /// The value to hand to `set_helper_gc_roots`; rooting it roots both slots.
-    fn as_root(&self) -> &JsValue {
-        &self.0
+    fn root(&self) -> JsValue {
+        self.0.clone()
     }
 
     fn slots<'a>(&self, interp: &'a Interpreter) -> &'a ObjectHandle {
@@ -2946,35 +2950,19 @@ impl Interpreter {
                 };
 
                 let inner_roots = RootedPair::new(interp);
-                // state: (outer_iter, outer_next, mapper, counter, rooted inner pair, alive, running)
+                // state: (outer_iter, outer_next, mapper, counter, alive, running)
                 #[allow(clippy::type_complexity)]
-                let state: Rc<
-                    RefCell<(
-                        JsValue,
-                        JsValue,
-                        JsValue,
-                        f64,
-                        RootedPair,
-                        bool,
-                        bool,
-                    )>,
-                > = Rc::new(RefCell::new((
-                    iter,
-                    next_method,
-                    mapper,
-                    0.0,
-                    inner_roots,
-                    true,
-                    false,
-                )));
+                let state: Rc<RefCell<(JsValue, JsValue, JsValue, f64, bool, bool)>> =
+                    Rc::new(RefCell::new((iter, next_method, mapper, 0.0, true, false)));
 
                 let state_next = state.clone();
+                let roots_next = inner_roots.clone();
                 let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let alive = state_next.borrow().5;
-                        let running = state_next.borrow().6;
+                        let alive = state_next.borrow().4;
+                        let running = state_next.borrow().5;
                         if !alive {
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
@@ -2984,31 +2972,15 @@ impl Interpreter {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_next.borrow_mut().6 = true;
+                        state_next.borrow_mut().5 = true;
                         let result = (|| {
                             loop {
-                                let (
-                                    outer_iter,
-                                    outer_next,
-                                    mapper,
-                                    counter,
-                                    inner_roots,
-                                    _alive,
-                                    _running,
-                                ) = {
+                                let (outer_iter, outer_next, mapper, counter) = {
                                     let s = state_next.borrow();
-                                    (
-                                        s.0.clone(),
-                                        s.1.clone(),
-                                        s.2.clone(),
-                                        s.3,
-                                        s.4.clone(),
-                                        s.5,
-                                        s.6,
-                                    )
+                                    (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
                                 };
 
-                                let inner = inner_roots.get(interp);
+                                let inner = roots_next.get(interp);
 
                                 // If we have an inner iterator, drain it
                                 if let Some((ref ii, ref in_next)) = inner {
@@ -3017,7 +2989,7 @@ impl Interpreter {
                                             let value = match interp.iterator_value(&result) {
                                                 Ok(v) => v,
                                                 Err(e) => {
-                                                    state_next.borrow_mut().5 = false;
+                                                    state_next.borrow_mut().4 = false;
                                                     let _ = iterator_close_getter(interp, &outer_iter);
                                                     return Completion::Throw(e);
                                                 }
@@ -3027,11 +2999,11 @@ impl Interpreter {
                                             );
                                         }
                                         Ok(None) => {
-                                            inner_roots.clear(interp);
+                                            roots_next.clear(interp);
                                             continue;
                                         }
                                         Err(e) => {
-                                            state_next.borrow_mut().5 = false;
+                                            state_next.borrow_mut().4 = false;
                                             let _ = iterator_close_getter(interp, &outer_iter);
                                             return Completion::Throw(e);
                                         }
@@ -3055,7 +3027,7 @@ impl Interpreter {
                                             Completion::Normal(mapped_val) => {
                                                 match get_iterator_flattenable(interp, &mapped_val, true) {
                                                     Ok((new_inner, inner_next_method)) => {
-                                                        inner_roots.set(
+                                                        roots_next.set(
                                                             interp,
                                                             new_inner,
                                                             inner_next_method,
@@ -3063,19 +3035,19 @@ impl Interpreter {
                                                         continue;
                                                     }
                                                     Err(e) => {
-                                                        state_next.borrow_mut().5 = false;
+                                                        state_next.borrow_mut().4 = false;
                                                         let _ = iterator_close_getter(interp, &outer_iter);
                                                         return Completion::Throw(e);
                                                     }
                                                 }
                                             }
                                             Completion::Throw(e) => {
-                                                state_next.borrow_mut().5 = false;
+                                                state_next.borrow_mut().4 = false;
                                                 let _ = iterator_close_getter(interp, &outer_iter);
                                                 return Completion::Throw(e);
                                             }
                                             _ => {
-                                                state_next.borrow_mut().5 = false;
+                                                state_next.borrow_mut().4 = false;
                                                 return Completion::Normal(
                                                     interp.create_iter_result_object(
                                                         JsValue::UNDEFINED,
@@ -3086,40 +3058,41 @@ impl Interpreter {
                                         }
                                     }
                                     Ok(None) => {
-                                        state_next.borrow_mut().5 = false;
+                                        state_next.borrow_mut().4 = false;
                                         return Completion::Normal(
                                             interp
                                                 .create_iter_result_object(JsValue::UNDEFINED, true),
                                         );
                                     }
                                     Err(e) => {
-                                        state_next.borrow_mut().5 = false;
+                                        state_next.borrow_mut().4 = false;
                                         return Completion::Throw(e);
                                     }
                                 }
                             }
                         })();
-                        state_next.borrow_mut().6 = false;
+                        state_next.borrow_mut().5 = false;
                         result
                     },
                 ));
 
                 let state_ret = state.clone();
+                let roots_ret = inner_roots.clone();
                 let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let (outer_iter, inner_roots, alive, running) = {
+                        let (outer_iter, alive, running) = {
                             let s = state_ret.borrow();
-                            (s.0.clone(), s.4.clone(), s.5, s.6)
+                            (s.0.clone(), s.4, s.5)
                         };
-                        let inner_iter = inner_roots.get(interp).map(|(iter, _)| iter);
+                        let inner_iter = roots_ret.get(interp).map(|(iter, _)| iter);
                         if running {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_ret.borrow_mut().6 = true;
-                        state_ret.borrow_mut().5 = false;
+                        state_ret.borrow_mut().5 = true;
+                        state_ret.borrow_mut().4 = false;
                         let result = if alive {
                             if let Some(ref ii) = inner_iter {
                                 let _ = iterator_close_getter(interp, ii);
@@ -3136,8 +3109,8 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
-                        inner_roots.clear(interp);
-                        state_ret.borrow_mut().6 = false;
+                        roots_ret.clear(interp);
+                        state_ret.borrow_mut().5 = false;
                         result
                     },
                 ));
@@ -3147,7 +3120,7 @@ impl Interpreter {
                     let b = state.borrow();
                     interp.set_helper_gc_roots(
                         &helper,
-                        vec![b.0.clone(), b.1.clone(), b.2.clone(), b.4.as_root().clone()],
+                        vec![b.0.clone(), b.1.clone(), b.2.clone(), inner_roots.root()],
                     );
                 }
                 Completion::Normal(helper)
@@ -3344,19 +3317,19 @@ impl Interpreter {
                 }
 
                 let current_roots = RootedPair::new(interp);
-                // state: (iterables, current_index, rooted current pair, alive, running)
+                // state: (iterables, current_index, alive, running)
                 #[allow(clippy::type_complexity)]
-                let state: Rc<
-                    RefCell<(Vec<(JsValue, JsValue)>, usize, RootedPair, bool, bool)>,
-                > = Rc::new(RefCell::new((iterables, 0, current_roots, true, false)));
+                let state: Rc<RefCell<(Vec<(JsValue, JsValue)>, usize, bool, bool)>> =
+                    Rc::new(RefCell::new((iterables, 0, true, false)));
 
                 let state_next = state.clone();
+                let roots_next = current_roots.clone();
                 let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let alive = state_next.borrow().3;
-                        let running = state_next.borrow().4;
+                        let alive = state_next.borrow().2;
+                        let running = state_next.borrow().3;
                         if !alive {
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
@@ -3366,20 +3339,13 @@ impl Interpreter {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        state_next.borrow_mut().4 = true;
+                        state_next.borrow_mut().3 = true;
                         let result = (|| {
                         loop {
-                            let (ref iterables, idx, ref current_roots, alive) = {
-                                let s = state_next.borrow();
-                                (s.0.clone(), s.1, s.2.clone(), s.3)
-                            };
-                            if !alive {
-                                return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                );
-                            }
+                            let idx = state_next.borrow().1;
+
                             // If we have a current iterator, try getting next
-                            if let Some((ref ci, ref cn)) = current_roots.get(interp) {
+                            if let Some((ref ci, ref cn)) = roots_next.get(interp) {
                                 match interp.iterator_step_direct(ci, cn) {
                                     Ok(Some(result)) => {
                                         let value = match interp.iterator_value(&result) {
@@ -3393,29 +3359,28 @@ impl Interpreter {
                                     Ok(None) => {
                                         // Current exhausted, move to next
                                         state_next.borrow_mut().1 = idx + 1;
-                                        current_roots.clear(interp);
+                                        roots_next.clear(interp);
                                         continue;
                                     }
                                     Err(e) => {
-                                        state_next.borrow_mut().3 = false;
+                                        state_next.borrow_mut().2 = false;
                                         return Completion::Throw(e);
                                     }
                                 }
                             }
 
                             // Open next iterable
-                            if idx >= iterables.len() {
-                                state_next.borrow_mut().3 = false;
+                            let Some((iterable, iter_fn)) = state_next.borrow().0.get(idx).cloned()
+                            else {
+                                state_next.borrow_mut().2 = false;
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
-                            }
-
-                            let (ref iterable, ref iter_fn) = iterables[idx];
-                            match interp.call_function(iter_fn, iterable, &[]) {
+                            };
+                            match interp.call_function(&iter_fn, &iterable, &[]) {
                                 Completion::Normal(new_iter) => {
                                     if !new_iter.is_object() {
-                                        state_next.borrow_mut().3 = false;
+                                        state_next.borrow_mut().2 = false;
                                         let err = interp.create_type_error(
                                             "Result of Symbol.iterator is not an object",
                                         );
@@ -3425,19 +3390,19 @@ impl Interpreter {
                                         match get_iterator_direct_getter(interp, &new_iter) {
                                             Ok((_, nm)) => nm,
                                             Err(e) => {
-                                                state_next.borrow_mut().3 = false;
+                                                state_next.borrow_mut().2 = false;
                                                 return Completion::Throw(e);
                                             }
                                         };
-                                    current_roots.set(interp, new_iter, next_method);
+                                    roots_next.set(interp, new_iter, next_method);
                                     continue;
                                 }
                                 Completion::Throw(e) => {
-                                    state_next.borrow_mut().3 = false;
+                                    state_next.borrow_mut().2 = false;
                                     return Completion::Throw(e);
                                 }
                                 _ => {
-                                    state_next.borrow_mut().3 = false;
+                                    state_next.borrow_mut().2 = false;
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
@@ -3445,27 +3410,28 @@ impl Interpreter {
                             }
                         }
                         })();
-                        state_next.borrow_mut().4 = false;
+                        state_next.borrow_mut().3 = false;
                         result
                     },
                 ));
 
                 let state_ret = state.clone();
+                let roots_ret = current_roots.clone();
                 let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let (current_roots, alive, running) = {
+                        let (alive, running) = {
                             let s = state_ret.borrow();
-                            (s.2.clone(), s.3, s.4)
+                            (s.2, s.3)
                         };
                         if running {
                             let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
                             return Completion::Throw(err);
                         }
-                        let cur_iter = current_roots.get(interp).map(|(iter, _)| iter);
-                        state_ret.borrow_mut().4 = true; // set running
-                        state_ret.borrow_mut().3 = false;
+                        let cur_iter = roots_ret.get(interp).map(|(iter, _)| iter);
+                        state_ret.borrow_mut().3 = true; // set running
+                        state_ret.borrow_mut().2 = false;
                         let result = if alive
                             && let Some(ref ci) = cur_iter
                             && let Err(e) = iterator_close_getter(interp, ci)
@@ -3476,8 +3442,8 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
-                        current_roots.clear(interp);
-                        state_ret.borrow_mut().4 = false; // clear running
+                        roots_ret.clear(interp);
+                        state_ret.borrow_mut().3 = false; // clear running
                         result
                     },
                 ));
@@ -3487,7 +3453,7 @@ impl Interpreter {
                     let b = state.borrow();
                     let mut roots = Vec::with_capacity(b.0.len() * 2 + 1);
                     for (io, nm) in &b.0 { roots.push(io.clone()); roots.push(nm.clone()); }
-                    roots.push(b.2.as_root().clone());
+                    roots.push(current_roots.root());
                     interp.set_helper_gc_roots(&helper, roots);
                 }
                 Completion::Normal(helper)

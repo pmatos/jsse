@@ -7,28 +7,18 @@ info: |
   Iterator.concat ( ...items )
 
   ...
-  3. Let closure be a new Abstract Closure with no parameters that captures
-     iterables and performs the following steps when called:
+  3. Let closure be a new Abstract Closure ... :
     a. For each Record iterable of iterables, do
       i. Let iter be ? Call(iterable.[[OpenMethod]], iterable.[[Iterable]]).
-      ii. If iter is not an Object, throw a TypeError exception.
       iii. Let iteratorRecord be ? GetIteratorDirect(iter).
-      iv. Let innerAlive be true.
       v. Repeat, while innerAlive is true,
         1. Let innerValue be ? IteratorStepValue(iteratorRecord).
-        2. If innerValue is done, then
-          a. Set innerAlive to false.
-        3. Else,
-          a. Let completion be Completion(Yield(innerValue)).
-    b. Return ReturnCompletion(undefined).
-  4. Let gen be CreateIteratorFromClosure(closure, "Iterator Helper",
-     %IteratorHelperPrototype%, << [[UnderlyingIterators]] >>).
   ...
 
-  The Abstract Closure resumes the same iteratorRecord across every suspension
-  of the generator, so the iterator opened at step 3.a.i must stay strongly
-  reachable for as long as the helper is live -- including across separate
-  calls to the helper's next method, when it is otherwise ephemeral.
+  The closure resumes the same iteratorRecord across every suspension of the
+  generator, so the iterator opened at step 3.a.i must stay strongly reachable
+  while the helper is live -- including across separate calls to its next
+  method, when it is otherwise ephemeral.
 features: [iterator-sequencing, host-gc-required]
 ---*/
 

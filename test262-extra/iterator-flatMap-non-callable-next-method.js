@@ -9,17 +9,14 @@ info: |
   ...
     vi. Let innerIterator be Completion(GetIteratorFlattenable(mapped,
         reject-primitives)).
-    ...
     ix. Repeat, while innerAlive is true,
       1. Let innerValue be Completion(IteratorStepValue(innerIterator)).
-      ...
+  ...
 
   GetIteratorDirect ( obj )
 
   1. Let nextMethod be ? Get(obj, "next").
-  2. Let iteratorRecord be the Iterator Record { [[Iterator]]: obj,
-     [[NextMethod]]: nextMethod, [[Done]]: false }.
-  3. Return iteratorRecord.
+  ...
 
   GetIteratorFlattenable does not check that nextMethod is callable, so the
   inner iterator is a valid Iterator Record and the TypeError is owed by
