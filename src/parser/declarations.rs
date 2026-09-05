@@ -779,26 +779,12 @@ impl<'a> Parser<'a> {
                 self.in_block_or_function = true;
                 self.in_switch_case = false;
                 let prev_labels = std::mem::take(&mut self.labels);
-                let mut stmts = Vec::new();
-                let mut lexical_names: Vec<String> = Vec::new();
-                while self.current != Token::RightBrace {
-                    let stmt = self.parse_statement_or_declaration()?;
-                    Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
-                    stmts.push(stmt);
-                }
-                // VarDeclaredNames must not overlap LexicallyDeclaredNames
-                if !lexical_names.is_empty() {
-                    let mut var_names = Vec::new();
-                    for stmt in &stmts {
-                        Self::collect_var_declared_names(stmt, &mut var_names);
-                    }
-                    for name in &var_names {
-                        if lexical_names.contains(name) {
-                            return Err(self
-                                .error(format!("Identifier '{name}' has already been declared")));
-                        }
-                    }
-                }
+
+                // As in `parse_function_body_inner`, restore the saved context on
+                // the failure path too: the zeroed counters must not escape an
+                // unterminated static block into the enclosing construct.
+                let result = self.parse_static_block_statements();
+
                 self.labels = prev_labels;
                 self.allow_super_property = prev_super_property;
                 self.allow_super_call = prev_allow_super_call;
@@ -811,6 +797,8 @@ impl<'a> Parser<'a> {
                 self.in_static_block = prev_in_static_block;
                 self.in_block_or_function = prev_block;
                 self.in_switch_case = prev_sc;
+
+                let stmts = result?;
                 if crate::ast::stmts_contain_matching(&stmts, &crate::ast::is_arguments_reference) {
                     return Err(self.error("'arguments' is not allowed in class static blocks"));
                 }
@@ -1267,6 +1255,31 @@ impl<'a> Parser<'a> {
         self.function_param_names = Some(names);
     }
 
+    fn parse_static_block_statements(&mut self) -> Result<Vec<Statement>, ParseError> {
+        let mut stmts = Vec::new();
+        let mut lexical_names: Vec<String> = Vec::new();
+        while self.current != Token::RightBrace {
+            let stmt = self.parse_statement_or_declaration()?;
+            Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
+            stmts.push(stmt);
+        }
+        // VarDeclaredNames must not overlap LexicallyDeclaredNames
+        if !lexical_names.is_empty() {
+            let mut var_names = Vec::new();
+            for stmt in &stmts {
+                Self::collect_var_declared_names(stmt, &mut var_names);
+            }
+            for name in &var_names {
+                if lexical_names.contains(name) {
+                    return Err(
+                        self.error(format!("Identifier '{name}' has already been declared"))
+                    );
+                }
+            }
+        }
+        Ok(stmts)
+    }
+
     pub(super) fn parse_function_body_inner(
         &mut self,
         is_generator: bool,
@@ -1299,6 +1312,36 @@ impl<'a> Parser<'a> {
         self.in_block_or_function = true;
         self.in_switch_case = false;
         self.in_static_block = false;
+
+        // The body parse below may fail anywhere; the saved context must be put
+        // back on that path too, or an enclosing construct sees the body's
+        // zeroed counters. `for (;;) { function f() {` used to underflow
+        // `in_iteration` in `parse_iteration_body` that way.
+        let result = self
+            .parse_function_body_statements(saved_param_names.as_ref())
+            .and_then(|body| self.eat(&Token::RightBrace).map(|()| body));
+
+        self.in_function -= 1;
+        self.in_generator = prev_generator;
+        self.in_async = prev_async;
+        self.in_iteration = prev_iteration;
+        self.in_switch = prev_switch;
+        self.labels = prev_labels;
+        self.allow_super_property = prev_super_property;
+        self.allow_super_call = prev_super_call;
+        self.in_formal_parameters = prev_formal;
+        self.in_block_or_function = prev_block;
+        self.in_switch_case = prev_sc;
+        self.in_static_block = prev_static_block;
+        self.function_param_names = None;
+        self.set_strict(prev_strict);
+        result
+    }
+
+    fn parse_function_body_statements(
+        &mut self,
+        saved_param_names: Option<&HashSet<String>>,
+    ) -> Result<(Vec<Statement>, bool), ParseError> {
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
         let mut has_use_strict_directive = false;
@@ -1333,7 +1376,7 @@ impl<'a> Parser<'a> {
 
         // §15.2.1: It is a SyntaxError if any BoundName of FormalParameters
         // also occurs in the LexicallyDeclaredNames of FunctionBody.
-        if let Some(ref param_names) = saved_param_names {
+        if let Some(param_names) = saved_param_names {
             for stmt in &stmts {
                 match stmt {
                     Statement::Variable(vd)
@@ -1361,23 +1404,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let was_strict = has_use_strict_directive;
-        self.in_function -= 1;
-        self.in_generator = prev_generator;
-        self.in_async = prev_async;
-        self.in_iteration = prev_iteration;
-        self.in_switch = prev_switch;
-        self.labels = prev_labels;
-        self.allow_super_property = prev_super_property;
-        self.allow_super_call = prev_super_call;
-        self.in_formal_parameters = prev_formal;
-        self.in_block_or_function = prev_block;
-        self.in_switch_case = prev_sc;
-        self.in_static_block = prev_static_block;
-        self.function_param_names = None;
-        self.eat(&Token::RightBrace)?;
-        self.set_strict(prev_strict);
-        Ok((stmts, was_strict))
+        Ok((stmts, has_use_strict_directive))
     }
 
     pub(super) fn parse_arrow_function_body(

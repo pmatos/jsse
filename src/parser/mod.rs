@@ -1534,4 +1534,46 @@ mod tests {
             Statement::ClassDeclaration(_)
         ));
     }
+
+    /// Truncated source aborts the parse partway through constructs that
+    /// re-scope the context counters. Each such construct must put the saved
+    /// counters back on the failure path as well, or the enclosing construct
+    /// decrements a counter someone else zeroed — `parse_iteration_body` used
+    /// to underflow `in_iteration` that way, panicking under `overflow-checks`.
+    #[test]
+    fn truncated_source_restores_context_counters() {
+        const SOURCES: &[&str] = &[
+            "for (v;7; i) {function t(a) {\n t",
+            "while (0) { function f() {",
+            "for (;;) for (;;) { function f() {",
+            "label: for (;;) { function f() {",
+            "for (;;) { async function f() {",
+            "for (;;) { function* g() {",
+            "for (;;) { (function () {",
+            "for (;;) { (() => {",
+            "for (;;) { class C { m() {",
+            "for (;;) { class C { static {",
+            "for (;;) { class C { static { for (;;) {",
+            "for (;;) { function f() { for (;;) {",
+            "for (;;) { function f() { switch (x) { case 1:",
+            "switch (x) { case 1:",
+            "switch (x) { case 1: for (;;) { function f() {",
+            "class C { static { for (;;) { function f() {",
+        ];
+
+        for source in SOURCES {
+            let mut parser = Parser::new(source).unwrap();
+            assert!(
+                parser.parse_program().is_err(),
+                "expected a parse error for {source:?}"
+            );
+            // `in_non_arrow_function` is deliberately not asserted: every one of
+            // its decrements sits after a `?`, so a failed parse skips the
+            // decrement rather than performing an unmatched one. Only counters
+            // whose decrement still runs on the error path can underflow.
+            assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
+            assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
+            assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+        }
+    }
 }
