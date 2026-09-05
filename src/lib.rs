@@ -82,13 +82,6 @@ mod lib_tests {
     }
 
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "MAX_PARSE_DEPTH's headroom below ENGINE_STACK_SIZE is calibrated \
-                  for release-mode stack frames; debug-mode recursive-descent frames \
-                  are large enough that this depth overflows the native stack well \
-                  before the depth guard fires. See jsse#599."
-    )]
     fn run_on_engine_stack_borrows_non_static_data() {
         // `ast::Program` holds `Rc`s and isn't `Send`, so (matching how a real
         // fuzz target must behave) the parse result is consumed entirely
@@ -122,13 +115,6 @@ mod lib_tests {
     }
 
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "MAX_PARSE_DEPTH's headroom below ENGINE_STACK_SIZE is calibrated \
-                  for release-mode stack frames; debug-mode recursive-descent frames \
-                  are large enough that this depth overflows the native stack well \
-                  before the depth guard fires. See jsse#599."
-    )]
     fn fuzz_parse_bytes_deep_nesting() {
         fuzz_parse_bytes("[".repeat(5000).as_bytes());
     }
