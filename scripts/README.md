@@ -349,14 +349,16 @@ mechanism as upstream's unmodified browser path. `node-test-harness.js`
 supplies the tape assertion adapter on jsse; Node loads real tape as an
 independent framework oracle.
 
-Curve25519/Ed25519 point arithmetic is roughly 100-3500x slower on the
-tree-walker than V8 per operation (measured: a single `scalarMult.base` call
-≈3.4s here vs ≈35ms on Node; `sign.detached.verify` ≈12s vs ≈76ms). At the
-full upstream vector counts (256 scalarmult, 256 box, 1024 Ed25519 sign
-vectors) the complete suite is on the order of ~7h, which isn't practical to
-run as part of landing the harness — a correctness smoke test first
-confirmed all 13 files pass 1233/1233 with truncated vectors, byte-identical
-to Node, so this is pure interpretation overhead rather than an engine bug.
+Curve25519/Ed25519 point arithmetic runs roughly 140-400x slower on the
+tree-walker than on V8, per operation (re-measured 2026-09-05, min of 3 reps:
+`scalarMult.base` 2.98s here vs 14ms on Node; `sign.detached.verify` 10.8s vs
+70ms — these supersede the ≈3.4s / ≈12s figures recorded when the harness
+landed). At the full upstream vector counts (256 scalarmult, 256 box, 1024
+Ed25519 sign vectors) the complete suite projects to ~6h, the same order as
+the ~7h first estimated here, which isn't practical to run as part of landing
+the harness — a correctness smoke test first confirmed all 13 files pass
+1233/1233 with truncated vectors, byte-identical to Node, so this is pure
+interpretation overhead rather than an engine bug.
 `lib_prepare` therefore evenly samples the three curve-heavy vector files
 (`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
 each (stride-sampled across the full array, not a prefix, so the subset still
@@ -370,7 +372,8 @@ Exhaustive coverage is tracked in
 against the bytecode VM on 2026-09-05: `--bytecode` does not move this
 workload — 1.00x on `scalarMult.base`, 1.01x on `scalarMult`, 1.00x on
 `sign.detached` and 1.07x on `sign.detached.verify`, all inside the host's
-run-to-run spread. The `perf-counters` build says why: three functions —
+run-to-run spread — several `--bytecode` reps came in slower than the
+default. The `perf-counters` build says why: three functions —
 `M` (the GF(2^255-19) multiply), `car25519` and `sel25519` — carry 96% of the
 tree-walker's work, and all three bail out of the compiler. `M` bails on
 `new Float64Array(31)` (`new` is not compiled), `car25519`/`sel25519` on
@@ -384,7 +387,8 @@ compiler gaps are [#603](https://github.com/pmatos/jsse/issues/603).
 The gate on raising these caps is therefore a large multiplier rather than
 the VM merely being enabled: at the measured per-op costs the full upstream
 counts project to ~6h, against a projected ~22min for the sampled corpus, so
-roughly 17x is needed versus the 1.00-1.07x on offer. Revisit when #603 has
+roughly 17x is needed to keep today's runtime (or ~6x to merely stay inside
+the 1h `LIB_TIMEOUT`), versus the 1.00-1.07x on offer. Revisit when #603 has
 landed *and* the VM is shown to speed up typed-array field arithmetic by a
 large factor — closing #603 makes that measurable but does not by itself
 establish it.

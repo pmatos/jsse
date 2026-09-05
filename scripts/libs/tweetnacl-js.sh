@@ -29,42 +29,29 @@
 # unmodified browser path. node-test-harness.js supplies a focused tape
 # adapter on jsse; Node loads real tape as an independent framework oracle.
 #
-# Curve25519/Ed25519 point arithmetic is ~100-3500x slower on the tree-walker
-# than V8 per operation (a single scalarMult.base ≈ 3.4s here vs ≈35ms on
-# Node; sign.detached.verify ≈ 12s vs ≈76ms). At the full upstream vector
-# counts (256 scalarmult / 256 box / 1024 sign) that's on the order of ~7h,
-# not minutes. A correctness smoke run against all 13 files with truncated
-# vectors passed 1233/1233 on jsse, byte-identical to Node, so this is pure
-# interpretation overhead rather than an engine bug — but a multi-hour harness
-# isn't practical to actually run. lib_prepare therefore evenly samples the
-# three curve-heavy vector files (scalarmult.random/box.random/sign.spec) down
-# to 20 each (stride-sampled across the full array, not just a prefix, so the
-# subset still spans the original vector space); every other file (secretbox,
-# hash, onetimeauth — no elliptic-curve cost) stays at its full upstream
-# count. This is the first sampled corpus in this harness (every other config
-# runs its library's suite unmodified).
+# Curve25519/Ed25519 point arithmetic runs ~140-400x slower on the tree-walker
+# than on V8 per operation (re-measured 2026-09-05, min of 3 reps:
+# scalarMult.base 2.98s here vs 14ms on Node; sign.detached.verify 10.8s vs
+# 70ms), so the full upstream counts (256 scalarmult / 256 box / 1024 sign)
+# project to ~6h rather than minutes. A correctness smoke run against all 13
+# files with truncated vectors passed 1233/1233 on jsse, byte-identical to
+# Node, so this is pure interpretation overhead rather than an engine bug — but
+# a multi-hour harness isn't practical to actually run. lib_prepare therefore
+# evenly samples the three curve-heavy vector files (scalarmult.random/
+# box.random/sign.spec) down to 20 each (stride-sampled across the full array,
+# not just a prefix, so the subset still spans the original vector space);
+# every other file (secretbox, hash, onetimeauth — no elliptic-curve cost)
+# stays at its full upstream count. This is the first sampled corpus in this
+# harness (every other config runs its library's suite unmodified).
 #
-# Exhaustive coverage is tracked in issue #361 and was measured there against
-# the bytecode VM on 2026-09-05: `--bytecode` does not move this workload —
-# 1.00x on scalarMult.base, 1.01x on scalarMult, 1.00x on sign.detached and
-# 1.07x on sign.detached.verify, all inside this host's run-to-run spread. The
-# perf-counters build says why: three functions — M (the GF(2^255-19)
-# multiply), car25519 and sel25519 — carry 96% of the tree-walker's work, and
-# all three bail out of the compiler. M bails on `new Float64Array(31)` (`new`
-# is not compiled), car25519/sel25519 on compound assignment to a member target
-# (`o[i] += x`, `o[i] ^= t`; only plain `o[i] = x` compiles). Their work-unit
-# counts come out identical with and without --bytecode, which is the direct
-# evidence the VM never touches the field arithmetic: it displaces only 3% of
-# the work, leaving those same three functions holding 99% of everything still
-# on the tree-walker. Those two gaps are issue #603.
-#
-# So the gate on raising these caps is a large multiplier, not merely the VM
-# being switched on: at the measured per-op costs the full upstream counts
-# (256/256/1024) project to ~6h, against a projected ~22min for the sampled
-# corpus, i.e. roughly 17x is needed, versus the 1.00-1.07x on offer. Revisit
-# when #603 has landed *and* the VM is shown to speed up typed-array field
-# arithmetic by a large factor — closing #603 makes that measurable but does
-# not by itself establish it.
+# Exhaustive coverage is issue #361, measured against the bytecode VM on
+# 2026-09-05: --bytecode does not move this workload (1.00-1.07x), because the
+# three functions carrying 96% of the work — M, car25519 and sel25519 — all
+# bail out of the compiler, on `new` and on compound assignment to a member
+# target (issue #603). Raising the caps needs ~17x to hold today's ~22min, or
+# ~6x to merely stay inside LIB_TIMEOUT below; #603 is a precondition for that
+# multiplier, not a demonstration of it. Full numbers and method are in
+# scripts/README.md and on #361.
 LIB_REPO="https://github.com/dchest/tweetnacl-js.git"
 LIB_REF="1.0.3"   # git tag; matches the published npm 1.0.3 exactly (same commit as v1.0.2)
 LIB_ENTRY="test/jsse-entry.js"
