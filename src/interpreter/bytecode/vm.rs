@@ -91,6 +91,20 @@ fn release_call_operands(
     unroot_stack_value(interp, callee);
 }
 
+fn take_construct_operands(stack: &mut Vec<JsValue>, argc: usize) -> (JsValue, Vec<JsValue>) {
+    assert!(stack.len() > argc, "stack underflow on construct operands");
+    let args = stack.split_off(stack.len() - argc);
+    let callee = stack.pop().expect("stack underflow on construct callee");
+    (callee, args)
+}
+
+fn release_construct_operands(interp: &mut Interpreter, callee: &JsValue, args: &[JsValue]) {
+    for arg in args.iter().rev() {
+        unroot_stack_value(interp, arg);
+    }
+    unroot_stack_value(interp, callee);
+}
+
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
     if base.is_nullish() {
         let err = interp.create_type_error(&format!(
@@ -525,6 +539,28 @@ fn run_chunk_inner(
                     *interp.call_slot(site_id) = next;
                 }
                 release_call_operands(interp, &callee, &this_value, &args);
+                match result {
+                    Completion::Normal(value) | Completion::Return(value) => {
+                        push_value(interp, &mut stack, value);
+                    }
+                    Completion::Empty => {
+                        push_value(interp, &mut stack, JsValue::UNDEFINED);
+                    }
+                    abrupt => return abrupt,
+                }
+            }
+            Op::Construct => {
+                let argc = decode_u16(chunk, pc) as usize;
+                pc += 2;
+                let _site_id = CallSiteId(decode_u32(chunk, pc));
+                pc += 4;
+                let (callee, args) = take_construct_operands(&mut stack, argc);
+                // The operands remain in gc_bytecode_roots for the complete
+                // nested construction, mirroring Op::Call: construct_from_evaluated
+                // can run arbitrary JS (constructor body, field initializers) and
+                // hit any number of safepoints before returning.
+                let result = interp.construct_from_evaluated(&callee, &args, env);
+                release_construct_operands(interp, &callee, &args);
                 match result {
                     Completion::Normal(value) | Completion::Return(value) => {
                         push_value(interp, &mut stack, value);

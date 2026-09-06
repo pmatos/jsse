@@ -448,6 +448,29 @@ impl Compiler {
             Expression::Call(callee, args, site_id) => {
                 self.compile_call(callee, args, Op::Call, *site_id)
             }
+            Expression::New(callee, args, site_id) => {
+                if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
+                    return Err(CompileError::Unsupported("spread constructor argument"));
+                }
+                let argc = u16::try_from(args.len())
+                    .map_err(|_| CompileError::Unsupported("construct argument count overflow"))?;
+                if usize::from(self.current_stack) + args.len() + 1 > usize::from(u16::MAX) {
+                    return Err(CompileError::Unsupported("operand stack overflow"));
+                }
+                // Construct never reads a `this` value from the callee reference
+                // (unlike Call), so no LoadCalleeName-style receiver capture is
+                // needed — any expression compiles as the callee directly.
+                self.compile_expr(callee)?;
+                for arg in args {
+                    self.compile_expr(arg)?;
+                }
+                self.emit(Op::Construct);
+                self.emit_u16(argc);
+                self.emit_u32(site_id.0);
+                self.pop_n(argc + 1);
+                self.push_n(1);
+                Ok(())
+            }
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
     }

@@ -56,6 +56,7 @@ pub(crate) enum Op {
     LoadThis = 52,
     DupN = 53,
     ToPrimitiveKey = 54,
+    Construct = 55,
 }
 
 impl Op {
@@ -116,6 +117,7 @@ impl Op {
             52 => Some(Op::LoadThis),
             53 => Some(Op::DupN),
             54 => Some(Op::ToPrimitiveKey),
+            55 => Some(Op::Construct),
             _ => None,
         }
     }

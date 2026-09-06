@@ -139,6 +139,106 @@ fn end_to_end_constructor_with_empty_body_returns_this() {
 }
 
 #[test]
+fn end_to_end_new_expression_compiles_inside_wrapping_function() {
+    // Unlike `end_to_end_constructor_with_empty_body_returns_this` above (whose
+    // top-level `new f()` falls back to the tree-walker regardless of `new`
+    // support, since `function f(){}` is an uncompiled top-level
+    // FunctionDeclaration), this pins the `new` expression itself compiling:
+    // `g`'s own body contains the `new` expression, and `f`'s body carries a
+    // lexical declaration so it can never independently compile — any chunk
+    // execution observed here must come from `g`.
+    let source = "\
+        function f(){ let unused = 0; } \
+        function g(){ return new f(); } \
+        var __r = g();";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "the `new` expression itself must compile to bytecode"
+    );
+    assert!(
+        v.is_object(),
+        "expected new f() to return the instance, got {v:?}"
+    );
+}
+
+#[test]
+fn end_to_end_new_expression_constructs_instance_with_arguments() {
+    // `Point`'s body carries a lexical declaration so it can never
+    // independently compile (it already supports `this.x = x`-shaped Dot
+    // assignment on its own); any chunk execution here must come from the
+    // wrapping IIFE, pinning the `new Point(3, 4)` expression itself.
+    let source = "\
+        function Point(x, y) { let unused = 0; this.x = x; this.y = y; } \
+        var __r = (function() { \
+            var p = new Point(3, 4); \
+            return p.x + p.y; \
+        })();";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "new with arguments should compile to bytecode");
+    assert_eq!(v.as_number(), Some(7.0));
+}
+
+#[test]
+fn end_to_end_new_expression_derived_class_default_constructor_compiles() {
+    // `Base`'s constructor carries a lexical declaration so it can never
+    // independently compile; `Derived`'s constructor is synthetic (no source
+    // body to compile at all). Any chunk execution here must come from the
+    // wrapping IIFE's own `new Derived(9)` expression.
+    let source = "\
+        class Base { constructor(v) { let unused = 0; this.v = v; } } \
+        class Derived extends Base {} \
+        var __r = (function() { \
+            var d = new Derived(9); \
+            return d.v; \
+        })();";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "new on a derived default constructor should compile to bytecode"
+    );
+    assert_eq!(v.as_number(), Some(9.0));
+}
+
+#[test]
+fn end_to_end_new_expression_derived_class_explicit_super_call_compiles() {
+    let source = "\
+        class Base { constructor(v) { let unused = 0; this.v = v; } } \
+        class Derived extends Base { constructor(v) { let unused2 = 0; super(v); } } \
+        var __r = (function() { \
+            var d = new Derived(9); \
+            return d.v; \
+        })();";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "new on a derived explicit-super constructor should compile to bytecode"
+    );
+    assert_eq!(v.as_number(), Some(9.0));
+}
+
+#[test]
+fn end_to_end_new_expression_non_constructor_arrow_callee_message_matches_tree_walker() {
+    // The callee expression compiles regardless of what value it resolves to
+    // at runtime (an Identifier compiles the same way whether it holds a
+    // constructor or not) — this pins the IsConstructor check's error text.
+    assert_message_parity(
+        "var notCtor = () => {}; \
+         var __r; \
+         try { (function(){ return new notCtor(); })(); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn end_to_end_new_expression_non_constructor_primitive_callee_message_matches_tree_walker() {
+    assert_message_parity(
+        "var notCtor = 42; \
+         var __r; \
+         try { (function(){ return new notCtor(); })(); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
 fn end_to_end_member_assignment_in_loop_takes_bytecode_path() {
     // Motivating case for issue #388 (mandreel's heap-copy loop shape):
     // a numeric `for` loop whose body is nothing but member/array-element
@@ -1889,6 +1989,53 @@ fn pending_with_getter_callee_survives_gc_during_argument() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert_eq!(ast.as_number(), Some(17.0));
+    assert_eq!(bytecode.as_number(), Some(17.0));
+}
+
+#[test]
+fn pending_construct_argument_survives_gc_during_later_argument() {
+    // `new`-callee analog of `pending_argument_survives_gc_during_later_call_argument`:
+    // `new Marker()`'s freshly-allocated, otherwise-unreferenced instance sits
+    // pending as the first Construct argument while the second argument's own
+    // call forces a GC before the outer Construct consumes it.
+    let source = "\
+        var collect = $262.gc; \
+        var observed = 0; \
+        function Marker() { this.marker = 42; } \
+        function Combine(value, ignored) { observed = value.marker; } \
+        function run() { new Combine(new Marker(), collect()); } \
+        run(); \
+        var __r = observed;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert_eq!(ast.as_number(), Some(42.0));
+    assert_eq!(bytecode.as_number(), Some(42.0));
+}
+
+#[test]
+fn pending_construct_callee_survives_gc_during_argument_evaluation() {
+    // `new`-callee analog of `pending_with_getter_callee_survives_gc_during_argument`:
+    // the getter returns a freshly-allocated, otherwise-unreferenced function
+    // value that sits pending as the Construct callee while the argument's
+    // own call forces a GC before the outer Construct consumes it.
+    let source = "\
+        var collect = $262.gc; \
+        var observed = 0; \
+        var factory = { \
+            get Ctor() { \
+                return function(ignored) { observed = 17; }; \
+            } \
+        }; \
+        function run() { new (factory.Ctor)(collect()); } \
+        run(); \
+        var __r = observed;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
     assert_eq!(ast.as_number(), Some(17.0));
     assert_eq!(bytecode.as_number(), Some(17.0));
 }
