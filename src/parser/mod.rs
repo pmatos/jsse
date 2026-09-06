@@ -45,6 +45,11 @@ pub(crate) struct Parser<'a> {
     pushback: Option<(Token, bool, usize, usize)>, // (token, had_line_terminator_before, token_start, token_end)
     strict: bool,
     is_module: bool,
+    /// Context depth counters. A construct that re-scopes one of these must
+    /// restore it on its **error** path too: any counter whose decrement runs
+    /// unconditionally somewhere turns a leaked zero into an underflow, which
+    /// is what issue #597 was. Adding a counter here means auditing its
+    /// decrements for that shape.
     in_function: u32,
     in_non_arrow_function: u32,
     in_generator: bool,
@@ -1560,6 +1565,74 @@ mod tests {
             &prog.body.as_slice()[0],
             Statement::ClassDeclaration(_)
         ));
+    }
+
+    /// Truncated source aborts the parse partway through constructs that
+    /// re-scope the context counters. Each such construct must put the saved
+    /// counters back on the failure path as well, or the enclosing construct
+    /// decrements a counter someone else zeroed — `parse_iteration_body` used
+    /// to underflow `in_iteration` that way, panicking under `overflow-checks`.
+    #[test]
+    fn truncated_source_restores_context_counters() {
+        const SOURCES: &[&str] = &[
+            "for (v;7; i) {function t(a) {\n t",
+            "while (0) { function f() {",
+            "for (;;) for (;;) { function f() {",
+            "label: for (;;) { function f() {",
+            "for (;;) { async function f() {",
+            "for (;;) { function* g() {",
+            "for (;;) { (function () {",
+            "for (;;) { (() => {",
+            "for (;;) { class C { m() {",
+            "for (;;) { class C { static {",
+            "for (;;) { class C { static { for (;;) {",
+            "for (;;) { function f() { for (;;) {",
+            "for (;;) { function f() { switch (x) { case 1:",
+            "switch (x) { case 1:",
+            "switch (x) { case 1: for (;;) { function f() {",
+            "class C { static { for (;;) { function f() {",
+        ];
+
+        fn assert_counters_clean(parser: &Parser<'_>, source: &str) {
+            assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
+            assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
+            assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+        }
+
+        for source in SOURCES {
+            let mut parser = Parser::new(source).unwrap();
+            assert!(
+                parser.parse_program().is_err(),
+                "expected a parse error for {source:?}"
+            );
+            assert_counters_clean(&parser, source);
+        }
+
+        // `in_non_arrow_function` is not asserted above. Eight of its nine
+        // decrements sit after a `?`, so an aborted parse skips them and simply
+        // leaves the counter elevated — untidy but harmless. The ninth,
+        // `parse_function_body_with_context`, decrements unconditionally, and
+        // `export default function` is the only way to reach it. A static block
+        // inside such a body zeroes the counter, so before the restores below
+        // were made unconditional that pairing underflowed — on a path
+        // `parse_program` cannot reach at all.
+        const MODULE_SOURCES: &[&str] = &[
+            "export default function () { class C { static {",
+            "export default function* () { class C { static {",
+        ];
+
+        for source in MODULE_SOURCES {
+            let mut parser = Parser::new(source).unwrap();
+            assert!(
+                parser.parse_program_as_module().is_err(),
+                "expected a parse error for {source:?}"
+            );
+            assert_counters_clean(&parser, source);
+            assert_eq!(
+                parser.in_non_arrow_function, 0,
+                "in_non_arrow_function leaked for {source:?}"
+            );
+        }
     }
 
     /// Source nested past `MAX_PARSE_DEPTH` must raise the catchable depth
