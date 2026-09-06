@@ -1394,16 +1394,10 @@ impl<'a> Parser<'a> {
         let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
             self.advance()?;
             self.eat(&Token::LeftBrace)?;
-            let prev_block = self.in_block_or_function;
-            let prev_sc = self.in_switch_case;
-            self.in_block_or_function = true;
-            self.in_switch_case = false;
-            let mut body = Vec::new();
-            while self.current != Token::RightBrace {
-                body.push(self.parse_statement_or_declaration()?);
-            }
-            self.in_block_or_function = prev_block;
-            self.in_switch_case = prev_sc;
+            let saved = self.save_block_scope();
+            let result = self.parse_statement_list_until_brace();
+            self.restore_block_scope(saved);
+            let body = result?;
             self.eat(&Token::RightBrace)?;
             Some(body)
         } else {
