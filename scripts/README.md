@@ -349,23 +349,43 @@ mechanism as upstream's unmodified browser path. `node-test-harness.js`
 supplies the tape assertion adapter on jsse; Node loads real tape as an
 independent framework oracle.
 
-Curve25519/Ed25519 point arithmetic is roughly 100-3500x slower on the
-tree-walker than V8 per operation (measured: a single `scalarMult.base` call
-≈3.4s here vs ≈35ms on Node; `sign.detached.verify` ≈12s vs ≈76ms). At the
-full upstream vector counts (256 scalarmult, 256 box, 1024 Ed25519 sign
-vectors) the complete suite is on the order of ~7h, which isn't practical to
-run as part of landing the harness — a correctness smoke test first
-confirmed all 13 files pass 1233/1233 with truncated vectors, byte-identical
-to Node, so this is pure interpretation overhead rather than an engine bug.
+Curve25519/Ed25519 point arithmetic runs roughly 140-390x slower on the
+tree-walker than on V8, per operation (re-measured 2026-09-05 on this shared
+buildbox, min of 3 reps: `scalarMult.base` 2.98s here vs 14ms on Node;
+`sign.detached.verify` 10.8s vs 70ms). At the full upstream vector counts
+(256 scalarmult, 256 box, 1024 Ed25519 sign vectors) the complete suite
+projects to ~6h, which isn't practical to run as part of landing the harness —
+a correctness smoke test first confirmed all 13 files pass 1233/1233 with
+truncated vectors, byte-identical to Node, so this is pure interpretation
+overhead rather than an engine bug.
 `lib_prepare` therefore evenly samples the three curve-heavy vector files
 (`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
 each (stride-sampled across the full array, not a prefix, so the subset still
 spans the vector space); every other data file (secretbox, hash,
 onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
-the first sampled corpus in this harness — every other config runs its
-library's suite unmodified. Exhaustive coverage is tracked in
-[#361](https://github.com/pmatos/jsse/issues/361), to revisit once the engine
-has a faster numeric path.
+the only corpus here reduced by *sampling a data set*; where other configs
+drop cases they do it case-by-case (lodash's `skipAssert` list, UglifyJS's
+`expect_stdout` stage), never by thinning a vector file.
+
+Exhaustive coverage is tracked in
+[#361](https://github.com/pmatos/jsse/issues/361), and was measured against the
+bytecode VM on 2026-09-05: `--bytecode` does not move this workload (1.00-1.07x
+across the four curve operations, with several `--bytecode` reps slower than the
+default). The `perf-counters` build says why — three functions, `M` (the
+GF(2^255-19) multiply), `car25519` and `sel25519`, carry 96% of the tree-walker's
+work and all three bail out of the compiler, `M` on `new Float64Array(31)` and
+the other two on compound assignment to a member target (`o[i] += x`; only plain
+`o[i] = x` compiles). Their work-unit counts are identical with and without
+`--bytecode`, which is the direct evidence the VM never reaches the field
+arithmetic. Both gaps are
+[#603](https://github.com/pmatos/jsse/issues/603).
+
+Raising the caps therefore needs a large multiplier, not merely the VM being
+enabled: ~17x to hold today's projected ~22min, or ~6x to stay inside the 1h
+`LIB_TIMEOUT`. Closing #603 is a precondition for that, not a demonstration of
+it — what the VM delivers on typed-array field arithmetic is still unmeasured.
+Full numbers, counter dumps and method:
+[`docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md`](../docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md).
 
 ### PrismJS token-stream fixtures
 
