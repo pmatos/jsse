@@ -1,3 +1,42 @@
+# [0.7.0](https://github.com/pmatos/jsse/compare/v0.6.0...v0.7.0) (2026-09-06)
+
+
+### Bug Fixes
+
+* **harness:** await callback-style tape completion ([#576](https://github.com/pmatos/jsse/issues/576)) ([bdc46f5](https://github.com/pmatos/jsse/commit/bdc46f5dfcba380bfeb12c5cef4392317007b10e))
+* **intl:** add region-sensitive calendar preferences ([#587](https://github.com/pmatos/jsse/issues/587)) ([f10d351](https://github.com/pmatos/jsse/commit/f10d351d1d04e5486e6eed909ff319fce1748be8))
+* **intl:** honor Intl.Locale region overrides ([#564](https://github.com/pmatos/jsse/issues/564)) ([d747e3e](https://github.com/pmatos/jsse/commit/d747e3e998aafd36fe2476d2036047521931dd8c))
+* **intl:** honor language-specific hour cycle preferences ([#589](https://github.com/pmatos/jsse/issues/589)) ([e03bc43](https://github.com/pmatos/jsse/commit/e03bc434e0645f640280a5acb84c1e30cbe487e6))
+* **iterator:** create validation errors before IteratorClose ([#590](https://github.com/pmatos/jsse/issues/590)) ([995c6b3](https://github.com/pmatos/jsse/commit/995c6b3dd752e691ae7dacd1417be43973efba67))
+* **iterator:** keep cached next methods alive across helpers ([#591](https://github.com/pmatos/jsse/issues/591)) ([e9437de](https://github.com/pmatos/jsse/commit/e9437de6c45ed40fc3d2c656a4c725df4e4b9292))
+* **iterator:** keep flatMap inner iterator GC-rooted ([#585](https://github.com/pmatos/jsse/issues/585)) ([8ffe5a3](https://github.com/pmatos/jsse/commit/8ffe5a3728379c13f9ba9ca7756b7aabbd44ae19))
+* **iterator:** reject take/drop limits above 2**53 - 1 ([#545](https://github.com/pmatos/jsse/issues/545)) ([4a49b84](https://github.com/pmatos/jsse/commit/4a49b84bbaf5236c6e9ea67c7a8a4c985c69c02e))
+* **module:** dispose top-level using resources ([#583](https://github.com/pmatos/jsse/issues/583)) ([c7bab4a](https://github.com/pmatos/jsse/commit/c7bab4a03b9270836d60bbfb319ccabed003eac2))
+* **module:** stop module DFS after a dependency's __host_exit ([#601](https://github.com/pmatos/jsse/issues/601)) ([a0ef691](https://github.com/pmatos/jsse/commit/a0ef691dbfd39359b33e0fb6cfc8936929988613))
+* **modules:** wait for deferred async cycle dependencies ([#567](https://github.com/pmatos/jsse/issues/567)) ([bcf04a9](https://github.com/pmatos/jsse/commit/bcf04a9c5cda1e5ee906518daa240afbba21d545))
+* **parser:** reject trailing commas after object rest patterns ([#565](https://github.com/pmatos/jsse/issues/565)) ([d7ce4d0](https://github.com/pmatos/jsse/commit/d7ce4d085460d7e89c1c1b7dd79e6340c4d2d4ec))
+* **promise:** preserve Promise.try returned promise identity ([#566](https://github.com/pmatos/jsse/issues/566)) ([4b38491](https://github.com/pmatos/jsse/commit/4b3849137d84ab711a019087a5d3967442fe8bf1))
+* **promise:** root combinator capabilities during synchronous setup ([#577](https://github.com/pmatos/jsse/issues/577)) ([7f74a4f](https://github.com/pmatos/jsse/commit/7f74a4fdc2988d1aa98722f9261dc472b35d657a))
+* **regexp:** preserve genuine supplementary PUA code points ([#579](https://github.com/pmatos/jsse/issues/579)) ([fdc21f8](https://github.com/pmatos/jsse/commit/fdc21f8a2d7afebc42af840b253774d15d9265d0))
+* **test262:** fail collection on unreadable directories ([#586](https://github.com/pmatos/jsse/issues/586)) ([c5f44f0](https://github.com/pmatos/jsse/commit/c5f44f0a3b611cc1d8746a45ae323d0fae17cbf6))
+* **test262:** stop killed runs leaving scratch files in the submodule ([#546](https://github.com/pmatos/jsse/issues/546)) ([e17a15c](https://github.com/pmatos/jsse/commit/e17a15c67e9cbcf70bdf7627b747de488be7749f)), closes [#559](https://github.com/pmatos/jsse/issues/559)
+
+
+### Features
+
+* **fuzz:** add cargo-fuzz parser and differential-vs-node targets ([#598](https://github.com/pmatos/jsse/issues/598)) ([d6c4d75](https://github.com/pmatos/jsse/commit/d6c4d759747d8b9aa5f1e611ab826eb163377c1e))
+* **iterator:** implement chunks and windows helpers ([#557](https://github.com/pmatos/jsse/issues/557)) ([bf9c191](https://github.com/pmatos/jsse/commit/bf9c1916c2ecc69285c535a53dddb631c5654ec5))
+* **iterator:** implement Iterator.prototype.includes ([#558](https://github.com/pmatos/jsse/issues/558)) ([ae39edd](https://github.com/pmatos/jsse/commit/ae39edd3a9b832a1a8214531240c9706dc4d803c)), closes [#569](https://github.com/pmatos/jsse/issues/569) [#571](https://github.com/pmatos/jsse/issues/571) [#549](https://github.com/pmatos/jsse/issues/549)
+* **iterator:** implement Iterator.prototype.join ([#561](https://github.com/pmatos/jsse/issues/561)) ([fc6ffd9](https://github.com/pmatos/jsse/commit/fc6ffd9122c01c0ad1f2558da622b09da8cb0a91))
+* **release:** reconcile orphaned release tags after publish failures ([#600](https://github.com/pmatos/jsse/issues/600)) ([642f9db](https://github.com/pmatos/jsse/commit/642f9dbc82c8b499d20552985a93c9e5af34d1a4))
+
+
+### Performance Improvements
+
+* **bytecode:** compile this expressions ([#578](https://github.com/pmatos/jsse/issues/578)) ([92669f3](https://github.com/pmatos/jsse/commit/92669f31328cb6153cca418d1a853bd4a9888380))
+* **bytecode:** fast-path numeric element reads ([#580](https://github.com/pmatos/jsse/issues/580)) ([cea2e1c](https://github.com/pmatos/jsse/commit/cea2e1c4d156cd25a34324dfdb14d034ad194faa))
+* **counters:** resolve generator/async BODY rows to function names ([#581](https://github.com/pmatos/jsse/issues/581)) ([f93e7a3](https://github.com/pmatos/jsse/commit/f93e7a3687fc842ad5f5953e4345fa57115e23e6))
+
 # [0.6.0](https://github.com/pmatos/jsse/compare/v0.5.0...v0.6.0) (2026-08-30)
 
 
