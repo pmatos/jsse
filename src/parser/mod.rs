@@ -83,8 +83,13 @@ pub(crate) struct Parser<'a> {
     /// Context depth counters. A construct that re-scopes one of these must
     /// restore it on its **error** path too: any counter whose decrement runs
     /// unconditionally somewhere turns a leaked zero into an underflow, which
-    /// is what issue #597 was. Adding a counter here means auditing its
-    /// decrements for that shape.
+    /// is what issue #597 was. The seven re-scoping sites that touch a batch
+    /// of these fields together do so via `save_block_scope`/
+    /// `save_function_context` and their `restore_*` counterparts rather than
+    /// hand-written save/mutate/restore blocks (issue #608); a handful of
+    /// single- or dual-field sites elsewhere (e.g. `in_non_arrow_function`
+    /// bumps in `expressions.rs`) still restore by hand and are unaffected.
+    /// Adding a counter here means auditing its decrements for that shape.
     in_function: u32,
     in_non_arrow_function: u32,
     in_generator: bool,
