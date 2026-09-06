@@ -749,17 +749,7 @@ impl<'a> Parser<'a> {
 
             if self.current == Token::LeftBrace {
                 self.eat(&Token::LeftBrace)?;
-                let prev_super_property = self.allow_super_property;
-                let prev_in_function = self.in_function;
-                let prev_in_non_arrow_function = self.in_non_arrow_function;
-                let prev_in_generator = self.in_generator;
-                let prev_in_async = self.in_async;
-                let prev_in_iteration = self.in_iteration;
-                let prev_in_switch = self.in_switch;
-                let prev_in_static_block = self.in_static_block;
-                let prev_allow_super_call = self.allow_super_call;
-                let prev_block = self.in_block_or_function;
-                let prev_sc = self.in_switch_case;
+                let saved = self.save_function_context();
                 self.allow_super_property = true;
                 self.allow_super_call = false;
                 self.in_function = 0;
@@ -771,25 +761,13 @@ impl<'a> Parser<'a> {
                 self.in_static_block = true;
                 self.in_block_or_function = true;
                 self.in_switch_case = false;
-                let prev_labels = std::mem::take(&mut self.labels);
 
                 // As in `parse_function_body_inner`, restore the saved context on
                 // the failure path too: the zeroed counters must not escape an
                 // unterminated static block into the enclosing construct.
                 let result = self.parse_static_block_statements();
 
-                self.labels = prev_labels;
-                self.allow_super_property = prev_super_property;
-                self.allow_super_call = prev_allow_super_call;
-                self.in_function = prev_in_function;
-                self.in_non_arrow_function = prev_in_non_arrow_function;
-                self.in_generator = prev_in_generator;
-                self.in_async = prev_in_async;
-                self.in_iteration = prev_in_iteration;
-                self.in_switch = prev_in_switch;
-                self.in_static_block = prev_in_static_block;
-                self.in_block_or_function = prev_block;
-                self.in_switch_case = prev_sc;
+                self.restore_function_context(saved);
 
                 let stmts = result?;
                 if crate::ast::stmts_contain_matching(&stmts, &crate::ast::is_arguments_reference) {

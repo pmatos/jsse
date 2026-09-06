@@ -45,6 +45,29 @@ struct SavedBlockScope {
     in_switch_case: bool,
 }
 
+/// Snapshot of the function-context flags re-scoped by class static blocks
+/// and function bodies. Deliberately excludes `strict` (restored via
+/// `set_strict`, which also updates the lexer) and `function_param_names`
+/// (its callers reset it to `None` rather than restoring a prior value) —
+/// both stay hand-managed locals at the one site that touches each. Each
+/// call site mutates only the subset of these fields it needs; an unmutated
+/// field round-trips as a same-value no-op (issue #608).
+struct SavedFunctionContext {
+    in_function: u32,
+    in_non_arrow_function: u32,
+    in_iteration: u32,
+    in_switch: u32,
+    in_generator: bool,
+    in_async: bool,
+    in_static_block: bool,
+    in_block_or_function: bool,
+    in_switch_case: bool,
+    in_formal_parameters: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    labels: Vec<(String, bool)>,
+}
+
 pub(crate) struct Parser<'a> {
     source: &'a str,
     source_text_source: Rc<str>,
@@ -297,6 +320,45 @@ impl<'a> Parser<'a> {
     fn restore_block_scope(&mut self, saved: SavedBlockScope) {
         self.in_block_or_function = saved.in_block_or_function;
         self.in_switch_case = saved.in_switch_case;
+    }
+
+    /// Snapshot the function-context fields before a call site re-scopes
+    /// whichever subset it needs. `std::mem::take`s `labels` rather than
+    /// cloning it — both call sites already want `labels` reset to empty for
+    /// the nested body, so this both captures the outer value and performs
+    /// that reset in one step.
+    fn save_function_context(&mut self) -> SavedFunctionContext {
+        SavedFunctionContext {
+            in_function: self.in_function,
+            in_non_arrow_function: self.in_non_arrow_function,
+            in_iteration: self.in_iteration,
+            in_switch: self.in_switch,
+            in_generator: self.in_generator,
+            in_async: self.in_async,
+            in_static_block: self.in_static_block,
+            in_block_or_function: self.in_block_or_function,
+            in_switch_case: self.in_switch_case,
+            in_formal_parameters: self.in_formal_parameters,
+            allow_super_property: self.allow_super_property,
+            allow_super_call: self.allow_super_call,
+            labels: std::mem::take(&mut self.labels),
+        }
+    }
+
+    fn restore_function_context(&mut self, saved: SavedFunctionContext) {
+        self.in_function = saved.in_function;
+        self.in_non_arrow_function = saved.in_non_arrow_function;
+        self.in_iteration = saved.in_iteration;
+        self.in_switch = saved.in_switch;
+        self.in_generator = saved.in_generator;
+        self.in_async = saved.in_async;
+        self.in_static_block = saved.in_static_block;
+        self.in_block_or_function = saved.in_block_or_function;
+        self.in_switch_case = saved.in_switch_case;
+        self.in_formal_parameters = saved.in_formal_parameters;
+        self.allow_super_property = saved.allow_super_property;
+        self.allow_super_call = saved.allow_super_call;
+        self.labels = saved.labels;
     }
 
     pub(crate) fn set_eval_allow_super_property(&mut self) {
