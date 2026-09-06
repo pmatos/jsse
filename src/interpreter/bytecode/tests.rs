@@ -486,6 +486,116 @@ fn compound_dot_assignment_base_survives_gc_during_rhs_evaluation() {
 }
 
 #[test]
+fn end_to_end_compound_computed_assignment_on_plain_array_takes_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(a,i){ a[i] += 1; return a[i]; })([5], 0);",
+        6.0,
+    );
+}
+
+#[test]
+fn end_to_end_compound_computed_assignment_on_typed_array_takes_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(ta,i){ ta[i] += 1; return ta[i]; })(new Float64Array([5.5]), 0);",
+        6.5,
+    );
+}
+
+#[test]
+fn end_to_end_compound_computed_write_null_base_message_matches_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(k){ null[k] += 1; })(0); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn end_to_end_compound_computed_write_undefined_base_message_matches_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(k){ undefined[k] += 1; })(0); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn compound_computed_assignment_coerces_key_exactly_once() {
+    // Pins both halves of sec-getvalue's ordering: the base-nullish check runs
+    // before ToPropertyKey's side effect (the null/undefined-base tests above),
+    // and the key's `toString` runs exactly once (not once for the read and
+    // once for the write). The measured IIFE's own body makes no calls of its
+    // own, so any executed chunk must come from it, not from `toString`
+    // (which calls `calls.push`, a member call the compiler doesn't support,
+    // so it can never mask a bail by compiling on its own).
+    let source = "
+        var calls = [];
+        var key = { toString: function() { calls.push('k'); return 'i'; } };
+        var __r = (function(o, k) {
+            o[k] += 1;
+            return calls.length;
+        })({ i: 1 }, key);
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "compound computed assignment should compile to bytecode"
+    );
+    assert_eq!(
+        v.as_number(),
+        Some(1.0),
+        "key must be coerced exactly once, got {v:?} calls"
+    );
+}
+
+#[test]
+fn compound_computed_assignment_captures_base_before_rhs_evaluation() {
+    // `someMutator`'s own body contains a lexical declaration, which the
+    // compiler doesn't support, so it can never itself compile — any chunk
+    // execution observed here must come from the measured IIFE, not from a
+    // helper that happens to compile regardless of whether the fix landed.
+    let source = "
+        var target = { i: 5 };
+        var replaced = { i: 100 };
+        var x = target;
+        function someMutator() { let unused = 0; x = replaced; return unused + 1; }
+        var __r = (function(k) {
+            x[k] += someMutator();
+            return target.i;
+        })('i');
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "compound computed assignment should compile to bytecode"
+    );
+    assert_eq!(
+        v.as_number(),
+        Some(6.0),
+        "the base used for the final write must be the one captured before the RHS ran, got {v:?}"
+    );
+}
+
+#[test]
+fn compound_computed_assignment_base_and_key_survive_gc_during_rhs_evaluation() {
+    let source = "
+        var __r = (function(a) {
+            a.arr[0] += a.rhs;
+            return a.arr[0];
+        })({
+            arr: [10],
+            get rhs() { $262.gc(); return 5; },
+        });
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "the containing function should compile to bytecode"
+    );
+    assert_eq!(
+        v.as_number(),
+        Some(15.0),
+        "the pending base/key must survive the nested GC triggered while evaluating the RHS, got {v:?}"
+    );
+}
+
+#[test]
 fn end_to_end_getprop_call_argument_survives_gc_during_sibling_arg_evaluation() {
     // Regression for merging PR #399 (calls) with PR #397 (member access): `GetProp`
     // pushed its result with a raw `stack.push`, bypassing `push_value`'s
@@ -1059,12 +1169,12 @@ fn if_with_unsupported_alternate_bails_to_unsupported() {
 }
 
 #[test]
-fn compound_assign_on_member_bails_to_unsupported() {
+fn compound_assign_on_member_compiles_to_bytecode() {
     let source = "var __r = (function(a){ a[0] += 1; return a[0]; })([1]);";
     let (v, count) = eval_with_mode(source, true);
-    assert_eq!(
-        count, 0,
-        "compound assignment on a member target must bail to the tree-walker"
+    assert!(
+        count >= 1,
+        "compound assignment on a member target must now compile to bytecode"
     );
     assert_eq!(v.as_number(), Some(2.0));
 }

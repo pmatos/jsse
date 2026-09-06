@@ -55,6 +55,7 @@ pub(crate) enum Op {
     ReturnCompletion = 51,
     LoadThis = 52,
     DupN = 53,
+    ToPrimitiveKey = 54,
 }
 
 impl Op {
@@ -114,6 +115,7 @@ impl Op {
             51 => Some(Op::ReturnCompletion),
             52 => Some(Op::LoadThis),
             53 => Some(Op::DupN),
+            54 => Some(Op::ToPrimitiveKey),
             _ => None,
         }
     }

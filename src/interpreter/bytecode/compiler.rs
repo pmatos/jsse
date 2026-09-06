@@ -328,15 +328,32 @@ impl Compiler {
                         Ok(())
                     }
                     MemberProperty::Computed(key) => {
-                        if *op != AssignOp::Assign {
-                            return Err(CompileError::Unsupported("assign target"));
-                        }
                         self.compile_expr(obj)?;
                         self.compile_expr(key)?;
-                        self.compile_expr(value)?;
-                        self.emit(Op::SetElement);
-                        self.pop_n(3);
-                        self.push_n(1);
+                        if *op == AssignOp::Assign {
+                            self.compile_expr(value)?;
+                            self.emit(Op::SetElement);
+                            self.pop_n(3);
+                            self.push_n(1);
+                        } else {
+                            // ToPrimitiveKey performs ToPropertyKey's only side-effecting
+                            // step exactly once, in the spec's required order (base-nullish
+                            // check before key coercion); base and key are then duplicated
+                            // so GetElement's pop and SetElement's pop each consume their
+                            // own copy.
+                            self.emit(Op::ToPrimitiveKey);
+                            self.emit_dup_n(2);
+                            self.emit(Op::GetElement);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.compile_expr(value)?;
+                            self.emit(Self::compound_binary_op(*op)?);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.emit(Op::SetElement);
+                            self.pop_n(3);
+                            self.push_n(1);
+                        }
                         Ok(())
                     }
                     MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),

@@ -667,6 +667,30 @@ fn run_chunk_inner(
                     push_value(interp, &mut stack, v);
                 }
             }
+            Op::ToPrimitiveKey => {
+                // sec-getvalue: the base-nullish check runs before ToPropertyKey's
+                // ToPrimitive side effect, so peek the base (one below the key,
+                // don't pop it) and check it first, without touching the key.
+                let base_index = stack
+                    .len()
+                    .checked_sub(2)
+                    .expect("stack underflow on ToPrimitiveKey base");
+                if stack[base_index].is_nullish() {
+                    let base = stack[base_index].clone();
+                    return Completion::Throw(
+                        interp.create_type_error(&format!("Cannot read properties of {base}")),
+                    );
+                }
+                let gc_frame = root_operand_stack(interp, &stack);
+                let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
+                let result = interp.to_primitive(&key, "string");
+                unroot_stack_value(interp, &key);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Ok(v) => push_value(interp, &mut stack, v),
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
             Op::JumpIfNotNullishKeep => {
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
