@@ -1455,11 +1455,17 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Colon)?;
                 None
             };
-            let prev_sc = self.in_switch_case;
-            self.in_switch_case = true;
+            // This site only needs `in_switch_case`; forcing
+            // `in_block_or_function` true alongside it via SavedBlockScope is
+            // a same-value no-op at its one read site (statements.rs:8/:17),
+            // which already ORs in `in_switch_case` — always true here — so
+            // `in_block_or_function`'s value can't change that check's
+            // outcome. Converted anyway for the "no hand-written restore
+            // blocks left" goal (issue #608).
+            let saved = self.save_block_scope();
             let result =
                 self.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names);
-            self.in_switch_case = prev_sc;
+            self.restore_block_scope(saved);
             let consequent = result?;
             cases.push(SwitchCase { test, consequent });
         }
