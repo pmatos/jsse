@@ -165,6 +165,12 @@ impl Compiler {
         self.pop_ref();
     }
 
+    fn emit_dup_n(&mut self, count: u8) {
+        self.emit(Op::DupN);
+        self.code.push(count);
+        self.push_n(u16::from(count));
+    }
+
     fn emit_load_name(&mut self, name_idx: u16) {
         self.emit(Op::LoadName);
         self.emit_u16(name_idx);
@@ -292,24 +298,62 @@ impl Compiler {
                     self.emit_store_resolved_name(idx);
                     Ok(())
                 }
-                Expression::Member(obj, prop, _) if *op == AssignOp::Assign => match prop {
+                Expression::Member(obj, prop, _) => match prop {
                     MemberProperty::Dot(name) => {
-                        self.compile_expr(obj)?;
                         let idx = self.add_name(name)?;
-                        self.compile_expr(value)?;
-                        self.emit(Op::SetProp);
-                        self.emit_u16(idx);
-                        self.pop_n(2);
-                        self.push_n(1);
+                        if *op == AssignOp::Assign {
+                            self.compile_expr(obj)?;
+                            self.compile_expr(value)?;
+                            self.emit(Op::SetProp);
+                            self.emit_u16(idx);
+                            self.pop_n(2);
+                            self.push_n(1);
+                        } else {
+                            // lVal ← base.name; rVal ← value; SetProp(base, name, op(lVal, rVal)).
+                            // The base is duplicated so GetProp's pop/SetProp's pop each
+                            // consume their own copy — the base is evaluated exactly once.
+                            self.compile_expr(obj)?;
+                            self.emit_dup_n(1);
+                            self.emit(Op::GetProp);
+                            self.emit_u16(idx);
+                            self.compile_expr(value)?;
+                            self.emit(Self::compound_binary_op(*op)?);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.emit(Op::SetProp);
+                            self.emit_u16(idx);
+                            self.pop_n(2);
+                            self.push_n(1);
+                        }
                         Ok(())
                     }
                     MemberProperty::Computed(key) => {
                         self.compile_expr(obj)?;
                         self.compile_expr(key)?;
-                        self.compile_expr(value)?;
-                        self.emit(Op::SetElement);
-                        self.pop_n(3);
-                        self.push_n(1);
+                        if *op == AssignOp::Assign {
+                            self.compile_expr(value)?;
+                            self.emit(Op::SetElement);
+                            self.pop_n(3);
+                            self.push_n(1);
+                        } else {
+                            // ToPrimitiveKey performs ToPropertyKey's only side-effecting
+                            // step exactly once, in the spec's required order (base-nullish
+                            // check before key coercion); base and key are then duplicated
+                            // so GetElement's pop and SetElement's pop each consume their
+                            // own copy.
+                            self.emit(Op::ToPrimitiveKey);
+                            self.emit_dup_n(2);
+                            self.emit(Op::GetElement);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.compile_expr(value)?;
+                            self.emit(Self::compound_binary_op(*op)?);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.emit(Op::SetElement);
+                            self.pop_n(3);
+                            self.push_n(1);
+                        }
                         Ok(())
                     }
                     MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
@@ -403,6 +447,29 @@ impl Compiler {
             },
             Expression::Call(callee, args, site_id) => {
                 self.compile_call(callee, args, Op::Call, *site_id)
+            }
+            Expression::New(callee, args, site_id) => {
+                if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
+                    return Err(CompileError::Unsupported("spread constructor argument"));
+                }
+                let argc = u16::try_from(args.len())
+                    .map_err(|_| CompileError::Unsupported("construct argument count overflow"))?;
+                if usize::from(self.current_stack) + args.len() + 1 > usize::from(u16::MAX) {
+                    return Err(CompileError::Unsupported("operand stack overflow"));
+                }
+                // Construct never reads a `this` value from the callee reference
+                // (unlike Call), so no LoadCalleeName-style receiver capture is
+                // needed — any expression compiles as the callee directly.
+                self.compile_expr(callee)?;
+                for arg in args {
+                    self.compile_expr(arg)?;
+                }
+                self.emit(Op::Construct);
+                self.emit_u16(argc);
+                self.emit_u32(site_id.0);
+                self.pop_n(argc + 1);
+                self.push_n(1);
+                Ok(())
             }
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }

@@ -91,6 +91,20 @@ fn release_call_operands(
     unroot_stack_value(interp, callee);
 }
 
+fn take_construct_operands(stack: &mut Vec<JsValue>, argc: usize) -> (JsValue, Vec<JsValue>) {
+    assert!(stack.len() > argc, "stack underflow on construct operands");
+    let args = stack.split_off(stack.len() - argc);
+    let callee = stack.pop().expect("stack underflow on construct callee");
+    (callee, args)
+}
+
+fn release_construct_operands(interp: &mut Interpreter, callee: &JsValue, args: &[JsValue]) {
+    for arg in args.iter().rev() {
+        unroot_stack_value(interp, arg);
+    }
+    unroot_stack_value(interp, callee);
+}
+
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
     if base.is_nullish() {
         let err = interp.create_type_error(&format!(
@@ -535,6 +549,28 @@ fn run_chunk_inner(
                     abrupt => return abrupt,
                 }
             }
+            Op::Construct => {
+                let argc = decode_u16(chunk, pc) as usize;
+                pc += 2;
+                let _site_id = CallSiteId(decode_u32(chunk, pc));
+                pc += 4;
+                let (callee, args) = take_construct_operands(&mut stack, argc);
+                // The operands remain in gc_bytecode_roots for the complete
+                // nested construction, mirroring Op::Call: construct_from_evaluated
+                // can run arbitrary JS (constructor body, field initializers) and
+                // hit any number of safepoints before returning.
+                let result = interp.construct_from_evaluated(&callee, &args, env);
+                release_construct_operands(interp, &callee, &args);
+                match result {
+                    Completion::Normal(value) | Completion::Return(value) => {
+                        push_value(interp, &mut stack, value);
+                    }
+                    Completion::Empty => {
+                        push_value(interp, &mut stack, JsValue::UNDEFINED);
+                    }
+                    abrupt => return abrupt,
+                }
+            }
             Op::Add
             | Op::Sub
             | Op::Mul
@@ -653,6 +689,42 @@ fn run_chunk_inner(
                 let v = stack.last().expect("stack underflow on JumpIfFalsyKeep");
                 if !interp.to_boolean_val(v) {
                     pc = (pc as i32 + offset) as usize;
+                }
+            }
+            Op::DupN => {
+                let count = chunk.code[pc] as usize;
+                pc += 1;
+                let start = stack
+                    .len()
+                    .checked_sub(count)
+                    .expect("stack underflow on DupN");
+                for i in 0..count {
+                    let v = stack[start + i].clone();
+                    push_value(interp, &mut stack, v);
+                }
+            }
+            Op::ToPrimitiveKey => {
+                // sec-getvalue: the base-nullish check runs before ToPropertyKey's
+                // ToPrimitive side effect, so peek the base (one below the key,
+                // don't pop it) and check it first, without touching the key.
+                let base_index = stack
+                    .len()
+                    .checked_sub(2)
+                    .expect("stack underflow on ToPrimitiveKey base");
+                if stack[base_index].is_nullish() {
+                    let base = stack[base_index].clone();
+                    return Completion::Throw(
+                        interp.create_type_error(&format!("Cannot read properties of {base}")),
+                    );
+                }
+                let gc_frame = root_operand_stack(interp, &stack);
+                let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
+                let result = interp.to_primitive(&key, "string");
+                unroot_stack_value(interp, &key);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Ok(v) => push_value(interp, &mut stack, v),
+                    Err(e) => return Completion::Throw(e),
                 }
             }
             Op::JumpIfNotNullishKeep => {

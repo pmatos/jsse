@@ -30,7 +30,7 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
 /// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::LoadThis as usize) < OP_SLOTS);
+const _: () = assert!((Op::Construct as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.
