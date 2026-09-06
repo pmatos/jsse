@@ -6751,6 +6751,33 @@ impl Interpreter {
                 return Completion::Throw(e);
             }
         };
+        let result = self.construct_from_evaluated(&callee_val, &evaluated_args, env);
+        self.gc_unroot_frame(gc_frame);
+        result
+    }
+
+    /// Everything `new`/`Construct` need once the callee and arguments are
+    /// already evaluated `JsValue`s: the `IsConstructor` check, the proxy
+    /// construct trap, bound-function delegation, and the derived/base
+    /// construction paths. `env` is the caller's lexical environment, used
+    /// only as a fallback closure for instance-field initializers when the
+    /// constructor itself carries none. Shared by the tree-walker's
+    /// `eval_new` and the bytecode VM's `Op::Construct` handler (mirrors
+    /// `Op::LoadThis`'s `resolve_this_binding` precedent) so the two never
+    /// drift.
+    pub(crate) fn construct_from_evaluated(
+        &mut self,
+        callee_val: &JsValue,
+        args: &[JsValue],
+        env: &EnvRef,
+    ) -> Completion {
+        let gc_frame = self.gc_root_frame();
+        let callee_val = callee_val.clone();
+        self.gc_root_value(&callee_val);
+        let evaluated_args = args.to_vec();
+        for arg in &evaluated_args {
+            self.gc_root_value(arg);
+        }
         // Check if callee is a constructor
         if let Some(co) = (callee_val)
             .as_object_id()
