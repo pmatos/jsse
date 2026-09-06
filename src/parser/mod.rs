@@ -1601,12 +1601,27 @@ mod tests {
             "switch (x) { case 1:",
             "switch (x) { case 1: for (;;) { function f() {",
             "class C { static { for (;;) { function f() {",
+            "try {",
+            "try { } catch (e) {",
+            "try { } catch {",
+            "try { } finally {",
+            "for (;;) { try {",
+            "for (;;) { try { } catch (e) {",
+            "for (;;) { try { } finally {",
         ];
 
         fn assert_counters_clean(parser: &Parser<'_>, source: &str) {
             assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
             assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
             assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+            assert!(
+                !parser.in_block_or_function,
+                "in_block_or_function leaked for {source:?}"
+            );
+            assert!(
+                !parser.in_switch_case,
+                "in_switch_case leaked for {source:?}"
+            );
         }
 
         for source in SOURCES {
