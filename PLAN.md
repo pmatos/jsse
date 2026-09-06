@@ -233,3 +233,67 @@ is the gate for "did the refactor change any observable parse result."
 - Rolling `test262-pass.txt` forward (`--update-baseline` is a `main`-branch operation).
 - Adding a new `docs/adr/` entry (see §3 — no architectural decision is being made beyond what
   the issue itself already settled).
+
+## 8. Status (resumed run, 2026-09-06)
+
+This workspace was reused from a prior attempt: slices 1–8 above are already implemented and
+committed on this branch (`071046b`..`7471b11`), but the branch has never been pushed and no PR
+exists. This run re-verified the existing work rather than re-planning from scratch, since a
+coherent `PLAN.md` was already committed and matched by the implementation.
+
+Slice → commit map:
+
+1. `a21cd37` — extended `truncated_source_restores_context_counters` (red for
+   `in_block_or_function` on the four small sites, as predicted).
+2. `0093b7b` — added `SavedBlockScope`, converted `parse_block_statement`.
+3. `f551167`, `36c466c`, `2e5878f` — try-block, catch-block, finally-block arms.
+4. `ced9e99` — switch-case site converted too (the "seven sites" judgement call from slice 4
+   was resolved in favor of converting it).
+5. `00977ce` — added `SavedFunctionContext`, converted the class-static-block arm.
+6. `d4ef89d` — converted `parse_function_body_inner`.
+7. `7471b11` — doc cleanup on the shared structs' field-exclusion rationale (`strict` /
+   `in_formal_parameters` / `function_param_names` stay hand-managed locals; see the doc
+   comment on `SavedFunctionContext` in `src/parser/mod.rs`).
+8. Full-suite gate — re-run in this session, not as a separate commit (see below).
+
+Care-needed items from the issue, verified against the landed code:
+
+- `in_non_arrow_function` — included in `SavedFunctionContext`; restoring it at the
+  static-block arm is a same-value no-op there, and the test comment at
+  `src/parser/mod.rs:1720-1727` documents why it's checked via `MODULE_SOURCES`
+  (`export default function`) instead of the main `SOURCES` table.
+- `strict` — deliberately excluded from both structs; restored via `set_strict` (which also
+  updates the lexer), documented inline on `SavedFunctionContext`.
+- `in_formal_parameters` — included in `SavedFunctionContext`.
+- `function_param_names` — deliberately excluded; callers reset it to `None` rather than
+  restoring a prior value, documented inline on `SavedFunctionContext`.
+
+Verification performed this run (read-only, no new production changes):
+
+- `cargo test --lib parser::` — 15/15 pass, including
+  `truncated_source_restores_context_counters`.
+- `./scripts/lint.sh` — rustfmt, clippy (default and `perf-counters`) all clean.
+- `grep` for hand-written `saved_*`/`prev_*` context-flag blocks in `statements.rs`/
+  `declarations.rs` — none remain; the only survivors are lexer/token backtracking
+  (`saved_lt`, `saved_current`, `saved_pushback`, `saved_lexer`) and the two deliberately
+  hand-managed fields above, which are out of scope per §7.
+- Targeted test262 (`language/statements/{block,try,switch,class,function}`): 10,089/10,089
+  scenarios pass (100%), 0 regressions against `origin/main:test262-pass.txt`.
+- `git fetch origin main`: no new commits on `main` since this branch's base — no rebase
+  needed before push.
+
+Remaining work for the next stage (implementation/PR-opening, not planning):
+
+- Run the full `uv run python scripts/run-test262.py` to confirm the baseline holds
+  repo-wide (only the targeted directories were run in this session).
+- `git rm PLAN.md` per the stage-handoff convention.
+- The untracked `EVIDENCE.md` in this workspace is a stale artifact from an unrelated `/simplify`
+  run that found no PR to operate on — it documents a blocker that resolves itself once the PR
+  below exists; the next stage should remove it (or leave it — it is untracked and won't ship).
+- Push the branch and `gh pr create --base main --head
+  sym/jsse/608-parser-a-scoping-combinator-for-the-seven-context-re-scoping-sites --title
+  "refactor(parser): add scoping combinator for context re-scoping sites"` with a body
+  summarizing slices 1–8 above, including the judgement call in slice 4 (switch-case site
+  converted despite the issue's six-site enumeration) and the two structs used instead of the
+  issue's single `SavedContext` (avoids a union-restore behavior change at the two sites whose
+  saved field sets differ, per §2/§6).
