@@ -808,80 +808,122 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
     }
 }
 
+/// `ContainsArguments` over an expression, walked with an explicit stack.
+///
+/// Flat operand chains (`a + b + c + ...`) and member/call chains
+/// (`a.b.b.b...`) parse in a continuation loop, so they are not bounded by
+/// `MAX_PARSE_DEPTH` and nest as deeply as the source is long. Native
+/// recursion here overflowed the engine stack on such input (jsse#612), and
+/// this predicate runs at function-object creation time, where there is no way
+/// to report a failure. The explicit stack makes it O(1) native stack.
+///
+/// The stack pops in a different order than the old short-circuiting `||`
+/// chain visited children, which is immaterial: this is a side-effect-free
+/// predicate, so only *whether* a matching node exists is observable.
 fn expr_uses_arguments(expr: &Expression) -> bool {
-    match expr {
-        Expression::Identifier(name) => name == "arguments",
-        Expression::Literal(_)
-        | Expression::This
-        | Expression::Super
-        | Expression::ImportMeta
-        | Expression::NewTarget
-        | Expression::PrivateIdentifier(_) => false,
-        // Regular functions have their own `arguments`. Classes have their own
-        // scope for method bodies, but `extends` and computed class element keys
-        // evaluate in the enclosing scope and may reference `arguments`.
-        Expression::Function(_) => false,
-        Expression::Class(c) => {
-            class_extends_or_computed_keys_use_arguments(c.super_class.as_deref(), &c.body)
-        }
-        // DO recurse into arrow functions (they inherit arguments)
-        Expression::ArrowFunction(a) => {
-            let body = a.body.body();
-            match body.statements.as_slice() {
-                [Statement::Return(Some(e))] => expr_uses_arguments(e),
-                stmts => stmts_use_arguments(stmts),
+    let mut stack = vec![expr];
+    while let Some(e) = stack.pop() {
+        match e {
+            Expression::Identifier(name) => {
+                if name == "arguments" {
+                    return true;
+                }
+            }
+            Expression::Literal(_)
+            | Expression::This
+            | Expression::Super
+            | Expression::ImportMeta
+            | Expression::NewTarget
+            | Expression::PrivateIdentifier(_) => {}
+            // Regular functions have their own `arguments`. Classes have their own
+            // scope for method bodies, but `extends` and computed class element keys
+            // evaluate in the enclosing scope and may reference `arguments`.
+            Expression::Function(_) => {}
+            Expression::Class(c) => {
+                if class_extends_or_computed_keys_use_arguments(c.super_class.as_deref(), &c.body) {
+                    return true;
+                }
+            }
+            // DO recurse into arrow functions (they inherit arguments)
+            Expression::ArrowFunction(a) => {
+                let body = a.body.body();
+                match body.statements.as_slice() {
+                    [Statement::Return(Some(e))] => stack.push(e),
+                    stmts => {
+                        if stmts_use_arguments(stmts) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            Expression::Array(elems, _) => stack.extend(elems.iter().flatten()),
+            Expression::Object(props, _) => {
+                for p in props.iter() {
+                    stack.push(&p.value);
+                    if let PropertyKey::Computed(e) = &p.key {
+                        stack.push(e);
+                    }
+                }
+            }
+            Expression::Unary(_, e)
+            | Expression::Update(_, _, e)
+            | Expression::Spread(e)
+            | Expression::Yield(Some(e), _)
+            | Expression::Await(e)
+            | Expression::Typeof(e)
+            | Expression::Void(e)
+            | Expression::Delete(e) => stack.push(e),
+            Expression::Yield(None, _) => {}
+            Expression::Binary(_, l, r)
+            | Expression::Logical(_, l, r)
+            | Expression::Assign(_, l, r) => {
+                stack.push(l);
+                stack.push(r);
+            }
+            Expression::Conditional(t, c, a) => {
+                stack.push(t);
+                stack.push(c);
+                stack.push(a);
+            }
+            Expression::Call(callee, args, _) => {
+                // A direct `eval(...)` call can itself reference `arguments`.
+                if matches!(&**callee, Expression::Identifier(name) if name == "eval") {
+                    return true;
+                }
+                stack.push(callee);
+                stack.extend(args.iter());
+            }
+            Expression::New(callee, args, _) => {
+                stack.push(callee);
+                stack.extend(args.iter());
+            }
+            Expression::Member(obj, prop, _) => {
+                stack.push(obj);
+                if let MemberProperty::Computed(e) = prop {
+                    stack.push(e);
+                }
+            }
+            Expression::OptionalChain(base, chain) => {
+                stack.push(base);
+                stack.push(chain);
+            }
+            Expression::Comma(exprs) | Expression::Sequence(exprs) => stack.extend(exprs.iter()),
+            Expression::TaggedTemplate(tag, tpl) => {
+                stack.push(tag);
+                stack.extend(tpl.expressions.iter());
+            }
+            Expression::Template(tpl) => stack.extend(tpl.expressions.iter()),
+            Expression::Import(spec, opts)
+            | Expression::ImportDefer(spec, opts)
+            | Expression::ImportSource(spec, opts) => {
+                stack.push(spec);
+                if let Some(opts) = opts.as_deref() {
+                    stack.push(opts);
+                }
             }
         }
-        Expression::Array(elems, _) => elems
-            .iter()
-            .any(|e| e.as_ref().is_some_and(expr_uses_arguments)),
-        Expression::Object(props, _) => props.iter().any(|p| {
-            expr_uses_arguments(&p.value)
-                || matches!(&p.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
-        }),
-        Expression::Unary(_, e)
-        | Expression::Update(_, _, e)
-        | Expression::Spread(e)
-        | Expression::Yield(Some(e), _)
-        | Expression::Await(e)
-        | Expression::Typeof(e)
-        | Expression::Void(e)
-        | Expression::Delete(e) => expr_uses_arguments(e),
-        Expression::Yield(None, _) => false,
-        Expression::Binary(_, l, r)
-        | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => expr_uses_arguments(l) || expr_uses_arguments(r),
-        Expression::Conditional(t, c, a) => {
-            expr_uses_arguments(t) || expr_uses_arguments(c) || expr_uses_arguments(a)
-        }
-        Expression::Call(callee, args, _) => {
-            matches!(&**callee, Expression::Identifier(name) if name == "eval")
-                || expr_uses_arguments(callee)
-                || args.iter().any(expr_uses_arguments)
-        }
-        Expression::New(callee, args, _) => {
-            expr_uses_arguments(callee) || args.iter().any(expr_uses_arguments)
-        }
-        Expression::Member(obj, prop, _) => {
-            expr_uses_arguments(obj)
-                || matches!(prop, MemberProperty::Computed(e) if expr_uses_arguments(e))
-        }
-        Expression::OptionalChain(base, chain) => {
-            expr_uses_arguments(base) || expr_uses_arguments(chain)
-        }
-        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-            exprs.iter().any(expr_uses_arguments)
-        }
-        Expression::TaggedTemplate(tag, tpl) => {
-            expr_uses_arguments(tag) || tpl.expressions.iter().any(expr_uses_arguments)
-        }
-        Expression::Template(tpl) => tpl.expressions.iter().any(expr_uses_arguments),
-        Expression::Import(spec, opts)
-        | Expression::ImportDefer(spec, opts)
-        | Expression::ImportSource(spec, opts) => {
-            expr_uses_arguments(spec) || opts.as_ref().is_some_and(|e| expr_uses_arguments(e))
-        }
     }
+    false
 }
 
 fn pattern_uses_arguments(pat: &Pattern) -> bool {
@@ -1365,136 +1407,171 @@ fn assign_pattern_sites(pat: &mut Pattern, call_id: &mut u32, prop_id: &mut u32)
     }
 }
 
-fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32) {
-    match expr {
-        Expression::Call(callee, args, site) => {
-            assign_expr_sites(callee, call_id, prop_id);
-            for a in args.iter_mut() {
-                assign_expr_sites(a, call_id, prop_id);
+/// One unit of work for [`assign_expr_sites`]'s explicit stack.
+///
+/// Site ids are assigned in *post-order*: every id inside a node is handed out
+/// before the node's own. `IcStore` sizes its slot arrays from the final counts
+/// and both the tree-walker and the bytecode compiler index them by these ids,
+/// so the numbering is part of the contract and must not shift. An explicit
+/// stack preserves it by pushing the `Set*` marker *before* the node's
+/// children, so it pops back off *after* all of them.
+enum SiteWork<'a> {
+    Expr(&'a mut Expression),
+    SetCall(&'a mut CallSiteId),
+    SetProp(&'a mut PropSiteId),
+}
+
+/// Number every call/new/member site reachable from `expr`, walked with an
+/// explicit stack.
+///
+/// Flat operand chains (`a + b + c + ...`) and member/call chains
+/// (`a.b.b.b...`) parse in a continuation loop rather than by recursive
+/// descent, so they are deliberately not bounded by `MAX_PARSE_DEPTH` and nest
+/// as deeply as the source is long. Native recursion here overflowed the engine
+/// stack — SIGABRT, uncatchable — at ~122k operands on a debug build and ~3-4M
+/// on release (jsse#612). This pass runs on every successful parse and has no
+/// way to report a failure, so it must use O(1) native stack.
+///
+/// Nested function, arrow, and class-method bodies each open a *fresh* id
+/// namespace via [`assign_ic_sites`], so they stay ordinary nested calls: that
+/// recursion is bounded by function/class nesting depth, which recursive
+/// descent does funnel through `MAX_PARSE_DEPTH`.
+fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &mut u32) {
+    let mut stack: Vec<SiteWork<'a>> = vec![SiteWork::Expr(expr)];
+    while let Some(work) = stack.pop() {
+        let expr = match work {
+            SiteWork::SetCall(site) => {
+                *site = CallSiteId(*call_id);
+                *call_id += 1;
+                continue;
             }
-            *site = CallSiteId(*call_id);
-            *call_id += 1;
-        }
-        Expression::New(callee, args, site) => {
-            assign_expr_sites(callee, call_id, prop_id);
-            for a in args.iter_mut() {
-                assign_expr_sites(a, call_id, prop_id);
+            SiteWork::SetProp(site) => {
+                *site = PropSiteId(*prop_id);
+                *prop_id += 1;
+                continue;
             }
-            *site = CallSiteId(*call_id);
-            *call_id += 1;
-        }
-        Expression::Member(obj, prop, site) => {
-            assign_expr_sites(obj, call_id, prop_id);
-            if let MemberProperty::Computed(e) = prop {
-                assign_expr_sites(e, call_id, prop_id);
-            }
-            *site = PropSiteId(*prop_id);
-            *prop_id += 1;
-        }
-        Expression::OptionalChain(base, chain) => {
-            assign_expr_sites(base, call_id, prop_id);
-            assign_expr_sites(chain, call_id, prop_id);
-        }
-        Expression::Unary(_, e)
-        | Expression::Update(_, _, e)
-        | Expression::Spread(e)
-        | Expression::Yield(Some(e), _)
-        | Expression::Await(e)
-        | Expression::Typeof(e)
-        | Expression::Void(e)
-        | Expression::Delete(e) => assign_expr_sites(e, call_id, prop_id),
-        Expression::Yield(None, _) => {}
-        Expression::Binary(_, l, r)
-        | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => {
-            assign_expr_sites(l, call_id, prop_id);
-            assign_expr_sites(r, call_id, prop_id);
-        }
-        Expression::Conditional(t, c, a) => {
-            assign_expr_sites(t, call_id, prop_id);
-            assign_expr_sites(c, call_id, prop_id);
-            assign_expr_sites(a, call_id, prop_id);
-        }
-        Expression::Array(elems, _) => {
-            for e in elems.iter_mut().flatten() {
-                assign_expr_sites(e, call_id, prop_id);
-            }
-        }
-        Expression::Object(props, _) => {
-            for p in props.iter_mut() {
-                if let PropertyKey::Computed(e) = &mut p.key {
-                    assign_expr_sites(e, call_id, prop_id);
+            SiteWork::Expr(expr) => expr,
+        };
+        match expr {
+            Expression::Call(callee, args, site) | Expression::New(callee, args, site) => {
+                stack.push(SiteWork::SetCall(site));
+                for a in args.iter_mut().rev() {
+                    stack.push(SiteWork::Expr(a));
                 }
-                assign_expr_sites(&mut p.value, call_id, prop_id);
+                stack.push(SiteWork::Expr(callee));
             }
-        }
-        Expression::Function(f) => {
-            assign_ic_sites(&mut f.body);
-        }
-        Expression::ArrowFunction(a) => {
-            assign_ic_sites(a.body.body_mut());
-        }
-        Expression::Class(c) => {
-            if let Some(super_class) = c.super_class.as_mut() {
-                assign_expr_sites(super_class, call_id, prop_id);
+            Expression::Member(obj, prop, site) => {
+                stack.push(SiteWork::SetProp(site));
+                if let MemberProperty::Computed(e) = prop {
+                    stack.push(SiteWork::Expr(e));
+                }
+                stack.push(SiteWork::Expr(obj));
             }
-            for el in c.body.iter_mut() {
-                match el {
-                    ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
-                    ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
-                        // See assign_class_sites: number computed keys and static
-                        // initializers (evaluated at class-definition time), but
-                        // leave instance field / auto-accessor initializers
-                        // UNASSIGNED so they take the IC slow path when they run
-                        // during construction under the constructor's handle.
-                        if let PropertyKey::Computed(e) = &mut p.key {
-                            assign_expr_sites(e, call_id, prop_id);
-                        }
-                        if p.is_static
-                            && let Some(v) = p.value.as_mut()
-                        {
-                            assign_expr_sites(v, call_id, prop_id);
-                        }
-                    }
-                    ClassElement::StaticBlock(stmts) => {
-                        for s in stmts.iter_mut() {
-                            assign_stmt_sites(s, call_id, prop_id);
-                        }
-                    }
+            Expression::OptionalChain(base, chain) => {
+                stack.push(SiteWork::Expr(chain));
+                stack.push(SiteWork::Expr(base));
+            }
+            Expression::Unary(_, e)
+            | Expression::Update(_, _, e)
+            | Expression::Spread(e)
+            | Expression::Yield(Some(e), _)
+            | Expression::Await(e)
+            | Expression::Typeof(e)
+            | Expression::Void(e)
+            | Expression::Delete(e) => stack.push(SiteWork::Expr(e)),
+            Expression::Yield(None, _) => {}
+            Expression::Binary(_, l, r)
+            | Expression::Logical(_, l, r)
+            | Expression::Assign(_, l, r) => {
+                stack.push(SiteWork::Expr(r));
+                stack.push(SiteWork::Expr(l));
+            }
+            Expression::Conditional(t, c, a) => {
+                stack.push(SiteWork::Expr(a));
+                stack.push(SiteWork::Expr(c));
+                stack.push(SiteWork::Expr(t));
+            }
+            Expression::Array(elems, _) => {
+                for e in elems.iter_mut().rev().flatten() {
+                    stack.push(SiteWork::Expr(e));
                 }
             }
-        }
-        Expression::TaggedTemplate(tag, tpl) => {
-            assign_expr_sites(tag, call_id, prop_id);
-            for e in tpl.expressions.iter_mut() {
-                assign_expr_sites(e, call_id, prop_id);
+            Expression::Object(props, _) => {
+                for p in props.iter_mut().rev() {
+                    stack.push(SiteWork::Expr(&mut p.value));
+                    if let PropertyKey::Computed(e) = &mut p.key {
+                        stack.push(SiteWork::Expr(e));
+                    }
+                }
             }
-        }
-        Expression::Template(tpl) => {
-            for e in tpl.expressions.iter_mut() {
-                assign_expr_sites(e, call_id, prop_id);
+            Expression::Function(f) => {
+                assign_ic_sites(&mut f.body);
             }
-        }
-        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-            for e in exprs.iter_mut() {
-                assign_expr_sites(e, call_id, prop_id);
+            Expression::ArrowFunction(a) => {
+                assign_ic_sites(a.body.body_mut());
             }
-        }
-        Expression::Import(spec, opts)
-        | Expression::ImportDefer(spec, opts)
-        | Expression::ImportSource(spec, opts) => {
-            assign_expr_sites(spec, call_id, prop_id);
-            if let Some(opts) = opts.as_mut() {
-                assign_expr_sites(opts, call_id, prop_id);
+            Expression::Class(c) => {
+                if let Some(super_class) = c.super_class.as_mut() {
+                    assign_expr_sites(super_class, call_id, prop_id);
+                }
+                for el in c.body.iter_mut() {
+                    match el {
+                        ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
+                        ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                            // See assign_class_sites: number computed keys and static
+                            // initializers (evaluated at class-definition time), but
+                            // leave instance field / auto-accessor initializers
+                            // UNASSIGNED so they take the IC slow path when they run
+                            // during construction under the constructor's handle.
+                            if let PropertyKey::Computed(e) = &mut p.key {
+                                assign_expr_sites(e, call_id, prop_id);
+                            }
+                            if p.is_static
+                                && let Some(v) = p.value.as_mut()
+                            {
+                                assign_expr_sites(v, call_id, prop_id);
+                            }
+                        }
+                        ClassElement::StaticBlock(stmts) => {
+                            for s in stmts.iter_mut() {
+                                assign_stmt_sites(s, call_id, prop_id);
+                            }
+                        }
+                    }
+                }
             }
+            Expression::TaggedTemplate(tag, tpl) => {
+                for e in tpl.expressions.iter_mut().rev() {
+                    stack.push(SiteWork::Expr(e));
+                }
+                stack.push(SiteWork::Expr(tag));
+            }
+            Expression::Template(tpl) => {
+                for e in tpl.expressions.iter_mut().rev() {
+                    stack.push(SiteWork::Expr(e));
+                }
+            }
+            Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+                for e in exprs.iter_mut().rev() {
+                    stack.push(SiteWork::Expr(e));
+                }
+            }
+            Expression::Import(spec, opts)
+            | Expression::ImportDefer(spec, opts)
+            | Expression::ImportSource(spec, opts) => {
+                if let Some(opts) = opts.as_deref_mut() {
+                    stack.push(SiteWork::Expr(opts));
+                }
+                stack.push(SiteWork::Expr(spec));
+            }
+            Expression::Literal(_)
+            | Expression::Identifier(_)
+            | Expression::This
+            | Expression::Super
+            | Expression::ImportMeta
+            | Expression::NewTarget
+            | Expression::PrivateIdentifier(_) => {}
         }
-        Expression::Literal(_)
-        | Expression::Identifier(_)
-        | Expression::This
-        | Expression::Super
-        | Expression::ImportMeta
-        | Expression::NewTarget
-        | Expression::PrivateIdentifier(_) => {}
     }
 }
 
@@ -1512,101 +1589,88 @@ fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32
 /// computed keys, and static-field initializers are cleared because they evaluate
 /// at class-definition time (i.e. when the terminator expression runs).
 pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
-    match expr {
-        Expression::Call(callee, args, site) => {
-            clear_expr_ic_sites(callee);
-            for a in args.iter_mut() {
-                clear_expr_ic_sites(a);
+    // Walked with an explicit stack for the same reason as `assign_expr_sites`:
+    // flat operand and member/call chains nest as deeply as the source is long
+    // (they parse in a continuation loop, so `MAX_PARSE_DEPTH` does not bound
+    // them), and this pass cannot report a failure — jsse#612. Order is
+    // irrelevant here, since every site is simply reset to `UNASSIGNED`.
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Expression::Call(callee, args, site) | Expression::New(callee, args, site) => {
+                *site = CallSiteId::UNASSIGNED;
+                stack.push(callee);
+                stack.extend(args.iter_mut());
             }
-            *site = CallSiteId::UNASSIGNED;
-        }
-        Expression::New(callee, args, site) => {
-            clear_expr_ic_sites(callee);
-            for a in args.iter_mut() {
-                clear_expr_ic_sites(a);
-            }
-            *site = CallSiteId::UNASSIGNED;
-        }
-        Expression::Member(obj, prop, site) => {
-            clear_expr_ic_sites(obj);
-            if let MemberProperty::Computed(e) = prop {
-                clear_expr_ic_sites(e);
-            }
-            *site = PropSiteId::UNASSIGNED;
-        }
-        Expression::OptionalChain(base, chain) => {
-            clear_expr_ic_sites(base);
-            clear_expr_ic_sites(chain);
-        }
-        Expression::Unary(_, e)
-        | Expression::Update(_, _, e)
-        | Expression::Spread(e)
-        | Expression::Yield(Some(e), _)
-        | Expression::Await(e)
-        | Expression::Typeof(e)
-        | Expression::Void(e)
-        | Expression::Delete(e) => clear_expr_ic_sites(e),
-        Expression::Yield(None, _) => {}
-        Expression::Binary(_, l, r)
-        | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => {
-            clear_expr_ic_sites(l);
-            clear_expr_ic_sites(r);
-        }
-        Expression::Conditional(t, c, a) => {
-            clear_expr_ic_sites(t);
-            clear_expr_ic_sites(c);
-            clear_expr_ic_sites(a);
-        }
-        Expression::Array(elems, _) => {
-            for e in elems.iter_mut().flatten() {
-                clear_expr_ic_sites(e);
-            }
-        }
-        Expression::Object(props, _) => {
-            for p in props.iter_mut() {
-                if let PropertyKey::Computed(e) = &mut p.key {
-                    clear_expr_ic_sites(e);
+            Expression::Member(obj, prop, site) => {
+                *site = PropSiteId::UNASSIGNED;
+                stack.push(obj);
+                if let MemberProperty::Computed(e) = prop {
+                    stack.push(e);
                 }
-                clear_expr_ic_sites(&mut p.value);
             }
-        }
-        // Nested function/arrow bodies run under their own IC store — leave them.
-        Expression::Function(_) | Expression::ArrowFunction(_) => {}
-        Expression::Class(c) => {
-            clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
-        }
-        Expression::TaggedTemplate(tag, tpl) => {
-            clear_expr_ic_sites(tag);
-            for e in tpl.expressions.iter_mut() {
-                clear_expr_ic_sites(e);
+            Expression::OptionalChain(base, chain) => {
+                stack.push(base);
+                stack.push(chain);
             }
-        }
-        Expression::Template(tpl) => {
-            for e in tpl.expressions.iter_mut() {
-                clear_expr_ic_sites(e);
+            Expression::Unary(_, e)
+            | Expression::Update(_, _, e)
+            | Expression::Spread(e)
+            | Expression::Yield(Some(e), _)
+            | Expression::Await(e)
+            | Expression::Typeof(e)
+            | Expression::Void(e)
+            | Expression::Delete(e) => stack.push(e),
+            Expression::Yield(None, _) => {}
+            Expression::Binary(_, l, r)
+            | Expression::Logical(_, l, r)
+            | Expression::Assign(_, l, r) => {
+                stack.push(l);
+                stack.push(r);
             }
-        }
-        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-            for e in exprs.iter_mut() {
-                clear_expr_ic_sites(e);
+            Expression::Conditional(t, c, a) => {
+                stack.push(t);
+                stack.push(c);
+                stack.push(a);
             }
-        }
-        Expression::Import(spec, opts)
-        | Expression::ImportDefer(spec, opts)
-        | Expression::ImportSource(spec, opts) => {
-            clear_expr_ic_sites(spec);
-            if let Some(opts) = opts.as_mut() {
-                clear_expr_ic_sites(opts);
+            Expression::Array(elems, _) => stack.extend(elems.iter_mut().flatten()),
+            Expression::Object(props, _) => {
+                for p in props.iter_mut() {
+                    stack.push(&mut p.value);
+                    if let PropertyKey::Computed(e) = &mut p.key {
+                        stack.push(e);
+                    }
+                }
             }
+            // Nested function/arrow bodies run under their own IC store — leave them.
+            Expression::Function(_) | Expression::ArrowFunction(_) => {}
+            Expression::Class(c) => {
+                clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
+            }
+            Expression::TaggedTemplate(tag, tpl) => {
+                stack.push(tag);
+                stack.extend(tpl.expressions.iter_mut());
+            }
+            Expression::Template(tpl) => stack.extend(tpl.expressions.iter_mut()),
+            Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+                stack.extend(exprs.iter_mut())
+            }
+            Expression::Import(spec, opts)
+            | Expression::ImportDefer(spec, opts)
+            | Expression::ImportSource(spec, opts) => {
+                stack.push(spec);
+                if let Some(opts) = opts.as_deref_mut() {
+                    stack.push(opts);
+                }
+            }
+            Expression::Literal(_)
+            | Expression::Identifier(_)
+            | Expression::This
+            | Expression::Super
+            | Expression::ImportMeta
+            | Expression::NewTarget
+            | Expression::PrivateIdentifier(_) => {}
         }
-        Expression::Literal(_)
-        | Expression::Identifier(_)
-        | Expression::This
-        | Expression::Super
-        | Expression::ImportMeta
-        | Expression::NewTarget
-        | Expression::PrivateIdentifier(_) => {}
     }
 }
 
@@ -1976,6 +2040,170 @@ mod ic_site_tests {
         assert!(program.body.ic.assigned);
         assert_eq!(program.body.ic.call_site_count, 2);
         assert_eq!(program.body.ic.prop_site_count, 1);
+    }
+
+    fn num(v: f64) -> Expression {
+        Expression::Literal(Literal::Number(v))
+    }
+
+    fn add(l: Expression, r: Expression) -> Expression {
+        Expression::Binary(BinaryOp::Add, Box::new(l), Box::new(r))
+    }
+
+    /// `a.b.b.b…`, `depth` members deep. Built with a loop, so the *builder*
+    /// is not what is under test.
+    fn deep_member_chain(depth: usize) -> Expression {
+        let mut e = ident("a");
+        for _ in 0..depth {
+            e = prop(e, "b");
+        }
+        e
+    }
+
+    /// `seed + 1 + 1 + …`, `depth` additions deep — the flat operand chain
+    /// from jsse#612.
+    fn deep_add_chain(seed: Expression, depth: usize) -> Expression {
+        let mut e = seed;
+        for _ in 0..depth {
+            e = add(e, num(1.0));
+        }
+        e
+    }
+
+    /// Nesting depth used by the stack-safety tests below. Chosen so that the
+    /// *recursive* form of these passes could not possibly fit in
+    /// `SMALL_STACK`: at the measured frame costs that is ~100 MB on debug and
+    /// ~3 MB on release, against a 256 KiB stack. An iterative pass keeps its
+    /// state on the heap and needs O(1) native stack, so it passes in both
+    /// profiles — which is the point, since the abort ceiling itself is very
+    /// profile-dependent (~122k debug vs ~3-4M release) and a fixed source
+    /// size could never regression-test both.
+    const DEEP: usize = 100_000;
+    const SMALL_STACK: usize = 256 * 1024;
+
+    /// Runs `f` on a thread far too small to hold the old recursive walks.
+    ///
+    /// A native stack overflow aborts the process rather than unwinding, so a
+    /// regression here fails the whole test binary loudly instead of reporting
+    /// a tidy assertion failure. That is intended: the bug being guarded
+    /// against is precisely an uncatchable SIGABRT.
+    fn on_small_stack<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(f)
+            .expect("spawn probe thread")
+            .join()
+            .expect("probe thread panicked")
+    }
+
+    #[test]
+    fn deep_member_chain_is_numbered_without_native_recursion() {
+        on_small_stack(|| {
+            let mut body = body_with(vec![expr_stmt(deep_member_chain(DEEP))]);
+            assign_ic_sites(&mut body);
+            assert_eq!(body.ic.prop_site_count, DEEP as u32);
+            assert_eq!(body.ic.call_site_count, 0);
+
+            // Post-order numbering: the innermost member is 0 and the
+            // outermost DEEP-1. Walking out-to-in must see them descending
+            // with no gaps — that density is what `IcStore` slot indexing
+            // relies on.
+            let mut cur = match &body.statements[0] {
+                Statement::Expression(e) => e,
+                other => panic!("expected an expression statement, got {other:?}"),
+            };
+            for expected in (0..DEEP as u32).rev() {
+                match cur {
+                    Expression::Member(obj, _, id) => {
+                        assert_eq!(id.0, expected, "member at depth {expected}");
+                        cur = obj;
+                    }
+                    other => panic!("expected Member at depth {expected}, got {other:?}"),
+                }
+            }
+            leak_deep(body);
+        });
+    }
+
+    #[test]
+    fn deep_call_chain_is_numbered_without_native_recursion() {
+        on_small_stack(|| {
+            // `a()()()…` — the other production that parses in a continuation
+            // loop and so is not bounded by `MAX_PARSE_DEPTH`.
+            let mut e = ident("a");
+            for _ in 0..DEEP {
+                e = call(e, vec![]);
+            }
+            let mut body = body_with(vec![expr_stmt(e)]);
+            assign_ic_sites(&mut body);
+            assert_eq!(body.ic.call_site_count, DEEP as u32);
+            assert_eq!(body.ic.prop_site_count, 0);
+            leak_deep(body);
+        });
+    }
+
+    #[test]
+    fn deep_operand_chain_arguments_scan_has_no_native_recursion() {
+        let (without, with_at_far_end) = on_small_stack(|| {
+            // No `arguments` anywhere: the scan cannot short-circuit and must
+            // walk every operand — the worst case for stack use.
+            let clean = body_with(vec![Statement::Return(Some(deep_add_chain(
+                num(1.0),
+                DEEP,
+            )))]);
+            let without = func_uses_arguments(&[], &clean);
+
+            // Same shape, with `arguments` buried at the far end of the chain.
+            let dirty = body_with(vec![Statement::Return(Some(deep_add_chain(
+                ident("arguments"),
+                DEEP,
+            )))]);
+            let with_at_far_end = func_uses_arguments(&[], &dirty);
+
+            leak_deep(clean);
+            leak_deep(dirty);
+            (without, with_at_far_end)
+        });
+        assert!(!without, "a chain of literals does not reference arguments");
+        assert!(
+            with_at_far_end,
+            "`arguments` at the deep end of the chain must still be found"
+        );
+    }
+
+    #[test]
+    fn deep_member_chain_is_cleared_without_native_recursion() {
+        on_small_stack(|| {
+            let mut e = deep_member_chain(DEEP);
+            let (mut call_id, mut prop_id) = (0u32, 0u32);
+            assign_expr_sites(&mut e, &mut call_id, &mut prop_id);
+            assert_eq!(prop_id, DEEP as u32);
+
+            clear_expr_ic_sites(&mut e);
+            let mut cur = &e;
+            for depth in (0..DEEP).rev() {
+                match cur {
+                    Expression::Member(obj, _, id) => {
+                        assert_eq!(*id, PropSiteId::UNASSIGNED, "member at depth {depth}");
+                        cur = obj;
+                    }
+                    other => panic!("expected Member at depth {depth}, got {other:?}"),
+                }
+            }
+            leak_deep(e);
+        });
+    }
+
+    /// Deliberately leaks a deeply nested AST.
+    ///
+    /// `Expression`'s *drop glue* is still natively recursive — it is the one
+    /// mandatory pass jsse#612 leaves alone, because `impl Drop for Expression`
+    /// would make every by-value destructure of an `Expression` in the crate an
+    /// E0509. Dropping a chain this deep would therefore overflow the small
+    /// probe stack for a reason unrelated to the pass under test, so the tree
+    /// is leaked instead; the process is about to exit anyway.
+    fn leak_deep<T>(deep: T) {
+        std::mem::forget(deep);
     }
 }
 
