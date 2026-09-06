@@ -1261,13 +1261,7 @@ impl<'a> Parser<'a> {
         let saved_param_names = self.function_param_names.take();
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
-        let prev_generator = self.in_generator;
-        let prev_async = self.in_async;
-        let prev_iteration = self.in_iteration;
-        let prev_switch = self.in_switch;
-        let prev_labels = std::mem::take(&mut self.labels);
-        let prev_super_property = self.allow_super_property;
-        let prev_super_call = self.allow_super_call;
+        let saved = self.save_function_context();
         self.in_generator = is_generator;
         self.in_async = is_async;
         self.in_iteration = 0;
@@ -1275,11 +1269,7 @@ impl<'a> Parser<'a> {
         self.in_function += 1;
         self.allow_super_property = super_property;
         self.allow_super_call = super_call;
-        let prev_formal = self.in_formal_parameters;
         self.in_formal_parameters = false;
-        let prev_block = self.in_block_or_function;
-        let prev_sc = self.in_switch_case;
-        let prev_static_block = self.in_static_block;
         self.in_block_or_function = true;
         self.in_switch_case = false;
         self.in_static_block = false;
@@ -1295,18 +1285,7 @@ impl<'a> Parser<'a> {
                 Ok(body)
             });
 
-        self.in_function -= 1;
-        self.in_generator = prev_generator;
-        self.in_async = prev_async;
-        self.in_iteration = prev_iteration;
-        self.in_switch = prev_switch;
-        self.labels = prev_labels;
-        self.allow_super_property = prev_super_property;
-        self.allow_super_call = prev_super_call;
-        self.in_formal_parameters = prev_formal;
-        self.in_block_or_function = prev_block;
-        self.in_switch_case = prev_sc;
-        self.in_static_block = prev_static_block;
+        self.restore_function_context(saved);
         self.function_param_names = None;
         self.set_strict(prev_strict);
         result
