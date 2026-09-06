@@ -5229,7 +5229,7 @@ mod generator_retirement_tests {
 /// stack because that is the stack the limit is calibrated against — the
 /// default test-harness stack is far smaller.
 #[test]
-fn deep_recursion_before_fix_call_depth() {
+fn deep_call_recursion_raises_error_before_native_overflow() {
     // Twice the limit, so even the shape advancing the counter slowest (one
     // unit per JS call) is guaranteed to cross it.
     let reps = CALL_DEPTH_HARD_LIMIT * 2;
@@ -5276,7 +5276,7 @@ fn deep_recursion_before_fix_call_depth() {
 /// that is the stack the limit is calibrated against — the default
 /// test-harness stack is far smaller.
 #[test]
-fn deep_recursion_before_fix_eval_depth() {
+fn deep_expression_nesting_raises_error_before_native_overflow() {
     // Twice the limit, so even the shape advancing the counter slowest is
     // guaranteed to cross it.
     let reps = EVAL_DEPTH_LIMIT * 2;
