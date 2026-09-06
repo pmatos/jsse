@@ -448,6 +448,44 @@ fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
 }
 
 #[test]
+fn end_to_end_compound_dot_assignment_takes_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(o){ o.x += 1; return o.x; })({x: 5});",
+        6.0,
+    );
+}
+
+#[test]
+fn compound_dot_assignment_base_survives_gc_during_rhs_evaluation() {
+    // Same two-hop shape as `end_to_end_member_chain_base_survives_gc_during_rhs_evaluation`
+    // but for `+=` on a Dot target: `a.base` is duplicated (DupN) so GetProp can read the
+    // current value while a copy of the base stays pending for the trailing SetProp. `a.rhs`'s
+    // own getter forces a GC collection before that pending base is consumed.
+    let source = "
+        var observed = 0;
+        var prototype = { get value() { return 10; }, set value(v) { observed = v; } };
+        function makeBase() { return Object.create(prototype); }
+        var __r = (function(a) {
+            a.base.value += a.rhs;
+            return observed;
+        })({
+            get base() { return makeBase(); },
+            get rhs() { $262.gc(); return 42; },
+        });
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "the containing function should compile to bytecode"
+    );
+    assert_eq!(
+        v.as_number(),
+        Some(52.0),
+        "the pending `a.base` must survive the nested GC triggered while evaluating `a.rhs`, got {v:?}"
+    );
+}
+
+#[test]
 fn end_to_end_getprop_call_argument_survives_gc_during_sibling_arg_evaluation() {
     // Regression for merging PR #399 (calls) with PR #397 (member access): `GetProp`
     // pushed its result with a raw `stack.push`, bypassing `push_value`'s

@@ -165,6 +165,12 @@ impl Compiler {
         self.pop_ref();
     }
 
+    fn emit_dup_n(&mut self, count: u8) {
+        self.emit(Op::DupN);
+        self.code.push(count);
+        self.push_n(u16::from(count));
+    }
+
     fn emit_load_name(&mut self, name_idx: u16) {
         self.emit(Op::LoadName);
         self.emit_u16(name_idx);
@@ -292,18 +298,39 @@ impl Compiler {
                     self.emit_store_resolved_name(idx);
                     Ok(())
                 }
-                Expression::Member(obj, prop, _) if *op == AssignOp::Assign => match prop {
+                Expression::Member(obj, prop, _) => match prop {
                     MemberProperty::Dot(name) => {
-                        self.compile_expr(obj)?;
                         let idx = self.add_name(name)?;
-                        self.compile_expr(value)?;
-                        self.emit(Op::SetProp);
-                        self.emit_u16(idx);
-                        self.pop_n(2);
-                        self.push_n(1);
+                        if *op == AssignOp::Assign {
+                            self.compile_expr(obj)?;
+                            self.compile_expr(value)?;
+                            self.emit(Op::SetProp);
+                            self.emit_u16(idx);
+                            self.pop_n(2);
+                            self.push_n(1);
+                        } else {
+                            // lVal ← base.name; rVal ← value; SetProp(base, name, op(lVal, rVal)).
+                            // The base is duplicated so GetProp's pop/SetProp's pop each
+                            // consume their own copy — the base is evaluated exactly once.
+                            self.compile_expr(obj)?;
+                            self.emit_dup_n(1);
+                            self.emit(Op::GetProp);
+                            self.emit_u16(idx);
+                            self.compile_expr(value)?;
+                            self.emit(Self::compound_binary_op(*op)?);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.emit(Op::SetProp);
+                            self.emit_u16(idx);
+                            self.pop_n(2);
+                            self.push_n(1);
+                        }
                         Ok(())
                     }
                     MemberProperty::Computed(key) => {
+                        if *op != AssignOp::Assign {
+                            return Err(CompileError::Unsupported("assign target"));
+                        }
                         self.compile_expr(obj)?;
                         self.compile_expr(key)?;
                         self.compile_expr(value)?;

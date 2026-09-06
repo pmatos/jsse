@@ -655,6 +655,18 @@ fn run_chunk_inner(
                     pc = (pc as i32 + offset) as usize;
                 }
             }
+            Op::DupN => {
+                let count = chunk.code[pc] as usize;
+                pc += 1;
+                let start = stack
+                    .len()
+                    .checked_sub(count)
+                    .expect("stack underflow on DupN");
+                for i in 0..count {
+                    let v = stack[start + i].clone();
+                    push_value(interp, &mut stack, v);
+                }
+            }
             Op::JumpIfNotNullishKeep => {
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
