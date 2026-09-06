@@ -45,6 +45,50 @@ if (factorialish(50) !== 50) {
 }
 
 // ---------------------------------------------------------------------------
+// Proxy apply-trap forwarding recursion (jsse#607): each JS-level recursion
+// step round-trips through the Proxy's `apply` trap and `Function.prototype
+// .apply`, the stack-hungriest call shape measured while calibrating
+// `CALL_DEPTH_*` — it must still raise a catchable RangeError rather than
+// overflowing the native stack, the same as plain call recursion above.
+
+function callMustRangeError(label, fn) {
+  var threw = false;
+  var err = null;
+  try {
+    fn();
+  } catch (e) {
+    threw = true;
+    err = e;
+  }
+  if (!threw) {
+    throw new Error("expected " + label + " to throw");
+  }
+  if (!(err instanceof RangeError)) {
+    throw new Error(
+      "expected " + label + " to throw a RangeError, got " +
+        (err && err.name) + ": " + (err && err.message)
+    );
+  }
+  if (!/stack/i.test(String(err.message))) {
+    throw new Error(
+      "expected " + label + " message to mention the stack, got: " + err.message
+    );
+  }
+}
+
+function proxyApplyRecurse(n) {
+  return n <= 0 ? 0 : 1 + proxyApplyForward(n - 1);
+}
+var proxyApplyForward = new Proxy(proxyApplyRecurse, {
+  apply(target, thisArg, args) {
+    return target.apply(thisArg, args);
+  },
+});
+callMustRangeError("Proxy apply-trap forwarding recursion", function () {
+  proxyApplyForward(10000);
+});
+
+// ---------------------------------------------------------------------------
 // Deep eval-time expression recursion (jsse#241).
 //
 // Binary/logical operators parse in a left-associative *loop*, so a flat
@@ -79,15 +123,28 @@ function evalMustRangeError(label, src) {
 }
 
 // Additive (left-nested Binary) and logical (left-nested Logical) arms both
-// descend through eval_expr and must both be bounded.
-evalMustRangeError("deep additive expression", "1" + "+1".repeat(500000));
-evalMustRangeError("deep logical expression", "1" + "&&1".repeat(500000));
+// descend through eval_expr and must both be bounded. A self-referential
+// member chain (`a.b.b.b…`) is the stack-hungriest pure-eval_depth shape
+// measured while calibrating this constant, and is bounded the same way.
+//
+// 80,000 operands: comfortably above both profiles' EVAL_DEPTH_LIMIT (2,000
+// debug / 50,000 release), while staying clear of jsse#612 — a *parser*-side
+// native stack limit (unrelated to eval_depth, found while implementing
+// jsse#607) that overflows a debug build on these same flat/member-chain
+// shapes past roughly 122,000 operands, before evaluation even starts.
+evalMustRangeError("deep additive expression", "1" + "+1".repeat(80000));
+evalMustRangeError("deep logical expression", "1" + "&&1".repeat(80000));
+evalMustRangeError(
+  "self-referential member chain",
+  "var a = {}; a.b = a; a" + ".b".repeat(80000) + ";"
+);
 
 // The eval-depth counter must unwind on the throw path, not leak. If it did,
 // repeated deep-eval failures would accumulate phantom depth until an
 // expression well *below* the limit spuriously threw. Trip the limit many
 // times, then require a moderately deep (but legal) expression to still
-// evaluate to the right value in the same process.
+// evaluate to the right value in the same process. 60,000 stays under
+// jsse#612's parser-side ceiling noted above.
 for (var i = 0; i < 20; i++) {
   try {
     eval("1" + "+1".repeat(60000));
@@ -95,6 +152,9 @@ for (var i = 0; i < 20; i++) {
     // expected RangeError, swallow
   }
 }
-if (eval("1" + "+1".repeat(10000)) !== 10001) {
+// 500 stays safely under both profiles' EVAL_DEPTH_LIMIT (2,000 debug /
+// 50,000 release) — this checks the counter unwinds, not "realistic code
+// depth", so the exact value is otherwise arbitrary.
+if (eval("1" + "+1".repeat(500)) !== 501) {
   throw new Error("eval-depth counter leaked: a below-limit expression failed after recovery");
 }
