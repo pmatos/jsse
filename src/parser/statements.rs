@@ -1316,19 +1316,27 @@ impl<'a> Parser<'a> {
         Ok(Statement::Throw(expr))
     }
 
+    /// The plain brace-delimited statement list shared by the `try`, `catch`,
+    /// and `finally` bodies: no interleaved lexical-name bookkeeping, and
+    /// deliberately no `Eof` check (unlike `parse_block_statement_body`'s
+    /// loop) — an unterminated body must fail inside
+    /// `parse_statement_or_declaration` with its own error, not silently stop
+    /// at `Eof` here.
+    fn parse_statement_list_until_brace(&mut self) -> Result<Vec<Statement>, ParseError> {
+        let mut stmts = Vec::new();
+        while self.current != Token::RightBrace {
+            stmts.push(self.parse_statement_or_declaration()?);
+        }
+        Ok(stmts)
+    }
+
     fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // try
         self.eat(&Token::LeftBrace)?;
-        let prev_block = self.in_block_or_function;
-        let prev_sc = self.in_switch_case;
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
-        let mut block = Vec::new();
-        while self.current != Token::RightBrace {
-            block.push(self.parse_statement_or_declaration()?);
-        }
-        self.in_block_or_function = prev_block;
-        self.in_switch_case = prev_sc;
+        let saved = self.save_block_scope();
+        let result = self.parse_statement_list_until_brace();
+        self.restore_block_scope(saved);
+        let block = result?;
         self.eat(&Token::RightBrace)?;
 
         let handler = if self.current == Token::Keyword(Keyword::Catch) {
