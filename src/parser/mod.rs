@@ -33,6 +33,18 @@ impl From<LexError> for ParseError {
     }
 }
 
+/// Snapshot of the two Annex B.3.3 block-scoping flags
+/// (`in_block_or_function`/`in_switch_case`), re-scoped at every site that
+/// parses a brace-delimited statement list: `Block`, the three `try` bodies,
+/// and the `switch` `CaseBlock` consequent. `Copy` and restored
+/// unconditionally so a failed nested parse can't leak the re-scoped values
+/// into the enclosing construct (issue #608, following #597/#602).
+#[derive(Clone, Copy)]
+struct SavedBlockScope {
+    in_block_or_function: bool,
+    in_switch_case: bool,
+}
+
 pub(crate) struct Parser<'a> {
     source: &'a str,
     source_text_source: Rc<str>,
@@ -270,6 +282,21 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn set_eval_new_target_allowed(&mut self) {
         self.eval_new_target_allowed = true;
+    }
+
+    fn save_block_scope(&mut self) -> SavedBlockScope {
+        let saved = SavedBlockScope {
+            in_block_or_function: self.in_block_or_function,
+            in_switch_case: self.in_switch_case,
+        };
+        self.in_block_or_function = true;
+        self.in_switch_case = false;
+        saved
+    }
+
+    fn restore_block_scope(&mut self, saved: SavedBlockScope) {
+        self.in_block_or_function = saved.in_block_or_function;
+        self.in_switch_case = saved.in_switch_case;
     }
 
     pub(crate) fn set_eval_allow_super_property(&mut self) {

@@ -227,10 +227,21 @@ impl<'a> Parser<'a> {
 
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
-        let prev = self.in_block_or_function;
-        let prev_sc = self.in_switch_case;
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
+        let saved = self.save_block_scope();
+        let result = self.parse_block_statement_body();
+        self.restore_block_scope(saved);
+        let stmts = result?;
+        self.eat(&Token::RightBrace)?;
+        Ok(Statement::Block(stmts))
+    }
+
+    /// The `Block` statement list plus its §14.2.1 early-error check, run
+    /// under the re-scoped `in_block_or_function`/`in_switch_case` flags.
+    /// Kept separate from the plain brace-delimited loop the `try` bodies
+    /// share, since lexical-name bookkeeping is interleaved per statement
+    /// here and must stay that way to report redeclaration errors before a
+    /// later syntax error in the same block.
+    fn parse_block_statement_body(&mut self) -> Result<Vec<Statement>, ParseError> {
         let mut stmts = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
         let mut func_decl_names: Vec<String> = Vec::new();
@@ -258,10 +269,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        self.in_block_or_function = prev;
-        self.in_switch_case = prev_sc;
-        self.eat(&Token::RightBrace)?;
-        Ok(Statement::Block(stmts))
+        Ok(stmts)
     }
 
     pub(super) fn collect_lexical_names(
