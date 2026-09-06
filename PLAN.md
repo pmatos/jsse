@@ -1,5 +1,62 @@
 # Plan: issue #607 — interpreter depth guards don't fire before native stack overflow in debug builds
 
+## 0. Status after prior attempt (this workspace was reused)
+
+This workspace already carries a full implementation of this plan from an
+earlier attempt, committed on this branch before this run started:
+
+- `944508b` test(interpreter): add engine-stack regression tests for depth
+  guards (slice 1 + slice 2, red phase — `deep_recursion_before_fix_call_depth`
+  / `deep_recursion_before_fix_eval_depth`, confirmed release-green /
+  debug-SIGABRT before the fix).
+- `3f5e284` fix(interpreter): calibrate `CALL_DEPTH_*`/`EVAL_DEPTH_LIMIT` per
+  build profile (slice 3 — the `_DEBUG`/`_RELEASE` split + compile-time
+  coupling assertion described in §4/§5 below, landed with exactly the
+  proposed values: `REARM` 120/3,000, `SOFT` 160/4,000, `HARD` 200/5,000,
+  `EVAL_DEPTH_LIMIT` 2,000/50,000, `PROXY_CHAIN_DEPTH_LIMIT` unchanged at
+  4,000. Also renamed the slice-2 tests off their red-phase `_before_fix`
+  name to `deep_call_recursion_raises_error_before_native_overflow` /
+  `deep_expression_nesting_raises_error_before_native_overflow` now that
+  they're permanently green, and fixed `src/parser/mod.rs`'s stale
+  forward-reference comment to #607.)
+- `9d523cf` test(recursion): cover Proxy apply-trap and member-chain shapes
+  for both profiles (slice 4 — extended `tests/recursion-limit-interpreter.js`
+  with the two new hungry shapes and re-sized the existing additive/logical
+  cases and the leak-check probe for the new debug `EVAL_DEPTH_LIMIT`).
+
+I re-ran slice 5 (the full regression pass this plan calls for) in this
+session before writing this status note, rather than trusting the commit
+messages alone:
+
+- `cargo test --release`: 650 passed, 0 failed, 1 ignored.
+- `cargo test` (debug): 650 passed, 0 failed, 1 ignored.
+- `deep_call_recursion_raises_error_before_native_overflow` and
+  `deep_expression_nesting_raises_error_before_native_overflow` both pass on
+  debug and release.
+- `uv run python scripts/run-custom-tests.py --jsse ./target/debug/jsse tests/recursion-limit-interpreter.js`
+  → 1/1 pass (the exact debug-build repro from the issue body, now green).
+- `uv run python scripts/run-custom-tests.py tests/recursion-limit-interpreter.js`
+  (release) → 1/1 pass.
+- `git diff 9b9b6b7..HEAD --stat` touches exactly the four files §5 names
+  (`src/interpreter/mod.rs`, `src/interpreter/tests.rs`,
+  `tests/recursion-limit-interpreter.js`) plus the one-line stale-comment fix
+  in `src/parser/mod.rs` that §5/§9 anticipated — nothing stray.
+
+Everything this plan asked for is implemented and green. While implementing
+slice 4, the prior attempt found a distinct, narrower native-stack gap in the
+*parser* on very deep flat/member-chain expressions and filed it separately
+rather than folding it into this PR: jsse#612 (open), out of scope here.
+
+**What is not yet done, and is not something the planning stage can do:**
+the branch has never been pushed to `origin` and no PR exists yet (confirmed
+via `git ls-remote --heads origin <this branch>` and `gh pr list --head
+<this branch> --state all`, both empty). Closing out this issue only needs
+the implementation stage to push this branch and open the PR against
+`main` — no further source or test changes are needed. An unrelated stray
+`EVIDENCE.md` (untracked, from a separate blocked `/simplify` run against
+this same reused workspace that predates a PR existing) is left in place
+for that stage to see and is not part of this plan's file list.
+
 ## 1. Problem restated
 
 `CALL_DEPTH_SOFT_LIMIT`/`CALL_DEPTH_HARD_LIMIT`/`CALL_DEPTH_REARM_LIMIT` and
