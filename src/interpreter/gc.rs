@@ -191,6 +191,12 @@ impl Interpreter {
     /// gains a young root is remembered for the next minor collection. Pins only
     /// ever accumulate: there is no unpin, so they are released when the anchor
     /// itself dies.
+    ///
+    /// That makes this the wrong tool for a capture that is *replaced* over the
+    /// anchor's lifetime — pinning each replacement retains every superseded
+    /// value. Pin one arena-backed container instead and mutate its slots in
+    /// place; `RootedPair` in `builtins/iterators.rs` is the two-slot case, and
+    /// `CONTEXT.md` calls the shape a Rooted Slot.
     pub(crate) fn pin_native_root(&self, anchor: &JsValue, value: &JsValue) {
         if value.as_object_id().is_none() {
             return;
