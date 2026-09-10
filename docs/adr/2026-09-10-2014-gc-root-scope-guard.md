@@ -17,9 +17,13 @@ whole-body, single-frame native temp-root scoping. It is not a Drop-guard:
 `gc_temp_roots` stays a plain `Vec<u64>`, so there is no interior-mutability
 borrow tax (`RefCell`) on the GC hot path (`gc_root_value`, called from every
 allocation-adjacent site in the interpreter). The raw `gc_root_frame`/
-`gc_unroot_frame` primitive is retained for frames that genuinely nest or
-interleave across early exits — the one case the combinator structurally
-cannot express, since it owns exactly one depth marker.
+`gc_unroot_frame` primitive is retained for the one shape the combinator
+cannot express: two frames alive at once where an *inner* one must truncate
+independently while the *outer* one stays open across repeated early exits
+(`Array.from`'s nested `gc_frame`/`gc_frame_next`, see below). Plain LIFO
+nesting — one `with_gc_root_scope` call inside another, each owning its own
+local frame marker on the same stack — composes fine and is not what this
+primitive is reserved for.
 
 An RAII `Drop`-guard is added only if a genuinely interleaved case with two
 or more real adapters later surfaces, decided where the variation is
