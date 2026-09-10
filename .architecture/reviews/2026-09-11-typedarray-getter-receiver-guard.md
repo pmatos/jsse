@@ -207,4 +207,82 @@ relation that `arraybuffer-receiver-guard` (#570) bears to it.
 
 ## Design
 
-_Written in step 4 (design-it-twice + adjudication); this section is amended and re-committed then._
+Three interfaces were produced in parallel by sub-agents (design-it-twice), each briefed to a different
+optimization target, then adjudicated against — in priority order — **depth, locality, seam placement,
+test surface, blast radius**. All three stay blast radius 1 (file-private in `typedarray.rs`, no exported
+interface touched) and behaviour-preserving (exact error strings, the detached-only vs detached-or-OOB
+distinction, the getters' return-0 semantics).
+
+Note the winning mechanism differs from the *pick card*'s sketch of a single
+`require_typed_array_receiver(this, brand, detach_policy)` guard: the adjudicator preferred a **combinator**
+over a policy-parameterized guard. The *hiding* is the same or greater — the drift-prone rule is baked in,
+not passed as an argument — so the card and the design agree on what is deepened, only not on the shape.
+
+### Design A — minimal surface (`require_typed_array` / `require_uint8_array`)
+
+- **Interface**: two same-shaped private fns `fn require_typed_array(interp, this) -> Result<TypedArrayInfo,
+  Completion>` and `fn require_uint8_array(...)`, the brand error string baked into each function *name*
+  (no brand parameter, **zero new types**). Mirrors the in-file #570 precedent `require_array_buffer` /
+  `require_shared_array_buffer`.
+- **Usage**: getters call the guard, then keep `if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta)
+  { return 0 }` inline; validators compose the existing `check_detached*` on top; `validate_uint8array_no_
+  detach_check` becomes a pure alias and is deleted.
+- **Hides**: the `as_object_id → get_object → borrow → typed_array_info → clone → brand-throw` dance.
+- **Trade-offs**: does **not** hide the `detached||oob ⇒ 0` rule — it stays copied across the 3 numeric
+  getters; two near-duplicate bodies.
+
+### Design B — maximum flexibility (`guard_ta_receiver` + policy enums) — runner-up design
+
+- **Interface**: one `fn guard_ta_receiver(interp, this, brand: Brand, detach: DetachPolicy) -> Guard`, with
+  **four new types**: `Brand{AnyTypedArray, Exactly(TypedArrayKind)}`, `DetachPolicy{Ignore, Throw(Scope),
+  Signal(Scope)}`, `Scope{Detached, DetachedOrOob}`, `Guard{Live(TypedArrayInfo), Dead, Reject(Completion)}`
+  + `Guard::into_result()`. All five current patterns map onto one call; illegal states (e.g. a scope on a
+  no-check policy) are unrepresentable because `Scope` nests inside the checking policies.
+- **Usage**: numeric getters do a 3-arm `match guard(..Signal(DetachedOrOob)) { Live(ta)=>payload, Dead=>0,
+  Reject(c)=>c }`; validators are one-line presets, so the 19 `validate_typed_array` callers stay untouched.
+- **Hides**: the resolve+brand+liveness prologue *and* the policy vocabulary.
+- **Trade-offs**: four types to learn dilutes behaviour-per-unit-of-interface; the `Dead→0` mapping is still
+  per-getter; the enum matrix seams policy combinations with **zero or one** user (`Signal(Detached)`,
+  `Exactly(non-Uint8)`) — hypothetical seams by the "two adapters = real" test; one `unreachable!` in
+  `into_result`; largest diff.
+
+### Design C — getter-optimised combinator (`with_typed_array_ref` + `ta_number_getter`) — winner
+
+- **Interface**: two layered private fns, **zero new named types**:
+  - kernel `fn with_typed_array_ref<R>(interp, this, brand_msg: &str, f: impl FnOnce(&TypedArrayInfo) -> R)
+    -> Result<R, Completion>` — resolves the receiver, runs the *pure* `f` while the object borrow is held,
+    throws `brand_msg` on a non-TA receiver (after the borrow drops);
+  - hot-path `fn ta_number_getter(interp, this, payload: impl FnOnce(&TypedArrayInfo) -> f64) -> Completion`
+    — bakes in the brand-throw `"not a TypedArray"`, the `detached||oob ⇒ 0` collapse, and the
+    `Completion::Normal(JsValue::number(_))` wrapping.
+- **Usage**: each numeric getter collapses to `ta_number_getter(interp, this, |ta| ta.byte_offset as f64)`
+  (and `typed_array_byte_length(ta)` / `typed_array_length(ta)`) — a one-line, zero-clone read through the
+  borrow. `buffer` uses the kernel directly (`|ta| ta.buffer_object_id`). The three validators layer their
+  own brand/kind + `check_detached*` refinements on the kernel, `validate_typed_array`'s signature and its
+  19 callers unchanged.
+- **Hides**: the resolve+brand+borrow-ordering prologue (kernel) *and*, for the numeric getters, the entire
+  spec `TypedArrayLength → 0`-on-detached rule (combinator). A numeric getter is *structurally incapable* of
+  the classic bugs: wrong brand string, skipped OOB half, payload-instead-of-0 on a dead view, or touching
+  `interp` out of borrow order — the payload closure is `FnOnce(&TypedArrayInfo) -> f64` and is only reached
+  on a live view.
+- **Trade-offs**: `buffer` (non-numeric, no-detach) and the two uint8 validators don't ride the numeric
+  combinator — they use the shallower kernel and keep their intrinsic refinements; the kernel carries a
+  `brand_msg: &str` that the hot numeric path never varies.
+
+### Verdict
+
+**Winner: C. Runner-up design: B.** On **depth**, C's numeric getter learns one function and a single
+`&TypedArrayInfo -> f64` closure, where B forces four types and a 3-arm match and A hides only the brand
+dance. On **locality**, the drift-prone `TypedArrayLength → 0` rule lives *once* in `ta_number_getter`
+(a fifth numeric getter cannot omit it), versus concentrated-but-still-per-getter in B and copied 3× in A.
+On **seam placement**, the ReturnZero rule has three real adapters (the three numeric getters, byte-identical
+predicate) and C seams exactly that, while B additionally seams single-/zero-user policy combinations
+(hypothetical seams) and A under-seams by leaving the rule out entirely. **Test surface** slightly favours
+B (every combo directly exercisable) but C pins the actual rule directly — assert 0 on a detached view and
+that the payload closure is never invoked — so it is not decisive. **Blast radius** (A < C < B) is a
+tie-break among equals and is not reached, since C already leads on the higher criteria. A loses despite
+matching the #570 `require_array_buffer` idiom because idiom-consistency is not a criterion, and A delivers
+*less than the candidate was scored on*: the pick is a deepening precisely because the ReturnZero policy
+"extends what the seam hides" — A does not hide it, C does.
+
+Adjudicated with the advisor (transcript). Designs produced by parallel sub-agents.
