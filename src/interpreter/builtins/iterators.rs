@@ -369,31 +369,17 @@ impl RootedPair {
         self.0.clone()
     }
 
-    fn slots<'a>(&self, interp: &'a Interpreter) -> &'a ObjectHandle {
-        interp.get_object_cell_expect(
-            self.0
-                .as_object_id()
-                .expect("rooted pair must be an Array object"),
-        )
-    }
-
     fn get(&self, interp: &Interpreter) -> Option<(JsValue, JsValue)> {
-        let cell = self.slots(interp);
-        let obj = cell.borrow();
-        let elements = obj
-            .array_elements()
-            .expect("rooted pair must have Array elements");
-        (!elements[0].is_undefined()).then(|| (elements[0].clone(), elements[1].clone()))
+        interp.with_array_elements(&self.0, |elements| {
+            (!elements[0].is_undefined()).then(|| (elements[0].clone(), elements[1].clone()))
+        })
     }
 
     fn set(&self, interp: &Interpreter, iterator: JsValue, next_method: JsValue) {
-        let cell = self.slots(interp);
-        let mut obj = cell.borrow_mut();
-        let elements = obj
-            .array_elements_mut()
-            .expect("rooted pair must have Array elements");
-        elements[0] = iterator;
-        elements[1] = next_method;
+        interp.with_array_elements_mut(&self.0, |elements| {
+            elements[0] = iterator;
+            elements[1] = next_method;
+        });
     }
 
     fn clear(&self, interp: &Interpreter) {
@@ -2687,25 +2673,14 @@ impl Interpreter {
                     loop {
                         match iterator_step_value_getter(interp, &iter, &next_method) {
                             Ok(Some(value)) => {
-                                let buffer_id = buffer
-                                    .as_object_id()
-                                    .expect("chunks buffer must be an Array object");
-                                let values = {
-                                    let cell = interp.get_object_cell_expect(buffer_id);
-                                    let mut obj = cell.borrow_mut();
-                                    let elements = obj
-                                        .array_elements_mut()
-                                        .expect("chunks buffer must have Array elements");
+                                let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     elements.push(value);
                                     (elements.len() == chunk_size).then(|| elements.clone())
-                                };
+                                });
                                 if let Some(values) = values {
-                                    interp
-                                        .get_object_cell_expect(buffer_id)
-                                        .borrow_mut()
-                                        .array_elements_mut()
-                                        .expect("chunks buffer must have Array elements")
-                                        .clear();
+                                    interp.with_array_elements_mut(&buffer, |elements| {
+                                        elements.clear()
+                                    });
                                     let chunk = interp.create_array(values);
                                     return Completion::Normal(
                                         interp.create_iter_result_object(chunk, false),
@@ -2714,27 +2689,15 @@ impl Interpreter {
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
-                                let buffer_id = buffer
-                                    .as_object_id()
-                                    .expect("chunks buffer must be an Array object");
-                                let values = {
-                                    let cell = interp.get_object_cell_expect(buffer_id);
-                                    cell.borrow()
-                                        .array_elements()
-                                        .expect("chunks buffer must have Array elements")
-                                        .clone()
-                                };
+                                let values = interp
+                                    .with_array_elements(&buffer, |elements| elements.clone());
                                 if values.is_empty() {
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
                                 }
                                 interp
-                                    .get_object_cell_expect(buffer_id)
-                                    .borrow_mut()
-                                    .array_elements_mut()
-                                    .expect("chunks buffer must have Array elements")
-                                    .clear();
+                                    .with_array_elements_mut(&buffer, |elements| elements.clear());
                                 let chunk = interp.create_array(values);
                                 return Completion::Normal(
                                     interp.create_iter_result_object(chunk, false),
@@ -2844,21 +2807,13 @@ impl Interpreter {
                     loop {
                         match iterator_step_value_getter(interp, &iter, &next_method) {
                             Ok(Some(value)) => {
-                                let buffer_id = buffer
-                                    .as_object_id()
-                                    .expect("windows buffer must be an Array object");
-                                let values = {
-                                    let cell = interp.get_object_cell_expect(buffer_id);
-                                    let mut obj = cell.borrow_mut();
-                                    let elements = obj
-                                        .array_elements_mut()
-                                        .expect("windows buffer must have Array elements");
+                                let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     if elements.len() == window_size {
                                         elements.remove(0);
                                     }
                                     elements.push(value);
                                     (elements.len() == window_size).then(|| elements.clone())
-                                };
+                                });
                                 if let Some(values) = values {
                                     let window = interp.create_array(values);
                                     return Completion::Normal(
@@ -2868,16 +2823,8 @@ impl Interpreter {
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
-                                let buffer_id = buffer
-                                    .as_object_id()
-                                    .expect("windows buffer must be an Array object");
-                                let values = {
-                                    let cell = interp.get_object_cell_expect(buffer_id);
-                                    cell.borrow()
-                                        .array_elements()
-                                        .expect("windows buffer must have Array elements")
-                                        .clone()
-                                };
+                                let values = interp
+                                    .with_array_elements(&buffer, |elements| elements.clone());
                                 if allow_partial && !values.is_empty() && values.len() < window_size
                                 {
                                     let window = interp.create_array(values);
