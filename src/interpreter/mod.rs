@@ -1974,6 +1974,42 @@ impl Interpreter {
         self.objects.get_cell_expect(id)
     }
 
+    /// Borrow `array`'s element vector immutably for the duration of `f`.
+    /// Panics if `array` is not an engine-allocated Array object.
+    pub(crate) fn with_array_elements<R>(
+        &self,
+        array: &JsValue,
+        f: impl FnOnce(&Vec<JsValue>) -> R,
+    ) -> R {
+        let id = array
+            .as_object_id()
+            .expect("with_array_elements: value must be an Array object");
+        let obj = self.get_object_cell_expect(id).borrow();
+        let elements = obj
+            .array_elements()
+            .expect("with_array_elements: object must have Array elements");
+        f(elements)
+    }
+
+    /// Borrow `array`'s element vector mutably for the duration of `f`, going
+    /// through `ObjectHandle::borrow_mut` so the generational write barrier
+    /// still runs.
+    /// Panics if `array` is not an engine-allocated Array object.
+    pub(crate) fn with_array_elements_mut<R>(
+        &self,
+        array: &JsValue,
+        f: impl FnOnce(&mut Vec<JsValue>) -> R,
+    ) -> R {
+        let id = array
+            .as_object_id()
+            .expect("with_array_elements_mut: value must be an Array object");
+        let mut obj = self.get_object_cell_expect(id).borrow_mut();
+        let elements = obj
+            .array_elements_mut()
+            .expect("with_array_elements_mut: object must have Array elements");
+        f(elements)
+    }
+
     pub(crate) fn set_function_name<K: PropertyKeyLike + ?Sized>(&self, val: &JsValue, name: &K) {
         if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
