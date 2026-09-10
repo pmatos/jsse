@@ -2818,8 +2818,8 @@ impl Interpreter {
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
-                                let values = interp
-                                    .with_array_elements(&buffer, |elements| elements.clone());
+                                let values =
+                                    interp.with_array_elements_mut(&buffer, std::mem::take);
                                 if allow_partial && !values.is_empty() && values.len() < window_size
                                 {
                                     let window = interp.create_array(values);
