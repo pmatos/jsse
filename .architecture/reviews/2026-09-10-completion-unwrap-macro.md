@@ -110,4 +110,57 @@ Older drops (`object-id-of`, `proxy-blind-callable-check`, `define-accessor-adop
 
 ## Design
 
-Written at step 4 (design-it-twice + advisor adjudication); this file is amended and re-committed after the design pass.
+Three interfaces were designed in parallel (design-it-twice, 3 sub-agents) and adjudicated by the advisor against the fixed criteria (depth → locality → seam placement → test surface → blast radius). **Winner: Design B.**
+
+**Decisive toolchain fact** (verified this firing): the crate builds on **stable rustc 1.98.0, edition 2024, zero `#![feature]` attributes**; `ci.yml`/`release.yml` pin `stable`. CLAUDE.md's "nightly features (`let_chains`)" line is **stale** — `let_chains` is stable under edition 2024 — but it is not edited here (out of scope; flagged in the PR body). This fact disqualifies Design C.
+
+### Design A (runner-up) — three named macros
+
+Hoist the two existing private macros out of `temporal/duration.rs`, drop `try_result!`'s vestigial `$interp`, rename it `try_throw!`, and add `try_abrupt!` for shape 3. Interface = three intent-named macros.
+
+- **Interface**: `try_completion!(e)` (Completion → bind `Normal`, `return` any other), `try_throw!(e)` (`Result<_,JsValue>` → bind `Ok`, `return Completion::Throw(err)`), `try_abrupt!(e)` (`Result<_,Completion>` → bind `Ok`, `return err`). Crate-visible via `macro_rules!` + `pub(crate) use`.
+- **Strengths**: highest call-site auditability (the name states Throw-wrap vs pass-through); zero trait-resolution inference cost; uniquely faithful to the existing in-repo pattern; correct on the `Empty`-propagation quirk.
+- **Why it lost**: shallowest plausible design — three near-identical expansions, and the caller must pick a name that duplicates a distinction the compiler already owns (the operand's error type). Self-scored depth 2.
+
+### Design B (winner) — one `propagate!` macro + `IntoAbrupt` trait
+
+A single macro backed by a conversion trait implemented for all three source shapes, so one interface token handles every propagation site.
+
+```rust
+pub(crate) trait IntoAbrupt {
+    type Ok;
+    fn into_abrupt(self) -> Result<Self::Ok, Completion>;
+}
+impl IntoAbrupt for Completion { type Ok = JsValue;
+    fn into_abrupt(self) -> Result<JsValue, Completion> {
+        match self { Completion::Normal(v) => Ok(v), other => Err(other) } } }  // Empty still propagates
+impl<T> IntoAbrupt for Result<T, JsValue> { type Ok = T;
+    fn into_abrupt(self) -> Result<T, Completion> { self.map_err(Completion::Throw) } }
+impl<T> IntoAbrupt for Result<T, Completion> { type Ok = T;
+    fn into_abrupt(self) -> Result<T, Completion> { self } }
+macro_rules! propagate {
+    ($expr:expr) => {
+        match $crate::interpreter::IntoAbrupt::into_abrupt($expr) {  // via `pub(crate) use types::*` re-export (types mod is private)
+            Ok(v) => v, Err(c) => return c,
+        }
+    };
+}
+pub(crate) use propagate;
+```
+
+- **Depth (criterion 1, B wins)**: one token hides all three propagation policies; the correct behaviour at a propagation site is fully determined by the callee's signature, so a policy-naming macro (A) is redundant with information the reader already sees. B also makes the wrong code hard to write — you cannot forget the `Throw` wrap or mishandle `Empty`.
+- **Locality (2, B slightly)**: one `impl` per shape is the sole edit point; a fourth source shape is one new impl, zero call-site churn.
+- **Seam placement (3, B)**: `IntoAbrupt` with three adapters on the real variation axis (source shape → abrupt completion) is a textbook real seam ("two adapters = real").
+- **Test surface (4, tie)**: exercisable through the interface from a `#[cfg(test)]` module — the `Empty`-passes-through, `Err→Throw`, and `Err→pass-through` cases all pinned without reaching past the seam.
+- **Blast radius (5, tie)**: 1 — seam in `types.rs`, re-point `duration.rs`, one real adopter; net-negative diff, no published interface.
+- **Honest debts (carried to the PR body)**: (a) call-site auditability — `propagate!(x)` hides Throw-vs-pass-through, so a hostile audit must consult the impl (A's strength); (b) trait-resolution inference — a site whose callee has an unconstrained error type needs a type annotation; the firing's adopter deliberately skips such sites to keep the diff mechanical.
+
+**Why B beat the runner-up design (A)**: B leads criteria 1–3 and ties 4–5; nothing A wins on ranks above a criterion B wins on. Depth is criterion 1, and it is exactly what the deepening exercise optimises for; A's advantages (auditability, zero inference cost) rank below it. Bonus: the three `IntoAbrupt` impls are precisely the `FromResidual` impls a future `impl Try for Completion` would need, so B is a stepping-stone to native `?` if the toolchain ever allows it.
+
+### Design C (disqualified) — `impl Try for Completion` (native `?`)
+
+Deepest conceivable interface (the `?` operator, zero import), but requires `#![feature(try_trait_v2)]`, which needs **nightly** and would force the shipped release binary onto nightly — `release.yml` pins stable. Disqualified on viability, not preference. Surfaced as the Proposed ADR below.
+
+### Proposed ADR (carried to the PR body)
+
+> **Completion propagation is a crate-local `IntoAbrupt` + `propagate!` seam, not `impl Try for Completion`.** Making `?` work on `Completion` (`try_trait_v2`) is the deepest interface but requires nightly on the shipped binary. Adopt the trait+macro seam on stable now; revisit native `?` only if `try_trait_v2` stabilises or the crate moves to nightly. The `IntoAbrupt` impls are deliberately shaped as the `FromResidual` impls that migration would need.
