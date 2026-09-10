@@ -40,8 +40,8 @@ zero real adapters in `array.rs`).
   `gc_frame_next` held simultaneously), which correctly keep the raw
   primitive.
 - **`eval.rs`'s `yield*` delegation** (this change): the concrete first slice
-  of the `gc-root-scope-guard-eval` follow-up PR #595 proposed. This is also
-  the control-flow-heavy path #331 itself named as the prototype target — 11
+  of the `gc-root-scope-guard-eval` follow-up PR #595 proposed, and the
+  control-flow-heavy path #331 itself named as the prototype target — 10
   `gc_unroot_frame` call sites across the iterator-protocol loop, one per
   abrupt exit (`IteratorNext` throwing, an awaited rejection, `done`/`value`
   getters throwing, and each of `next`/`return`/`throw` resume kinds)
@@ -49,6 +49,28 @@ zero real adapters in `array.rs`).
   `if let Some(o) = iterator.as_object_id() { self.gc_temp_roots.push(o.id) }`
   bypass at this site is replaced with `gc_root_value(&iterator)`, retiring
   one of the two seam bypasses PR #595 flagged (`eval.rs:1066`/`:4324`).
+
+  **Reachability caveat, found during review of this ADR.** #331 described
+  this loop as *the* control-flow-heavy `yield*` path when it was filed.
+  Today, ordinary `yield*` execution goes through `generator_runtime.rs`'s
+  state-machine `StateTerminator::Yield { is_delegate: true, .. }` arm
+  instead — a separate, independently-suspending implementation (spec
+  §14.4.14) that stores `delegated_iterator` on the generator object rather
+  than calling back into `eval_expr`. This `eval.rs` loop is reached only
+  through the documented `InlineYield` fallback
+  (`generator_runtime.rs:4301-4304`: "any `Completion::Yield` from
+  `exec_statements` ... came from a loop body or complex control flow that
+  isn't decomposed by the state machine transformer"). Direct instrumentation
+  of this exact branch found zero hits across a bare `yield*`, `while`/
+  `do-while`/nested-`while` loops, `try`/`finally`, `switch`, `for-in`,
+  labeled `continue`, `yield*` as a binary/call/ternary/array-literal operand,
+  and an async generator — so no construction found so far exercises it. The
+  migration is still correct and harmless (identical behavior on every exit
+  path, full test262 green), but its practical value is unconfirmed rather
+  than the "control-flow-heavy path" framing alone would suggest; see
+  jsse#625 for the open question of whether/when this fallback fires and
+  whether the legacy `self.generator_context`-driven branch is still load-
+  bearing.
 
 ## Deliberately not migrated
 
