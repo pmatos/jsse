@@ -2675,12 +2675,9 @@ impl Interpreter {
                             Ok(Some(value)) => {
                                 let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     elements.push(value);
-                                    (elements.len() == chunk_size).then(|| elements.clone())
+                                    (elements.len() == chunk_size).then(|| std::mem::take(elements))
                                 });
                                 if let Some(values) = values {
-                                    interp.with_array_elements_mut(&buffer, |elements| {
-                                        elements.clear()
-                                    });
                                     let chunk = interp.create_array(values);
                                     return Completion::Normal(
                                         interp.create_iter_result_object(chunk, false),
@@ -2689,15 +2686,13 @@ impl Interpreter {
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
-                                let values = interp
-                                    .with_array_elements(&buffer, |elements| elements.clone());
+                                let values =
+                                    interp.with_array_elements_mut(&buffer, std::mem::take);
                                 if values.is_empty() {
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
                                 }
-                                interp
-                                    .with_array_elements_mut(&buffer, |elements| elements.clear());
                                 let chunk = interp.create_array(values);
                                 return Completion::Normal(
                                     interp.create_iter_result_object(chunk, false),
