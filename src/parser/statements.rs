@@ -227,7 +227,8 @@ impl<'a> Parser<'a> {
 
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
-        let stmts = self.with_block_scope(|_p| {}, |p| p.parse_block_statement_body())?;
+        let stmts =
+            self.with_block_scope(Self::enter_block_scope, |p| p.parse_block_statement_body())?;
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Block(stmts))
     }
@@ -1330,7 +1331,9 @@ impl<'a> Parser<'a> {
     fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // try
         self.eat(&Token::LeftBrace)?;
-        let block = self.with_block_scope(|_p| {}, |p| p.parse_statement_list_until_brace())?;
+        let block = self.with_block_scope(Self::enter_block_scope, |p| {
+            p.parse_statement_list_until_brace()
+        })?;
         self.eat(&Token::RightBrace)?;
 
         let handler = if self.current == Token::Keyword(Keyword::Catch) {
@@ -1357,7 +1360,9 @@ impl<'a> Parser<'a> {
                 }
             }
             self.eat(&Token::LeftBrace)?;
-            let body = self.with_block_scope(|_p| {}, |p| p.parse_statement_list_until_brace())?;
+            let body = self.with_block_scope(Self::enter_block_scope, |p| {
+                p.parse_statement_list_until_brace()
+            })?;
             self.eat(&Token::RightBrace)?;
             // §13.15.1: BoundNames of CatchParameter must not overlap
             // LexicallyDeclaredNames of Block
@@ -1385,7 +1390,9 @@ impl<'a> Parser<'a> {
         let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
             self.advance()?;
             self.eat(&Token::LeftBrace)?;
-            let body = self.with_block_scope(|_p| {}, |p| p.parse_statement_list_until_brace())?;
+            let body = self.with_block_scope(Self::enter_block_scope, |p| {
+                p.parse_statement_list_until_brace()
+            })?;
             self.eat(&Token::RightBrace)?;
             Some(body)
         } else {
@@ -1443,15 +1450,14 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Colon)?;
                 None
             };
-            // This site only needs `in_switch_case`; forcing
-            // `in_block_or_function` true alongside it via SavedBlockScope is
-            // a same-value no-op at its one read site (statements.rs:8/:17),
-            // which already ORs in `in_switch_case` — always true here — so
-            // `in_block_or_function`'s value can't change that check's
-            // outcome. Converted anyway for the "no hand-written restore
-            // blocks left" goal (issue #608).
+            // Unlike the other four `with_block_scope` sites, this one must
+            // not touch `in_block_or_function` — it stays at its ambient
+            // value here, only `in_switch_case` re-scopes (statements.rs:8/17
+            // reads `(!in_block_or_function && !is_module) || in_switch_case`,
+            // so forcing `in_block_or_function` true would wrongly allow a
+            // `using`/`await using` declaration directly in a case body).
             let consequent = self.with_block_scope(
-                |_p| {},
+                |p| p.in_switch_case = true,
                 |p| p.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names),
             )?;
             cases.push(SwitchCase { test, consequent });

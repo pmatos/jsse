@@ -39,6 +39,17 @@ impl From<LexError> for ParseError {
 /// and the `switch` `CaseBlock` consequent. `Copy` and restored
 /// unconditionally so a failed nested parse can't leak the re-scoped values
 /// into the enclosing construct (issue #608, following #597/#602).
+///
+/// `save_block_scope` only snapshots — it does not itself set either flag.
+/// The four brace-body sites (`Block`, the three `try` bodies) need
+/// `in_block_or_function = true; in_switch_case = false`, but the `switch`
+/// `CaseBlock` consequent needs only `in_switch_case = true`, leaving
+/// `in_block_or_function` at its ambient value. Baking a fixed pair of
+/// values into the snapshot step silently overwrote that fifth site's
+/// ambient `in_block_or_function` and dropped `in_switch_case` to `false`
+/// instead of `true` — accepting `using`/`await using` declarations
+/// directly in a case body that must reject them. Each call site's `enter`
+/// closure sets exactly the fields it needs instead.
 #[derive(Clone, Copy)]
 struct SavedBlockScope {
     in_block_or_function: bool,
@@ -313,19 +324,25 @@ impl<'a> Parser<'a> {
         self.eval_new_target_allowed = true;
     }
 
-    fn save_block_scope(&mut self) -> SavedBlockScope {
-        let saved = SavedBlockScope {
+    fn save_block_scope(&self) -> SavedBlockScope {
+        SavedBlockScope {
             in_block_or_function: self.in_block_or_function,
             in_switch_case: self.in_switch_case,
-        };
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
-        saved
+        }
     }
 
     fn restore_block_scope(&mut self, saved: SavedBlockScope) {
         self.in_block_or_function = saved.in_block_or_function;
         self.in_switch_case = saved.in_switch_case;
+    }
+
+    /// `enter` closure shared by the four sites (`Block`, the three `try`
+    /// bodies) that re-scope a plain brace-delimited statement list. The
+    /// `switch` `CaseBlock` consequent is deliberately not one of them — see
+    /// the note on `SavedBlockScope`.
+    fn enter_block_scope(&mut self) {
+        self.in_block_or_function = true;
+        self.in_switch_case = false;
     }
 
     /// Snapshot the function-context fields before a call site re-scopes
@@ -1876,6 +1893,27 @@ mod tests {
         assert_eq!(result.unwrap(), 7);
         assert!(!parser.in_generator);
         assert!(!parser.in_block_or_function);
+    }
+
+    /// A `using`/`await using` declaration must be rejected directly in a
+    /// `switch` case body (test262
+    /// `language/statements/using/syntax/using-invalid-switchstatement-*`):
+    /// the `switch` `CaseBlock` consequent's `with_block_scope` call is the
+    /// one site whose `enter` closure must not force `in_block_or_function`
+    /// true, or this parses successfully instead — the regression a
+    /// same-value-no-op assumption in an earlier draft of this combinator
+    /// carried forward silently until the full test262 run caught it.
+    #[test]
+    fn using_declaration_rejected_directly_in_switch_case() {
+        for src in [
+            "switch (x) { case 1: using y = z; }",
+            "switch (x) { default: using y = z; }",
+        ] {
+            assert!(
+                Parser::new(src).unwrap().parse_program().is_err(),
+                "expected a parse error for {src:?}"
+            );
+        }
     }
 
     /// Source nested past `MAX_PARSE_DEPTH` must raise the catchable depth
