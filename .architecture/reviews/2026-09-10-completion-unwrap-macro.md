@@ -164,3 +164,9 @@ Deepest conceivable interface (the `?` operator, zero import), but requires `#![
 ### Proposed ADR (carried to the PR body)
 
 > **Completion propagation is a crate-local `IntoAbrupt` + `propagate!` seam, not `impl Try for Completion`.** Making `?` work on `Completion` (`try_trait_v2`) is the deepest interface but requires nightly on the shipped binary. Adopt the trait+macro seam on stable now; revisit native `?` only if `try_trait_v2` stabilises or the crate moves to nightly. The `IntoAbrupt` impls are deliberately shaped as the `FromResidual` impls that migration would need.
+
+### Delivered
+
+`IntoAbrupt` trait + three impls + `propagate!` macro added beside `Completion` in `src/interpreter/types.rs` (crate-visible via `macro_rules!` + `pub(crate) use`, re-exported through `pub(crate) use types::*`). The two private macros were deleted from `temporal/duration.rs` and its 4 call sites re-pointed (shapes 1 & 2). Adopted **13 real sites in `string.rs` cross-module** — 5 shape-2 (`Result<_, JsValue>` → `Throw`) and 8 shape-3 (the `this_js_string` receiver prologue, `Result<_, Completion>`) — so all three `IntoAbrupt` impls have production callers. Pinned by `propagate_macro_covers_three_shapes_and_empty` in `tests.rs` (all three shapes + the non-abrupt `Empty` quirk). Broad adoption of the remaining ~1700 sites (array.rs 124 / typedarray.rs 46 / collections.rs 32 shape-3 alone) is left to follow-up firings.
+
+Net: 5 files, +136/−74. Gate green — 670 unit + full `cargo test` (incl. `test262_smoke_oracle`); test262 built-ins/String 2443, Temporal/Duration 1080, intl402/String 38, annexB/String 222 (0 regressions); 11 custom; clippy + fmt clean. CONTEXT.md gains a **Completion Propagation** term.
