@@ -1,299 +1,269 @@
 # Plan: issue #608 — a scoping combinator for the parser's context re-scoping sites
 
+## 0. Retarget notice (read this first)
+
+The issue body (still unedited) proposes a `SavedContext` snapshot struct with manually
+invoked `save_context()`/`restore_context()`. **That proposal was superseded before any
+implementation existed**, by a comment from the repo owner on this issue
+(`gh issue view 608 --comments`, posted 2026-09-05T21:52:29Z, heading "Retarget: a scoping
+combinator, not a snapshot struct"):
+
+> a `SavedContext` snapshot you still restore by hand is one notch too shallow — it removes
+> the duplicated fields but leaves "forgot to restore on the error path" reachable. A
+> combinator that owns the restore point removes the bug class structurally.
+
+This workspace was reused from a prior attempt. Commits `071046b..7471b11` (2026-09-06,
+13:24–13:38, i.e. **after** the retarget comment) implemented the *original*, superseded
+snapshot-struct design anyway: `SavedBlockScope`/`SavedFunctionContext` plus
+`save_*`/`restore_*` method pairs, invoked by hand at each of the seven sites as
+`let saved = self.save_x(); <mutate fields>; let result = self.body_fn(); self.restore_x(saved);
+result?`. A second planning-stage run then verified that implementation as complete
+(`cargo test`, lint, targeted test262 all green) without checking the issue comments, and
+committed that verification as `02bef91`. Both runs missed the retarget.
+
+Verified facts about the current branch state (checked this run):
+- `cargo test --lib parser::` and `./scripts/lint.sh` are green; targeted test262 passed
+  10,089/10,089 with 0 regressions (figures from the `02bef91` verification pass, spot-checked
+  by re-grepping the code below rather than re-run, since nothing has changed since).
+- Every one of the seven sites already restores unconditionally (result captured in a local
+  *before* the restore call, restore called, *then* `?`/propagation) — confirmed by reading
+  `src/parser/statements.rs:228-236` (block), `:1320-1390`-ish (try/catch/finally),
+  `:1441-1460`-ish (switch-case), and `src/parser/declarations.rs:757-785` (static block),
+  `:1261-1299` (`parse_function_body_inner`). So the *literal* #597 bug (leak on error path) is
+  already fixed at all seven sites today. What's missing is the retargeted issue's actual ask:
+  closing the bug class *structurally*, so a ninth future site can't reintroduce it by copying
+  the wrong idiom.
+- `save_block_scope`/`restore_block_scope`/`save_function_context`/`restore_function_context`
+  (`src/parser/mod.rs:315-372`-ish) are reusable as-is — they are exactly the "snapshot" half of
+  a combinator. Nothing here needs to be thrown away; it needs a combinator wrapped around it so
+  call sites can no longer invoke save/restore separately.
+
+This plan supersedes `PLAN.md`'s prior revisions on this branch. It targets the retargeted
+design. The next stage should treat commits `071046b..7471b11`/`02bef91` as a real, working
+intermediate state to build on (not to revert), and convert each of the seven call sites from
+the hand-rolled save/mutate/body/restore/propagate idiom to the combinator below.
+
 ## 1. Problem restated
 
-Seven call sites in the recursive-descent parser re-scope a subset of `Parser`'s context
-flags (`in_function`, `in_iteration`, `in_switch`, `in_block_or_function`, `in_switch_case`,
-etc.) with a hand-written `let prev = self.field; self.field = new_value; ...parse...;
-self.field = prev;` block. Six of those seven restore only on the success path today: if the
-nested parse returns `Err` via `?` before the restore line runs, the mutated flags leak into
-the caller. #602 fixed this shape at the two largest sites (the class-static-block arm and
-`parse_function_body_inner`) by making their restores unconditional, but left the same shape
-at four smaller sites (`parse_block_statement`, and the try/catch/finally bodies of
-`parse_try_statement`) — its own fix comment even names the duplication out loud. This is
-exactly the shape of #597: today the leak is unobservable because a parse error aborts
-`parse_program` and the whole `Parser` is discarded, but any future construct that re-scopes a
-counter and *doesn't* remember to capture the `Result` before restoring reintroduces a live
-bug. The fix is to collapse the repeated save/mutate/restore boilerplate into two shared
-snapshot types with `save_*`/`restore_*` method pairs, so restoring is a single unconditional
-call at every site instead of a hand-copied block, and extend the existing regression test to
-prove the four small sites no longer leak.
+Seven call sites in the recursive-descent parser re-scope a subset of `Parser`'s context flags
+around a nested parse. Today each site (already, per the prior implementation on this branch)
+captures a snapshot, mutates fields, runs the nested parse, and restores the snapshot
+unconditionally before propagating any error — which is correct, but only because each site's
+author got the idiom right by hand. The retargeted ask is to make that idiom impossible to get
+wrong: introduce a combinator that *owns* the save point, the restore point, and the
+unconditional-restore-before-propagate ordering, taking the "enter" mutation and the nested
+parse as two closures. Each of the seven sites becomes a single call to
+`self.with_block_scope(enter, body)` or `self.with_function_context(enter, body)`; there is no
+longer a restore call for a future author to accidentally omit, reorder, or gate on `Ok`.
 
 ## 2. Spec basis
 
-This is an internal refactor of parser bookkeeping: no JavaScript syntax or semantics changes
-for any program that parses successfully today, and no error message or error/non-error
-verdict changes for any program that fails to parse today (the leaked counters were never
-observable — the `Parser` is always discarded on error). The refactor must preserve the exact
-scoping semantics of the constructs it touches, which are governed by:
+Same as before — this is an internal refactor of parser bookkeeping shape, not of the JavaScript
+behavior it implements. No syntax or semantics change for any program that parses successfully
+or unsuccessfully today. The scoping semantics being preserved are governed by:
 
-- **Block** — §14.2 *The `Block` Statement* / §14.2.1 (Static Semantics: Early Errors) governs
-  `parse_block_statement`'s VarDeclaredNames/LexicallyDeclaredNames overlap check, already
-  cited inline at `src/parser/statements.rs:247`.
-- **`try` Statement** — §14.15 *The `try` Statement*, and §14.15.1 (CatchParameter Early
-  Errors — no duplicate bindings, no overlap with the catch block's LexicallyDeclaredNames)
-  cited inline at `src/parser/statements.rs:1323` and `:1348` (as §13.15.1 in this codebase's
-  older numbering).
-- **`switch` Statement** — §14.12 *The `switch` Statement* / §14.12.1 (Static Semantics: Early
-  Errors — CaseBlock VarDeclaredNames/LexicallyDeclaredNames overlap), cited inline at
-  `src/parser/statements.rs:1449`, and the CaseClause/DefaultClause `in_switch_case` scoping at
-  `:1441`.
-- **Class static initialization blocks** — the `ClassStaticBlock` production and its
-  `sec-class-definitions-static-semantics-early-errors` clause (no `arguments`, no
-  `super()`, `return` restricted, own `[[HomeObject]]`; verified present in
-  `spec/spec.html` at this anchor id, section number not quoted here since it is
-  render-time-computed and not present in the raw source), which is why
-  `parse_class_element`'s static-block arm zeroes
-  `in_function`/`in_generator`/`in_async`/`in_iteration`/`in_switch` and sets
-  `in_static_block`/`allow_super_property` for the body it parses. `ClassStaticBlockBody`'s
-  grammar (`spec/spec.html` near the `ClassStaticBlock` production) has no DirectivePrologue
-  production, which is the spec basis for the existing choice to leave `strict` untouched
-  there (see §6 below).
-- **FunctionBody / FormalParameters** — §15.2.1 (Early Errors — a `let`/`const` bound name in
-  FunctionBody must not also be a FormalParameter name) governs `function_param_names`,
-  referenced inline near `src/parser/declarations.rs:1382`.
-- **Annex B**, clause id `sec-block-level-function-declarations-web-legacy-compatibility-semantics`
-  (verified present in `spec/spec.html`; the "B.3.3" numbering used in older comments in this
-  codebase is this same clause under an earlier edition's numbering) governs
-  `in_block_or_function`/`in_switch_case`, which jointly gate whether a bare `function`
-  declaration is legal directly inside a block/switch-case in sloppy mode (the
-  `(!self.in_block_or_function && !self.is_module) || self.in_switch_case` check at
-  `src/parser/statements.rs:8` and `:17`).
+- **Block** — §14.2 *The `Block` Statement* / §14.2.1 (Static Semantics: Early Errors),
+  `sec-block` — cited inline at `src/parser/statements.rs:247`-ish
+  (VarDeclaredNames/LexicallyDeclaredNames overlap).
+- **`try` Statement** — §14.15 *The `try` Statement* and its CatchParameter early-error clause
+  (no duplicate bindings, no overlap with the catch block's LexicallyDeclaredNames).
+- **`switch` Statement** — §14.12 *The `switch` Statement* / §14.12.1 (CaseBlock
+  VarDeclaredNames/LexicallyDeclaredNames overlap), plus the CaseClause/DefaultClause
+  `in_switch_case` scoping.
+- **Class static initialization blocks** — `sec-class-definitions-static-semantics-early-errors`
+  (verified present in `spec/spec.html`) and the `ClassStaticBlock`/`ClassStaticBlockStatementList`
+  productions (verified present, e.g. `spec/spec.html:7752`) — no `arguments`, no `super()`,
+  restricted `return`, own `[[HomeObject]]`; `ClassStaticBlockStatementList` has no
+  DirectivePrologue production, which is why `strict` stays untouched by the static-block site.
+- **FunctionBody / FormalParameters** — §15.2.1 (a `let`/`const` bound name in FunctionBody must
+  not also be a FormalParameter name) governs `function_param_names`.
+- **Annex B**, `sec-block-level-function-declarations-web-legacy-compatibility-semantics`
+  (verified present in `spec/spec.html`) governs `in_block_or_function`/`in_switch_case`.
 
-None of these clauses change. They're cited to show the refactor must reproduce, field for
-field, the exact scoping each site already performs — a wrong union of saved fields would be a
-silent Annex B.3.3 or static-block regression, not merely a style problem.
+None of these clauses change, and none of the seven sites' field-mutation lists change either —
+this plan only changes *how* the save/mutate/restore/propagate sequence is invoked, not *which*
+fields each site touches. A wrong field ending up inside `with_block_scope`'s or
+`with_function_context`'s `enter` closure at a given site would be a silent regression against
+one of these clauses, exactly as it would have been under the hand-rolled version.
 
 ## 3. Files to touch
 
-- `src/parser/mod.rs` — add `SavedBlockScope` and `SavedFunctionContext` struct definitions
-  and their `save_*`/`restore_*` methods on `impl<'a> Parser<'a>`; extend the
-  `truncated_source_restores_context_counters` test's `assert_counters_clean` helper.
-- `src/parser/statements.rs` — convert `parse_block_statement` (~:228), the try-block,
-  catch-block, and finally-block arms of `parse_try_statement` (~:1298–1388), and the
-  `in_switch_case`-only site inside the switch `CaseBlock` loop (~:1441) to use
-  `SavedBlockScope`.
+- `src/parser/mod.rs` — add two combinator methods on `impl<'a> Parser<'a>`:
+  - `fn with_block_scope<T>(&mut self, enter: impl FnOnce(&mut Self), body: impl FnOnce(&mut Self) -> Result<T, ParseError>) -> Result<T, ParseError>`
+  - `fn with_function_context<T>(&mut self, enter: impl FnOnce(&mut Self), body: impl FnOnce(&mut Self) -> Result<T, ParseError>) -> Result<T, ParseError>`
+  Each: snapshot via the existing `save_block_scope`/`save_function_context`, call `enter(self)`,
+  call `body(self)` capturing the result, call the existing `restore_block_scope`/
+  `restore_function_context` unconditionally, then return the captured result (propagation is
+  the caller's `?`, not the combinator's). Add a focused unit test for each combinator proving
+  restore happens on both the `Ok` and `Err` body paths (new tests, not a modification of the
+  existing `truncated_source_restores_context_counters`, which stays as an end-to-end guard).
+- `src/parser/statements.rs` — convert `parse_block_statement` (~:228), the try/catch/finally
+  arms of `parse_try_statement` (~:1320-1390), and the switch `CaseBlock` loop's
+  `in_switch_case` site (~:1441-1460) from the hand-rolled `let saved = ...; result; restore;
+  result?` shape to `self.with_block_scope(|p| { ... }, |p| { ... })?`.
 - `src/parser/declarations.rs` — convert the class-static-block arm of `parse_class_element`
-  (~:757–807) and `parse_function_body_inner` (~:1283–1342) to use `SavedFunctionContext`,
-  leaving `strict`, `in_formal_parameters`, and `function_param_names` as the hand-managed
-  locals they already are at whichever of the two sites touches them (see §6, "Care needed"
-  carried over from the issue).
-- No `docs/adr/` entry: this is a mechanical dedup of existing internal state-machine
-  bookkeeping, not an architectural decision about parser design (no alternative was rejected
-  other than the RAII guard the issue itself already ruled out inline).
+  (~:757-785) and `parse_function_body_inner` (~:1261-1299) to
+  `self.with_function_context(|p| { ... }, |p| { ... })`, keeping `saved_param_names`,
+  `prev_strict`, and `function_param_names` handling *outside* the combinator call exactly as
+  today (captured before, restored after) — these three are deliberately excluded from
+  `SavedFunctionContext` per the issue's own "Care needed" section and that exclusion doesn't
+  change.
+- No `docs/adr/` entry: same reasoning as before — this is a mechanical strengthening of
+  existing internal bookkeeping, not a new architectural decision (the combinator shape was
+  specified by the issue owner in-thread, not chosen among competing designs here).
 
 ## 4. TDD slices
 
-1. **Red (partial — one field, not two):** extend `assert_counters_clean` in
-   `src/parser/mod.rs` (`truncated_source_restores_context_counters`, currently at :1596) to
-   also assert `parser.in_block_or_function == false` and `parser.in_switch_case == false` for
-   every existing `SOURCES` entry. Only the first assertion is expected to go red. Trace why
-   before writing it: `grep -n "in_switch_case = true" src/parser/*.rs` should return exactly
-   one hit, the `CaseBlock` loop at `statements.rs:1442`, and that site already restores
-   `in_switch_case` unconditionally before its own `?` (:1445) — so nothing downstream can
-   observe a leaked `true`, and the field is `false` at top level regardless of today's bug.
-   `in_block_or_function`, by contrast, is set `true` at six sites: the four buggy small ones
-   plus the two already-fixed big ones (#602). Sources like `"for (;;) { function f() {
-   for (;;) {"` and `"for (;;) { function f() { switch (x) { case 1:"` route through
-   `parse_block_statement`/`parse_try_statement` and should assert `in_block_or_function`
-   still `true` on current `main` — that's the red. Add the `in_switch_case` assertion anyway
-   (it's the DoD's literal ask and documents the invariant), but record in the PR that it
-   passes from slice 1 onward as a guard, not as evidence of a fix. No production change yet.
-2. **Green (small sites, mechanics):** add `SavedBlockScope { in_block_or_function: bool,
-   in_switch_case: bool }` (derive `Clone, Copy`) plus `save_block_scope`/`restore_block_scope`
-   to `src/parser/mod.rs`. Convert `parse_block_statement` first. Its fallible region
-   (`statements.rs:234`–`:260`) has three exit paths — the loop's own `?` at :238, the
-   `collect_lexical_names_with_func_names(...)?` at :239, and the explicit `return Err` at
-   :255 — so "capture the result in a local" means extracting that region into a helper
-   function returning `Result<Vec<Statement>, ParseError>` (the same shape
-   `parse_static_block_statements`/`parse_function_body_statements` already use at the two big
-   sites), then at the call site: `let r = self.helper(); self.restore_block_scope(saved); r`
-   (propagate with `?` only after the restore). Keep `self.eat(&Token::LeftBrace)?` *before*
-   `save_block_scope()`, exactly as today, so a missing `{` has nothing to restore. Re-run the
-   slice-1 test; the block-only leak clears.
-3. **Green (try/catch/finally):** the try/catch/finally bodies at `statements.rs:1298`–`:1388`
-   share one shape — `while self.current != Token::RightBrace { block.push(self
-   .parse_statement_or_declaration()?); }` — so factor that loop into a single
-   `parse_statement_list_until_brace(&mut self) -> Result<Vec<Statement>, ParseError>` helper
-   and call it from all three arms (plus `parse_block_statement`, which is the same loop with
-   extra lexical-name bookkeeping layered on — keep that bookkeeping at the
-   `parse_block_statement` call site, not inside the shared helper). Convert one arm at a
-   time (try-block, then catch-block, then finally-block), re-running the test after each so a
-   mistake in one arm is isolated. All four small sites now share `SavedBlockScope`.
-4. **Green (switch-case, judgement call):** convert the `in_switch_case`-only site in the
-   `CaseBlock` loop (~:1441) to `SavedBlockScope` too, even though slice 1 established it was
-   never buggy. The issue's body enumerates six sites and says "all six sites converted," but
-   its title says "seven ... re-scoping sites" and its closing goal is "no hand-written
-   restore blocks left" — this site is exactly such a block. Treat migrating it as a
-   judgement call: record in the PR body that it was included for the "no hand-written
-   restore blocks left" goal and title-seven count, with `in_block_or_function` round-tripping
-   through `SavedBlockScope` as a same-value no-op at this site. If a reviewer prefers reading
-   the six-site DoD literally, this slice is the one to drop — it's independent of slices 2–3
-   and 5–6. No behavior change either way; no new test needed beyond confirming the existing
-   switch sources in slice 1 still pass.
-5. **Green (function-context sites):** add `SavedFunctionContext` (the fields listed in the
-   issue body minus `strict`/`in_formal_parameters`, which stay local) plus
-   `save_function_context`/`restore_function_context`. Convert the class-static-block arm in
-   `src/parser/declarations.rs` first — it is the simpler of the two (no `strict`/
-   `in_formal_parameters`/`function_param_names` handling to keep external to the struct).
-   Diff the converted site's mutation list field-by-field against the original hand-written
-   block (§6's first regression-risk item) rather than trusting the struct's field names to
-   line up automatically. Re-run `truncated_source_restores_context_counters` plus a full
-   `cargo test --release`.
-6. **Green (`parse_function_body_inner`):** convert the second big site, keeping
-   `saved_param_names`, `prev_strict`, and `prev_formal` as separate local saves exactly as
-   today. Before converting `in_function` from its current `+= 1` / `-= 1` shape to
-   `self.in_function = saved.in_function + 1` plus snapshot-restore, run
-   `grep -n "\.in_function" src/parser/*.rs` and confirm every mutator restores it before
-   returning control to its caller: at the time of writing this plan that grep turns up the
-   static-block arm (save/restore, already unconditional post-#602), this function's own
-   `+=1`/`-=1`, `parse_field_initializer_value` (`declarations.rs:1083`-ish, captures its
-   result without an early `?` and always restores before returning), and
-   `set_eval_in_field_initializer` (`mod.rs:267`, a one-time permanent bump for a
-   dedicated eval-only `Parser` instance that is *never* restored — leave this one alone, it
-   is orthogonal to this issue and does not participate in nested save/restore). If that
-   grep's result set changes before this slice lands, re-verify the equivalence argument
-   before proceeding — snapshot-restore is only equivalent to `-= 1` if nothing else can leave
-   `in_function` altered across the save/restore window. Record the grep output and this
-   reasoning in the PR description. Re-run the full parser test suite.
-7. **Refactor:** delete the now-dead hand-written save/restore locals at all converted sites;
-   confirm `./scripts/lint.sh` is clean (no unused `prev_*` bindings, no dead code).
-8. **Full-suite gate:** run `cargo test --release`, then a targeted `test262` pass over the
-   directories in §5, then the full `uv run python scripts/run-test262.py` to confirm the
-   baseline holds (no `--update-baseline`).
+1. **Red → green, combinator in isolation:** in `src/parser/mod.rs`'s test module, add a test
+   that calls `with_block_scope` with an `enter` closure that flips `in_block_or_function` and
+   `in_switch_case`, and a `body` closure that returns `Err(...)` unconditionally; assert both
+   fields are back to their pre-call values after the call returns, and that the `Err` came
+   through. Add the mirror-image `Ok`-path test. Both fail to compile until the combinator
+   exists (red), then pass once it's implemented (green). Repeat for `with_function_context`
+   with a couple of its fields (e.g. `in_generator`, `in_block_or_function`) — no need to cover
+   every field, this test is about the combinator's control flow, not field completeness.
+2. **Green, mechanics:** implement `with_block_scope`/`with_function_context` in
+   `src/parser/mod.rs` per §3. No call sites changed yet. Slice 1's tests go green;
+   `truncated_source_restores_context_counters` and the full parser test module still pass
+   unchanged (nothing calls the new methods yet, so this slice is additive-only).
+3. **Convert `parse_block_statement`** (`statements.rs:228`) to `with_block_scope`. Move the
+   `enter` mutations (none today beyond what `parse_block_statement_body` needs — check whether
+   this site currently mutates anything before calling its body helper, or whether it relies on
+   ambient state; if `enter` is a no-op here keep it as `|_p| {}` rather than inventing
+   mutations) and pass `parse_block_statement_body` as `body`. Delete the local `let saved =
+   ...; let result = ...; self.restore_block_scope(saved); let stmts = result?;` sequence.
+   Re-run the full parser test module.
+4. **Convert the try/catch/finally arms** one at a time (try-block, then catch-block, then
+   finally-block), same mechanical transform, re-running tests after each so a mistake in one
+   arm is isolated to one commit.
+5. **Convert the switch-case site** (`CaseBlock` loop, ~`statements.rs:1441`) the same way.
+6. **Convert the class-static-block arm** (`declarations.rs:757`) to `with_function_context`:
+   the ten-field mutation block at `:760-770` becomes the `enter` closure, `|p|
+   p.parse_static_block_statements()` becomes `body`. Re-run tests; specifically re-check the
+   `'arguments' is not allowed in class static blocks` post-check at `:780-782` still runs after
+   the combinator call returns (it must stay outside the combinator — it inspects the *parsed
+   statements*, not parser state, and doesn't need scope restored first, but restoring first is
+   harmless and matches today's order).
+7. **Convert `parse_function_body_inner`** (`declarations.rs:1261`). This is the trickiest
+   conversion: `saved_param_names` is taken *before* `eat(LeftBrace)`, `prev_strict` is captured
+   *before* the combinator, and both are restored/consumed *after* it, exactly as today (see the
+   current code at `:1268-1298` — the combinator only replaces the
+   `save_function_context`/`restore_function_context` pair and the result-capture in the middle,
+   nothing about the surrounding param-name/strict handling changes). The `body` closure is
+   `|p| p.parse_function_body_statements(saved_param_names.as_ref()).and_then(|body| {
+   p.eat(&Token::RightBrace)?; Ok(body) })`. Re-run the full parser test suite plus
+   `truncated_source_restores_context_counters` explicitly.
+8. **Cleanup:** once no call site outside the two combinators invokes `save_block_scope`,
+   `restore_block_scope`, `save_function_context`, or `restore_function_context` directly,
+   confirm with `grep -n "save_block_scope\|restore_block_scope\|save_function_context\|restore_function_context" src/parser/*.rs`
+   that each of the four has exactly one call site (inside its combinator). Run
+   `./scripts/lint.sh` to confirm no dead code / unused-result warnings.
+9. **Full-suite gate:** `cargo test --release`, then the targeted test262 directories in §5,
+   then the full `uv run python scripts/run-test262.py` to confirm the baseline holds (no
+   `--update-baseline`).
 
-Each slice is a single, revertible commit-sized unit: convert one site (or one struct), rerun
-the extended unit test, move on. Do not convert more than one site per commit — a fix that
-silently changes which fields round-trip at a given site is exactly the class of bug this
-issue exists to prevent, so each conversion should be independently reviewable against its
-"before" hand-written block.
+Convert one site per commit, re-running the test suite after each, for the same reason the
+prior plan gave: a conversion that silently changes which fields a site's `enter` closure
+touches is exactly the class of bug this issue exists to prevent.
 
 ## 5. Test surface
 
-Targeted test262 directories (no spec behavior change expected — these confirm the refactor
-is invisible):
+Targeted test262 directories (no observable behavior change expected):
 
 - `test262/test/language/statements/block/`
 - `test262/test/language/statements/try/`
 - `test262/test/language/statements/switch/`
-- `test262/test/language/statements/class/` (static-init-block early errors: files matching
-  `static-init-*.js`, e.g. `static-init-invalid-return.js`, `static-init-invalid-arguments.js`,
-  `static-init-scope-var-derived.js`)
+- `test262/test/language/statements/class/` (static-init-block early errors:
+  `static-init-invalid-return.js`, `static-init-invalid-arguments.js`,
+  `static-init-scope-var-derived.js`, and siblings matching `static-init-*.js`)
 - `test262/test/annexB/language/statements/function/` (Annex B.3.3 block-level function
   declarations, the `in_block_or_function`/`in_switch_case` consumer)
 
-None of these need a new `test262-extra/` file: the DoD is explicit that the missing coverage
-is the parser-internal counter leak on the abort path, not an observable spec gap, and that is
-exactly what the existing (soon-extended) `truncated_source_restores_context_counters` unit
-test in `src/parser/mod.rs` covers. `cargo test --release` is the gate for that test; test262
-is the gate for "did the refactor change any observable parse result."
+No new `test262-extra/` file: as before, the gap this issue closes (a structural guarantee
+about parser-internal bookkeeping, not an observable spec behavior) isn't test262's job to
+cover. It's covered by:
+- The existing `truncated_source_restores_context_counters` test in `src/parser/mod.rs`
+  (already extended, per the prior implementation, to assert `in_block_or_function` and
+  `in_switch_case`) — keep it as the end-to-end guard.
+- The two new combinator-level unit tests from TDD slice 1 — these are the tests that actually
+  exercise the structural guarantee the retarget asked for (restore-on-`Err`, independent of any
+  particular parser construct).
 
 ## 6. Regression risk
 
-- **Field-set drift per site.** The two big sites do not save identical field sets today
-  (see §2's spec citations). `SavedFunctionContext` must capture the *union* the issue
-  specifies, but each site only *mutates* the subset it needs; an unmutated field round-trips
-  as a same-value no-op. The risk is copying a field into a site's mutation list that the
-  original hand-written block didn't touch (e.g. accidentally zeroing `in_non_arrow_function`
-  in the static-block arm, which never zeroed it before) — each conversion in slices 5–6 must
-  be diffed against the original block field-by-field, not just field-name-matched.
-- **`labels` clone cost.** `SavedFunctionContext` carries `labels: Vec<(String, bool)>`
-  because the two big sites already `std::mem::take` it today — no new cost there. Do **not**
-  reuse `SavedFunctionContext` (with its `labels` field) for the four small block-like sites;
-  they never touch `labels`, and cloning that `Vec` once per `{`-block parsed across all of
-  test262 would be a real, avoidable allocation on the hottest part of the parser. This is why
-  the plan keeps `SavedBlockScope` as a separate, deliberately smaller struct (2 `bool`
-  fields, `Copy`) rather than one struct for all seven sites.
-- **`strict` / `in_formal_parameters` / `function_param_names` exclusion.** Per the issue's own
-  "Care needed" section, these three stay outside both shared structs and remain hand-managed
-  locals at the one site that touches each. Pulling them into `SavedFunctionContext` "for
-  completeness" would make the static-block arm start saving/restoring fields it has no
-  behavioral need to touch, and is exactly the kind of scope creep this plan should not bundle
-  in.
-- **Shared machinery leaned on:** none of the tree-walker (`eval_expr`/`exec_statement`),
-  `property.rs` MOP, GC rooting, `ObjectKind` matches, bytecode fast path, or Node-compat
-  library harnesses are touched — this is parser-only. The only shared risk is
-  `test262-pass.txt`: any directory in §5 regressing would indicate a field was
-  mis-restored; per project convention this plan does **not** roll the baseline forward
-  regardless of outcome (that is a `main`-branch operation).
+- **`enter`-closure field drift.** Converting a site means moving its mutation block verbatim
+  into a closure. The risk is dropping or adding a field mutation during the move — diff each
+  converted site's `enter` closure against its pre-conversion mutation list line-for-line, not
+  just by re-running tests (the existing tests don't cover every field at every site).
+- **Order-sensitive surrounding code.** `parse_function_body_inner` and the static-block arm
+  both have logic that must stay *outside* the combinator call (param-name/strict handling;
+  the `'arguments'`-in-static-block post-check). Moving any of that *inside* an `enter` or
+  `body` closure would change when it runs relative to the scope restore — see slice 6/7 above
+  for the exact ordering to preserve.
+- **Closure borrow shape.** `body` closures that need to call further `&mut self` methods (e.g.
+  `p.eat(&Token::RightBrace)?` inside `parse_function_body_inner`'s `body`) take `p: &mut Self`
+  as their own parameter rather than capturing `self` — this is what avoids the borrow-checker
+  conflict that the issue said ruled out an RAII guard. If a conversion accidentally tries to
+  capture `self` by reference inside a closure instead of using the closure's own parameter, it
+  won't compile — that's a compile-time backstop, not a silent risk, but worth calling out so
+  the implementer doesn't fight the borrow checker by reintroducing the RAII shape the issue
+  already rejected.
+- **Shared machinery leaned on:** none of the tree-walker, `property.rs` MOP, GC rooting,
+  `ObjectKind` matches, bytecode fast path, or Node-compat library harnesses are touched — this
+  is parser-only. The only shared risk is `test262-pass.txt`; per project convention this plan
+  does not roll the baseline forward regardless of outcome.
 
 ## 7. Out of scope
 
-- Converting any of the *other* `let prev_x = self.x; ...; self.x = prev_x;` patterns found
-  during exploration (e.g. `prev_generator`/`prev_async` pairs in `expressions.rs` around
-  method/getter/setter parsing, `saved_no_in` in several expression parsers, the
-  lexer-position `saved_lt`/`saved_ts`/`saved_te` backtracking triples used for lookahead).
-  These are a different shape (single- or dual-field, mostly already restoring unconditionally
-  before their own `?`) and are not named by the issue; bundling them in would turn a
-  six/seven-site targeted fix into an open-ended parser refactor.
-- An RAII scope-guard combinator — explicitly ruled out by the issue itself (fights the
-  borrow checker: the guard would need to hold `&mut Parser` across the whole nested body
-  parse, which conflicts with the nested parse's own need for `&mut self`).
+The retarget comment also listed three "also in scope for the same pass" items and a separate
+`in_non_arrow_function`-normalization item. This plan deliberately does **not** bundle them into
+the same PR as the combinator conversion, for reasons noted next to each — but names them so
+they aren't lost:
+
+- **`reject_var_lexical_collision` dedup** (four near-identical VarDeclaredNames/
+  LexicallyDeclaredNames collision checks at `statements.rs:247`-ish, `statements.rs:1448`-ish,
+  `declarations.rs:1266`-ish, `mod.rs:936`-ish, two of which build `ParseError` by hand instead
+  of using `self.error()`). Independent of the combinator shape — worth its own small PR/issue
+  since it also fixes an error-position inconsistency, which deserves its own review and test
+  coverage rather than riding along.
+- **Consolidating `parse_static_block_statements` into `parse_block_statement`'s shared body
+  helper**, including adding the missing `&& self.current != Token::Eof` loop guard. Checked
+  this run: the missing guard is not a hang/panic risk (`parse_statement_or_declaration` at EOF
+  already returns a parse error via the normal `eat`/`error` path, it just doesn't say
+  "unterminated static block" as precisely as the block path might), so this is a quality
+  improvement, not a bug fix — reasonable to defer.
+- **`HashSet` swap for the O(n·m) `lexical_names.contains(name)` scan** — the owner's own comment
+  frames this as "only worth doing while in there" (i.e. contingent on doing the consolidation
+  above). Deferred with it.
+- **Normalizing the `in_non_arrow_function` 8-vs-1 asymmetry** across eight call sites in
+  `expressions.rs`/`declarations.rs` unrelated to the seven re-scoping sites this issue names.
+  This is materially larger and riskier than the combinator conversion (eight sites outside the
+  ones this issue is scoped to, plus a claimed behavior tightening of the regression test to
+  assert unconditionally rather than only for module cases) and belongs in its own issue with
+  its own plan.
+- An RAII scope-guard combinator using `Drop` — still ruled out, for the reason the issue
+  originally gave (fights the borrow checker) and the closure-based combinator sidesteps this
+  without needing `Drop`.
 - Any change to `MAX_PARSE_DEPTH`, the lexer, or AST types.
-- Rolling `test262-pass.txt` forward (`--update-baseline` is a `main`-branch operation).
-- Adding a new `docs/adr/` entry (see §3 — no architectural decision is being made beyond what
-  the issue itself already settled).
+- Rolling `test262-pass.txt` forward.
 
-## 8. Status (resumed run, 2026-09-06)
+A `gh issue comment` on #608 should record this scoping decision (combinator conversion now,
+the four deferred items as follow-ups) so the owner can override if they'd rather have them
+bundled.
 
-This workspace was reused from a prior attempt: slices 1–8 above are already implemented and
-committed on this branch (`071046b`..`7471b11`), but the branch has never been pushed and no PR
-exists. This run re-verified the existing work rather than re-planning from scratch, since a
-coherent `PLAN.md` was already committed and matched by the implementation.
+## 8. Status / resume notes for the next stage
 
-Slice → commit map:
-
-1. `a21cd37` — extended `truncated_source_restores_context_counters` (red for
-   `in_block_or_function` on the four small sites, as predicted).
-2. `0093b7b` — added `SavedBlockScope`, converted `parse_block_statement`.
-3. `f551167`, `36c466c`, `2e5878f` — try-block, catch-block, finally-block arms.
-4. `ced9e99` — switch-case site converted too (the "seven sites" judgement call from slice 4
-   was resolved in favor of converting it).
-5. `00977ce` — added `SavedFunctionContext`, converted the class-static-block arm.
-6. `d4ef89d` — converted `parse_function_body_inner`.
-7. `7471b11` — doc cleanup on the shared structs' field-exclusion rationale (`strict` /
-   `in_formal_parameters` / `function_param_names` stay hand-managed locals; see the doc
-   comment on `SavedFunctionContext` in `src/parser/mod.rs`).
-8. Full-suite gate — re-run in this session, not as a separate commit (see below).
-
-Care-needed items from the issue, verified against the landed code:
-
-- `in_non_arrow_function` — included in `SavedFunctionContext`; restoring it at the
-  static-block arm is a same-value no-op there, and the test comment at
-  `src/parser/mod.rs:1720-1727` documents why it's checked via `MODULE_SOURCES`
-  (`export default function`) instead of the main `SOURCES` table.
-- `strict` — deliberately excluded from both structs; restored via `set_strict` (which also
-  updates the lexer), documented inline on `SavedFunctionContext`.
-- `in_formal_parameters` — included in `SavedFunctionContext`.
-- `function_param_names` — deliberately excluded; callers reset it to `None` rather than
-  restoring a prior value, documented inline on `SavedFunctionContext`.
-
-Verification performed this run (read-only, no new production changes):
-
-- `cargo test --lib parser::` — 15/15 pass, including
-  `truncated_source_restores_context_counters`.
-- `./scripts/lint.sh` — rustfmt, clippy (default and `perf-counters`) all clean.
-- `grep` for hand-written `saved_*`/`prev_*` context-flag blocks in `statements.rs`/
-  `declarations.rs` — none remain; the only survivors are lexer/token backtracking
-  (`saved_lt`, `saved_current`, `saved_pushback`, `saved_lexer`) and the two deliberately
-  hand-managed fields above, which are out of scope per §7.
-- Targeted test262 (`language/statements/{block,try,switch,class,function}`): 10,089/10,089
-  scenarios pass (100%), 0 regressions against `origin/main:test262-pass.txt`.
-- `git fetch origin main`: no new commits on `main` since this branch's base — no rebase
-  needed before push.
-
-Remaining work for the next stage (implementation/PR-opening, not planning):
-
-- Run the full `uv run python scripts/run-test262.py` to confirm the baseline holds
-  repo-wide (only the targeted directories were run in this session).
-- `git rm PLAN.md` per the stage-handoff convention.
-- The untracked `EVIDENCE.md` in this workspace is a stale artifact from an unrelated `/simplify`
-  run that found no PR to operate on — it documents a blocker that resolves itself once the PR
-  below exists; the next stage should remove it (or leave it — it is untracked and won't ship).
-- Push the branch and `gh pr create --base main --head
-  sym/jsse/608-parser-a-scoping-combinator-for-the-seven-context-re-scoping-sites --title
-  "refactor(parser): add scoping combinator for context re-scoping sites"` with a body
-  summarizing slices 1–8 above, including the judgement call in slice 4 (switch-case site
-  converted despite the issue's six-site enumeration) and the two structs used instead of the
-  issue's single `SavedContext` (avoids a union-restore behavior change at the two sites whose
-  saved field sets differ, per §2/§6).
+- Commits `071046b..7471b11` and `02bef91` are already on this branch, unpushed, no PR open.
+  They implement the pre-retarget (snapshot-struct) design correctly and are green
+  (`cargo test`, lint, targeted test262 10,089/10,089). Do not revert them; build on top —
+  `SavedBlockScope`/`SavedFunctionContext`/their `save_*`/`restore_*` methods are exactly the
+  snapshot half the new combinators need.
+- Two automated review passes (`gh issue view 608 --comments`) already tried and bounced off
+  "no PR exists yet" for this branch — expected until the next stage pushes and opens one.
+- An untracked `EVIDENCE.md` may exist in this workspace from one of those bounced runs; it's
+  stale once a PR exists and can be removed or left (untracked, won't ship).
+- Next stage's job: implement TDD slices 1-9 above on top of the existing commits, `git rm
+  PLAN.md`, post the scoping-decision comment from §7, push, and `gh pr create --base main
+  --head sym/jsse/608-parser-a-scoping-combinator-for-the-seven-context-re-scoping-sites --title
+  "refactor(parser): add scoping combinator for context re-scoping sites"` with a body citing
+  the retarget comment and summarizing what's in/out of scope per §7.
