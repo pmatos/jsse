@@ -7,8 +7,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## gc-root-scope-guard
 
-- **Status**: in-flight
-- **PR**: #595
+- **Status**: landed
+- **PR**: #595 (merged 2026-09-04; reconciled in-flight→landed by the 2026-09-10 firing)
 - **Score**: 22/25 (leverage 5, locality 4, blast radius 3, heat 5)
 - **Files (full candidate)**: ~9–12 — `src/interpreter/eval.rs` (primary), `src/interpreter/builtins/array.rs`, `src/interpreter/mod.rs` (seam home), + `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`, `eval/literals.rs`, `bytecode/vm.rs`
 - **Files (this firing's scope)**: ~2 estimated — `src/interpreter/mod.rs` (new `with_gc_root_scope` seam) + `src/interpreter/builtins/array.rs`
@@ -68,10 +68,11 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 ## completion-unwrap-macro
 
 - **Status**: proposed
-- **Score**: 21/25 (leverage 4, locality 3, blast radius 1, heat 5)
-- **Files**: ~2 estimated — `src/interpreter/types.rs`, `src/interpreter/builtins/typedarray.rs`
-- **Modules**: `src/interpreter/types.rs`
-- **Summary**: A `try_completion!(expr)` macro that binds a `Completion::Normal` value and propagates any abrupt Completion, for the Completion-returning natives (typedarray 27, builtins/mod 22, eval 11, string 11, …). Distinct from `completion-into-result` (Result vs Completion return context). Scope the first step to one adopter to stay blast-radius 1. First seen 2026-09-02.
+- **Score**: 23/25 (leverage 5, locality 3, blast radius 1, heat 5)
+- **Files (this firing's scope)**: ~3 estimated — hoist macros out of `src/interpreter/builtins/temporal/duration.rs:9-25` into a crate-visible home in `src/interpreter/types.rs`, re-point `duration.rs`, adopt one representative file (`array.rs`/`string.rs`/`typedarray.rs` — chosen at step 5 from the shape-3 concentrations).
+- **Modules**: `src/interpreter/types.rs`, `src/interpreter/builtins/temporal/duration.rs`
+- **Summary**: Promote the private error-propagation macros to a crate-visible seam. **2026-09-10 re-score (leverage 4→5): fresh scan found `try_completion!` AND a sibling `try_result!` already exist but are `macro_rules!`-private to `temporal/duration.rs:9-25`, and the true footprint is ~1725 hand-rolled adapter sites** (911 `Result<_,JsValue>`→`Completion::Throw`, 598 `Result<_,Completion>`→`return c`, 216 `Completion`→bind-`Normal`) — not the ~200 last estimated. Hoist both macros to a shared home (drop `try_result!`'s vestigial unused `$interp` param), add the missing `Result<T,Completion>` arm, re-point `duration.rs`, adopt one file to prove the seam and pin behaviour. Distinct from `completion-into-result` (Result-return context, a method) and `throw-error-completion` (throw-site wrapper). Scope the first step to one adopter to stay blast-radius 1. First seen 2026-09-02.
+- **Picked**: 2026-09-10 firing (re-scored 23/25, above runner-up `gc-root-scope-guard-eval` 22/25 by 1 point on the inverted blast-radius term). Branch adopted (`sym/jsse/routine/refactor-audit/01M25W97CF`), not renamed.
 
 ## settle-and-return-tail
 
@@ -202,3 +203,49 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Summary**: `generator_next_state_machine_impl` and `async_generator_next_state_machine_impl` are largely parallel ~1580/~3050-line state-machine interpreters. Unifying them is a deep structural refactor for a human to schedule.
 - **First seen**: 2026-09-01
 - **Reason**: Blast radius 5 — human-scheduled. Land the generator-constructor and settle-tail candidates first to shrink both drivers.
+
+## throw-error-completion
+
+- **Status**: proposed
+- **Score**: 18/25 (leverage 3, locality 2, blast radius 1, heat 5)
+- **Files**: ~1 estimated (one adopter file first) — all `builtins/*`; representative `src/interpreter/builtins/typedarray.rs:1426`.
+- **Modules**: `src/interpreter/mod.rs` (seam home), `src/interpreter/builtins/typedarray.rs`
+- **Summary**: `interp.throw_type_error(msg) -> Completion` / `throw_range_error` helpers collapsing the 535 `return Completion::Throw(interp.create_type_error(...))` sites (287 type, 248 range, 5 reference) that each re-spell the constructor lookup + `Completion::Throw` wrapper. Thinner than `completion-unwrap-macro` (hides one wrapper token) but large. First seen 2026-09-10.
+
+## array-typedarray-immutable-methods
+
+- **Status**: proposed
+- **Score**: 17/25 (leverage 3, locality 3, blast radius 2, heat 4)
+- **Files**: ~2 estimated — `src/interpreter/builtins/array.rs:1652/2535/2908`, `src/interpreter/builtins/typedarray.rs:2258/2315`.
+- **Modules**: `src/interpreter/builtins/array.rs`, `src/interpreter/builtins/typedarray.rs`
+- **Summary**: Two parallel implementations of `toReversed`/`toSorted`/`with` (Array vs TypedArray) that risk drifting. A shared core with thin per-kind adapters. Small (~3 method pairs) but the "parallel implementations drift" pattern the scan watches for. First seen 2026-09-10.
+
+## arg-or-undefined
+
+- **Status**: dropped
+- **Score**: n/a (leverage 2 — shallow DRY helper)
+- **Files**: ubiquitous across `builtins/*`; representative `typedarray.rs:1394`.
+- **Modules**: `src/interpreter/builtins/mod.rs`
+- **Summary**: `fn arg(args, n) -> JsValue` collapsing 943 `args.get(n).cloned().unwrap_or(JsValue::UNDEFINED)` chains (627 `.first()`, 316 `.get(N)`).
+- **First seen**: 2026-09-10
+- **Reason**: Leverage 2 — the largest raw site count in the tree, but a helper whose interface equals its implementation (shallow by definition). Pure DRY + naming, not a deep module; `/simplify`-class, same bar as `object-id-of`.
+
+## define-method-adoption
+
+- **Status**: dropped
+- **Score**: n/a (leverage 2 — finishing an existing migration)
+- **Files**: ~200–260 sites — `typedarray.rs`, `iterators.rs`, `promise.rs`, `regexp.rs`, `mod.rs`.
+- **Modules**: `src/interpreter/mod.rs`
+- **Summary**: The `define_method` seam already exists (`mod.rs:1819`, 258 adopters) but ~200 sites still register the verbose `create_function(...)` + `insert_builtin` way.
+- **First seen**: 2026-09-10
+- **Reason**: Leverage 2 — the deep seam already exists; migrating stragglers is `/simplify`-class finishing work, same reasoning as `define-accessor-adoption`.
+
+## proxy-trap-skeleton
+
+- **Status**: dropped
+- **Score**: n/a (leverage 2 — thin, deep part already factored)
+- **Files**: ~13 sites — `src/interpreter/property.rs` (`proxy_is_extensible:2016`, `proxy_prevent_extensions:2050`, …).
+- **Modules**: `src/interpreter/property.rs`
+- **Summary**: The `if proxy { trap-or-recurse } else { ordinary }` skeleton repeats across ~13 trap wrappers.
+- **First seen**: 2026-09-10
+- **Reason**: Leverage 2 — the deep part (`invoke_proxy_trap`) is already factored, and the per-trap middle validation genuinely differs, so only a thin skeleton would collapse.
