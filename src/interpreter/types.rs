@@ -265,6 +265,61 @@ impl Completion {
     }
 }
 
+/// Convert a fallible or control-flow-carrying value into the interpreter's
+/// canonical `Result<success, abrupt Completion>`: `Ok` is the value to bind,
+/// `Err` is a [`Completion`] that must early-return from the caller. Implemented
+/// for the three error-propagation source shapes that `-> Completion` functions
+/// consume, so [`propagate!`] can unwrap any of them with one spelling.
+pub(crate) trait IntoAbrupt {
+    /// The success payload — fixed per source shape, hence an associated type
+    /// (functionally determined by `Self`) rather than a type parameter.
+    type Ok;
+    fn into_abrupt(self) -> Result<Self::Ok, Completion>;
+}
+
+impl IntoAbrupt for Completion {
+    type Ok = JsValue;
+    fn into_abrupt(self) -> Result<JsValue, Completion> {
+        match self {
+            Completion::Normal(v) => Ok(v),
+            // Every other variant early-returns — including `Empty`, which is
+            // not abrupt but was propagated verbatim by the `other => return
+            // other` sites this seam replaces.
+            other => Err(other),
+        }
+    }
+}
+
+impl<T> IntoAbrupt for Result<T, JsValue> {
+    type Ok = T;
+    fn into_abrupt(self) -> Result<T, Completion> {
+        // A Rust `Err(JsValue)` is a JS throw.
+        self.map_err(Completion::Throw)
+    }
+}
+
+impl<T> IntoAbrupt for Result<T, Completion> {
+    type Ok = T;
+    fn into_abrupt(self) -> Result<T, Completion> {
+        // The `Err` already carries the completion — pass it through.
+        self
+    }
+}
+
+/// Unwrap the success value of a [`Completion`], `Result<T, JsValue>`, or
+/// `Result<T, Completion>` (via [`IntoAbrupt`]), early-returning the abrupt
+/// completion out of the enclosing `-> Completion` function otherwise. Replaces
+/// the hand-rolled two-line `match` propagation heads across the interpreter.
+macro_rules! propagate {
+    ($expr:expr) => {
+        match $crate::interpreter::IntoAbrupt::into_abrupt($expr) {
+            Ok(v) => v,
+            Err(c) => return c,
+        }
+    };
+}
+pub(crate) use propagate;
+
 pub(crate) enum GeneratorResumeKind {
     Next,
     Return(JsValue),

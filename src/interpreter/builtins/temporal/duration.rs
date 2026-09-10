@@ -6,24 +6,6 @@ use crate::interpreter::builtins::temporal::{
     temporal_unit_singular, to_integer_if_integral,
 };
 
-macro_rules! try_completion {
-    ($expr:expr) => {
-        match $expr {
-            Completion::Normal(v) => v,
-            other => return other,
-        }
-    };
-}
-
-macro_rules! try_result {
-    ($interp:expr, $expr:expr) => {
-        match $expr {
-            Ok(v) => v,
-            Err(e) => return Completion::Throw(e),
-        }
-    };
-}
-
 /// Correctly-rounded i128 / i128 → f64 division.
 /// Uses string-based conversion for precise results: constructs a decimal
 /// string with enough digits and lets f64 parsing handle the rounding.
@@ -1804,11 +1786,11 @@ impl Interpreter {
                 }
                 macro_rules! get_field {
                     ($name:expr, $default:expr) => {{
-                        let v = try_completion!(get_prop(interp, &like, $name));
+                        let v = propagate!(get_prop(interp, &like, $name));
                         if is_undefined(&v) {
                             (false, $default)
                         } else {
-                            let n = try_result!(interp, interp.to_number_value(&v));
+                            let n = propagate!(interp.to_number_value(&v));
                             match to_integer_if_integral(n) {
                                 Some(i) => (true, i),
                                 None => {
@@ -2271,11 +2253,11 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let u = try_completion!(get_prop(interp, &total_of, "unit"));
+                    let u = propagate!(get_prop(interp, &total_of, "unit"));
                     if is_undefined(&u) {
                         return Completion::Throw(interp.create_range_error("unit is required"));
                     }
-                    let us = try_result!(interp, interp.to_string_value(&u));
+                    let us = propagate!(interp.to_string_value(&u));
                     let unit = match temporal_unit_singular(&us) {
                         Some(u) => u,
                         None => {

@@ -4576,3 +4576,59 @@ fn with_gc_root_scope_truncates_on_every_exit() {
     // The pre-scope root is untouched.
     assert!(interp.gc_temp_roots.contains(&9_001));
 }
+
+// `propagate!` (+ the `IntoAbrupt` seam) unwraps the success value of the three
+// error-propagation source shapes inside a `-> Completion` fn, early-returning
+// the abrupt completion otherwise. Pins all three shapes plus the `Empty`
+// quirk (non-abrupt, yet propagated verbatim — matching the pre-existing
+// `other => return other` sites the seam replaces).
+#[test]
+fn propagate_macro_covers_three_shapes_and_empty() {
+    // Shape 1: Completion — bind Normal, propagate every other variant.
+    fn s1(c: Completion) -> Completion {
+        let v = propagate!(c);
+        Completion::Normal(v)
+    }
+    assert!(matches!(
+        s1(Completion::Normal(JsValue::UNDEFINED)),
+        Completion::Normal(_)
+    ));
+    // Empty is NOT abrupt, but is still propagated verbatim.
+    assert!(matches!(s1(Completion::Empty), Completion::Empty));
+    assert!(matches!(
+        s1(Completion::Throw(JsValue::UNDEFINED)),
+        Completion::Throw(_)
+    ));
+    assert!(matches!(
+        s1(Completion::Break(None, None)),
+        Completion::Break(_, _)
+    ));
+
+    // Shape 2: Result<T, JsValue> — a Rust Err is a JS throw, so it is wrapped.
+    fn s2(r: Result<JsValue, JsValue>) -> Completion {
+        let v = propagate!(r);
+        Completion::Normal(v)
+    }
+    assert!(matches!(s2(Ok(JsValue::UNDEFINED)), Completion::Normal(_)));
+    assert!(matches!(s2(Err(JsValue::UNDEFINED)), Completion::Throw(_)));
+
+    // Shape 3: Result<T, Completion> — the Err already carries the completion,
+    // so it passes through unchanged.
+    fn s3(r: Result<JsValue, Completion>) -> Completion {
+        let v = propagate!(r);
+        Completion::Normal(v)
+    }
+    assert!(matches!(s3(Ok(JsValue::UNDEFINED)), Completion::Normal(_)));
+    assert!(matches!(
+        s3(Err(Completion::Continue(None, None))),
+        Completion::Continue(_, _)
+    ));
+
+    // The success value flows through generically (not fixed to JsValue).
+    fn s2_typed(r: Result<u32, JsValue>) -> Completion {
+        let n: u32 = propagate!(r);
+        assert_eq!(n, 7);
+        Completion::Normal(JsValue::number(n as f64))
+    }
+    assert!(matches!(s2_typed(Ok(7)), Completion::Normal(_)));
+}
