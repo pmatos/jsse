@@ -84,12 +84,13 @@ pub(crate) struct Parser<'a> {
     /// restore it on its **error** path too: any counter whose decrement runs
     /// unconditionally somewhere turns a leaked zero into an underflow, which
     /// is what issue #597 was. The seven re-scoping sites that touch a batch
-    /// of these fields together do so via `save_block_scope`/
-    /// `save_function_context` and their `restore_*` counterparts rather than
-    /// hand-written save/mutate/restore blocks (issue #608); a handful of
-    /// single- or dual-field sites elsewhere (e.g. `in_non_arrow_function`
-    /// bumps in `expressions.rs`) still restore by hand and are unaffected.
-    /// Adding a counter here means auditing its decrements for that shape.
+    /// of these fields together go through `with_block_scope`/
+    /// `with_function_context`, the combinators that own the save → enter →
+    /// body → unconditional-restore sequence, rather than hand-written
+    /// save/mutate/restore blocks (issue #608); a handful of single- or
+    /// dual-field sites elsewhere (e.g. `in_non_arrow_function` bumps in
+    /// `expressions.rs`) still restore by hand and are unaffected. Adding a
+    /// counter here means auditing its decrements for that shape.
     in_function: u32,
     in_non_arrow_function: u32,
     in_generator: bool,
@@ -364,6 +365,39 @@ impl<'a> Parser<'a> {
         self.allow_super_property = saved.allow_super_property;
         self.allow_super_call = saved.allow_super_call;
         self.labels = saved.labels;
+    }
+
+    /// Owns both ends of a block-scope re-scoping: snapshot, `enter`
+    /// mutation, `body` parse, unconditional restore, then the result is
+    /// handed back for the caller's own `?`. Restoring here — rather than at
+    /// each call site — means there is no separate restore call for a future
+    /// author to omit, reorder, or gate on `Ok` (issue #608, following
+    /// #597/#602's restore-on-error fix).
+    fn with_block_scope<T>(
+        &mut self,
+        enter: impl FnOnce(&mut Self),
+        body: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let saved = self.save_block_scope();
+        enter(self);
+        let result = body(self);
+        self.restore_block_scope(saved);
+        result
+    }
+
+    /// Function-context counterpart of `with_block_scope`, for the two sites
+    /// that re-scope the full function-context field set (class static
+    /// blocks, function bodies).
+    fn with_function_context<T>(
+        &mut self,
+        enter: impl FnOnce(&mut Self),
+        body: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let saved = self.save_function_context();
+        enter(self);
+        let result = body(self);
+        self.restore_function_context(saved);
+        result
     }
 
     pub(crate) fn set_eval_allow_super_property(&mut self) {
@@ -1752,6 +1786,96 @@ mod tests {
                 "in_non_arrow_function leaked for {source:?}"
             );
         }
+    }
+
+    /// The combinator itself, independent of any parser construct: `enter`
+    /// mutates a couple of block-scope fields, `body` returns `Err`
+    /// unconditionally, and the fields must be back to their pre-call values
+    /// once `with_block_scope` returns — this is the structural guarantee
+    /// issue #608's retarget asked for (a restore a future call site cannot
+    /// forget, since there is no separate restore call to omit).
+    #[test]
+    fn with_block_scope_restores_on_err() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_block_or_function = false;
+        parser.in_switch_case = true;
+        let result = parser.with_block_scope(
+            |p| {
+                p.in_block_or_function = true;
+                p.in_switch_case = false;
+            },
+            |_p| {
+                Err::<(), ParseError>(ParseError {
+                    message: "boom".into(),
+                })
+            },
+        );
+        assert!(result.is_err());
+        assert!(!parser.in_block_or_function);
+        assert!(parser.in_switch_case);
+    }
+
+    #[test]
+    fn with_block_scope_restores_on_ok() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_block_or_function = false;
+        parser.in_switch_case = true;
+        let result = parser.with_block_scope(
+            |p| {
+                p.in_block_or_function = true;
+                p.in_switch_case = false;
+            },
+            |p| {
+                assert!(p.in_block_or_function);
+                assert!(!p.in_switch_case);
+                Ok(42)
+            },
+        );
+        assert_eq!(result.unwrap(), 42);
+        assert!(!parser.in_block_or_function);
+        assert!(parser.in_switch_case);
+    }
+
+    #[test]
+    fn with_function_context_restores_on_err() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_generator = false;
+        parser.in_block_or_function = false;
+        let result = parser.with_function_context(
+            |p| {
+                p.in_generator = true;
+                p.in_block_or_function = true;
+            },
+            |_p| {
+                Err::<(), ParseError>(ParseError {
+                    message: "boom".into(),
+                })
+            },
+        );
+        assert!(result.is_err());
+        assert!(!parser.in_generator);
+        assert!(!parser.in_block_or_function);
+    }
+
+    #[test]
+    fn with_function_context_restores_on_ok() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_generator = false;
+        parser.in_block_or_function = false;
+        let result = parser.with_function_context(
+            |p| {
+                p.in_generator = true;
+                p.in_block_or_function = true;
+            },
+            |p| {
+                assert!(p.in_generator);
+                assert!(p.in_block_or_function);
+                Ok(7)
+            },
+        );
+        assert_eq!(result.unwrap(), 7);
+        assert!(!parser.in_generator);
+        assert!(!parser.in_block_or_function);
     }
 
     /// Source nested past `MAX_PARSE_DEPTH` must raise the catchable depth

@@ -749,27 +749,22 @@ impl<'a> Parser<'a> {
 
             if self.current == Token::LeftBrace {
                 self.eat(&Token::LeftBrace)?;
-                let saved = self.save_function_context();
-                self.allow_super_property = true;
-                self.allow_super_call = false;
-                self.in_function = 0;
-                self.in_non_arrow_function = 0;
-                self.in_generator = false;
-                self.in_async = false;
-                self.in_iteration = 0;
-                self.in_switch = 0;
-                self.in_static_block = true;
-                self.in_block_or_function = true;
-                self.in_switch_case = false;
-
-                // As in `parse_function_body_inner`, restore the saved context on
-                // the failure path too: the zeroed counters must not escape an
-                // unterminated static block into the enclosing construct.
-                let result = self.parse_static_block_statements();
-
-                self.restore_function_context(saved);
-
-                let stmts = result?;
+                let stmts = self.with_function_context(
+                    |p| {
+                        p.allow_super_property = true;
+                        p.allow_super_call = false;
+                        p.in_function = 0;
+                        p.in_non_arrow_function = 0;
+                        p.in_generator = false;
+                        p.in_async = false;
+                        p.in_iteration = 0;
+                        p.in_switch = 0;
+                        p.in_static_block = true;
+                        p.in_block_or_function = true;
+                        p.in_switch_case = false;
+                    },
+                    |p| p.parse_static_block_statements(),
+                )?;
                 if crate::ast::stmts_contain_matching(&stmts, &crate::ast::is_arguments_reference) {
                     return Err(self.error("'arguments' is not allowed in class static blocks"));
                 }
@@ -1261,31 +1256,30 @@ impl<'a> Parser<'a> {
         let saved_param_names = self.function_param_names.take();
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
-        let saved = self.save_function_context();
-        self.in_generator = is_generator;
-        self.in_async = is_async;
-        self.in_iteration = 0;
-        self.in_switch = 0;
-        self.in_function += 1;
-        self.allow_super_property = super_property;
-        self.allow_super_call = super_call;
-        self.in_formal_parameters = false;
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
-        self.in_static_block = false;
 
-        // The body parse below may fail anywhere; the saved context must be put
-        // back on that path too, or an enclosing construct sees the body's
-        // zeroed counters. `for (;;) { function f() {` used to underflow
-        // `in_iteration` in `parse_iteration_body` that way.
-        let result = self
-            .parse_function_body_statements(saved_param_names.as_ref())
-            .and_then(|body| {
-                self.eat(&Token::RightBrace)?;
-                Ok(body)
-            });
+        let result = self.with_function_context(
+            |p| {
+                p.in_generator = is_generator;
+                p.in_async = is_async;
+                p.in_iteration = 0;
+                p.in_switch = 0;
+                p.in_function += 1;
+                p.allow_super_property = super_property;
+                p.allow_super_call = super_call;
+                p.in_formal_parameters = false;
+                p.in_block_or_function = true;
+                p.in_switch_case = false;
+                p.in_static_block = false;
+            },
+            |p| {
+                p.parse_function_body_statements(saved_param_names.as_ref())
+                    .and_then(|body| {
+                        p.eat(&Token::RightBrace)?;
+                        Ok(body)
+                    })
+            },
+        );
 
-        self.restore_function_context(saved);
         self.function_param_names = None;
         self.set_strict(prev_strict);
         result

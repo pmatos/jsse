@@ -227,10 +227,7 @@ impl<'a> Parser<'a> {
 
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
-        let saved = self.save_block_scope();
-        let result = self.parse_block_statement_body();
-        self.restore_block_scope(saved);
-        let stmts = result?;
+        let stmts = self.with_block_scope(|_p| {}, |p| p.parse_block_statement_body())?;
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Block(stmts))
     }
@@ -1333,10 +1330,7 @@ impl<'a> Parser<'a> {
     fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // try
         self.eat(&Token::LeftBrace)?;
-        let saved = self.save_block_scope();
-        let result = self.parse_statement_list_until_brace();
-        self.restore_block_scope(saved);
-        let block = result?;
+        let block = self.with_block_scope(|_p| {}, |p| p.parse_statement_list_until_brace())?;
         self.eat(&Token::RightBrace)?;
 
         let handler = if self.current == Token::Keyword(Keyword::Catch) {
@@ -1363,10 +1357,7 @@ impl<'a> Parser<'a> {
                 }
             }
             self.eat(&Token::LeftBrace)?;
-            let saved = self.save_block_scope();
-            let result = self.parse_statement_list_until_brace();
-            self.restore_block_scope(saved);
-            let body = result?;
+            let body = self.with_block_scope(|_p| {}, |p| p.parse_statement_list_until_brace())?;
             self.eat(&Token::RightBrace)?;
             // §13.15.1: BoundNames of CatchParameter must not overlap
             // LexicallyDeclaredNames of Block
@@ -1394,10 +1385,7 @@ impl<'a> Parser<'a> {
         let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
             self.advance()?;
             self.eat(&Token::LeftBrace)?;
-            let saved = self.save_block_scope();
-            let result = self.parse_statement_list_until_brace();
-            self.restore_block_scope(saved);
-            let body = result?;
+            let body = self.with_block_scope(|_p| {}, |p| p.parse_statement_list_until_brace())?;
             self.eat(&Token::RightBrace)?;
             Some(body)
         } else {
@@ -1462,11 +1450,10 @@ impl<'a> Parser<'a> {
             // `in_block_or_function`'s value can't change that check's
             // outcome. Converted anyway for the "no hand-written restore
             // blocks left" goal (issue #608).
-            let saved = self.save_block_scope();
-            let result =
-                self.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names);
-            self.restore_block_scope(saved);
-            let consequent = result?;
+            let consequent = self.with_block_scope(
+                |_p| {},
+                |p| p.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names),
+            )?;
             cases.push(SwitchCase { test, consequent });
         }
         // §14.12.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames in CaseBlock
