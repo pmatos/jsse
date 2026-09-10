@@ -1,7 +1,7 @@
 # Architecture review — jsse — 2026-09-10
 
 **Scope**: `src/interpreter/` and `src/interpreter/builtins/` — the interpreter hot spots that dominate recent history and that every prior deepening firing has drawn from. A fresh sub-agent scan was run against these files, and the persistent `.architecture/backlog.md` was reconciled against `gh` first.
-**Picked**: `completion-unwrap-macro` — see [PR to be opened] and `.architecture/backlog.md`. Branch was **adopted** (the firing's `sym/jsse/routine/refactor-audit/01M25W97CF`, which met all four adoption conditions: non-default, 0 commits ahead of `origin/main`, no upstream, unpublished on origin), so it is **not** renamed to `pm-deepen/<slug>`; the slug lives here and in the backlog.
+**Picked**: `completion-unwrap-macro` — see [PR #623](https://github.com/pmatos/jsse/pull/623) and `.architecture/backlog.md`. Branch was **adopted** (the firing's `sym/jsse/routine/refactor-audit/01M25W97CF`, which met all four adoption conditions: non-default, 0 commits ahead of `origin/main`, no upstream, unpublished on origin), so it is **not** renamed to `pm-deepen/<slug>`; the slug lives here and in the backlog.
 **Degradations**: none. `gh` authenticated; sub-agent available; advisor available.
 
 **Diagram convention**: solid edges are the interface (what a caller wires up); dashed edges are inside the implementation (hidden behind the seam).

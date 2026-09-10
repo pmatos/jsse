@@ -67,7 +67,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## completion-unwrap-macro
 
-- **Status**: proposed
+- **Status**: in-flight
+- **PR**: #623
 - **Score**: 23/25 (leverage 5, locality 3, blast radius 1, heat 5)
 - **Files (this firing's scope)**: ~3 estimated — hoist macros out of `src/interpreter/builtins/temporal/duration.rs:9-25` into a crate-visible home in `src/interpreter/types.rs`, re-point `duration.rs`, adopt one representative file (`array.rs`/`string.rs`/`typedarray.rs` — chosen at step 5 from the shape-3 concentrations).
 - **Modules**: `src/interpreter/types.rs`, `src/interpreter/builtins/temporal/duration.rs`
