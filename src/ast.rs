@@ -290,9 +290,9 @@ pub(crate) enum Pattern {
     Identifier(String),
     Array(Vec<Option<ArrayPatternElement>>),
     Object(Vec<ObjectPatternProperty>),
-    Assign(Box<Pattern>, Box<Expression>),
+    Assign(Box<Pattern>, ExprBox),
     Rest(Box<Pattern>),
-    MemberExpression(Box<Expression>),
+    MemberExpression(ExprBox),
 }
 
 #[derive(Clone, Debug)]
@@ -354,47 +354,207 @@ pub(crate) enum Expression {
     Function(FunctionExpr),
     ArrowFunction(ArrowFunction),
     Class(ClassExpr),
-    Unary(UnaryOp, Box<Expression>),
-    Binary(BinaryOp, Box<Expression>, Box<Expression>),
-    Logical(LogicalOp, Box<Expression>, Box<Expression>),
-    Update(UpdateOp, bool, Box<Expression>), // op, prefix, argument
-    Assign(AssignOp, Box<Expression>, Box<Expression>),
-    Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
+    Unary(UnaryOp, ExprBox),
+    Binary(BinaryOp, ExprBox, ExprBox),
+    Logical(LogicalOp, ExprBox, ExprBox),
+    Update(UpdateOp, bool, ExprBox), // op, prefix, argument
+    Assign(AssignOp, ExprBox, ExprBox),
+    Conditional(ExprBox, ExprBox, ExprBox),
     /// Function call `f(args)` / `obj.method(args)`. Third field is a
     /// per-body call IC site identifier (issue #71, Phase 3).
-    Call(Box<Expression>, Vec<Expression>, CallSiteId),
+    Call(ExprBox, Vec<Expression>, CallSiteId),
     /// Constructor invocation `new F(args)`. Carries its own call IC site id —
     /// not yet read in Phase-3 v1; the slot is allocated for forward
     /// compatibility (issue #71).
-    New(Box<Expression>, Vec<Expression>, CallSiteId),
+    New(ExprBox, Vec<Expression>, CallSiteId),
     /// Property access `obj.x` / `obj[key]`. Third field is a per-body
     /// property-access IC site identifier (issue #71). The runtime cache slot
     /// lives in the interpreter, keyed by the body identity.
-    Member(Box<Expression>, MemberProperty, PropSiteId),
-    OptionalChain(Box<Expression>, Box<Expression>),
+    Member(ExprBox, MemberProperty, PropSiteId),
+    OptionalChain(ExprBox, ExprBox),
     #[allow(dead_code)]
     Comma(Vec<Expression>),
-    Spread(Box<Expression>),
-    Yield(Option<Box<Expression>>, bool), // expr, delegate
-    Await(Box<Expression>),
-    TaggedTemplate(Box<Expression>, TemplateLiteral),
+    Spread(ExprBox),
+    Yield(Option<ExprBox>, bool), // expr, delegate
+    Await(ExprBox),
+    TaggedTemplate(ExprBox, TemplateLiteral),
     Template(TemplateLiteral),
-    Typeof(Box<Expression>),
-    Void(Box<Expression>),
-    Delete(Box<Expression>),
+    Typeof(ExprBox),
+    Void(ExprBox),
+    Delete(ExprBox),
     Sequence(Vec<Expression>),
-    Import(Box<Expression>, Option<Box<Expression>>), // dynamic import(specifier, options?)
-    ImportDefer(Box<Expression>, Option<Box<Expression>>), // import.defer(specifier, options?)
-    ImportSource(Box<Expression>, Option<Box<Expression>>), // import.source(specifier, options?)
+    Import(ExprBox, Option<ExprBox>), // dynamic import(specifier, options?)
+    ImportDefer(ExprBox, Option<ExprBox>), // import.defer(specifier, options?)
+    ImportSource(ExprBox, Option<ExprBox>), // import.source(specifier, options?)
     ImportMeta,
     NewTarget,
     PrivateIdentifier(String),
 }
 
+/// Owning link to a child `Expression`, used everywhere the AST used to hold
+/// a plain `Box<Expression>`.
+///
+/// `Expression` itself must never implement `Drop`: two parser productions
+/// (binary/logical operator precedence, and the member/call/optional-chain
+/// continuation loop) build chains iteratively specifically so they are not
+/// bounded by `MAX_PARSE_DEPTH`, so these chains can reach millions of levels
+/// deep. The compiler's derived drop glue walks such a chain with one native
+/// stack frame per level, which overflows the stack long before any other
+/// limit fires (jsse#614). Boxing the recursive link behind `ExprBox` instead
+/// lets `Drop` be hand-written as an iterative worklist walk, while
+/// `Expression` stays `Drop`-free so existing by-value matches on it keep
+/// compiling (`impl Drop for Expression` would make those an `E0509`).
+pub(crate) struct ExprBox(Box<Expression>);
+
+impl ExprBox {
+    pub(crate) fn new(expr: Expression) -> Self {
+        Self(Box::new(expr))
+    }
+
+    /// Extracts the inner `Expression`, leaving `self` holding a childless
+    /// placeholder so dropping it (at the end of this call) is O(1).
+    ///
+    /// This is the only legal way to move an `Expression` out of an
+    /// `ExprBox` by value: `*self.0` cannot be moved directly because `self`
+    /// implements `Drop`, but swapping through the mutable reference the
+    /// `Box` gives us is not a partial move of `self` and is always allowed.
+    pub(crate) fn into_expression(mut self) -> Expression {
+        std::mem::replace(&mut *self.0, Expression::This)
+    }
+}
+
+impl Clone for ExprBox {
+    fn clone(&self) -> Self {
+        // Delegates to `Box<Expression>`'s clone, which recurses per nesting
+        // level exactly as it always has — unaffected by this fix. Cloning a
+        // chain deep enough to overflow the stack is a pre-existing,
+        // out-of-scope limitation (jsse#614 is about Drop only).
+        Self(self.0.clone())
+    }
+}
+
+impl std::ops::Deref for ExprBox {
+    type Target = Expression;
+
+    fn deref(&self) -> &Expression {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ExprBox {
+    fn deref_mut(&mut self) -> &mut Expression {
+        &mut self.0
+    }
+}
+
+impl AsRef<Expression> for ExprBox {
+    fn as_ref(&self) -> &Expression {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ExprBox {
+    /// Delegates to the inner `Expression`'s `Debug`, matching how
+    /// `Box<Expression>` printed before this wrapper existed (`Box<T>`'s own
+    /// `Debug` impl is transparent) — so debug output is unchanged.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl Drop for ExprBox {
+    fn drop(&mut self) {
+        let mut stack = Vec::new();
+        push_children(&mut self.0, &mut stack);
+        while let Some(mut node) = stack.pop() {
+            push_children(&mut node, &mut stack);
+        }
+    }
+}
+
+/// Steals every `ExprBox` child directly owned by `node`, replacing each with
+/// a childless placeholder, and pushes the extracted `Expression`s onto
+/// `stack`. Called repeatedly by `ExprBox`'s `Drop` to turn what would
+/// otherwise be per-level native recursion into a heap-backed loop.
+///
+/// Exhaustive with no wildcard arm: a future `Expression` variant that adds
+/// an `ExprBox` field must be handled here explicitly, or it silently
+/// reintroduces native recursion for that variant's children — mirroring the
+/// discipline `gc::trace_object_fields` already applies to `ObjectKind`.
+/// `Vec<Expression>` payloads (`Call`/`New` arguments, `Array`, `Sequence`,
+/// `Comma`, `Object` property values) are deliberately not drained here: they
+/// are not built by the unbounded continuation loops this fix targets, and
+/// each element still safely self-flattens through its own `ExprBox` fields
+/// when the `Vec`'s ordinary drop reaches it.
+fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
+    fn take(child: &mut ExprBox) -> Expression {
+        std::mem::replace(&mut *child.0, Expression::This)
+    }
+
+    match node {
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::Array(_, _)
+        | Expression::Object(_, _)
+        | Expression::Function(_)
+        | Expression::ArrowFunction(_)
+        | Expression::Class(_)
+        | Expression::Comma(_)
+        | Expression::Template(_)
+        | Expression::Sequence(_)
+        | Expression::ImportMeta
+        | Expression::NewTarget
+        | Expression::PrivateIdentifier(_) => {}
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e)
+        | Expression::TaggedTemplate(e, _) => {
+            stack.push(take(e));
+        }
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r)
+        | Expression::OptionalChain(l, r) => {
+            stack.push(take(l));
+            stack.push(take(r));
+        }
+        Expression::Conditional(a, b, c) => {
+            stack.push(take(a));
+            stack.push(take(b));
+            stack.push(take(c));
+        }
+        Expression::Call(callee, _, _) | Expression::New(callee, _, _) => {
+            stack.push(take(callee));
+        }
+        Expression::Member(obj, _, _) => {
+            stack.push(take(obj));
+        }
+        Expression::Yield(arg, _) => {
+            if let Some(arg) = arg {
+                stack.push(take(arg));
+            }
+        }
+        Expression::Import(spec, opts)
+        | Expression::ImportDefer(spec, opts)
+        | Expression::ImportSource(spec, opts) => {
+            stack.push(take(spec));
+            if let Some(opts) = opts {
+                stack.push(take(opts));
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum MemberProperty {
     Dot(String),
-    Computed(Box<Expression>),
+    Computed(ExprBox),
     Private(String),
 }
 
@@ -490,7 +650,7 @@ pub(crate) enum PropertyKey {
     Identifier(String),
     String(Vec<u16>),
     Number(f64),
-    Computed(Box<Expression>),
+    Computed(ExprBox),
     Private(String),
 }
 
@@ -1923,12 +2083,12 @@ mod ic_site_tests {
     }
 
     fn call(callee: Expression, args: Vec<Expression>) -> Expression {
-        Expression::Call(Box::new(callee), args, CallSiteId::UNASSIGNED)
+        Expression::Call(ExprBox::new(callee), args, CallSiteId::UNASSIGNED)
     }
 
     fn prop(obj: Expression, name: &str) -> Expression {
         Expression::Member(
-            Box::new(obj),
+            ExprBox::new(obj),
             MemberProperty::Dot(name.to_string()),
             PropSiteId::UNASSIGNED,
         )
@@ -2050,7 +2210,7 @@ mod ic_site_tests {
     }
 
     fn add(l: Expression, r: Expression) -> Expression {
-        Expression::Binary(BinaryOp::Add, Box::new(l), Box::new(r))
+        Expression::Binary(BinaryOp::Add, ExprBox::new(l), ExprBox::new(r))
     }
 
     /// `a.b.b.b…`, `depth` members deep. Built with a loop, so the *builder*
@@ -2124,7 +2284,6 @@ mod ic_site_tests {
                     other => panic!("expected Member at depth {expected}, got {other:?}"),
                 }
             }
-            leak_deep(body);
         });
     }
 
@@ -2141,7 +2300,6 @@ mod ic_site_tests {
             assign_ic_sites(&mut body);
             assert_eq!(body.ic.call_site_count, DEEP as u32);
             assert_eq!(body.ic.prop_site_count, 0);
-            leak_deep(body);
         });
     }
 
@@ -2163,8 +2321,6 @@ mod ic_site_tests {
             )))]);
             let with_at_far_end = func_uses_arguments(&[], &dirty);
 
-            leak_deep(clean);
-            leak_deep(dirty);
             (without, with_at_far_end)
         });
         assert!(!without, "a chain of literals does not reference arguments");
@@ -2193,20 +2349,46 @@ mod ic_site_tests {
                     other => panic!("expected Member at depth {depth}, got {other:?}"),
                 }
             }
-            leak_deep(e);
         });
     }
 
-    /// Deliberately leaks a deeply nested AST.
-    ///
-    /// `Expression`'s *drop glue* is still natively recursive — it is the one
-    /// mandatory pass jsse#612 leaves alone, because `impl Drop for Expression`
-    /// would make every by-value destructure of an `Expression` in the crate an
-    /// E0509. Dropping a chain this deep would therefore overflow the small
-    /// probe stack for a reason unrelated to the pass under test, so the tree
-    /// is leaked instead; the process is about to exit anyway.
-    fn leak_deep<T>(deep: T) {
-        std::mem::forget(deep);
+    #[test]
+    fn deep_add_chain_drops_without_native_recursion() {
+        on_small_stack(|| {
+            let e = deep_add_chain(num(1.0), DEEP);
+            drop(e);
+        });
+    }
+
+    #[test]
+    fn deep_member_chain_drops_without_native_recursion() {
+        on_small_stack(|| {
+            let e = deep_member_chain(DEEP);
+            drop(e);
+        });
+    }
+
+    #[test]
+    fn deep_call_chain_drops_without_native_recursion() {
+        on_small_stack(|| {
+            let mut e = ident("a");
+            for _ in 0..DEEP {
+                e = call(e, vec![]);
+            }
+            drop(e);
+        });
+    }
+
+    #[test]
+    fn expr_box_debug_is_transparent() {
+        for e in [
+            add(num(1.0), num(2.0)),
+            prop(ident("a"), "b"),
+            call(ident("f"), vec![num(1.0)]),
+        ] {
+            let boxed = ExprBox::new(e.clone());
+            assert_eq!(format!("{boxed:?}"), format!("{e:?}"));
+        }
     }
 }
 
@@ -2232,7 +2414,8 @@ mod bound_names_tests {
     #[test]
     fn member_expression_binds_nothing() {
         // `[obj.prop] = ...` — an assignment target, not a declaration.
-        let pat = Pattern::MemberExpression(Box::new(Expression::Identifier("obj".to_string())));
+        let pat =
+            Pattern::MemberExpression(ExprBox::new(Expression::Identifier("obj".to_string())));
         assert_eq!(names_of(&pat), Vec::<String>::new());
     }
 
@@ -2241,7 +2424,7 @@ mod bound_names_tests {
         // `a = 5` binds `a`; the default-value expression contributes no names.
         let pat = Pattern::Assign(
             Box::new(ident("a")),
-            Box::new(Expression::Identifier("unused".to_string())),
+            ExprBox::new(Expression::Identifier("unused".to_string())),
         );
         assert_eq!(names_of(&pat), vec!["a"]);
     }

@@ -2,7 +2,7 @@ use super::chunk::{Chunk, Constant};
 use super::compiler::{compile_body, compile_script_body};
 use super::op::Op;
 use super::vm::run_chunk;
-use crate::ast::{Expression, Literal, Statement};
+use crate::ast::{ExprBox, Expression, Literal, Statement};
 use crate::interpreter::Interpreter;
 use crate::interpreter::types::Completion;
 use crate::types::{JsString, JsValue};
@@ -848,8 +848,8 @@ fn compile_body_return_addition_of_literals() {
     // return 2 + 3;
     let body = vec![Statement::Return(Some(Expression::Binary(
         crate::ast::BinaryOp::Add,
-        Box::new(Expression::Literal(Literal::Number(2.0))),
-        Box::new(Expression::Literal(Literal::Number(3.0))),
+        ExprBox::new(Expression::Literal(Literal::Number(2.0))),
+        ExprBox::new(Expression::Literal(Literal::Number(3.0))),
     )))];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
@@ -1222,8 +1222,8 @@ fn compile_body_if_lowers_via_vm_directly() {
     let body = vec![Statement::If(IfStatement {
         test: Expression::Binary(
             BinaryOp::Lt,
-            Box::new(Expression::Literal(Literal::Number(1.0))),
-            Box::new(Expression::Literal(Literal::Number(2.0))),
+            ExprBox::new(Expression::Literal(Literal::Number(1.0))),
+            ExprBox::new(Expression::Literal(Literal::Number(2.0))),
         ),
         consequent: Box::new(Statement::Return(Some(Expression::Literal(
             Literal::Number(10.0),
@@ -1316,7 +1316,7 @@ fn private_field_member_bails_to_unsupported() {
     // base expression is; the `MemberProperty::Private` arm short-circuits
     // before ever recursing into the base.
     let body = vec![Statement::Return(Some(Expression::Member(
-        Box::new(Expression::This),
+        ExprBox::new(Expression::This),
         MemberProperty::Private("x".to_string()),
         PropSiteId::UNASSIGNED,
     )))];
@@ -2082,7 +2082,7 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
     use crate::ast::CallSiteId;
 
     let direct_eval = vec![Statement::Expression(Expression::Call(
-        Box::new(Expression::Identifier("eval".to_string())),
+        ExprBox::new(Expression::Identifier("eval".to_string())),
         vec![Expression::Literal(Literal::String(
             "var x = 1".encode_utf16().collect(),
         ))],
@@ -2094,8 +2094,8 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
     ));
 
     let spread = vec![Statement::Expression(Expression::Call(
-        Box::new(Expression::Identifier("f".to_string())),
-        vec![Expression::Spread(Box::new(Expression::Identifier(
+        ExprBox::new(Expression::Identifier("f".to_string())),
+        vec![Expression::Spread(ExprBox::new(Expression::Identifier(
             "args".to_string(),
         )))],
         CallSiteId::UNASSIGNED,
@@ -2112,8 +2112,8 @@ fn member_calls_and_nested_tail_positions_remain_ineligible() {
     use crate::ast::{CallSiteId, LogicalOp, MemberProperty, PropSiteId};
 
     let member_call = vec![Statement::Expression(Expression::Call(
-        Box::new(Expression::Member(
-            Box::new(Expression::Identifier("object".to_string())),
+        ExprBox::new(Expression::Member(
+            ExprBox::new(Expression::Identifier("object".to_string())),
             MemberProperty::Dot("method".to_string()),
             PropSiteId::UNASSIGNED,
         )),
@@ -2127,9 +2127,9 @@ fn member_calls_and_nested_tail_positions_remain_ineligible() {
 
     let nested_tail_call = Expression::Logical(
         LogicalOp::And,
-        Box::new(Expression::Identifier("condition".to_string())),
-        Box::new(Expression::Call(
-            Box::new(Expression::Identifier("f".to_string())),
+        ExprBox::new(Expression::Identifier("condition".to_string())),
+        ExprBox::new(Expression::Call(
+            ExprBox::new(Expression::Identifier("f".to_string())),
             vec![],
             CallSiteId::UNASSIGNED,
         )),

@@ -1281,7 +1281,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
     match expr {
         Expression::Identifier(name) => Ok(Pattern::Identifier(name)),
         Expression::Assign(AssignOp::Assign, left, right) => {
-            let pat = expr_to_pattern(*left)?;
+            let pat = expr_to_pattern(left.into_expression())?;
             Ok(Pattern::Assign(Box::new(pat), right))
         }
         Expression::Array(elements, trailing_comma_after_spread) => {
@@ -1303,7 +1303,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                                 });
                             }
                             saw_rest = true;
-                            expr_to_pattern(*inner).map(ArrayPatternElement::Rest)
+                            expr_to_pattern(inner.into_expression()).map(ArrayPatternElement::Rest)
                         } else {
                             expr_to_pattern(e).map(ArrayPatternElement::Pattern)
                         }
@@ -1335,12 +1335,12 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                 if let PropertyKind::Init = prop.kind {
                     if let Expression::Spread(inner) = prop.value {
                         saw_rest = true;
-                        let pat = expr_to_pattern(*inner)?;
+                        let pat = expr_to_pattern(inner.into_expression())?;
                         pat_props.push(ObjectPatternProperty::Rest(pat));
                     } else if prop.shorthand {
                         if let PropertyKey::Identifier(ref name) = prop.key {
                             if let Expression::Assign(AssignOp::Assign, left, right) = prop.value {
-                                let pat = expr_to_pattern(*left)?;
+                                let pat = expr_to_pattern(left.into_expression())?;
                                 pat_props.push(ObjectPatternProperty::KeyValue(
                                     prop.key,
                                     Pattern::Assign(Box::new(pat), right),
@@ -1371,10 +1371,10 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             Ok(Pattern::Object(pat_props))
         }
         Expression::Spread(inner) => {
-            let pat = expr_to_pattern(*inner)?;
+            let pat = expr_to_pattern(inner.into_expression())?;
             Ok(Pattern::Rest(Box::new(pat)))
         }
-        Expression::Member(_, _, _) => Ok(Pattern::MemberExpression(Box::new(expr))),
+        Expression::Member(_, _, _) => Ok(Pattern::MemberExpression(ExprBox::new(expr))),
         _ => Err(ParseError {
             message: "Invalid destructuring target".to_string(),
         }),
@@ -1384,7 +1384,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
 fn pattern_to_expr(pat: Pattern) -> Expression {
     match pat {
         Pattern::Identifier(name) => Expression::Identifier(name),
-        Pattern::Rest(inner) => Expression::Spread(Box::new(pattern_to_expr(*inner))),
+        Pattern::Rest(inner) => Expression::Spread(ExprBox::new(pattern_to_expr(*inner))),
         Pattern::Array(elements) => {
             let exprs: Vec<Option<Expression>> = elements
                 .into_iter()
@@ -1392,7 +1392,7 @@ fn pattern_to_expr(pat: Pattern) -> Expression {
                     elem.map(|e| match e {
                         ArrayPatternElement::Pattern(p) => pattern_to_expr(p),
                         ArrayPatternElement::Rest(p) => {
-                            Expression::Spread(Box::new(pattern_to_expr(p)))
+                            Expression::Spread(ExprBox::new(pattern_to_expr(p)))
                         }
                     })
                 })
@@ -1421,7 +1421,7 @@ fn pattern_to_expr(pat: Pattern) -> Expression {
                     },
                     ObjectPatternProperty::Rest(p) => Property {
                         key: PropertyKey::Identifier("__rest__".into()),
-                        value: Expression::Spread(Box::new(pattern_to_expr(p))),
+                        value: Expression::Spread(ExprBox::new(pattern_to_expr(p))),
                         kind: PropertyKind::Init,
                         computed: false,
                         shorthand: false,
@@ -1431,10 +1431,12 @@ fn pattern_to_expr(pat: Pattern) -> Expression {
                 .collect();
             Expression::Object(expr_props, false)
         }
-        Pattern::Assign(pat, default) => {
-            Expression::Assign(AssignOp::Assign, Box::new(pattern_to_expr(*pat)), default)
-        }
-        Pattern::MemberExpression(expr) => *expr,
+        Pattern::Assign(pat, default) => Expression::Assign(
+            AssignOp::Assign,
+            ExprBox::new(pattern_to_expr(*pat)),
+            default,
+        ),
+        Pattern::MemberExpression(expr) => expr.into_expression(),
     }
 }
 
