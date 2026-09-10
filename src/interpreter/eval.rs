@@ -1083,7 +1083,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             if done {
-                                break Completion::Normal(value);
+                                return Completion::Normal(value);
                             }
                             if let Some(ref mut ctx) = this.generator_context {
                                 let current = ctx.current_yield;
