@@ -67,3 +67,18 @@ _Avoid_: permanent root, closure root.
 **Rooted Slot**:
 A GC-traced container an anchor pins once and the owner then mutates in place, for a capture whose value is *replaced* over the anchor's lifetime. A native closure's own `Rc<RefCell<…>>` state is invisible to the tracer, and re-pinning each replacement would retain every superseded value, so the slot — not the value — is what gets pinned. `RootedPair` in `builtins/iterators.rs` is the two-slot case: the iterator an iterator helper is currently drawing from, plus that iterator's `next` method.
 _Avoid_: root cell, traced box, rooted buffer.
+
+## Builtins
+
+**Receiver Guard**:
+The single prologue a native method routes its `this` through to brand-check the
+receiver and hand back an owned snapshot of its kind-specific info — or throw the
+brand `TypeError` — so callers never re-spell the `as_object_id → get_object →
+borrow → <kind>_info` dance. The family: `validate_typed_array` /
+`with_typed_array_ref` (any TypedArray), `require_array_buffer` /
+`require_shared_array_buffer` (`builtins/typedarray.rs`). A guard may be
+parameterized by a detach policy: `ta_number_getter` layers the numeric getters'
+spec `TypedArrayLength → 0`-on-detached-or-out-of-bounds rule on top of the guard,
+where `validate_typed_array` instead throws. The snapshot is owned so the object
+borrow drops before any `create_type_error` (which mutates the object arena).
+_Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
