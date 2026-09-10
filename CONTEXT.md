@@ -44,6 +44,12 @@ _Avoid_: boundary, layer.
 How the `differential` fuzz target (`fuzz/fuzz_targets/differential.rs`) classifies a jsse-vs-node run. Tier 1: jsse crashed (signal or the interpreter-panic exit code) while node didn't — an engine bug by definition. Tier 2: exactly one side rejects the source as a syntax error — a real coverage gap. Tier 3: both sides threw (possibly a different error class) or both timed out — expected noise (usually an unimplemented feature), recorded but not a fuzzer finding. See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`.
 _Avoid_: divergence class, mismatch level.
 
+## Control flow
+
+**Completion Propagation**:
+The unwrap-or-early-return of the interpreter's `Completion` type behind the `propagate!(expr)` macro and its `IntoAbrupt` trait (`src/interpreter/types.rs`): the success value (`Completion::Normal`, or a `Result` `Ok`) is bound, and any abrupt completion early-returns out of the enclosing `-> Completion` function. `IntoAbrupt` adapts the three propagation source shapes into one spelling — a `Completion`, a `Result<T, JsValue>` (a Rust `Err` is a JS throw, wrapped in `Completion::Throw`), and a `Result<T, Completion>` (passed through) — replacing the hand-rolled two-line `match` heads scattered across the natives. `Completion::Empty` is not abrupt but is still propagated verbatim, matching the sites it replaces. A new source shape is one added `IntoAbrupt` impl, with no call-site churn.
+_Avoid_: try macro, error unwrap, ReturnIfAbrupt helper.
+
 ## Memory
 
 **Temp-Root Frame**:

@@ -125,10 +125,7 @@ impl Interpreter {
                 "charAt",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let pos = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
                             Ok(n) => n,
@@ -150,10 +147,7 @@ impl Interpreter {
                 "charCodeAt",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let pos = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
                             Ok(n) => n,
@@ -173,10 +167,7 @@ impl Interpreter {
                 "codePointAt",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let pos = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
                             Ok(n) => n,
@@ -423,10 +414,7 @@ impl Interpreter {
                 "slice",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let units = &js_str.code_units;
                     let from = match resolve_start_index(interp, args.first(), units.len()) {
                         Ok(v) => v,
@@ -448,10 +436,7 @@ impl Interpreter {
                 "substring",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let units = &js_str.code_units;
                     let len = units.len() as f64;
                     let int_start = match args.first() {
@@ -511,10 +496,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let locale_list = match interp.intl_canonicalize_locale_list(&locales_arg) {
-                        Ok(list) => list,
-                        Err(e) => return Completion::Throw(e),
-                    };
+                    let locale_list =
+                        propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
                     let resolved = interp.intl_resolve_locale(&locale_list);
                     let langid: icu::locale::LanguageIdentifier =
                         resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
@@ -532,10 +515,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let locale_list = match interp.intl_canonicalize_locale_list(&locales_arg) {
-                        Ok(list) => list,
-                        Err(e) => return Completion::Throw(e),
-                    };
+                    let locale_list =
+                        propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
                     let resolved = interp.intl_resolve_locale(&locale_list);
                     let langid: icu::locale::LanguageIdentifier =
                         resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
@@ -955,10 +936,7 @@ impl Interpreter {
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     other => return other,
                                 };
-                            let flags = match interp.to_string_value(&flags_val) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                            let flags = propagate!(interp.to_string_value(&flags_val));
                             if !flags.contains('g') {
                                 return Completion::Throw(interp.create_type_error(
                                     "String.prototype.replaceAll called with a non-global RegExp argument",
@@ -1077,10 +1055,7 @@ impl Interpreter {
                 "at",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let units = &js_str.code_units;
                     let idx = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
@@ -1260,10 +1235,7 @@ impl Interpreter {
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     other => return other,
                                 };
-                            let flags = match interp.to_string_value(&flags_val) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                            let flags = propagate!(interp.to_string_value(&flags_val));
                             if !flags.contains('g') {
                                 return Completion::Throw(interp.create_type_error(
                                     "String.prototype.matchAll called with a non-global RegExp argument",
@@ -1371,10 +1343,7 @@ impl Interpreter {
                 "isWellFormed",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let units = &js_str.code_units;
                     let mut i = 0;
                     while i < units.len() {
@@ -1397,10 +1366,7 @@ impl Interpreter {
                 "toWellFormed",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let js_str = match this_js_string(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let js_str = propagate!(this_js_string(interp, this_val));
                     let units = &js_str.code_units;
                     let mut result = Vec::with_capacity(units.len());
                     let mut i = 0;
@@ -1543,10 +1509,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let attr_val = match interp.to_string_value(&arg) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
+                    let attr_val = propagate!(interp.to_string_value(&arg));
                     let escaped = attr_val.replace('"', "&quot;");
                     Completion::Normal(JsValue::string(JsString::from_str(&format!(
                         "<{tag_o} {attr_name}=\"{escaped}\">{s}</{tag_c}>"
