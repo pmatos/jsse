@@ -7,7 +7,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## typedarray-getter-receiver-guard
 
-- **Status**: proposed
+- **Status**: in-flight
+- **PR**: #626
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated — `src/interpreter/builtins/typedarray.rs`
 - **Modules**: `src/interpreter/builtins/typedarray.rs`
