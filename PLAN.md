@@ -1,5 +1,33 @@
 # Plan: #614 — Expression drop glue still recurses per AST nesting level
 
+## Status at re-plan (2026-09-10)
+
+This planning stage re-ran on a workspace already containing a completed
+implementation from an earlier attempt. Do not re-plan or re-implement from
+scratch — carry this forward instead:
+
+- **Implementation already landed** at commit `90e7062` ("fix(ast): make
+  Expression's boxed links drop iteratively via ExprBox", `Closes #614`),
+  on top of this plan commit (`045774b`). It matches Option 1 below exactly:
+  `ExprBox` wrapper, the ADR at `docs/adr/2026-09-10-0836-expr-box-iterative-drop.md`,
+  and the file list in section 3. `cargo check -j4` on this commit is clean.
+- **Do not redo the fix.** The implementation stage should detect the
+  existing fix commit via `git log`/`git status` and proceed directly to
+  verification and PR creation, not re-implement `ExprBox`.
+- **Quality gates not yet re-run this session**: `cargo test` /
+  `cargo test --release`, `./scripts/lint.sh`, and the full `test262`
+  baseline check (section 4 slice 7 / section 6) still need to be run fresh
+  before pushing — they were presumably run by the attempt that produced
+  `90e7062`, but that isn't verified from this workspace state alone.
+- **Remaining steps for the implementation stage**: `git rm PLAN.md` and
+  commit, push the branch (never pushed to `origin` — confirmed via
+  `git branch -r` and no upstream configured), and `gh pr create --base main
+  --head <branch> --title "fix(ast): ..." --body ...` including `Closes #614`.
+- **`EVIDENCE.md`** (untracked in this workspace) is a stale artifact from a
+  later `simplify`-stage run that found no PR to review (since the branch was
+  never pushed) and correctly exited without committing. It documents the
+  same push/PR gap noted above. Leave it untracked; do not commit it here.
+
 ## 1. Problem restated
 
 `Expression` has no `impl Drop`, so tearing one down uses the compiler's derived
