@@ -5,6 +5,17 @@ Persistent candidate memory for the `pm-deepen` architecture routine. Statuses:
 `dropped` (hard filter — reversible), `rejected` (human declined / recurring bail — human-only reopen).
 Never delete rows; they are the memory that stops re-surfacing the same work.
 
+## typedarray-getter-receiver-guard
+
+- **Status**: in-flight
+- **PR**: #626
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated — `src/interpreter/builtins/typedarray.rs`
+- **Modules**: `src/interpreter/builtins/typedarray.rs`
+- **Summary**: The 4 `%TypedArray%.prototype` getters (`byteOffset` :1313, `byteLength` :1328, `length` :1343, `buffer` :1359) each re-open-code the `as_object_id→get_object[_cell]→borrow→typed_array_info→(detach/OOB branch)→else create_type_error("not a TypedArray")` receiver dance, because `validate_typed_array` (:5655) hides exactly this but only under a **throw-on-detached** policy — the getters need **return-0-on-detached** (spec TypedArrayLength→0), so they reach past the seam. Alongside sits a 3-member validator sibling family (`validate_typed_array` :5655, `validate_uint8array` :5673, `validate_uint8array_no_detach_check` :5700) differing only in brand string + detach policy. Add one `require_typed_array_receiver(this, brand, detach_policy) -> Result<TypedArrayInfo, Completion>` guard (policy = Throw / NoCheck / ReturnZero) the 4 getters and 3 validators all route through. **Genuine deepening**, not straggler-adoption: the ReturnZero policy *extends what the seam hides* (the distinction that keeps `dataview-receiver-guard` proposed while `define-method-adoption` was dropped). Direct follow-up to landed `validate-typed-array` (#543); same family relation `arraybuffer-receiver-guard` (#570) bears to it. **Correction**: an earlier scan over-counted "~10 getters" — only 4 are genuine TypedArray-prototype getters; the rest were ArrayBuffer/SAB getters (#570) and DataView getters (`dataview-receiver-guard`).
+- **First seen**: 2026-09-11
+- **Picked**: 2026-09-11 firing. Top two tied at 22/25 with `gc-root-scope-guard-eval` (blast 3); won on the lower-blast-radius tie-break. Branch adopted (`sym/jsse/routine/refactor-audit/01M26RZFXE`), not renamed.
+
 ## gc-root-scope-guard
 
 - **Status**: landed
@@ -67,8 +78,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## completion-unwrap-macro
 
-- **Status**: in-flight
-- **PR**: #623
+- **Status**: landed
+- **PR**: #623 (merged 2026-09-10T19:59Z; reconciled in-flight→landed by the 2026-09-11 firing). Delivered as the `propagate!` macro + `IntoAbrupt` trait in `src/interpreter/types.rs`, adopted in `string.rs` and `temporal/duration.rs`; CONTEXT.md gained the "Completion Propagation" term.
 - **Score**: 23/25 (leverage 5, locality 3, blast radius 1, heat 5)
 - **Files (this firing's scope)**: ~3 estimated — hoist macros out of `src/interpreter/builtins/temporal/duration.rs:9-25` into a crate-visible home in `src/interpreter/types.rs`, re-point `duration.rs`, adopt one representative file (`array.rs`/`string.rs`/`typedarray.rs` — chosen at step 5 from the shape-3 concentrations).
 - **Modules**: `src/interpreter/types.rs`, `src/interpreter/builtins/temporal/duration.rs`
@@ -145,7 +156,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Score**: 18/25 (leverage 3, locality 4, blast radius 1, heat 3)
 - **Files**: ~5 estimated — `src/interpreter/builtins/number.rs`, `bigint.rs`, `string.rs` (+ helper home)
 - **Modules**: `src/interpreter/builtins/number.rs`
-- **Summary**: Five near-identical private helpers implement "return primitive X, else unwrap a wrapper object whose `class_name == "X"` reading `primitive_value`, else None/throw": `this_number_value` (`number.rs:397`), `this_boolean_value` (`:667`), `this_symbol_value` (`:258`), `this_bigint_value` (`bigint.rs:40`), `this_string_value` (`string.rs:6`), differing only by the class-name literal and the primitive extractor. A generic `this_primitive_value(this, class_name)` (or small trait) collapses the five parallel brand-and-unwrap bodies. Wrapper-object analogue of `object-this-coercion` (ToObject), so net-new. First seen 2026-09-04.
+- **Summary**: Five near-identical private helpers implement "return primitive X, else unwrap a wrapper object whose `class_name == "X"` reading `primitive_value`, else None/throw": `this_number_value` (`number.rs:397`), `this_boolean_value` (`:667`), `this_symbol_value` (`:258`), `this_bigint_value` (`bigint.rs:40`), `this_string_value` (`string.rs:6`), differing only by the class-name literal and the primitive extractor. A generic `this_primitive_value(this, class_name)` (or small trait) collapses the parallel brand-and-unwrap bodies. Wrapper-object analogue of `object-this-coercion` (ToObject), so net-new. First seen 2026-09-04. (2026-09-11 re-check: the parallel family is **4, not 5** — `this_string_value` (`string.rs:6`) is *not* a sibling: it returns `Result<String, Completion>`, takes `&mut`, and does RequireObjectCoercible + ToString fallback rather than the Option-returning brand-unwrap the other four share. Re-scored leverage 3, total 18/25.)
 
 ## regexp-last-index-accessor
 

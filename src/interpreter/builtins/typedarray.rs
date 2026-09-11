@@ -1311,63 +1311,22 @@ impl Interpreter {
 
         // byteOffset getter
         self.define_getter(proto_id, "byteOffset", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object_cell(o)
-            {
-                let obj_ref = obj.borrow();
-                if let Some(ta) = obj_ref.typed_array_info() {
-                    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                        return Completion::Normal(JsValue::number(0.0));
-                    }
-                    return Completion::Normal(JsValue::number(ta.byte_offset as f64));
-                }
-            }
-            Completion::Throw(interp.create_type_error("not a TypedArray"))
+            ta_number_getter(interp, this_val, |ta| ta.byte_offset as f64)
         });
         // byteLength getter
         self.define_getter(proto_id, "byteLength", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object_cell(o)
-            {
-                let obj_ref = obj.borrow();
-                if let Some(ta) = obj_ref.typed_array_info() {
-                    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                        return Completion::Normal(JsValue::number(0.0));
-                    }
-                    return Completion::Normal(JsValue::number(typed_array_byte_length(ta) as f64));
-                }
-            }
-            Completion::Throw(interp.create_type_error("not a TypedArray"))
+            ta_number_getter(interp, this_val, |ta| typed_array_byte_length(ta) as f64)
         });
         // length getter
         self.define_getter(proto_id, "length", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object_cell(o)
-            {
-                let obj_ref = obj.borrow();
-                if let Some(ta) = obj_ref.typed_array_info() {
-                    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                        return Completion::Normal(JsValue::number(0.0));
-                    }
-                    return Completion::Normal(JsValue::number(typed_array_length(ta) as f64));
-                }
-            }
-            Completion::Throw(interp.create_type_error("not a TypedArray"))
+            ta_number_getter(interp, this_val, |ta| typed_array_length(ta) as f64)
         });
 
-        // buffer getter (returns the ArrayBuffer object - we need to find it)
+        // buffer getter (returns the ArrayBuffer object; no detached/OOB check —
+        // the buffer survives detachment. `buffer_object_id: None` on the rare
+        // wrapperless construction path preserves the "not a TypedArray" throw.)
         self.define_getter(proto_id, "buffer", |interp, this_val, _args| {
-            if let Some(o) = this_val.as_object_id()
-                && let Some(obj) = interp.get_object(o)
-            {
-                let obj_ref = obj.borrow();
-                if obj_ref.typed_array_info().is_some()
-                    && let Some(buf_id) = obj_ref.view_buffer_object_id()
-                {
-                    return Completion::Normal(JsValue::object(buf_id));
-                }
-            }
-            Completion::Throw(interp.create_type_error("not a TypedArray"))
+            ta_buffer_getter(interp, this_val)
         });
 
         // [Symbol.iterator] = values
@@ -5652,71 +5611,93 @@ fn require_shared_array_buffer(
     ))
 }
 
+/// The shared `%TypedArray%.prototype` receiver-guard prologue: resolve
+/// `this_val` to its `TypedArrayInfo` and run the pure `f` against the borrowed
+/// info. A receiver that is not a TypedArray throws `TypeError(brand_msg)` — the
+/// object borrow is dropped before the error is built, because
+/// `create_type_error` mutates the object arena. `f` must not need
+/// `&mut Interpreter`; every `TypedArrayInfo` field read and the `typed_array_*`
+/// / `is_typed_array_out_of_bounds` helpers already qualify. This is the one
+/// door the prototype getters and the `validate_*` helpers route `this` through.
+fn with_typed_array_ref<R>(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+    brand_msg: &str,
+    f: impl FnOnce(&TypedArrayInfo) -> R,
+) -> Result<R, Completion> {
+    if let Some(o) = this_val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
+    {
+        let obj_ref = obj.borrow();
+        if let Some(ta) = obj_ref.typed_array_info() {
+            return Ok(f(ta));
+        }
+    }
+    Err(Completion::Throw(interp.create_type_error(brand_msg)))
+}
+
+/// Express the non-numeric `buffer` getter the same way `ta_number_getter`
+/// expresses the numeric ones. No detach/OOB collapse — the buffer survives
+/// detachment; `Ok(None)` preserves the pre-existing `buffer_object_id: None`
+/// fall-through to the same `"not a TypedArray"` throw.
+fn ta_buffer_getter(interp: &mut Interpreter, this_val: &JsValue) -> Completion {
+    match with_typed_array_ref(interp, this_val, "not a TypedArray", |ta| {
+        ta.buffer_object_id
+    }) {
+        Ok(Some(buf_id)) => Completion::Normal(JsValue::object(buf_id)),
+        Ok(None) | Err(_) => Completion::Throw(interp.create_type_error("not a TypedArray")),
+    }
+}
+
+/// Express a numeric `%TypedArray%.prototype` getter as a pure
+/// `TypedArrayInfo -> f64` payload. Owns the whole getter prologue: the
+/// brand-throw `"not a TypedArray"`, the spec `TypedArrayLength`-style
+/// "detached-or-out-of-bounds ⇒ 0" collapse (so `payload` is reached only on a
+/// live view), and the `Completion::Normal(number)` wrapping. Shared by the
+/// `byteOffset` / `byteLength` / `length` getters.
+fn ta_number_getter(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+    payload: impl FnOnce(&TypedArrayInfo) -> f64,
+) -> Completion {
+    match with_typed_array_ref(interp, this_val, "not a TypedArray", |ta| {
+        if is_ta_detached_or_oob(ta) {
+            0.0
+        } else {
+            payload(ta)
+        }
+    }) {
+        Ok(n) => Completion::Normal(JsValue::number(n)),
+        Err(throw) => throw,
+    }
+}
+
 fn validate_typed_array(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let Some(o) = this_val.as_object_id()
-        && let Some(obj) = interp.get_object(o)
-    {
-        let ta = obj.borrow().typed_array_info().cloned();
-        if let Some(ta) = ta {
-            check_detached_or_out_of_bounds(interp, &ta)?;
-            return Ok(ta);
-        }
-    }
-    Err(Completion::Throw(
-        interp.create_type_error("not a TypedArray"),
-    ))
+    let ta = with_typed_array_ref(interp, this_val, "not a TypedArray", TypedArrayInfo::clone)?;
+    check_detached_or_out_of_bounds(interp, &ta)?;
+    Ok(ta)
 }
 
 fn validate_uint8array(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let Some(o) = this_val.as_object_id()
-        && let Some(obj) = interp.get_object(o)
-    {
-        let obj_ref = obj.borrow();
-        if let Some(ta) = obj_ref.typed_array_info() {
-            if !matches!(ta.kind, TypedArrayKind::Uint8) {
-                return Err(Completion::Throw(
-                    interp.create_type_error("not a Uint8Array"),
-                ));
-            }
-            if ta.is_detached.get() {
-                return Err(Completion::Throw(
-                    interp.create_type_error("typed array is detached"),
-                ));
-            }
-            return Ok(ta.clone());
-        }
-    }
-    Err(Completion::Throw(
-        interp.create_type_error("not a Uint8Array"),
-    ))
+    let ta = validate_uint8array_no_detach_check(interp, this_val)?;
+    check_detached(interp, &ta)?;
+    Ok(ta)
 }
 
 fn validate_uint8array_no_detach_check(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let Some(o) = this_val.as_object_id()
-        && let Some(obj) = interp.get_object(o)
-    {
-        let obj_ref = obj.borrow();
-        if let Some(ta) = obj_ref.typed_array_info() {
-            if !matches!(ta.kind, TypedArrayKind::Uint8) {
-                return Err(Completion::Throw(
-                    interp.create_type_error("not a Uint8Array"),
-                ));
-            }
-            return Ok(ta.clone());
-        }
-    }
-    Err(Completion::Throw(
-        interp.create_type_error("not a Uint8Array"),
-    ))
+    let ta = with_typed_array_ref(interp, this_val, "not a Uint8Array", |ta| {
+        matches!(ta.kind, TypedArrayKind::Uint8).then(|| ta.clone())
+    })?;
+    ta.ok_or_else(|| Completion::Throw(interp.create_type_error("not a Uint8Array")))
 }
 
 fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), Completion> {
@@ -5729,13 +5710,19 @@ fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), C
     }
 }
 
+/// True iff the TypedArray is detached, or tracks a resizable ArrayBuffer that
+/// has since shrunk out from under its bounds.
+fn is_ta_detached_or_oob(ta: &TypedArrayInfo) -> bool {
+    ta.is_detached.get() || is_typed_array_out_of_bounds(ta)
+}
+
 /// Combines the detached check with the out-of-bounds check that applies to
 /// typed arrays tracking a resizable ArrayBuffer that has since shrunk.
 fn check_detached_or_out_of_bounds(
     interp: &mut Interpreter,
     ta: &TypedArrayInfo,
 ) -> Result<(), Completion> {
-    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+    if is_ta_detached_or_oob(ta) {
         Err(Completion::Throw(
             interp.create_type_error("typed array is detached"),
         ))
@@ -6366,7 +6353,7 @@ mod validate_typed_array_tests {
     use crate::parser::Parser;
     use crate::types::JsValue;
 
-    fn interp_with(source: &str) -> Interpreter {
+    pub(super) fn interp_with(source: &str) -> Interpreter {
         let mut parser = Parser::new(source).expect("parser init");
         let program = parser.parse_program().expect("parse program");
         let mut interp = Interpreter::new();
@@ -6378,7 +6365,7 @@ mod validate_typed_array_tests {
         interp
     }
 
-    fn global(interp: &Interpreter, name: &str) -> JsValue {
+    pub(super) fn global(interp: &Interpreter, name: &str) -> JsValue {
         interp
             .get_global_var_ref(name)
             .unwrap_or_else(|| panic!("expected global {name}"))
@@ -6433,6 +6420,97 @@ mod validate_typed_array_tests {
             err.contains("typed array is detached"),
             "unexpected error: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ta_number_getter_tests {
+    //! Pins the getter-first receiver-guard seam: `with_typed_array_ref` (the
+    //! shared brand-check prologue that resolves `this` to its `TypedArrayInfo`
+    //! or throws a caller-chosen brand message) and `ta_number_getter` (the
+    //! numeric-getter combinator that bakes in the spec `TypedArrayLength -> 0`
+    //! on-detached-or-out-of-bounds rule). A live receiver is mapped through the
+    //! payload; a detached one yields 0 *without ever invoking the payload*; a
+    //! non-TypedArray receiver throws "not a TypedArray".
+    use super::validate_typed_array_tests::{global, interp_with};
+    use super::{ta_number_getter, with_typed_array_ref};
+    use crate::interpreter::Completion;
+    use crate::types::JsValue;
+    use std::cell::Cell;
+
+    #[test]
+    fn number_getter_maps_a_live_receiver_through_the_payload() {
+        let mut interp = interp_with("var ta = new Uint32Array(new ArrayBuffer(16), 8);");
+        let ta = global(&interp, "ta");
+        let comp = ta_number_getter(&mut interp, &ta, |ta| ta.byte_offset as f64);
+        match comp {
+            Completion::Normal(v) => assert_eq!(v.as_number(), Some(8.0)),
+            other => panic!("expected Normal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn number_getter_returns_zero_on_detached_without_invoking_payload() {
+        let mut interp =
+            interp_with("var buf = new ArrayBuffer(8); var dta = new Uint8Array(buf);");
+        let buf = global(&interp, "buf");
+        let dta = global(&interp, "dta");
+        interp.detach_arraybuffer(&buf);
+        let called = Cell::new(false);
+        let comp = ta_number_getter(&mut interp, &dta, |ta| {
+            called.set(true);
+            ta.byte_offset as f64
+        });
+        match comp {
+            Completion::Normal(v) => assert_eq!(v.as_number(), Some(0.0)),
+            other => panic!("expected Normal(0), got {other:?}"),
+        }
+        assert!(!called.get(), "payload must not run on a detached receiver");
+    }
+
+    #[test]
+    fn number_getter_throws_on_a_non_object_receiver() {
+        let mut interp = interp_with("");
+        let comp = ta_number_getter(&mut interp, &JsValue::UNDEFINED, |ta| ta.byte_offset as f64);
+        match comp {
+            Completion::Throw(e) => {
+                let msg = interp.format_value(&e);
+                assert!(msg.contains("not a TypedArray"), "unexpected error: {msg}");
+            }
+            other => panic!("expected Throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn number_getter_throws_on_a_plain_object_receiver() {
+        let mut interp = interp_with("var o = {};");
+        let o = global(&interp, "o");
+        let comp = ta_number_getter(&mut interp, &o, |ta| ta.byte_offset as f64);
+        match comp {
+            Completion::Throw(e) => {
+                let msg = interp.format_value(&e);
+                assert!(msg.contains("not a TypedArray"), "unexpected error: {msg}");
+            }
+            other => panic!("expected Throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kernel_honours_the_brand_message_and_runs_f_on_a_live_receiver() {
+        let mut interp = interp_with("var ta = new Uint8Array([1, 2, 3]);");
+        let ta = global(&interp, "ta");
+        let len = with_typed_array_ref(&mut interp, &ta, "not a Uint8Array", |ta| ta.array_length)
+            .expect("live TypedArray");
+        assert_eq!(len, 3);
+
+        let err =
+            match with_typed_array_ref(&mut interp, &JsValue::UNDEFINED, "not a Uint8Array", |_| 0)
+            {
+                Ok(_) => panic!("expected non-TA to be rejected"),
+                Err(Completion::Throw(e)) => interp.format_value(&e),
+                Err(other) => panic!("expected Throw, got {other:?}"),
+            };
+        assert!(err.contains("not a Uint8Array"), "unexpected error: {err}");
     }
 }
 

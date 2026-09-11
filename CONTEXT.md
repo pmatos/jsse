@@ -67,3 +67,22 @@ _Avoid_: permanent root, closure root.
 **Rooted Slot**:
 A GC-traced container an anchor pins once and the owner then mutates in place, for a capture whose value is *replaced* over the anchor's lifetime. A native closure's own `Rc<RefCell<…>>` state is invisible to the tracer, and re-pinning each replacement would retain every superseded value, so the slot — not the value — is what gets pinned. `RootedPair` in `builtins/iterators.rs` is the two-slot case: the iterator an iterator helper is currently drawing from, plus that iterator's `next` method.
 _Avoid_: root cell, traced box, rooted buffer.
+
+## Builtins
+
+**Receiver Guard**:
+The single prologue a native method routes its `this` through to brand-check the
+receiver — or throw the brand `TypeError` — so callers never re-spell the
+`as_object_id → get_object → borrow → <kind>_info` dance. The family:
+`require_array_buffer` / `require_shared_array_buffer` (`builtins/typedarray.rs`)
+hand back an owned snapshot of the buffer's kind-specific info; `with_typed_array_ref`
+is the leaner kernel form — it runs a caller-supplied closure against the borrowed
+`TypedArrayInfo` and returns whatever the closure returns (a scalar, an owned
+snapshot via `TypedArrayInfo::clone`, or anything else), so ownership is the
+caller's choice, not the guard's. `validate_typed_array` layers a snapshot +
+detached/OOB throw on top of the kernel. A guard may be parameterized by a
+detach policy: `ta_number_getter` layers the numeric getters' spec
+`TypedArrayLength → 0`-on-detached-or-out-of-bounds rule on top of the kernel,
+where `validate_typed_array` instead throws. Either way, any borrow the guard
+holds drops before `create_type_error` runs (it mutates the object arena).
+_Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
