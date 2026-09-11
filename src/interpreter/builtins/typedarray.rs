@@ -5645,8 +5645,7 @@ fn ta_buffer_getter(interp: &mut Interpreter, this_val: &JsValue) -> Completion 
         ta.buffer_object_id
     }) {
         Ok(Some(buf_id)) => Completion::Normal(JsValue::object(buf_id)),
-        Ok(None) => Completion::Throw(interp.create_type_error("not a TypedArray")),
-        Err(throw) => throw,
+        Ok(None) | Err(_) => Completion::Throw(interp.create_type_error("not a TypedArray")),
     }
 }
 
@@ -5662,7 +5661,7 @@ fn ta_number_getter(
     payload: impl FnOnce(&TypedArrayInfo) -> f64,
 ) -> Completion {
     match with_typed_array_ref(interp, this_val, "not a TypedArray", |ta| {
-        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+        if is_ta_detached_or_oob(ta) {
             0.0
         } else {
             payload(ta)
@@ -5695,13 +5694,10 @@ fn validate_uint8array_no_detach_check(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    let ta = with_typed_array_ref(interp, this_val, "not a Uint8Array", TypedArrayInfo::clone)?;
-    if !matches!(ta.kind, TypedArrayKind::Uint8) {
-        return Err(Completion::Throw(
-            interp.create_type_error("not a Uint8Array"),
-        ));
-    }
-    Ok(ta)
+    let ta = with_typed_array_ref(interp, this_val, "not a Uint8Array", |ta| {
+        matches!(ta.kind, TypedArrayKind::Uint8).then(|| ta.clone())
+    })?;
+    ta.ok_or_else(|| Completion::Throw(interp.create_type_error("not a Uint8Array")))
 }
 
 fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), Completion> {
@@ -5714,13 +5710,19 @@ fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), C
     }
 }
 
+/// True iff the TypedArray is detached, or tracks a resizable ArrayBuffer that
+/// has since shrunk out from under its bounds.
+fn is_ta_detached_or_oob(ta: &TypedArrayInfo) -> bool {
+    ta.is_detached.get() || is_typed_array_out_of_bounds(ta)
+}
+
 /// Combines the detached check with the out-of-bounds check that applies to
 /// typed arrays tracking a resizable ArrayBuffer that has since shrunk.
 fn check_detached_or_out_of_bounds(
     interp: &mut Interpreter,
     ta: &TypedArrayInfo,
 ) -> Result<(), Completion> {
-    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+    if is_ta_detached_or_oob(ta) {
         Err(Completion::Throw(
             interp.create_type_error("typed array is detached"),
         ))
@@ -6351,7 +6353,7 @@ mod validate_typed_array_tests {
     use crate::parser::Parser;
     use crate::types::JsValue;
 
-    fn interp_with(source: &str) -> Interpreter {
+    pub(super) fn interp_with(source: &str) -> Interpreter {
         let mut parser = Parser::new(source).expect("parser init");
         let program = parser.parse_program().expect("parse program");
         let mut interp = Interpreter::new();
@@ -6363,7 +6365,7 @@ mod validate_typed_array_tests {
         interp
     }
 
-    fn global(interp: &Interpreter, name: &str) -> JsValue {
+    pub(super) fn global(interp: &Interpreter, name: &str) -> JsValue {
         interp
             .get_global_var_ref(name)
             .unwrap_or_else(|| panic!("expected global {name}"))
@@ -6430,29 +6432,11 @@ mod ta_number_getter_tests {
     //! on-detached-or-out-of-bounds rule). A live receiver is mapped through the
     //! payload; a detached one yields 0 *without ever invoking the payload*; a
     //! non-TypedArray receiver throws "not a TypedArray".
+    use super::validate_typed_array_tests::{global, interp_with};
     use super::{ta_number_getter, with_typed_array_ref};
-    use crate::interpreter::{Completion, Interpreter};
-    use crate::parser::Parser;
+    use crate::interpreter::Completion;
     use crate::types::JsValue;
     use std::cell::Cell;
-
-    fn interp_with(source: &str) -> Interpreter {
-        let mut parser = Parser::new(source).expect("parser init");
-        let program = parser.parse_program().expect("parse program");
-        let mut interp = Interpreter::new();
-        let result = interp.run(&program);
-        assert!(
-            matches!(result, Completion::Normal(_) | Completion::Empty),
-            "unexpected completion: {result:?}"
-        );
-        interp
-    }
-
-    fn global(interp: &Interpreter, name: &str) -> JsValue {
-        interp
-            .get_global_var_ref(name)
-            .unwrap_or_else(|| panic!("expected global {name}"))
-    }
 
     #[test]
     fn number_getter_maps_a_live_receiver_through_the_payload() {
