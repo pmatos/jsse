@@ -1058,83 +1058,58 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(o) = iterator
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        self.gc_temp_roots.push(o.id);
-                    }
-                    let result = loop {
-                        let next_result = match self.iterator_next(&iterator) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                self.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let next_result = if is_async_gen {
-                            match self.await_value(&next_result) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    self.gc_unroot_frame(gc_frame);
-                                    return Completion::Throw(e);
+                    self.with_gc_root_scope(|this| {
+                        this.gc_root_value(&iterator);
+                        loop {
+                            let next_result = match this.iterator_next(&iterator) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let next_result = if is_async_gen {
+                                match this.await_value(&next_result) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    other => return other,
                                 }
-                                other => {
-                                    self.gc_unroot_frame(gc_frame);
-                                    return other;
+                            } else {
+                                next_result
+                            };
+                            let done = match this.iterator_complete(&next_result) {
+                                Ok(d) => d,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let value = match this.iterator_value(&next_result) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if done {
+                                return Completion::Normal(value);
+                            }
+                            if let Some(ref mut ctx) = this.generator_context {
+                                let current = ctx.current_yield;
+                                ctx.current_yield += 1;
+                                if current < ctx.target_yield {
+                                    continue;
+                                }
+                                if current == ctx.target_yield {
+                                    match &ctx.resume_kind {
+                                        GeneratorResumeKind::Next => {
+                                            return Completion::Yield(value);
+                                        }
+                                        GeneratorResumeKind::Return(v) => {
+                                            let v = v.clone();
+                                            return Completion::Return(v);
+                                        }
+                                        GeneratorResumeKind::Throw(e) => {
+                                            let e = e.clone();
+                                            return Completion::Throw(e);
+                                        }
+                                    }
                                 }
                             }
-                        } else {
-                            next_result
-                        };
-                        let done = match self.iterator_complete(&next_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                self.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let value = match self.iterator_value(&next_result) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                self.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        if done {
-                            break Completion::Normal(value);
+                            return Completion::Yield(value);
                         }
-                        if let Some(ref mut ctx) = self.generator_context {
-                            let current = ctx.current_yield;
-                            ctx.current_yield += 1;
-                            if current < ctx.target_yield {
-                                continue;
-                            }
-                            if current == ctx.target_yield {
-                                match &ctx.resume_kind {
-                                    GeneratorResumeKind::Next => {
-                                        self.gc_unroot_frame(gc_frame);
-                                        return Completion::Yield(value);
-                                    }
-                                    GeneratorResumeKind::Return(v) => {
-                                        let v = v.clone();
-                                        self.gc_unroot_frame(gc_frame);
-                                        return Completion::Return(v);
-                                    }
-                                    GeneratorResumeKind::Throw(e) => {
-                                        let e = e.clone();
-                                        self.gc_unroot_frame(gc_frame);
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                        }
-                        self.gc_unroot_frame(gc_frame);
-                        return Completion::Yield(value);
-                    };
-                    self.gc_unroot_frame(gc_frame);
-                    result
+                    })
                 } else {
                     let value = if let Some(e) = expr {
                         match self.eval_expr(e, env) {
