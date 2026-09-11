@@ -1325,20 +1325,9 @@ impl Interpreter {
         // buffer getter (returns the ArrayBuffer object; no detached/OOB check —
         // the buffer survives detachment. `buffer_object_id: None` on the rare
         // wrapperless construction path preserves the "not a TypedArray" throw.)
-        self.define_getter(
-            proto_id,
-            "buffer",
-            |interp, this_val, _args| match with_typed_array_ref(
-                interp,
-                this_val,
-                "not a TypedArray",
-                |ta| ta.buffer_object_id,
-            ) {
-                Ok(Some(buf_id)) => Completion::Normal(JsValue::object(buf_id)),
-                Ok(None) => Completion::Throw(interp.create_type_error("not a TypedArray")),
-                Err(throw) => throw,
-            },
-        );
+        self.define_getter(proto_id, "buffer", |interp, this_val, _args| {
+            ta_buffer_getter(interp, this_val)
+        });
 
         // [Symbol.iterator] = values
         let proto_id_for_iter = proto_id;
@@ -5637,7 +5626,7 @@ fn with_typed_array_ref<R>(
     f: impl FnOnce(&TypedArrayInfo) -> R,
 ) -> Result<R, Completion> {
     if let Some(o) = this_val.as_object_id()
-        && let Some(obj) = interp.get_object(o)
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let obj_ref = obj.borrow();
         if let Some(ta) = obj_ref.typed_array_info() {
@@ -5645,6 +5634,20 @@ fn with_typed_array_ref<R>(
         }
     }
     Err(Completion::Throw(interp.create_type_error(brand_msg)))
+}
+
+/// Express the non-numeric `buffer` getter the same way `ta_number_getter`
+/// expresses the numeric ones. No detach/OOB collapse — the buffer survives
+/// detachment; `Ok(None)` preserves the pre-existing `buffer_object_id: None`
+/// fall-through to the same `"not a TypedArray"` throw.
+fn ta_buffer_getter(interp: &mut Interpreter, this_val: &JsValue) -> Completion {
+    match with_typed_array_ref(interp, this_val, "not a TypedArray", |ta| {
+        ta.buffer_object_id
+    }) {
+        Ok(Some(buf_id)) => Completion::Normal(JsValue::object(buf_id)),
+        Ok(None) => Completion::Throw(interp.create_type_error("not a TypedArray")),
+        Err(throw) => throw,
+    }
 }
 
 /// Express a numeric `%TypedArray%.prototype` getter as a pure
@@ -5683,12 +5686,7 @@ fn validate_uint8array(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    let ta = with_typed_array_ref(interp, this_val, "not a Uint8Array", TypedArrayInfo::clone)?;
-    if !matches!(ta.kind, TypedArrayKind::Uint8) {
-        return Err(Completion::Throw(
-            interp.create_type_error("not a Uint8Array"),
-        ));
-    }
+    let ta = validate_uint8array_no_detach_check(interp, this_val)?;
     check_detached(interp, &ta)?;
     Ok(ta)
 }

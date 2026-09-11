@@ -72,13 +72,17 @@ _Avoid_: root cell, traced box, rooted buffer.
 
 **Receiver Guard**:
 The single prologue a native method routes its `this` through to brand-check the
-receiver and hand back an owned snapshot of its kind-specific info — or throw the
-brand `TypeError` — so callers never re-spell the `as_object_id → get_object →
-borrow → <kind>_info` dance. The family: `validate_typed_array` /
-`with_typed_array_ref` (any TypedArray), `require_array_buffer` /
-`require_shared_array_buffer` (`builtins/typedarray.rs`). A guard may be
-parameterized by a detach policy: `ta_number_getter` layers the numeric getters'
-spec `TypedArrayLength → 0`-on-detached-or-out-of-bounds rule on top of the guard,
-where `validate_typed_array` instead throws. The snapshot is owned so the object
-borrow drops before any `create_type_error` (which mutates the object arena).
+receiver — or throw the brand `TypeError` — so callers never re-spell the
+`as_object_id → get_object → borrow → <kind>_info` dance. The family:
+`require_array_buffer` / `require_shared_array_buffer` (`builtins/typedarray.rs`)
+hand back an owned snapshot of the buffer's kind-specific info; `with_typed_array_ref`
+is the leaner kernel form — it runs a caller-supplied closure against the borrowed
+`TypedArrayInfo` and returns whatever the closure returns (a scalar, an owned
+snapshot via `TypedArrayInfo::clone`, or anything else), so ownership is the
+caller's choice, not the guard's. `validate_typed_array` layers a snapshot +
+detached/OOB throw on top of the kernel. A guard may be parameterized by a
+detach policy: `ta_number_getter` layers the numeric getters' spec
+`TypedArrayLength → 0`-on-detached-or-out-of-bounds rule on top of the kernel,
+where `validate_typed_array` instead throws. Either way, any borrow the guard
+holds drops before `create_type_error` runs (it mutates the object arena).
 _Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
