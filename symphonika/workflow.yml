@@ -35,12 +35,44 @@ workflow:
       transitions:
         # branch_ahead_of_base alone would be satisfied by the plan commit
         # already on the branch, so require this run to advance HEAD too.
-        - to: code_review_fix
+        # This only proves the agent committed something -- it says nothing
+        # about whether it ever pushed and opened the PR prompts/impl.md tells
+        # it to (vow-lang/vow#1277: an implement run backgrounded the quality
+        # gate, ended its turn waiting on it, and never reached the "Open the
+        # PR" step -- yet still satisfied every predicate below).
+        # wait_for_pr_open closes that gap; mirrors symphonika's own
+        # workflow.yml, which added the identical state for the same reason
+        # (symphonika issue #730, #1255).
+        - to: wait_for_pr_open
           when:
             provider_success: true
             branch_ahead_of_base: true
             branch_advanced_since_attempt_start: true
         - to: failed
+
+    # pr_signal predicates (pr_open/pr_merged/...) are only projected for
+    # kind: wait states -- run-controller's agent-completion path only ever
+    # supplies provider_success/branch_ahead_of_base/branch_advanced_since_attempt_start
+    # (outcome-projection.ts), so a pr_open check cannot live on implement's own
+    # transitions. This dedicated wait state is the supported way to gate on PR
+    # existence: it reuses the same tracked-PR polling and the
+    # no-PR-ever-tracked escalation to sym:blocked/sym:human-needed that
+    # wait_for_pr already relies on, but fails fast right after implement
+    # instead of silently burning a code_review_fix and a simplify run against
+    # a branch with no PR first.
+    wait_for_pr_open:
+      action:
+        kind: wait
+      transitions:
+        - to: merged
+          when:
+            pr_merged: true
+        - to: code_review_fix
+          when:
+            pr_open: true
+        - to: failed
+          when:
+            pr_open: false
 
     code_review_fix:
       action:
