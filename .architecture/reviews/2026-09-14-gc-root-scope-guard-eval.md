@@ -25,11 +25,16 @@ the deepened module's implementation.
 - **Files**: full candidate ~10 files — `src/interpreter/eval.rs` (primary) +
   `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`,
   `property.rs`, `eval/literals.rs`, `mod.rs`, `bytecode/vm.rs`.
-  **This firing's scope: ~1 file (`eval.rs`), 7 sites** — the member-access /
-  compound-assignment / property-write IIFE sites at `eval.rs:2611, 2744, 3016,
-  3421, 3517, 4046` plus the tagged-template call manual-epilogue at
-  `eval.rs:1385`. The remaining `eval.rs` sites and the 9 other files are
-  deferred to `gc-root-scope-guard-remainder`.
+  **This firing's scope: 1 file (`eval.rs`), 5 sites delivered** — the
+  tagged-template call manual-epilogue at `eval.rs:1385` (3 hand-threaded
+  teardowns → returns) plus the member-access / compound-assignment /
+  property-write IIFE sites at `eval.rs:2611, 2744, 3421, 4046`. The two
+  largest IIFE bodies (`3016` ~273 lines, `3517` ~85 lines) were **deferred to
+  `gc-root-scope-guard-remainder`**: they carry 0 redundant teardowns (the IIFE
+  already funnels every exit through one post-IIFE unroot), so their whole-body
+  `self.`→`i.` rewrite is near-cosmetic and its risk/benefit for an unattended
+  firing favours a human-reviewed slice. The remaining `eval.rs` sites and the 9
+  other files are likewise deferred to `gc-root-scope-guard-remainder`.
 - **Score** (full candidate): **22/25**
   - **Leverage 5** — the `with_gc_root_scope` seam (landed #595, adopted in
     `array.rs` and the `yield*` path #624) removes an entire class of
@@ -268,20 +273,25 @@ firing. It loses only on leverage (4 vs 5): it collapses 18 adapter heads in one
 file, where the pick removes a whole teardown-epilogue class from the hottest
 file behind an already-audited seam.
 
-**This firing scopes to `eval.rs` only (7 sites)**, mirroring how the parent
-`gc-root-scope-guard` (#595) scored the full ~10-file candidate at 22/25 but
-implemented a 2-file `array.rs` slice and deferred the rest to this candidate.
-The scope excludes, and defers to `gc-root-scope-guard-remainder`:
-the array/object-destructuring sites (`eval.rs:4340, 4453, 4621, 4702` — the
-ADR-flagged sensitive region that roots `DestructLRef` and nests frames), the
-hot call/spread sites (`:4839, 4931, 5109, 5124, 6716, 6749` — highest teardown
-redundancy but the hottest paths, a deliberately-scheduled slice), the
-promise/multi-tick sites (`:8193, 9735`), the two cosmetic single-exit sites
-(`:4268, 5366`, no redundant teardown to collapse), the ADR-excluded
-`gc_temp_roots.push`/`remove` bypasses (`:4302, :4566`) and `gc_unroot_value`
-identity-removal sites, and the 9 non-`eval.rs` files. The 7 in-scope sites were
-each confirmed to meet the ADR criterion: single frame, bulk-truncate on all
-exits, zero `gc_unroot_value`/`gc_temp_roots` between setup and teardown.
+**This firing scopes to `eval.rs` only (5 sites delivered)**, mirroring how the
+parent `gc-root-scope-guard` (#595) scored the full ~10-file candidate at 22/25
+but implemented a 2-file `array.rs` slice and deferred the rest to this
+candidate. The scope excludes, and defers to `gc-root-scope-guard-remainder`:
+the two largest IIFE bodies (`:3016`, `:3517` — near-cosmetic full-body rewrites,
+deferred at implementation time), the array/object-destructuring sites
+(`eval.rs:4340, 4453, 4621, 4702` — the ADR-flagged sensitive region that roots
+`DestructLRef` and nests frames), the hot call/spread sites (`:4839, 4931, 5109,
+5124, 6716, 6749` — highest teardown redundancy but the hottest paths, a
+deliberately-scheduled slice), the promise/multi-tick sites (`:8193, 9735`), the
+two cosmetic single-exit sites (`:4268, 5366`, no redundant teardown to
+collapse), the ADR-excluded `gc_temp_roots.push`/`remove` bypasses (`:4302,
+:4566`) and `gc_unroot_value` identity-removal sites, and the 9 non-`eval.rs`
+files. The 5 in-scope sites were each confirmed to meet the ADR criterion:
+single frame, bulk-truncate on all exits, zero `gc_unroot_value`/`gc_temp_roots`
+between setup and teardown. Gate green: 676 lib unit tests (incl. a new
+tagged-template survival + no-leak pin), lint clean, test262-extra 316/316, and
+7,950 targeted test262 scenarios (template/assignment/increment + class/elements)
+with **0 regressions**.
 
 ## Design
 
