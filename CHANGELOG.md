@@ -1,3 +1,18 @@
+# [0.8.0](https://github.com/pmatos/jsse/compare/v0.7.0...v0.8.0) (2026-09-13)
+
+
+### Bug Fixes
+
+* **ast:** walk mandatory AST passes with an explicit stack ([#613](https://github.com/pmatos/jsse/issues/613)) ([0c35f1f](https://github.com/pmatos/jsse/commit/0c35f1f304bc31361f88308e841a634c4ecabae3))
+* **iterator:** keep concat current iterator GC-rooted ([#604](https://github.com/pmatos/jsse/issues/604)) ([4a01fdd](https://github.com/pmatos/jsse/commit/4a01fdd99d57e81f17f2afd289ffacc89a9ead3c)), closes [#585](https://github.com/pmatos/jsse/issues/585) [#585](https://github.com/pmatos/jsse/issues/585) [#609](https://github.com/pmatos/jsse/issues/609) [#610](https://github.com/pmatos/jsse/issues/610) [#584](https://github.com/pmatos/jsse/issues/584)
+* **parser:** calibrate MAX_PARSE_DEPTH per build profile ([#606](https://github.com/pmatos/jsse/issues/606)) ([8d6151a](https://github.com/pmatos/jsse/commit/8d6151af6415127c8831be032be7f561516546a2)), closes [#598](https://github.com/pmatos/jsse/issues/598) [#607](https://github.com/pmatos/jsse/issues/607) [#599](https://github.com/pmatos/jsse/issues/599)
+* **parser:** restore context counters when a body parse fails ([#602](https://github.com/pmatos/jsse/issues/602)) ([626ff19](https://github.com/pmatos/jsse/commit/626ff19ae8dae159f48717f1031a3bee42aa2578))
+
+
+### Features
+
+* **bytecode:** compile new expressions and compound member assignment ([#611](https://github.com/pmatos/jsse/issues/611)) ([4267239](https://github.com/pmatos/jsse/commit/4267239f7b2a2fb2032119c20089efa27a16699f))
+
 # [0.7.0](https://github.com/pmatos/jsse/compare/v0.6.0...v0.7.0) (2026-09-06)
 
 
