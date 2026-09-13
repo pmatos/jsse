@@ -31,7 +31,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## gc-root-scope-guard-eval
 
-- **Status**: proposed
+- **Status**: in-flight
+- **PR**: #628 (2026-09-14 firing — `eval.rs` 5-site slice; remainder in `gc-root-scope-guard-remainder`)
 - **Score**: 22/25 (leverage 5, locality 4, blast radius 3, heat 5)
 - **Files**: ~10 estimated — `src/interpreter/eval.rs` (primary) + `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`, `eval/literals.rs`, `mod.rs`, `bytecode/vm.rs`
 - **Modules**: `src/interpreter/eval.rs`
