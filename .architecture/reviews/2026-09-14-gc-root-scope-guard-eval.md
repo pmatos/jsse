@@ -285,4 +285,79 @@ exits, zero `gc_unroot_value`/`gc_temp_roots` between setup and teardown.
 
 ## Design
 
-_Written in step 4; appended after this section is committed._
+Three interfaces were produced in parallel by sub-agents (not inline), each for
+*how `eval.rs` consumes the existing `with_gc_root_scope` seam* — the seam itself
+is fixed by ADR-2026-09-10-2014 (RAII rejected), so the design axis is the
+consumption pattern, not the combinator. Adjudicated by the advisor against
+depth → locality → seam placement → test surface → blast radius.
+
+### Design A — minimal surface (bare adoption) · WINNER
+
+No new API. Each site becomes
+`self.with_gc_root_scope(|i| { i.gc_root_value(&x); …body, self→i… })`, with
+static-prefix roots and dynamic mid-body roots (1385's substitution loop,
+3517's `boxed` wrapper at `:3550`) going through the same `i.gc_root_value(...)`
+call. The 6 IIFE sites are near-1:1 rewrites (`(|| {` → `with_gc_root_scope(|i| {`,
+drop the trailing `gc_unroot_frame`); the manual-epilogue site 1385 collapses 3
+hand-threaded `gc_unroot_frame` calls to plain returns. This is exactly the shape
+the landed `yield*` adopter (#624) uses.
+
+### Design B — value-rooting slice wrapper (`with_gc_rooted(&[&JsValue], body)`) · runner-up design, REJECTED
+
+Add a wrapper that roots a static prefix then delegates:
+`self.with_gc_rooted(&[&a, &b], |i| …)`. This is the exact variant #595's
+design-it-twice review rejected as its runner-up ("its slice seals a ≥2-root
+variation that had zero real adapters in `array.rs`").
+
+**Why it lost — the stronger reason `eval.rs` surfaces.** #595's stated premise
+is factually overturned: `eval.rs` has **3** ≥2-root sites (1385, 2744, 4046),
+not zero. But the rejection survives for a more fundamental reason: `JsValue` is
+not `Copy` (custom `Drop`, `types.rs:734`), so the `&[&JsValue]` slice holds
+shared borrows across the whole call while the closure **moves** those same
+values into `set_object_with_key` (2744 `:2771`, 4046 `:4064`) or
+`Completion::TailCall` (1385 `:1407`) — **E0505** at all 3 adapter sites,
+forcing `.clone()` workarounds. And 1385 also roots dynamically (its loop),
+which a fixed prefix slice cannot express, so it degrades to a *mixed* idiom
+(slice + inline `gc_root_value`) at the very site that most needs help. Only 2
+of 7 sites (2744, 4046) are clean pure-static-prefix adapters, and both still
+need the clone. The slice does not cleanly serve even its own target sites.
+
+### Design C — maximum-flexibility rooting handle (`with_gc_root_scope(|i, roots| …)`) · REJECTED
+
+A handle passed to the closure so static and dynamic roots share one `.push()`
+idiom. **Borrow-checker-infeasible in its flagship form**: the handle must reach
+`gc_temp_roots`, which every body method (`eval_expr`, `call_function`, …)
+mutates through `&mut self`; a disjoint `&mut self.gc_temp_roots` conflicts with
+those calls, a token handle needs `self` passed back in anyway, and interior
+mutability (`Rc<RefCell>`/`*mut`) is the precise GC-hot-path tax
+ADR-2026-09-10-2014 rejected. Its only compilable fallback is the Design B
+prefix slice — already rejected. Decisive observation: `gc_root_value(&mut self)`
+**already is** the dynamic-root API and the closure already receives `&mut Self`,
+so Design C's stated goal (one idiom for static + dynamic) is already met by
+Design A with zero new types.
+
+### Verdict
+
+**Design A wins on every criterion.** Depth: reuses the audited seam, adds no
+surface. Locality: one rooting idiom, uniform across static and dynamic roots.
+Seam placement: the seam already sits where variation is (three prior adopters);
+B/C seal a variation with no clean adapter. Test surface: identical for all
+three (behaviour-preserving), pinned via the existing `$262.gc()` hook and the
+seam test at `tests.rs:4536`. Blast radius: A is the smallest diff — near-mechanical,
+no clones. B and C both self-defeat on the borrow checker; A is what #595 and
+#624 already established.
+
+**Honest yield**: 1385 is the substantive collapse (3 hand-threaded unroots →
+returns). The 6 IIFE sites retire the IIFE-funnel idiom for consistency but are
+near-cosmetic — the trailing `gc_unroot_frame` after an IIFE already could not be
+skipped by an early return inside it. Net line count is roughly neutral apart
+from rustfmt reindent of the ~270-line body at 3016. The value is uniformity and
+one audited teardown path, not deletion volume.
+
+### Proposed ADR amendment (see PR body)
+
+Not a new ADR — an amendment note to ADR-2026-09-10-2014 recording that the
+value-taking `with_gc_rooted(&[&JsValue], …)` variant, when re-evaluated against
+`eval.rs`, is rejected for a **stronger** reason than #595 gave: the shared-borrow
+vs. move conflict (E0505), not merely absent adapters. Recorded so a future
+firing over `gc-root-scope-guard-remainder` does not re-derive the slice.
