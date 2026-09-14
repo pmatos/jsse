@@ -1382,37 +1382,36 @@ impl Interpreter {
                 // in Rust locals until EvaluateCall invokes the tag. Later
                 // substitutions can run arbitrary JavaScript (and therefore a
                 // GC safepoint), so keep all previously evaluated values live.
-                let gc_frame = self.gc_root_frame();
-                self.gc_root_value(&func_val);
-                self.gc_root_value(&this_val);
-                let template_obj = self.get_template_object(tmpl);
-                self.gc_root_value(&template_obj);
+                // The func/this/template values and each evaluated substitution
+                // stay live until EvaluateCall; later substitutions can run
+                // arbitrary JS (a GC safepoint) while these exist only as Rust
+                // locals. `with_gc_root_scope` truncates on every exit path.
+                self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&func_val);
+                    i.gc_root_value(&this_val);
+                    let template_obj = i.get_template_object(tmpl);
+                    i.gc_root_value(&template_obj);
 
-                let mut call_args = vec![template_obj];
-                for sub_expr in &tmpl.expressions {
-                    match self.eval_expr(sub_expr, env) {
-                        Completion::Normal(v) => {
-                            self.gc_root_value(&v);
-                            call_args.push(v);
-                        }
-                        other => {
-                            self.gc_unroot_frame(gc_frame);
-                            return other;
+                    let mut call_args = vec![template_obj];
+                    for sub_expr in &tmpl.expressions {
+                        match i.eval_expr(sub_expr, env) {
+                            Completion::Normal(v) => {
+                                i.gc_root_value(&v);
+                                call_args.push(v);
+                            }
+                            other => return other,
                         }
                     }
-                }
 
-                if tail {
-                    self.gc_unroot_frame(gc_frame);
-                    return Completion::TailCall {
-                        func: func_val,
-                        this: this_val,
-                        args: call_args,
-                    };
-                }
-                let result = self.call_function(&func_val, &this_val, &call_args);
-                self.gc_unroot_frame(gc_frame);
-                result
+                    if tail {
+                        return Completion::TailCall {
+                            func: func_val,
+                            this: this_val,
+                            args: call_args,
+                        };
+                    }
+                    i.call_function(&func_val, &this_val, &call_args)
+                })
             }
         }
     }
@@ -2608,24 +2607,21 @@ impl Interpreter {
                 // rooted across all three steps: ToNumeric runs a user
                 // `valueOf` that can reach a GC safepoint while `obj_val`
                 // exists only as a Rust local, invisible to the collector.
-                let gc_frame = self.gc_root_frame();
-                self.gc_root_value(&obj_val);
-                let result = (|| {
-                    let old = match self.private_get(&obj_val, name, env) {
+                return self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&obj_val);
+                    let old = match i.private_get(&obj_val, name, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let (old_val, new_val) = match self.apply_update_numeric(&old, op) {
+                    let (old_val, new_val) = match i.apply_update_numeric(&old, op) {
                         Ok(pair) => pair,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if let Err(e) = self.set_private_field(&obj_val, name, new_val.clone(), env) {
+                    if let Err(e) = i.set_private_field(&obj_val, name, new_val.clone(), env) {
                         return Completion::Throw(e);
                     }
                     Completion::Normal(if prefix { new_val } else { old_val })
-                })();
-                self.gc_unroot_frame(gc_frame);
-                return result;
+                });
             }
             let key = match prop {
                 MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
@@ -2741,24 +2737,23 @@ impl Interpreter {
                 // ToPropertyKey) and PutValue. Both can reach a GC safepoint
                 // while these exist only as Rust locals, invisible to the
                 // tracing collector.
-                let gc_frame = self.gc_root_frame();
-                self.gc_root_value(&obj_val);
-                self.gc_root_value(&value);
-                let result = (|| {
+                self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&obj_val);
+                    i.gc_root_value(&value);
                     let key = match prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(cexpr) => {
-                            let v = match self.eval_expr(cexpr, env) {
+                            let v = match i.eval_expr(cexpr, env) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Err(e),
                                 _ => return Ok(()),
                             };
-                            self.to_property_key(&v)?
+                            i.to_property_key(&v)?
                         }
                         MemberProperty::Private(_) => unreachable!(),
                     };
                     if obj_val.is_null() || obj_val.is_undefined() {
-                        return Err(self.create_type_error(&format!(
+                        return Err(i.create_type_error(&format!(
                             "Cannot set properties of {} (setting '{key}')",
                             if obj_val.is_null() {
                                 "null"
@@ -2768,10 +2763,8 @@ impl Interpreter {
                         )));
                     }
                     let strict = env.borrow().strict;
-                    self.set_object_with_key(obj_val, &key, value, strict)
-                })();
-                self.gc_unroot_frame(gc_frame);
-                result
+                    i.set_object_with_key(obj_val, &key, value, strict)
+                })
             }
             _ => Ok(()),
         }
@@ -3418,33 +3411,30 @@ impl Interpreter {
                 // PrivateSet writes through the setter. Both steps run user
                 // code that can reach a GC safepoint while `obj_val` exists
                 // only as a Rust local, invisible to the collector.
-                let gc_frame = self.gc_root_frame();
-                self.gc_root_value(&obj_val);
-                let result = (|| {
-                    let lval = match self.private_get(&obj_val, name, env) {
+                self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&obj_val);
+                    let lval = match i.private_get(&obj_val, name, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
                     let should_assign = match op {
-                        AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
-                        AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
+                        AssignOp::LogicalAndAssign => i.to_boolean_val(&lval),
+                        AssignOp::LogicalOrAssign => !i.to_boolean_val(&lval),
                         AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
                         _ => unreachable!(),
                     };
                     if !should_assign {
                         return Completion::Normal(lval);
                     }
-                    let rval = match self.eval_expr(right, env) {
+                    let rval = match i.eval_expr(right, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let Err(e) = self.set_private_field(&obj_val, name, rval.clone(), env) {
+                    if let Err(e) = i.set_private_field(&obj_val, name, rval.clone(), env) {
                         return Completion::Throw(e);
                     }
                     Completion::Normal(rval)
-                })();
-                self.gc_unroot_frame(gc_frame);
-                result
+                })
             }
             Expression::Member(obj_expr, prop, _) => {
                 // Super property logical assignment: super.p &&= / ||= / ??=
@@ -4043,28 +4033,25 @@ impl Interpreter {
         // computed-key evaluation (arbitrary user code, plus ToPropertyKey) and
         // PutValue. Both can reach a GC safepoint while these exist only as
         // Rust locals, invisible to the tracing collector.
-        let gc_frame = self.gc_root_frame();
-        self.gc_root_value(&obj_val);
-        self.gc_root_value(&val);
-        let result = (|| {
+        self.with_gc_root_scope(|i| {
+            i.gc_root_value(&obj_val);
+            i.gc_root_value(&val);
             let key = match prop {
                 MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(expr) => {
-                    let v = match self.eval_expr(expr, env) {
+                    let v = match i.eval_expr(expr, env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),
                         _ => return Ok(()),
                     };
-                    self.to_property_key(&v)?
+                    i.to_property_key(&v)?
                 }
                 MemberProperty::Private(_) => unreachable!(),
             };
 
             let strict = env.borrow().strict;
-            self.set_object_with_key(obj_val, &key, val, strict)
-        })();
-        self.gc_unroot_frame(gc_frame);
-        result
+            i.set_object_with_key(obj_val, &key, val, strict)
+        })
     }
 
     pub(crate) fn assign_to_for_pattern(

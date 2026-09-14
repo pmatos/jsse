@@ -4577,6 +4577,43 @@ fn with_gc_root_scope_truncates_on_every_exit() {
     assert!(interp.gc_temp_roots.contains(&9_001));
 }
 
+/// Pins the observable contract of the `eval.rs` temp-root sites that adopt
+/// `with_gc_root_scope` (the `gc-root-scope-guard-eval` firing): an earlier
+/// tagged-template substitution (site `eval.rs:1385`) must stay reachable while
+/// a *later* substitution triggers a collection, and the migration must leave
+/// no root behind — `gc_temp_roots` returns to empty once the top-level script
+/// completes. Behaviour-preserving: green before and after the migration, red
+/// if a site drops an `i.gc_root_value` or reorders a root past the safepoint.
+#[test]
+fn tagged_template_substitution_survives_gc_and_leaves_no_temp_root_leak() {
+    let interp = run_script(
+        r#"
+        function tag(strings) { return Array.prototype.slice.call(arguments, 1); }
+        // The first substitution object is reachable only through the pending
+        // argument list while the second substitution's `$262.gc()` runs.
+        var subs = tag`${{ marker: "first" }}${($262.gc(), { marker: "second" })}`;
+        var first = subs[0].marker;
+        var second = subs[1].marker;
+        "#,
+    );
+
+    let first = interp.get_global_var_ref("first").expect("first defined");
+    let second = interp.get_global_var_ref("second").expect("second defined");
+    assert_eq!(
+        to_js_string(&first),
+        "first",
+        "the earlier tagged-template substitution survived the GC in the later one",
+    );
+    assert_eq!(to_js_string(&second), "second");
+
+    // No exit path of the site left a root pinned after the script settled.
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "temp-root stack fully unwound, got {:?}",
+        interp.gc_temp_roots,
+    );
+}
+
 // `propagate!` (+ the `IntoAbrupt` seam) unwraps the success value of the three
 // error-propagation source shapes inside a `-> Completion` fn, early-returning
 // the abrupt completion otherwise. Pins all three shapes plus the `Empty`

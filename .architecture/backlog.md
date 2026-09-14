@@ -7,8 +7,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## typedarray-getter-receiver-guard
 
-- **Status**: in-flight
-- **PR**: #626
+- **Status**: landed
+- **PR**: #626 (merged 2026-09-11T11:34:50Z; reconciled in-flight→landed by the 2026-09-14 firing)
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated — `src/interpreter/builtins/typedarray.rs`
 - **Modules**: `src/interpreter/builtins/typedarray.rs`
@@ -31,12 +31,40 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## gc-root-scope-guard-eval
 
+- **Status**: in-flight
+- **PR**: #628 (2026-09-14 firing — `eval.rs` 5-site slice; remainder in `gc-root-scope-guard-remainder`)
+- **Score**: 22/25 (leverage 5, locality 4, blast radius 3, heat 5)
+- **Files**: ~10 estimated — `src/interpreter/eval.rs` (primary) + `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`, `eval/literals.rs`, `mod.rs`, `bytecode/vm.rs`
+- **Modules**: `src/interpreter/eval.rs`
+- **Summary**: Follow-up to `gc-root-scope-guard` covering `eval.rs` and the remaining ~9 files once the `with_gc_root_scope` seam exists. **2026-09-14 re-scan: `eval.rs` now has 22 `gc_root_frame` setups / 41 teardowns (was 50; #624 removed ~9 via the `yield*` migration), 10 IIFE sites (was recorded as 5 — undercount) + 12 manual-epilogue sites (~19 redundant teardown copies), 1 remaining `gc_temp_roots.push` bypass at :4302 (the :1066 one became `with_gc_root_scope` in #624), 1 manual remove at :4566. Critically, the headline blocker is GONE: `eval_expr` is no longer `#[inline(always)]` (def at :418, no attribute; `EvalDepthGuard` doc no longer warns), so adopting the `#[inline]` combinator adds no hot-path frame concern.** ADR-2026-09-10-2014 sanctions this remaining scope, per-site against the criterion single frame / no cross-branch identity removal / no multi-tick continuation.
+- **First seen**: 2026-09-04
+- **Picked**: 2026-09-14 firing (22/25, top; runner-up `completion-into-result` 21/25 within 1 point). Branch adopted (`sym/jsse/routine/refactor-audit/01M2EG403H`), not renamed. This firing scoped to `eval.rs`, mirroring how #595 scoped the parent to `array.rs`.
+- **Delivered (2026-09-14 firing)**: **5 sites** — manual-epilogue :1385 (tagged-template call, 3 hand-threaded teardowns → returns) + IIFE sites :2611 (private `#x++`), :2744 (computed member set), :3421 (private logical-assign), :4046 (member compound set). Winning design: **A — bare `with_gc_root_scope` adoption** (Design B value-rooting slice rejected on E0505 shared-borrow-vs-move; Design C rooting-handle borrow-infeasible). The two largest IIFE bodies (:3016 ~273 lines, :3517 ~85 lines) were **deferred to `gc-root-scope-guard-remainder`** at implementation time — 0 redundant teardowns, near-cosmetic full-body `self.`→`i.` rewrite, better as a human-reviewed slice. Gate green: 676 lib unit tests (+1 new pin) / lint / test262-extra 316·316 / 7,950 targeted test262 (0 regressions). CONTEXT.md already carries `Temp-Root Frame` + `GC Root Scope` (from #595) — no glossary change. On PR open, status flips to in-flight with the PR number; the remainder stays `proposed`.
+
+## gc-root-scope-guard-remainder
+
 - **Status**: proposed
 - **Score**: 22/25 (leverage 5, locality 4, blast radius 3, heat 5)
-- **Files**: ~10 estimated — `src/interpreter/eval.rs` (primary; 22 setups / 50 teardowns, 5 IIFE sites, 2 `gc_temp_roots.push` bypasses at :1066 & :4324, 1 manual remove at :4586), + `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`, `eval/literals.rs`, `mod.rs` (5), `bytecode/vm.rs`
-- **Modules**: `src/interpreter/eval.rs`
-- **Summary**: Follow-up to `gc-root-scope-guard` covering `eval.rs` and the remaining ~9 files once the `with_gc_root_scope` seam exists. Harder than the `array.rs` slice: the `eval_expr` `#[inline(always)]` hot path must not gain a call frame (the `EvalDepthGuard` doc at `eval.rs:10` warns why); the two `gc_temp_roots.push` bypasses must be routed through the seam or left as documented exceptions; the 5 existing IIFE workarounds adopt the combinator trivially. Correctness-sensitive control-flow rewrite of the hottest file — a deliberately-scheduled firing.
-- **First seen**: 2026-09-04
+- **Files**: ~10 estimated — the `eval.rs` sites the 2026-09-14 firing deferred + the 9 non-`eval.rs` files
+- **Modules**: `src/interpreter/eval.rs`, `iterators.rs`, `promise.rs`, `exec.rs`, `atomics.rs`, `typedarray.rs`, `property.rs`, `eval/literals.rs`, `mod.rs`, `bytecode/vm.rs`
+- **Summary**: The tail of `gc-root-scope-guard-eval` after the 2026-09-14 firing took `eval.rs`'s 5 clean member/tagged-template sites. Remaining `eval.rs` sites: the two large IIFE bodies :3016 (~273 lines) / :3517 (~85 lines) deferred at implementation time (0 redundant teardowns — near-cosmetic full-body `self.`→`i.` rewrite, better human-reviewed), the array/object-destructuring IIFEs :4340/4453/4621/4702 (ADR-flagged sensitive region — roots `DestructLRef`, nests frames; migratable per ADR criterion but higher-risk), the hot call/spread manual-epilogue sites :4839/4931/5109/5124/6716/6749 (highest teardown redundancy incl. :6749's 7 → a deliberately-scheduled slice), the promise/multi-tick sites :8193/9735, the two cosmetic single-exit sites :4268/5366 (no redundant teardown — low value). Explicitly **out of scope forever**: the ADR-excluded `gc_temp_roots.push`/`remove` bypasses (:4302, :4566, destructuring identity-removal) and `gc_unroot_value` sites. Plus the 9 non-`eval.rs` files. **`promise.rs` overlaps `promise-combinator-setup-prologue`** — whichever lands second adapts. (Note: pre-migration `eval.rs` line numbers; re-derive after the 2026-09-14 PR lands.)
+- **First seen**: 2026-09-14 (carved from `gc-root-scope-guard-eval`)
+
+## promise-combinator-setup-prologue
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 4, locality 4, blast radius 1, heat 3)
+- **Files**: ~1 estimated — `src/interpreter/builtins/promise.rs`
+- **Modules**: `src/interpreter/builtins/promise.rs`
+- **Summary**: 4 full combinators (`promise_all` :1238, `promise_all_settled` :1386, `promise_race` :1964, `promise_any` :2039) + 2 partial keyed fast-path hooks (`promise_all_keyed` :1577, `promise_all_settled_keyed` :1740) re-spell the identical prologue — `NewPromiseCapability(C)` → root cap on a GC frame → `GetPromiseResolve(C)` + `is_callable` → `GetIterator(iterable)`, each abrupt through `if_abrupt_reject_promise` (:13). Extract `perform_promise_combinator_setup(constructor, iterable) -> Result<(PromiseCapability, JsValue, JsValue), Completion>`. Deletion test concentrates: hides the *abrupt-becomes-rejected-promise vs thrown-completion* decision. Composes with `gc-root-scope-guard-remainder`'s `promise.rs` frames. First seen 2026-09-14.
+
+## regexp-object-receiver-guard
+
+- **Status**: proposed
+- **Score**: 18/25 (leverage 3, locality 3, blast radius 1, heat 4)
+- **Files**: ~1 estimated — `src/interpreter/builtins/regexp.rs`
+- **Modules**: `src/interpreter/builtins/regexp.rs`
+- **Summary**: ~13 sites open-code `match this.as_object_id() { Some(id)=>id, None=>return Throw(TypeError "…requires that 'this' be an Object") }` (exec :8325, test :8363, toString :8392, compile :8435, `@@match` :8592, `@@search` :8801, `@@replace` :8882, `@@split` :9456, `@@matchAll` :9692, RegExpStringIterator.next :9857, `flags` :10137, flag getters :10195, `source` :10249). Two **deliberate** realm policies (not drift): methods use caller-realm `create_type_error`; the flag/`source` accessors use `create_error_in_realm(my_realm_id, …)` captured at getter-creation (:10181) — cross-realm accessor semantics. `flags` also does a second liveness check (:10144) the others skip. `require_regexp_object_receiver(this, name, realm_policy) -> Result<u64/cell, Completion>`. Genuine deepening only if it returns the cell + carries the realm policy (else it's `object-this-coercion`-class); RegExp sibling of `object-this-coercion` and the receiver-guard family, in a module with none. First seen 2026-09-14.
 
 ## complete-state-machine-generator-ctor
 
@@ -74,7 +102,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Score**: 21/25 (leverage 4, locality 3, blast radius 1, heat 5)
 - **Files**: ~2 estimated — `src/interpreter/builtins/iterators.rs`, `src/interpreter/types.rs`
 - **Modules**: `src/interpreter/builtins/iterators.rs`
-- **Summary**: Add `Completion::into_result(self) -> Result<JsValue, JsValue>` and collapse the ~37 hand-rolled `match Completion { Normal(v)=>v, Throw(e)=>return Err(e), _=>… }` adapter heads in the Result-returning iterator abstract-operation helpers to `.into_result()?`; the fabricated `_ =>` error arms become removable dead code. First seen 2026-09-02. (2026-09-04 re-check: friction present — 196 `Completion::Normal` occurrences in `iterators.rs`; **runner-up candidate** to this firing's pick, within 1 point.)
+- **Summary**: Add `Completion::into_result(self) -> Result<JsValue, JsValue>` and collapse the ~37 hand-rolled `match Completion { Normal(v)=>v, Throw(e)=>return Err(e), _=>… }` adapter heads in the Result-returning iterator abstract-operation helpers to `.into_result()?`; the fabricated `_ =>` error arms become removable dead code. First seen 2026-09-02. (2026-09-14 re-check: 37 `Normal(v)=>v` unwrap heads, 25 `Throw(e)=>return Err(e)` arms, **18 canonical byte-identical 3-arm heads** at `iterators.rs:308, 322, 418, 427, 439, 483, 506, 527, 545, 4513, 4530, 4547, 4553, 4593, 4903, 5038, 5114, 5128` — all 18 shed a fabricated `_ =>` dead arm. **Runner-up candidate** to the 2026-09-14 pick, within 1 point.)
 
 ## completion-unwrap-macro
 
@@ -116,7 +144,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
 - **Files**: ~2 estimated — `src/interpreter/builtins/iterators.rs`
 - **Modules**: `src/interpreter/builtins/iterators.rs`
-- **Summary**: Four parallel reimplementations of spec IteratorClose (GetMethod(iterator,"return") → Call → handle result) that have drifted: `iterator_close_getter` (`iterators.rs:319`) and `iterator_close_with_completion` (`:541`) omit the `is_callable` pre-check that `iterator_close` (`:5103`) and `iterator_close_result` (`:5134`) perform; only the latter two handle `Completion::Exit` (the `__host_exit` floor). Extract one core `iterator_close(iterator, completion) -> Completion` all four delegate to, differences (Result vs JsValue wrapper, completion-priority, Exit) as thin adapters. Leverage 3 by backlog calibration (4 implementation sites; the 121 downstream callers do not change). Distinct from `unify-generator-async-drivers` (execution driver, not IteratorClose). First seen 2026-09-04.
+- **Summary**: Four parallel reimplementations of spec IteratorClose (GetMethod(iterator,"return") → Call → handle result) that have drifted: `iterator_close_getter` (`iterators.rs:319`) and `iterator_close_with_completion` (`:587`, 2026-09-14 re-check; was :541) omit the `is_callable` pre-check that `iterator_close` (`:4999`; was :5103, #622 deleted ~104 lines above) and `iterator_close_result` (`:5030`; was :5134) perform; only the latter two handle `Completion::Exit` (the `__host_exit` floor). Extract one core `iterator_close(iterator, completion) -> Completion` all four delegate to, differences (Result vs JsValue wrapper, completion-priority, Exit) as thin adapters. Leverage 3 by backlog calibration (4 implementation sites; the 121 downstream callers do not change). Distinct from `unify-generator-async-drivers` (execution driver, not IteratorClose). First seen 2026-09-04.
 
 ## generator-entry-guard
 
@@ -174,7 +202,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Modules**: `src/interpreter/eval.rs`
 - **Summary**: ~130 circular `.as_object_id().map(|id| JsObject { id })` round-trips that rebuild a `JsObject` only to read `.id` back out. A `/simplify`-class cleanup, not a deepening — recorded so future runs don't re-derive it as a deep-module candidate.
 - **First seen**: 2026-09-01
-- **Reason**: Leverage 2 — `/simplify`-class round-trip cleanup, fails the deepening bar (complexity renamed, not concentrated behind a seam). (2026-09-04 re-check: filter still applies.)
+- **Reason**: Leverage 2 — `/simplify`-class round-trip cleanup, fails the deepening bar (complexity renamed, not concentrated behind a seam). (2026-09-14 re-check: filter still applies; now 158 `.map(|id| JsObject { id })` sites, up from ~130.)
 
 ## proxy-blind-callable-check
 
@@ -194,7 +222,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Modules**: `src/interpreter/mod.rs`
 - **Summary**: A `define_getter` seam already exists (`mod.rs:1812`) and is adopted at 22 sites, but 42 sites still open-code the getter as `create_function(...)` + raw six-field `PropertyDescriptor` + `insert_property`. The genuinely net-new piece is a `define_accessor(name, get, set)` for the 4 getter+setter sites lacking a helper.
 - **First seen**: 2026-09-04
-- **Reason**: Leverage 2 — the deep seam already exists, so migrating the 42 raw getters is `/simplify`-class finishing work, not a new deep module. The `define_accessor` (getter+setter) piece is genuinely net-new but only 4 sites, too low-leverage to pick.
+- **Reason**: Leverage 2 — the deep seam already exists, so migrating the raw getters is `/simplify`-class finishing work, not a new deep module. The `define_accessor` (getter+setter) piece is genuinely net-new but only 4 sites, too low-leverage to pick. (2026-09-14 re-check: `define_getter` at `mod.rs:1840` with 24 adopters; raw getter sites grew 42→54. Filter still applies.)
 
 ## typedarray-shared-equality
 
