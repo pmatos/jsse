@@ -451,7 +451,7 @@ impl Interpreter {
                     frac_digits.map(|d| d as i32)
                 };
 
-                let actual_offset = if tz_id != "UTC" && tz_id.contains('/') {
+                let actual_offset = if tz_id != "UTC" && !tz_id.starts_with(['+', '-']) {
                     super::zoned_date_time::get_tz_offset_ns_pub(&tz_id, &rounded_ns)
                 } else {
                     tz_offset_ns
@@ -1394,20 +1394,10 @@ fn validate_timezone_string(
     if let Some(v) = parse_plain_offset(s) {
         return Ok(v);
     }
-    // 2. Try as named timezone: "UTC", "America/New_York", "Etc/GMT+5", etc.
-    //    Named TZ identifiers are alphanumeric with /, _, -, +
-    //    They don't start with digits and don't look like ISO date-time strings
-    if s.eq_ignore_ascii_case("utc") || s == "Etc/UTC" || s == "Etc/GMT" {
-        return Ok(("UTC".to_string(), 0));
-    }
-    // A named timezone must have at least one letter and not look like a datetime
-    // (datetimes have digit runs like YYYY-MM-DD or contain 'T' as date/time separator
-    //  in positions after a date-like prefix)
-    let looks_like_iana = s.contains('/')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+');
-    if looks_like_iana {
-        return Ok((s.to_string(), 0));
+    // 2. Available named time zone: IANA database lookup, case-insensitive.
+    //    Unknown identifiers fall through and end in RangeError.
+    if let Some(name) = super::resolve_iana_timezone(s) {
+        return Ok((name, 0));
     }
     // 3. Try as ISO date-time string with timezone info
     //    Must have a Z, offset, or [annotation] to be valid as timezone source
@@ -1433,6 +1423,9 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
         let annotation = &s[bracket_start + 1..bracket_start + bracket_end];
         // Skip non-timezone annotations like u-ca=iso8601
         if !annotation.contains('=') {
+            // RFC 9557 critical flag: strip before classification. Recognized
+            // critical annotations resolve; unrecognized ones throw below either way.
+            let annotation = annotation.strip_prefix('!').unwrap_or(annotation);
             if annotation.eq_ignore_ascii_case("UTC") || annotation == "Etc/UTC" {
                 return Some(("UTC".to_string(), 0));
             }
@@ -1442,11 +1435,11 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
                 // Must be a valid offset with no sub-minute
                 return parse_plain_offset(annotation);
             }
-            // IANA name: must contain '/' and be alphanumeric
-            if annotation.contains('/') {
-                return Some((annotation.to_string(), 0));
+            // Available named time zone: IANA database lookup, case-insensitive.
+            // Unknown annotation name → invalid; the ISO offset is not a fallback.
+            if let Some(name) = super::resolve_iana_timezone(annotation) {
+                return Some((name, 0));
             }
-            // Other plain names (e.g. just "UTC" was handled above)
             return None; // Invalid annotation
         }
     }

@@ -35585,6 +35585,8 @@ test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-multi
 test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-multiple-offsets.js:strict
 test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-sub-minute-offset.js
 test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-sub-minute-offset.js:strict
+test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-unknown.js
+test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-unknown.js:strict
 test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-year-zero.js
 test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string-year-zero.js:strict
 test262/test/built-ins/Temporal/Instant/prototype/toString/timezone-string.js
@@ -35623,6 +35625,8 @@ test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-st
 test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-multiple-offsets.js:strict
 test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-sub-minute-offset.js
 test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-sub-minute-offset.js:strict
+test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-unknown.js
+test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-unknown.js:strict
 test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-year-zero.js
 test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-year-zero.js:strict
 test262/test/built-ins/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string.js

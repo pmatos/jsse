@@ -2687,7 +2687,7 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
 
 /// Resolve an IANA timezone name, returning the properly-cased name if valid.
 /// Uses chrono-tz's database for case-insensitive matching.
-fn resolve_iana_timezone(s: &str) -> Option<String> {
+pub(super) fn resolve_iana_timezone(s: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
