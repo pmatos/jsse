@@ -210,7 +210,20 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
     };
 
     if let Ok(tz_parsed) = tz.parse::<Tz>() {
-        let utc_dt = Utc.timestamp_opt(epoch_secs, nanos).single();
+        // chrono's timestamp_opt covers roughly ±262k years, but Instant's
+        // range is ~±274k years. Beyond chrono's edge, chrono-tz applies the
+        // zone's proleptic tail rule, which repeats with the 400-year
+        // Gregorian cycle — so shift an unrepresentable epoch by whole cycles
+        // (preserving calendar position) instead of falling back to 0.
+        const GREGORIAN_CYCLE_SECS: i64 = 146_097 * 86_400; // 400 years
+        let utc_dt = Utc.timestamp_opt(epoch_secs, nanos).single().or_else(|| {
+            let cycles = epoch_secs / GREGORIAN_CYCLE_SECS;
+            if cycles == 0 {
+                return None;
+            }
+            Utc.timestamp_opt(epoch_secs - cycles * GREGORIAN_CYCLE_SECS, nanos)
+                .single()
+        });
         if let Some(dt) = utc_dt {
             let offset = dt.with_timezone(&tz_parsed).offset().fix();
             return offset.local_minus_utc() as i64 * NS_PER_SEC as i64;
