@@ -421,7 +421,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let options = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let (tz_id, tz_offset_ns, tz_explicit, frac_digits, smallest_unit, rounding_mode) =
+                let (tz_id, tz_explicit, frac_digits, smallest_unit, rounding_mode) =
                     match parse_to_string_options(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -451,11 +451,10 @@ impl Interpreter {
                     frac_digits.map(|d| d as i32)
                 };
 
-                let actual_offset = if tz_id != "UTC" && !tz_id.starts_with(['+', '-']) {
-                    super::zoned_date_time::get_tz_offset_ns_pub(&tz_id, &rounded_ns)
-                } else {
-                    tz_offset_ns
-                };
+                // tz_id is always "UTC", a normalized ±HH:MM offset, or a
+                // canonical IANA name — get_tz_offset_ns classifies all three.
+                let actual_offset =
+                    super::zoned_date_time::get_tz_offset_ns_pub(&tz_id, &rounded_ns);
                 let result = instant_to_string_with_tz(
                     &rounded_ns,
                     &tz_id,
@@ -1163,23 +1162,13 @@ fn instant_to_string_with_tz(
     result
 }
 
-// Returns (tz_id, tz_offset_ns, tz_explicit, frac_digits, smallest_unit, rounding_mode)
+// Returns (tz_id, tz_explicit, frac_digits, smallest_unit, rounding_mode)
 fn parse_to_string_options(
     interp: &mut Interpreter,
     options: &JsValue,
-) -> Result<
-    (
-        String,
-        i64,
-        bool,
-        Option<u8>,
-        Option<&'static str>,
-        &'static str,
-    ),
-    Completion,
-> {
+) -> Result<(String, bool, Option<u8>, Option<&'static str>, &'static str), Completion> {
     if is_undefined(options) {
-        return Ok(("UTC".to_string(), 0, false, None, None, "trunc"));
+        return Ok(("UTC".to_string(), false, None, None, "trunc"));
     }
     if !options.is_object() {
         return Err(Completion::Throw(
@@ -1278,8 +1267,8 @@ fn parse_to_string_options(
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let (tz_id, tz_offset_ns, tz_explicit) = if is_undefined(&tz_val) {
-        ("UTC".to_string(), 0i64, false)
+    let (tz_id, tz_explicit) = if is_undefined(&tz_val) {
+        ("UTC".to_string(), false)
     } else {
         // Per spec, must be a string (not coerced from other types)
         let tz_str = match tz_val.as_string() {
@@ -1290,12 +1279,18 @@ fn parse_to_string_options(
                 ));
             }
         };
-        let (id, offset) = validate_timezone_string(interp, &tz_str)?;
-        (id, offset, true)
+        match super::parse_temporal_time_zone_string(&tz_str) {
+            Some(tz) => (tz, true),
+            None => {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid time zone: {tz_str}")),
+                ));
+            }
+        }
     };
 
     // Now validate smallestUnit
-    let smallest_unit = if let Some(ref ss) = su_str {
+    let smallest_unit = if let Some(ss) = &su_str {
         match temporal_unit_singular(ss) {
             Some(u)
                 if matches!(
@@ -1317,186 +1312,9 @@ fn parse_to_string_options(
 
     Ok((
         tz_id,
-        tz_offset_ns,
         tz_explicit,
         frac_digits,
         smallest_unit,
         rounding_mode,
     ))
-}
-
-/// Parse a plain numeric offset like "+01:00", "-05:00", "+0100", "+01".
-/// Returns (formatted_id, offset_ns) or None if not a valid offset.
-/// Only HH:MM precision allowed — sub-minute offsets rejected.
-fn parse_plain_offset(s: &str) -> Option<(String, i64)> {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() || (bytes[0] != b'+' && bytes[0] != b'-') {
-        return None;
-    }
-    let sign: i64 = if bytes[0] == b'-' { -1 } else { 1 };
-    let rest = &s[1..];
-    // Only digits and colons allowed
-    if rest.chars().any(|c| !c.is_ascii_digit() && c != ':') {
-        return None;
-    }
-    let parts: Vec<&str> = rest.split(':').collect();
-    match parts.len() {
-        1 => {
-            // ±HH or ±HHMM
-            if parts[0].len() == 2 {
-                let h: i64 = parts[0].parse().ok()?;
-                if h > 23 {
-                    return None;
-                }
-                let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, 0);
-                Some((id, sign * h * 3_600_000_000_000))
-            } else if parts[0].len() == 4 {
-                let h: i64 = parts[0][..2].parse().ok()?;
-                let m: i64 = parts[0][2..].parse().ok()?;
-                if h > 23 || m > 59 {
-                    return None;
-                }
-                let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, m);
-                Some((id, sign * (h * 3_600_000_000_000 + m * 60_000_000_000)))
-            } else {
-                None
-            }
-        }
-        2 => {
-            // ±HH:MM — exactly 2 parts
-            if parts[0].len() != 2 || parts[1].len() != 2 {
-                return None;
-            }
-            let h: i64 = parts[0].parse().ok()?;
-            let m: i64 = parts[1].parse().ok()?;
-            if h > 23 || m > 59 {
-                return None;
-            }
-            let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, m);
-            Some((id, sign * (h * 3_600_000_000_000 + m * 60_000_000_000)))
-        }
-        _ => None, // ±HH:MM:SS or more — sub-minute, rejected
-    }
-}
-
-/// ToTemporalTimeZoneIdentifier — validates a timezone string.
-/// Returns (tz_id, offset_ns) or error.
-fn validate_timezone_string(
-    interp: &mut Interpreter,
-    s: &str,
-) -> Result<(String, i64), Completion> {
-    if s.is_empty() {
-        return Err(Completion::Throw(
-            interp.create_range_error("Invalid time zone: empty string"),
-        ));
-    }
-    // 1. Try as plain numeric offset: ±HH:MM, ±HHMM, ±HH
-    if let Some(v) = parse_plain_offset(s) {
-        return Ok(v);
-    }
-    // 2. Available named time zone: IANA database lookup, case-insensitive.
-    //    Unknown identifiers fall through and end in RangeError.
-    if let Some(name) = super::resolve_iana_timezone(s) {
-        return Ok((name, 0));
-    }
-    // 3. Try as ISO date-time string with timezone info
-    //    Must have a Z, offset, or [annotation] to be valid as timezone source
-    if let Some(tz) = extract_timezone_from_iso_string(s) {
-        return Ok(tz);
-    }
-    Err(Completion::Throw(
-        interp.create_range_error(&format!("Invalid time zone: {s}")),
-    ))
-}
-
-/// Extract timezone info from an ISO date-time string.
-/// Returns Some((id, offset_ns)) if the string has timezone info, None otherwise.
-fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
-    // Reject negative zero year: -000000
-    if s.starts_with("-000000") {
-        return None;
-    }
-    // Look for [annotation] bracket — IANA name takes precedence
-    if let Some(bracket_start) = s.find('[')
-        && let Some(bracket_end) = s[bracket_start..].find(']')
-    {
-        let annotation = &s[bracket_start + 1..bracket_start + bracket_end];
-        // Skip non-timezone annotations like u-ca=iso8601
-        if !annotation.contains('=') {
-            // RFC 9557 critical flag: strip before classification. Recognized
-            // critical annotations resolve; unrecognized ones throw below either way.
-            let annotation = annotation.strip_prefix('!').unwrap_or(annotation);
-            if annotation.eq_ignore_ascii_case("UTC") || annotation == "Etc/UTC" {
-                return Some(("UTC".to_string(), 0));
-            }
-            // Validate: annotation must be a valid TZ identifier
-            // (either IANA name or ±HH:MM offset — no sub-minute)
-            if annotation.starts_with('+') || annotation.starts_with('-') {
-                // Must be a valid offset with no sub-minute
-                return parse_plain_offset(annotation);
-            }
-            // Available named time zone: IANA database lookup, case-insensitive.
-            // Unknown annotation name → invalid; the ISO offset is not a fallback.
-            if let Some(name) = super::resolve_iana_timezone(annotation) {
-                return Some((name, 0));
-            }
-            return None; // Invalid annotation
-        }
-    }
-    // Look for Z
-    let _upper = s.to_uppercase();
-    // Find time portion (after T)
-    let t_pos = s.find(['T', 't'])?;
-    let time_part = &s[t_pos + 1..];
-    // Strip calendar annotation if present
-    let time_part = if let Some(b) = time_part.find('[') {
-        &time_part[..b]
-    } else {
-        time_part
-    };
-    // Check for Z at the end
-    if time_part.ends_with('Z') || time_part.ends_with('z') {
-        return Some(("UTC".to_string(), 0));
-    }
-    // Look for offset after the time digits
-    // Find the last +/- that's part of an offset (not part of exponent, etc.)
-    // Time format: HH:MM:SS.fff±HH:MM
-    let offset_re_start = find_offset_in_time(time_part)?;
-    let offset_str = &time_part[offset_re_start..];
-    // Validate: must be exactly ±HH:MM (no sub-minute)
-    parse_plain_offset(offset_str)
-}
-
-/// Find the start of an offset (+ or -) in a time string portion.
-/// Skips time digits to find the trailing offset.
-fn find_offset_in_time(time: &str) -> Option<usize> {
-    // Walk past time digits: HH:MM:SS.fractional
-    let bytes = time.as_bytes();
-    let mut i = 0;
-    // Skip digits and colons and dots (time portion)
-    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b':' || bytes[i] == b'.') {
-        i += 1;
-    }
-    // Should now be at + or -
-    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
-        // Validate the offset portion has no sub-minute (seconds) parts
-        let offset_part = &time[i..];
-        let _offset_bytes = offset_part.as_bytes();
-        // Check for sub-minute: if there are more than 2 colon-separated parts, reject
-        let colon_count = offset_part.chars().filter(|&c| c == ':').count();
-        if colon_count > 1 {
-            return None; // Sub-minute offset
-        }
-        // Also check ±HHMMSS (6+ digits without colons)
-        let digits_after_sign = &offset_part[1..];
-        if digits_after_sign.len() > 4
-            && !digits_after_sign.contains(':')
-            && digits_after_sign.chars().all(|c| c.is_ascii_digit())
-        {
-            return None; // Sub-minute offset in compact form
-        }
-        Some(i)
-    } else {
-        None // No offset found — bare date-time string
-    }
 }

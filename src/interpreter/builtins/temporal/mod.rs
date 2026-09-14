@@ -2301,62 +2301,34 @@ fn parse_duration_number(bytes: &[u8], start: usize) -> Option<(f64, Option<f64>
 
 // --- Timezone identifier validation ---
 
-/// Parse a string as a UTC offset timezone identifier: ±HH:MM (no seconds).
+/// Parse a string as a UTC offset timezone identifier: exactly ±HH, ±HHMM,
+/// or ±HH:MM (no seconds, no trailing characters).
 /// Returns the normalized offset string if valid.
 pub(crate) fn parse_utc_offset_timezone(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
-    if bytes.len() < 3 {
-        return None;
-    }
-    let sign = match bytes[0] {
-        b'+' => '+',
-        b'-' => '-',
+    let sign = match bytes.first() {
+        Some(b'+') => '+',
+        Some(b'-') => '-',
         _ => return None,
     };
-    let start = 1;
-    let rest = &bytes[start..];
-
-    if rest.len() < 2 {
+    let rest = &bytes[1..];
+    let digit = |b: &u8| (*b as char).to_digit(10).map(|d| d as u8);
+    let (hours, minutes) = match rest.len() {
+        2 => (digit(&rest[0])? * 10 + digit(&rest[1])?, 0),
+        4 => (
+            digit(&rest[0])? * 10 + digit(&rest[1])?,
+            digit(&rest[2])? * 10 + digit(&rest[3])?,
+        ),
+        5 if rest[2] == b':' => (
+            digit(&rest[0])? * 10 + digit(&rest[1])?,
+            digit(&rest[3])? * 10 + digit(&rest[4])?,
+        ),
+        _ => return None,
+    };
+    if hours > 23 || minutes > 59 {
         return None;
     }
-    let h0 = (rest[0] as char).to_digit(10)? as u8;
-    let h1 = (rest[1] as char).to_digit(10)? as u8;
-    let hours = h0 * 10 + h1;
-    if hours > 23 {
-        return None;
-    }
-
-    if rest.len() == 2 {
-        return Some(format!("{}{:02}:00", sign, hours));
-    }
-
-    let has_sep = rest.len() > 2 && rest[2] == b':';
-    let min_start = if has_sep { 3 } else { 2 };
-    if rest.len() < min_start + 2 {
-        if has_sep {
-            return None;
-        }
-        return Some(format!("{}{:02}:00", sign, hours));
-    }
-    let m0 = (rest[min_start] as char).to_digit(10)? as u8;
-    let m1 = (rest[min_start + 1] as char).to_digit(10)? as u8;
-    let minutes = m0 * 10 + m1;
-    if minutes > 59 {
-        return None;
-    }
-
-    let after_min = min_start + 2;
-    // Sub-minute precision → reject
-    if rest.len() > after_min
-        && (rest[after_min] == b':'
-            || rest[after_min] == b'.'
-            || rest[after_min] == b','
-            || rest[after_min].is_ascii_digit())
-    {
-        return None;
-    }
-
-    Some(format!("{}{:02}:{:02}", sign, hours, minutes))
+    Some(format!("{sign}{hours:02}:{minutes:02}"))
 }
 
 pub(super) fn parse_offset_string(s: &str) -> Option<ParsedOffset> {
@@ -2687,7 +2659,7 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
 
 /// Resolve an IANA timezone name, returning the properly-cased name if valid.
 /// Uses chrono-tz's database for case-insensitive matching.
-pub(super) fn resolve_iana_timezone(s: &str) -> Option<String> {
+fn resolve_iana_timezone(s: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
@@ -2728,12 +2700,10 @@ pub(super) fn parse_temporal_time_zone_string(s: &str) -> Option<String> {
 
     // 3. Try parsing as ISO datetime string and extract timezone info
     if let Some(parsed) = parse_temporal_date_time_string(s) {
-        // Must have time component
-        if !parsed.has_time {
-            return None;
-        }
-        // If there's an explicit timezone annotation [Asia/Tokyo], use it
-        if let Some(ref tz) = parsed.time_zone {
+        // If there's an explicit timezone annotation [Asia/Tokyo], use it —
+        // with an annotation present, a time component is not required
+        // (e.g. "2020-01-01[America/New_York]").
+        if let Some(tz) = &parsed.time_zone {
             if let Some(offset) = parse_utc_offset_timezone(tz) {
                 return Some(offset);
             }
@@ -2742,8 +2712,12 @@ pub(super) fn parse_temporal_time_zone_string(s: &str) -> Option<String> {
             }
             return None;
         }
+        // Must have time component
+        if !parsed.has_time {
+            return None;
+        }
         // If there's a UTC offset (Z or ±HH:MM), return it
-        if let Some(ref offset) = parsed.offset {
+        if let Some(offset) = &parsed.offset {
             if offset.has_sub_minute {
                 return None; // sub-minute offset
             }
@@ -2948,6 +2922,7 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
     let mut calendar = None;
     let mut calendar_critical = false;
     let mut calendar_count = 0u32;
+    let mut seen_key_value = false;
     while pos < bytes.len() && bytes[pos] == b'[' {
         pos += 1;
         let is_critical = pos < bytes.len() && bytes[pos] == b'!';
@@ -2979,8 +2954,10 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
             } else if is_critical {
                 return None;
             }
+            seen_key_value = true;
         } else {
-            if time_zone.is_some() {
+            // RFC 9557: the time zone annotation must be the first annotation.
+            if time_zone.is_some() || seen_key_value {
                 return None;
             }
             // If it looks like a UTC offset, validate no sub-minute precision
