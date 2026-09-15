@@ -57,8 +57,9 @@ jobs:
           # (otherwise it prints a terminal summary and stops); (2) spawns sub-agents
           # (Agent/Task, name varies by CLI version); (3) posts inline findings via
           # the action's github_inline_comment MCP tool (and the no-issues summary
-          # via `gh pr comment`), reading git history for context. Grant all of
-          # these or the run ends "success" silently.
-          claude_args: '--model claude-sonnet-5 --allowedTools "Agent,Task,Read,Grep,Glob,Bash(gh:*),Bash(git:*),mcp__github_inline_comment__create_inline_comment"'
+          # via `gh pr comment`), reading git history for context. `--permission-mode
+          # auto` auto-approves all of these; without it the run ends "success"
+          # silently.
+          claude_args: '--model claude-sonnet-5 --permission-mode auto'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
