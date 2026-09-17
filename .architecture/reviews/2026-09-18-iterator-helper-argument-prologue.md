@@ -354,4 +354,116 @@ unseen single-concern candidates scored higher on the same rubric.
 
 ## Design
 
-*(written at step 4 — see below)*
+Three designs were produced in parallel by sub-agents, each briefed to a *radically
+different* direction and each given the two hard constraints (strict behaviour
+preservation; do **not** route the callable check through `is_callable`).
+
+### Two corrections the design pass forced on the candidate card
+
+All three designers independently found the same two facts, verified here directly:
+
+1. **The brand check is not part of the shared prologue.** Only **9** of the 14 methods
+   carry `if !this.is_object()` — `includes` :1775, `join` :1950, `map` :2025,
+   `filter` :2156, `take` :2298, `drop` :2459, `chunks` :2626, `windows` :2739,
+   `flatMap` :2875. `forEach`, `some`, `every`, `find` and `reduce` have **none**: they go
+   straight to the callable check, so for a non-object `this` the observable error is
+   *"callback is not a function"*, not *"called on non-object"*. Any seam that performs
+   the brand check unconditionally is a **behaviour change at 5 sites** and is
+   disqualified. The candidate card's "step 1 brand-check" framing was wrong.
+2. **The callable-check population is 8, not 11.** `grep "callable.is_some()"` returns 11
+   hits in the file, but 3 (:474, :755, :3245) are outside the 14 helpers. The 8 in scope
+   are :1550, :1599, :1659, :1718, :1872, :2032, :2163, :2882.
+
+A third correction, from Design B's trace of `iterator_close_with_completion` (:587–630)
+with an `Err` completion: the four close spellings really partition **17 rooted / 8
+unrooted**, not into four behaviours. `close_iterator_for_error` and the `includes` inline
+triple both root the error across the close; the 2 bare `iterator_close_getter` sites and
+all 6 `iterator_close_with_completion` sites do **not** — the `err.clone()` is a handle
+clone into a Rust local, not a GC root. The invariant those 8 violate is stated in the
+file's own comment at :1786-1789. **This refactor does not fix them** (constraint 1), but
+it is the clearest statement yet of what the seam is for.
+
+### Design A — minimal surface: `throw_closing` + three `fn`-pointer policies
+
+```rust
+fn throw_closing(
+    interp: &mut Interpreter,
+    iterator: &JsValue,
+    error: JsValue,
+    close: fn(&mut Interpreter, &JsValue, JsValue) -> JsValue,
+) -> Completion { Completion::Throw(close(interp, iterator, error)) }
+```
+
+Plus `close_iterator_for_error_unrooted` and `close_iterator_for_error_via_completion`
+as the two new named policy values. Zero new types.
+
+*Coverage*: all **25** close sites, 100%, with no control-flow restructuring.
+*Key insight it contributes*: the close policy varies **within** a single method — `take`
+uses the unrooted spelling on its ToNumber path and the rooted one on its three RangeError
+paths — so a per-*method* seam needs two close arguments and cannot work. The seam must be
+per-*error-site*.
+*Borrow analysis*: compiles. The `fn`-pointer (not `impl Fn`) parameter is load-bearing —
+it is already higher-ranked over its elided lifetimes, sidestepping the closure-lifetime
+inference failure that a `impl FnOnce(&mut Interpreter, …)` parameter would hit.
+*Self-declared weakness*: it is by its own admission a **shallow pass-through** — four
+parameters and a stack frame to save one line per site. Net line delta ≈ zero without the
+`propagate!` adjunct. It concentrates a *decision*, not computation.
+
+### Design B — explicit policy types: `ArgPolicy` + `Rejection` + `ClosePolicy`
+
+Seven new names (`ThisCheck`, `ClosePolicy`, `ErrorSource`, `Rejection`, `ArgPolicy`,
+`HelperEntry`, `Custom`) plus four policy structs (`Callable`, `ToNumberLimit`,
+`OptionalIntegralCount`, `IntegralSize`), ~160 lines of definitions, driven by
+`enter_iterator_helper(interp, this, args, this_check, policy) -> Result<HelperEntry<P::Out>, JsValue>`.
+
+*Coverage*: **14 of 14** methods — 12 via a named policy, `join` and `windows` via a
+`Custom(fn)` escape hatch.
+*Genuine strengths*: "validated, threw, forgot to close" becomes **unrepresentable**
+(a validator's only `Err` type is `Rejection`, which has no constructor without a
+`ClosePolicy`); and a `this`-check failure structurally cannot close, because no
+`Rejection` exists yet. `ErrorSource` is *data*, so "close before building the error" is
+also unrepresentable. The 8 hazardous sites become an 8-token diff to fix later.
+*Borrow analysis*: compiles, and the report is careful about why — `Custom` is a bare
+`fn` pointer precisely so it cannot capture an `&mut Interpreter`; `impl<T> ArgPolicy for
+Custom<T>` is E0207-clean because `T` is in the self type; no blanket impl, so no E0119.
+*Self-declared weakness*: it **introduces a silent-regression mode the current code lacks**
+— `ToNumberLimit { non_negative, too_large }` are both `&'static str`, so transposing them
+type-checks, and test262 does not assert error messages. It is also roughly break-even on
+line count (~160 added to remove ~120).
+
+### Design C — macro for the common caller: `require_callable_arg!`
+
+A file-local `macro_rules!` absorbing the 11-line callable check plus the 4-line
+`get_iterator_direct_getter` block, yielding `(callable, iter, next_method)` as a tuple so
+the caller keeps its own binding names (macro hygiene solved by passing nothing out).
+
+*Coverage*: the **8** callable-argument methods, 15 lines → 1 statement each; the 6
+numeric/string-argument helpers get only `propagate!` on their getter block.
+*Genuine strength it argues for itself*: mechanical auditability — a reviewer can diff
+`cargo expand` against the deleted text and see identical tokens, which matters when the
+acceptance criterion is byte-for-byte preservation of a check that *looks* like a bug.
+*Self-declared weakness*: the report writes out a plain-function variant of itself and
+concedes it wins on **every navigability axis** — jump-to-definition, hover types, real
+stack frames, compiler spans, **unit-testability**, AI-navigability, and idiom match with
+the repo's existing 13 `propagate!` uses — at a cost of twelve characters per call site.
+It also carries a documented-only footgun: `return` inside the macro abandons the
+enclosing closure, which is correct at all 8 sites but silently wrong if ever invoked
+inside the nested `next()` closures a few lines below each of them.
+
+### Design C&prime; — the function form of C (surfaced by Design C's own report)
+
+```rust
+fn require_callable_arg(
+    interp: &mut Interpreter,
+    this: &JsValue,
+    args: &[JsValue],
+    not_a_function: &str,
+) -> Result<(JsValue, JsValue, JsValue), JsValue>
+```
+
+Called as
+`let (mapper, iter, next_method) = propagate!(require_callable_arg(interp, this, args, "mapper is not a function"));`.
+Not a fourth independent design — it is the alternative Design C wrote out in full in its
+own "strongest argument against" section, and it is on the ballot because that argument is
+the strongest single claim any of the three reports makes.
+
