@@ -31,14 +31,16 @@ jobs:
     # adds little value, and this job holds `id-token: write` plus the
     # CLAUDE_CODE_OAUTH_TOKEN secret, so it is better not to run it on
     # bot-authored PRs at all than to allow-list them in. See issue #177.
-    if: github.event.pull_request.user.type != 'Bot'
+    # Also skip pmatos's own PRs — self-reviewing adds no value either.
+    if: github.event.pull_request.user.type != 'Bot' && github.event.pull_request.user.login != 'pmatos'
 
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write # required so the review can post PR comments
       issues: write # required for the `gh pr comment` no-issues summary
       id-token: write
+      actions: read
 
     steps:
       - name: Checkout repository
