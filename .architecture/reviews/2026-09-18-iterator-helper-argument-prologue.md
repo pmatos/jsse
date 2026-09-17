@@ -318,7 +318,7 @@ graph LR
 
 ## Dropped
 
-Re-checked this run against the filter that removed each ([ranking.md](../../../../.claude/skills/pm-deepen/references/ranking.md) step 4). **All five filters still apply; none moves back to `proposed`.**
+Re-checked this run against the filter that removed each (the `pm-deepen` ranking rubric, reconciliation step 4). **All five filters still apply; none moves back to `proposed`.**
 
 | Candidate | Dropped because | Still applies? |
 |---|---|---|
