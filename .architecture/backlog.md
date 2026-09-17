@@ -7,7 +7,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## iterator-helper-argument-prologue
 
-- **Status**: proposed
+- **Status**: in-flight
+- **PR**: #640 (2026-09-18 firing — the 8 callable-argument sites; remainder in `iterator-helper-close-policy`)
 - **Score**: 24/25 (leverage 5, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated — `src/interpreter/builtins/iterators.rs`
 - **Modules**: `src/interpreter/builtins/iterators.rs`

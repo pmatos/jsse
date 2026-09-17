@@ -8,7 +8,7 @@ re-verification pass over every `proposed` and `dropped` entry in
 `gc-root-scope-guard-remainder` site inventory post-#628, one re-verifying the top
 six `proposed` entries against current code, one hunting genuinely new candidates.
 
-**Picked**: `iterator-helper-argument-prologue` — see `.architecture/backlog.md`
+**Picked**: `iterator-helper-argument-prologue` — see PR #640 and `.architecture/backlog.md`
 
 **Degradations**: none. `gh` authenticated, sub-agents available, advisor available,
 quality gate discoverable.
