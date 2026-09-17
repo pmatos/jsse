@@ -86,3 +86,19 @@ detach policy: `ta_number_getter` layers the numeric getters' spec
 where `validate_typed_array` instead throws. Either way, any borrow the guard
 holds drops before `create_type_error` runs (it mutates the object arena).
 _Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
+
+**Close-on-Reject**:
+The exit an `%IteratorPrototype%` helper takes when its argument fails
+validation: build the error, close the iterator the helper was handed but does
+not own (spec `IfAbruptCloseIterator`), then throw. `require_callable_arg`
+(`builtins/iterators.rs`) concentrates it for the eight helpers taking a callable
+argument. Two orderings are load-bearing and are the reason this is a seam rather
+than a convention: the error object is constructed **before** the close, because
+the close runs a user `return()` method that can rebind the global `TypeError`
+and so change the thrown error's prototype; and the error is GC-rooted **across**
+the close, because the close runs arbitrary JS and the collector does not scan
+the Rust stack. The close's own failure is discarded — the original argument
+error wins. Distinct from a Receiver Guard, which checks `this` and has no
+iterator to close; the two are deliberately separate here, because only 9 of the
+14 helpers brand-check their receiver at all.
+_Avoid_: close-and-throw, argument check, iterator preamble.

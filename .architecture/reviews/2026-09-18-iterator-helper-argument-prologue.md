@@ -81,10 +81,16 @@ particular remains dropped, and directly constrains the pick — see the card be
 - **Problem**: The 14 `%IteratorPrototype%` helpers — `forEach:1553`, `some:1602`,
   `every:1662`, `find:1721`, `includes:1775`, `reduce:1875`, `join:1950`, `map:2025`,
   `filter:2156`, `take:2295`, `drop:2456`, `chunks:2626`, `windows:2739`, `flatMap:2875` —
-  each open-code the same prologue: brand-check `this` is an Object, read and validate
-  argument 0, **close the underlying iterator before propagating a validation failure**,
-  then `GetIteratorDirect`. The interface each caller must learn is as complex as the thing
-  it is doing, which is the definition of a shallow cluster.
+  each open-code the same prologue: read and validate argument 0, **close the underlying
+  iterator before propagating a validation failure**, then `GetIteratorDirect`. The
+  interface each caller must learn is as complex as the thing it is doing, which is the
+  definition of a shallow cluster.
+
+  **Correction made during the design pass** (this card originally said the prologue began
+  with a brand check of `this`): only **9** of the 14 carry `if !this.is_object()`.
+  `forEach`, `some`, `every`, `find` and `reduce` have none and reach the callable check
+  first, so folding an unconditional brand check into the seam would be a behaviour change
+  at those five sites. The brand check is therefore **out of scope**.
 
   The close step is spelled **three incompatible ways across 25 sites**:
   `close_iterator_for_error` (roots the error across the close) at 14 sites; raw
@@ -108,24 +114,26 @@ particular remains dropped, and directly constrains the pick — see the card be
 - **Solution**: One guard the 14 siblings route through, which brand-checks the receiver,
   runs a caller-supplied validation closure, closes-and-rethrows on failure under a single
   explicit rooting policy, and returns the `(validated, iterator, next)` record on success.
-- **Benefits**: *Leverage* — 14 call sites shed their prologue and the close policy becomes
-  one decision instead of 25. *Locality* — a change to the rooting rule becomes a one-function
-  edit. *Test surface* — the behaviour becomes exercisable through one interface;
-  today "does argument validation close the underlying iterator?" needs 14 separate paths.
+- **Benefits**: *Leverage* — the 8 callable-argument sites each shed 15 lines for one
+  statement. *Locality* — a change to the build-before-close or rooting rule becomes a
+  one-function edit. *Test surface* — the behaviour becomes exercisable through one
+  interface; today "does argument validation close the underlying iterator?" needs 8
+  separate paths. This is the axis the adjudication turned on.
   test262 already pins it exactly: `argument-validation-failure-closes-underlying.js`,
   `argument-effect-order.js`, `limit-rangeerror.js`, `limit-tonumber-throws.js`,
   `this-non-object.js`, `callable.js`, mirrored under `take/`, `drop/`, `map/`, `filter/`,
   `flatMap/`.
 
-> **Constrained by the `proxy-blind-callable-check` drop.** Eleven of these sites open-code
-> the callability test as `obj.borrow().callable.is_some()` rather than calling the canonical
-> `is_callable` (`promise.rs:2195`), which is a known latent spec bug — a `Proxy` wrapping a
-> function is rejected. That entry is `dropped` precisely because fixing it is a *behaviour
-> change*, not a behaviour-preserving deepening. **This refactor therefore preserves the
-> open-coded check byte-for-byte and fixes nothing.** Doing so is not a compromise: moving
-> the check behind the seam concentrates the bug from 11 sites to 1, so the filed fix becomes
-> a one-line change once its semantics are agreed. The deepening is the prerequisite that
-> makes the dropped bug fix cheap.
+> **The `proxy-blind-callable-check` premise does not hold at these sites.** That `dropped`
+> entry claims the open-coded `obj.borrow().callable.is_some()` probe "bypasses the Proxy
+> branch that the canonical `is_callable` handles — so `new Proxy(fn, {})` … throws 'not a
+> function' though spec IsCallable is true". **Tested directly during implementation: it does
+> not.** `Proxy` construction copies a callable target's `callable` slot onto the proxy object
+> (`builtins/proxy.rs:38-41`), so the probe sees it without unwrapping and agrees with
+> `is_callable`. The refactor copies the probe verbatim regardless — so it is behaviour-preserving
+> either way — and now pins the agreement with a test, which is strictly better than the
+> assumption it replaces. The `dropped` entry stays dropped (its other ~29 sites were not
+> tested here) but its stated example is wrong and has been annotated.
 
 **Before** — each caller wires the steps itself:
 
@@ -467,3 +475,70 @@ Not a fourth independent design — it is the alternative Design C wrote out in 
 own "strongest argument against" section, and it is on the ballot because that argument is
 the strongest single claim any of the three reports makes.
 
+
+### Adjudication — winner: **Design C&prime;**
+
+Adjudicated against the fixed criteria, in order: depth, locality, seam placement, test
+surface, blast radius. The advisor was consulted with the criteria stated and the four
+written designs on the ballot.
+
+**Why C&prime; wins.**
+
+1. *Depth* — 15 lines → 1 statement at 8 sites, behind four obvious parameters, hiding four
+   decisions (absent-argument default, build-before-close, root-across-close,
+   discard-the-close's-own-error). Highest behaviour-per-unit-of-interface of the four.
+2. *Locality* — all four decisions land in one body; today they are re-derived per site.
+3. *Seam placement* — 8 adapters. A real seam, not a hypothetical one.
+4. *Test surface* — **decisive.** C&prime; returns a `Result`, so the seam is exercisable
+   directly, and `tests.rs:4536` (`with_gc_root_scope_truncates_on_every_exit`) is the
+   in-repo precedent for exactly this shape of pin.
+5. *Blast radius* — 1 file.
+
+**Why each loser lost.**
+
+- **Design C (macro)** is disqualified at criterion 4, on its own report's words: you cannot
+  unit-test a macro that `return`s out of its caller. The only surface left to test would be
+  the JS method, which is reaching *past* the seam — and this run must implement test-first.
+  Its one edge over C&prime;, `cargo expand` auditability, is not a criterion, and
+  `git diff --word-diff` gives a reviewer the same token-identity check. It also carries a
+  documented-only footgun (`return` inside the nested `next()` closures a few lines below
+  each call site would abandon the wrong frame).
+- **Design B (policy types)** fails criterion 1: seven new names is a large interface, and
+  its own report concedes a reader visiting `map` once is net worse off. It also *adds* a
+  failure mode the current code lacks — `ToNumberLimit { non_negative, too_large }` are both
+  `&'static str`, so transposing them type-checks and test262 does not assert messages. That
+  is negative locality. Its genuine contributions (the 17/8 rooted partition; "forgot to
+  close" made unrepresentable) are recorded in the carve-out entry instead.
+- **Design A (`throw_closing`)** is self-declared shallow — four parameters and a stack frame
+  to save one line, `Completion::Throw(close(interp, iterator, error))`. Off-mission for a
+  deepening run as the *primary* seam. But it is the right design for the **close-policy**
+  scope specifically, and is handed forward intact to `iterator-helper-close-policy`.
+
+**Runner-up design**: Design A, kept for the follow-up. **Runner-up candidate**:
+`temporal-rounding-options-reader`.
+
+### Scope actually landed, and what was carved out
+
+C&prime; covers the **8 callable-argument** helpers. The 17-rooted/8-unrooted close-policy
+divergence and the 6 numeric/string-argument helpers are **not** touched — scoping a seam to
+its cleanest slice is the house pattern (#595 scoped to `array.rs`, #628 to 5 `eval.rs`
+sites). Recorded as `iterator-helper-close-policy` (`proposed`, 20/25) with all 8 unrooted
+sites enumerated, so the next firing does not rediscover it.
+
+`propagate!` adoption on the other six helpers' `get_iterator_direct_getter` blocks was
+deliberately **left out**: it is straggler-adoption (the reason `define-method-adoption` is
+`dropped`) and would muddy a diff whose whole claim is one pattern.
+
+### A premise the tests disproved
+
+The candidate card asserted that this refactor must preserve a latent Proxy bug. Written as a
+test, that assertion **failed** — the open-coded probe *accepts* `new Proxy(function(){}, {})`,
+because `Proxy` construction copies a callable target's `callable` slot onto the proxy
+(`builtins/proxy.rs:38-41`). The probe and `is_callable` agree here. The test was corrected to
+pin the agreement rather than a non-existent divergence, and the `proxy-blind-callable-check`
+backlog entry now carries the correction. It stays `dropped`: its other ~29 sites were not
+retested, but its motivating example does not reproduce, so a human should re-derive the real
+divergence before reopening.
+
+This is the test-first step doing its job — the belief was load-bearing for the design brief
+and was wrong.
