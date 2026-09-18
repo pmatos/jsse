@@ -474,16 +474,7 @@ pub(crate) fn enumerable_own_keys(
             continue;
         };
         let key = JsPropertyKey::from_js_string(&key_string);
-        let descriptor_value = interp.proxy_get_own_property_descriptor(obj_id, &key)?;
-        if descriptor_value.is_undefined() {
-            continue;
-        }
-        let descriptor = match interp.to_property_descriptor(&descriptor_value) {
-            Ok(descriptor) => descriptor,
-            Err(Some(error)) => return Err(error),
-            Err(None) => continue,
-        };
-        if descriptor.enumerable == Some(true) {
+        if interp.proxy_own_property_is_enumerable(obj_id, &key)? {
             enumerable_keys.push(key);
         }
     }
