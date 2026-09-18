@@ -398,6 +398,52 @@ fn close_iterator_for_error(
     error
 }
 
+/// The prologue shared by every `%IteratorPrototype%` helper that takes a
+/// callable first argument: read argument 0, require it to be callable, and —
+/// because the helper has been handed an iterator it does not own — close that
+/// iterator before throwing if it is not. On success, performs GetIteratorDirect
+/// and hands back `(callable, iterator, next_method)`.
+///
+/// Three things here are load-bearing, and concentrating them is the point:
+///
+/// 1. **The error object is built before the close runs.** `IteratorClose`
+///    invokes a user `return()` method, which can replace the global `TypeError`
+///    binding; an error constructed afterwards would get the wrong prototype.
+/// 2. **The error is GC-rooted across the close.** `close_iterator_for_error`
+///    does that. The close runs arbitrary JS and can collect, and the collector
+///    does not scan the Rust stack.
+/// 3. **Callability is open-coded, not `Interpreter::is_callable`.** This probe
+///    reads the value's own `callable` slot; `is_callable` additionally unwraps
+///    a Proxy target. The two agree on a Proxy wrapping a function, because
+///    `Proxy` construction copies a callable target's slot onto the proxy
+///    (`builtins/proxy.rs:38-41`). The probe is preserved verbatim from the
+///    eight prologues regardless, so this refactor cannot change what they
+///    accept; `require_callable_arg_tests` pins the agreement.
+///
+/// The receiver brand check is deliberately *not* part of this seam: only 9 of
+/// the 14 helpers perform one, and `forEach`/`some`/`every`/`find`/`reduce`
+/// reach the callable check first. Folding it in would change which error a
+/// non-object receiver produces at those five sites.
+fn require_callable_arg(
+    interp: &mut Interpreter,
+    iterator: &JsValue,
+    args: &[JsValue],
+    not_a_function: &str,
+) -> Result<(JsValue, JsValue, JsValue), JsValue> {
+    let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    if !arg.as_object_id().is_some_and(|id| {
+        interp
+            .get_object_cell(id)
+            .map(|od| od.borrow().callable.is_some())
+            .unwrap_or(false)
+    }) {
+        let err = interp.create_type_error(not_a_function);
+        return Err(close_iterator_for_error(interp, iterator, err));
+    }
+    let (iter, next_method) = get_iterator_direct_getter(interp, iterator)?;
+    Ok((arg, iter, next_method))
+}
+
 // GetIteratorFlattenable(obj, primitiveHandling) per spec
 // primitiveHandling is either "reject-primitives" or "iterate-strings"
 fn get_iterator_flattenable(
@@ -1543,21 +1589,12 @@ impl Interpreter {
 
         // forEach(fn)
         self.define_method(iter_proto_id, "forEach", 1, |interp, this, args| {
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if !callback.as_object_id().is_some_and(|id| {
-                interp
-                    .get_object_cell(id)
-                    .map(|od| od.borrow().callable.is_some())
-                    .unwrap_or(false)
-            }) {
-                let err = interp.create_type_error("callback is not a function");
-                let err = close_iterator_for_error(interp, this, err);
-                return Completion::Throw(err);
-            }
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (callback, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "callback is not a function"
+            ));
             let frame = interp.gc_root_frame();
             interp.gc_root_value(&iter);
             interp.gc_root_value(&next_method);
@@ -1592,21 +1629,12 @@ impl Interpreter {
 
         // some(predicate)
         self.define_method(iter_proto_id, "some", 1, |interp, this, args| {
-            let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if !predicate.as_object_id().is_some_and(|id| {
-                interp
-                    .get_object_cell(id)
-                    .map(|od| od.borrow().callable.is_some())
-                    .unwrap_or(false)
-            }) {
-                let err = interp.create_type_error("predicate is not a function");
-                let err = close_iterator_for_error(interp, this, err);
-                return Completion::Throw(err);
-            }
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (predicate, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "predicate is not a function"
+            ));
             let frame = interp.gc_root_frame();
             interp.gc_root_value(&iter);
             interp.gc_root_value(&next_method);
@@ -1652,21 +1680,12 @@ impl Interpreter {
 
         // every(predicate)
         self.define_method(iter_proto_id, "every", 1, |interp, this, args| {
-            let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if !predicate.as_object_id().is_some_and(|id| {
-                interp
-                    .get_object_cell(id)
-                    .map(|od| od.borrow().callable.is_some())
-                    .unwrap_or(false)
-            }) {
-                let err = interp.create_type_error("predicate is not a function");
-                let err = close_iterator_for_error(interp, this, err);
-                return Completion::Throw(err);
-            }
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (predicate, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "predicate is not a function"
+            ));
             let frame = interp.gc_root_frame();
             interp.gc_root_value(&iter);
             interp.gc_root_value(&next_method);
@@ -1711,21 +1730,12 @@ impl Interpreter {
 
         // find(predicate)
         self.define_method(iter_proto_id, "find", 1, |interp, this, args| {
-            let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if !predicate.as_object_id().is_some_and(|id| {
-                interp
-                    .get_object_cell(id)
-                    .map(|od| od.borrow().callable.is_some())
-                    .unwrap_or(false)
-            }) {
-                let err = interp.create_type_error("predicate is not a function");
-                let err = close_iterator_for_error(interp, this, err);
-                return Completion::Throw(err);
-            }
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (predicate, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "predicate is not a function"
+            ));
             let frame = interp.gc_root_frame();
             interp.gc_root_value(&iter);
             interp.gc_root_value(&next_method);
@@ -1865,21 +1875,12 @@ impl Interpreter {
 
         // reduce(reducer, [initial])
         self.define_method(iter_proto_id, "reduce", 1, |interp, this, args| {
-            let reducer = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if !reducer.as_object_id().is_some_and(|id| {
-                interp
-                    .get_object_cell(id)
-                    .map(|od| od.borrow().callable.is_some())
-                    .unwrap_or(false)
-            }) {
-                let err = interp.create_type_error("reducer is not a function");
-                let err = close_iterator_for_error(interp, this, err);
-                return Completion::Throw(err);
-            }
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (reducer, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "reducer is not a function"
+            ));
             let frame = interp.gc_root_frame();
             interp.gc_root_value(&iter);
             interp.gc_root_value(&next_method);
@@ -2025,21 +2026,8 @@ impl Interpreter {
                     let err = interp.create_type_error("Iterator.prototype.map called on non-object");
                     return Completion::Throw(err);
                 }
-                let mapper = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !mapper.as_object_id().is_some_and(|id| {
-                    interp
-                        .get_object_cell(id)
-                        .map(|od| od.borrow().callable.is_some())
-                        .unwrap_or(false)
-                }) {
-                    let err = interp.create_type_error("mapper is not a function");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let (mapper, iter, next_method) =
+                    propagate!(require_callable_arg(interp, this, args, "mapper is not a function"));
 
                 // state: (iter, next_method, mapper, counter, alive, running)
                 #[allow(clippy::type_complexity)]
@@ -2156,21 +2144,8 @@ impl Interpreter {
                     let err = interp.create_type_error("Iterator.prototype.filter called on non-object");
                     return Completion::Throw(err);
                 }
-                let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !predicate.as_object_id().is_some_and(|id| {
-                    interp
-                        .get_object_cell(id)
-                        .map(|od| od.borrow().callable.is_some())
-                        .unwrap_or(false)
-                }) {
-                    let err = interp.create_type_error("predicate is not a function");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let (predicate, iter, next_method) =
+                    propagate!(require_callable_arg(interp, this, args, "predicate is not a function"));
 
                 // state: (iter, next_method, predicate, counter, alive, running)
                 #[allow(clippy::type_complexity)]
@@ -2875,21 +2850,8 @@ impl Interpreter {
                     let err = interp.create_type_error("Iterator.prototype.flatMap called on non-object");
                     return Completion::Throw(err);
                 }
-                let mapper = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !mapper.as_object_id().is_some_and(|id| {
-                    interp
-                        .get_object_cell(id)
-                        .map(|od| od.borrow().callable.is_some())
-                        .unwrap_or(false)
-                }) {
-                    let err = interp.create_type_error("mapper is not a function");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let (mapper, iter, next_method) =
+                    propagate!(require_callable_arg(interp, this, args, "mapper is not a function"));
 
                 let inner_roots = RootedPair::new(interp);
                 // state: (outer_iter, outer_next, mapper, counter, alive, running)
@@ -5132,5 +5094,174 @@ impl Interpreter {
             list.push(next);
         }
         Ok(list)
+    }
+}
+
+#[cfg(test)]
+mod require_callable_arg_tests {
+    //! Pins the `require_callable_arg` seam — the prologue shared by the eight
+    //! `%IteratorPrototype%` helpers that take a callable first argument
+    //! (`forEach`, `some`, `every`, `find`, `reduce`, `map`, `filter`,
+    //! `flatMap`).
+    //!
+    //! The seam concentrates four decisions that were previously re-derived at
+    //! each site, and each has a test here:
+    //!
+    //! 1. A missing argument defaults to `undefined` and is rejected.
+    //! 2. A non-callable argument closes the underlying iterator *before* the
+    //!    error propagates — spec `IfAbruptCloseIterator`.
+    //! 3. Callability is tested by the open-coded `callable.is_some()` probe
+    //!    rather than `Interpreter::is_callable`, preserved verbatim from the
+    //!    eight prologues. The two agree on a Proxy wrapping a function, because
+    //!    `Proxy` construction copies a callable target's slot onto the proxy
+    //!    (`builtins/proxy.rs:38-41`) —
+    //!    `proxy_wrapped_function_is_accepted_matching_is_callable` pins that
+    //!    agreement so neither side can drift silently.
+    //! 4. On success the iterator record is returned, so no caller re-runs
+    //!    GetIteratorDirect.
+    use super::require_callable_arg;
+    use crate::interpreter::{Completion, Interpreter};
+    use crate::parser::Parser;
+    use crate::types::JsValue;
+
+    fn interp_with(source: &str) -> Interpreter {
+        let mut parser = Parser::new(source).expect("parser init");
+        let program = parser.parse_program().expect("parse program");
+        let mut interp = Interpreter::new();
+        let result = interp.run(&program);
+        assert!(
+            matches!(result, Completion::Normal(_) | Completion::Empty),
+            "unexpected completion: {result:?}"
+        );
+        interp
+    }
+
+    fn global(interp: &Interpreter, name: &str) -> JsValue {
+        interp
+            .get_global_var_ref(name)
+            .unwrap_or_else(|| panic!("expected global {name}"))
+    }
+
+    /// An iterator whose `return()` records that it ran, so a test can assert
+    /// the close actually happened rather than just that an error came back.
+    const RECORDING_ITERATOR: &str = "
+        var closed = false;
+        var iter = {
+            next: function () { return { done: true, value: undefined }; },
+            return: function () { closed = true; return {}; },
+        };
+        var fn = function (x) { return x; };
+    ";
+
+    #[test]
+    fn accepts_a_callable_argument_and_returns_the_iterator_record() {
+        let mut interp = interp_with(RECORDING_ITERATOR);
+        let iter = global(&interp, "iter");
+        let f = global(&interp, "fn");
+        let (arg, iterator, next_method) = require_callable_arg(
+            &mut interp,
+            &iter,
+            &[f.clone()],
+            "callback is not a function",
+        )
+        .expect("a callable argument is accepted");
+        assert_eq!(arg.as_object_id(), f.as_object_id(), "returns the argument");
+        assert_eq!(
+            iterator.as_object_id(),
+            iter.as_object_id(),
+            "returns the receiver as the iterator"
+        );
+        assert!(
+            next_method.as_object_id().is_some(),
+            "returns the resolved next method"
+        );
+        let closed = global(&interp, "closed");
+        assert_eq!(
+            closed.as_boolean(),
+            Some(false),
+            "a successful prologue must not close the iterator"
+        );
+    }
+
+    #[test]
+    fn non_callable_argument_closes_the_iterator_before_throwing() {
+        let mut interp = interp_with(RECORDING_ITERATOR);
+        let iter = global(&interp, "iter");
+        let err = require_callable_arg(
+            &mut interp,
+            &iter,
+            &[JsValue::number(42.0)],
+            "callback is not a function",
+        )
+        .expect_err("a non-callable argument is rejected");
+        let message = interp.format_value(&err);
+        assert!(
+            message.contains("callback is not a function"),
+            "unexpected error: {message}"
+        );
+        let closed = global(&interp, "closed");
+        assert_eq!(
+            closed.as_boolean(),
+            Some(true),
+            "the underlying iterator must be closed before the error propagates"
+        );
+    }
+
+    #[test]
+    fn missing_argument_is_treated_as_undefined_and_rejected() {
+        let mut interp = interp_with(RECORDING_ITERATOR);
+        let iter = global(&interp, "iter");
+        let err = require_callable_arg(&mut interp, &iter, &[], "predicate is not a function")
+            .expect_err("an absent argument is rejected");
+        let message = interp.format_value(&err);
+        assert!(
+            message.contains("predicate is not a function"),
+            "unexpected error: {message}"
+        );
+        let closed = global(&interp, "closed");
+        assert_eq!(
+            closed.as_boolean(),
+            Some(true),
+            "absent argument still closes"
+        );
+    }
+
+    #[test]
+    fn proxy_wrapped_function_is_accepted_matching_is_callable() {
+        // Pins the open-coded probe against `Interpreter::is_callable` for the
+        // case the `proxy-blind-callable-check` backlog entry predicts they
+        // disagree on. They do NOT disagree here: `Proxy` construction copies a
+        // callable target's `callable` slot onto the proxy object
+        // (`builtins/proxy.rs:38-41`), so the probe sees it without unwrapping.
+        //
+        // This test exists to keep that agreement honest. If the probe is ever
+        // narrowed, or the slot copy in `proxy.rs` removed, this fails rather
+        // than silently changing what the eight helpers accept.
+        let mut interp = interp_with(
+            "
+            var closed = false;
+            var iter = {
+                next: function () { return { done: true, value: undefined }; },
+                return: function () { closed = true; return {}; },
+            };
+            var p = new Proxy(function () {}, {});
+        ",
+        );
+        let iter = global(&interp, "iter");
+        let p = global(&interp, "p");
+        assert!(
+            interp.is_callable(&p),
+            "spec IsCallable accepts a Proxy wrapping a function"
+        );
+        let (arg, ..) =
+            require_callable_arg(&mut interp, &iter, &[p.clone()], "mapper is not a function")
+                .expect("the open-coded probe agrees with is_callable here");
+        assert_eq!(arg.as_object_id(), p.as_object_id());
+        let closed = global(&interp, "closed");
+        assert_eq!(
+            closed.as_boolean(),
+            Some(false),
+            "an accepted argument must not close the iterator"
+        );
     }
 }
