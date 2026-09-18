@@ -1,3 +1,11 @@
+## [0.8.1](https://github.com/pmatos/jsse/compare/v0.8.0...v0.8.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **symphonika:** gate implement stage on an open PR, not just a commit ([#627](https://github.com/pmatos/jsse/issues/627)) ([af0ac25](https://github.com/pmatos/jsse/commit/af0ac25446fb147528cd1c0c575527fabf16c09c))
+* **temporal:** validate Instant.prototype.toString timeZone against tz database ([#630](https://github.com/pmatos/jsse/issues/630)) ([ff4b96a](https://github.com/pmatos/jsse/commit/ff4b96ae285d5c9783683524508263c479cffbed))
+
 # [0.8.0](https://github.com/pmatos/jsse/compare/v0.7.0...v0.8.0) (2026-09-13)
 
 
