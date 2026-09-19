@@ -1492,6 +1492,35 @@ impl Interpreter {
         }
     }
 
+    /// Whether `key` is an enumerable own property of `obj_id`, via the same [[GetOwnProperty]]
+    /// path as `proxy_get_own_property_descriptor`. Non-proxy objects skip the descriptor-object
+    /// round trip that the generic path performs.
+    pub(crate) fn proxy_own_property_is_enumerable<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_none()
+            && let Some(obj) = self.get_object(obj_id)
+        {
+            self.check_namespace_tdz(obj_id, key)?;
+            let enumerable = obj
+                .borrow()
+                .get_own_property(key)
+                .is_some_and(|d| d.enumerable == Some(true));
+            return Ok(enumerable);
+        }
+        let descriptor_value = self.proxy_get_own_property_descriptor(obj_id, key)?;
+        if descriptor_value.is_undefined() {
+            return Ok(false);
+        }
+        match self.to_property_descriptor(&descriptor_value) {
+            Ok(descriptor) => Ok(descriptor.enumerable == Some(true)),
+            Err(Some(error)) => Err(error),
+            Err(None) => Ok(false),
+        }
+    }
+
     /// Proxy-aware [[GetOwnProperty]] - checks proxy `getOwnPropertyDescriptor` trap, recurses on target if no trap.
     pub(crate) fn proxy_get_own_property_descriptor<K: PropertyKeyLike + ?Sized>(
         &mut self,
