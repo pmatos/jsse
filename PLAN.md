@@ -94,7 +94,8 @@ requires: uncatchable, no routing, no disposal, no promise settlement.
    condition throw inside a `for-of` body inside `try/catch` → the iterator's `return()` is called before the catch runs;
    unhandled condition throw with a function-level `using` → disposer runs before the throw escapes, generator is `done` afterwards (`next()` → `{value: undefined, done: true}`);
    a caught-then-continued generator (`catch` yields, then more code) to prove state survives routing.
-   Header: `esid: sec-if-statement-runtime-semantics-evaluation`, `features: [generators, explicit-resource-management]`, `includes: [compareArray.js]`; `info:` cites the `?` in the Evaluation steps and `TryStatement` Evaluation.
+   Header: one file, one anchor `esid: sec-if-statement-runtime-semantics-evaluation` (the `if` case); the `info:` block enumerates every other cited id from §2 (while/do-while/for/conditional/logical/try/generatorstart) and quotes the `? Evaluation of Expression` steps and `TryStatement` Evaluation. `features: [generators, explicit-resource-management]`, `includes: [compareArray.js]`.
+   Finally bodies in these tests must **not yield** in the async file (see the pre-existing defect below); a yielding `finally` after a routed throw is fine in the sync file (probe: sync matches node) and is worth one case there.
    Expected red: every catch/finally case fails today.
 2. **GREEN — sync `ConditionalGoto`**. Replace the `Completion::Throw(e)` arm body with the same tail as sync `SwitchDispatch`
    (~L1461): `let e = route_exception!(e);` → `dispose_resources(&func_env, Completion::Throw(e))` (§27.5.3.3) →
@@ -113,6 +114,8 @@ requires: uncatchable, no routing, no disposal, no promise settlement.
    Do **not** try to fix `return <rejecting promise>` here (see Out of scope).
 7. **Refactor pass (only if the diff shows duplication)**: none planned. Do not extract a shared helper for the sync/async tails; #664 kept them inline and the arms differ in settlement.
 8. **Full gate** — see §5.
+
+**Pre-existing async defect to avoid (probed, not part of this PR):** in an async generator, a `yield` inside a `finally` entered via a routed throw drops the rest of the finally body on resume — `EnterFinally` leaves `pending_exception` set, the suspended state stores it, and on resume `check_abrupt_on_resume` (L3965/L4012) rejects before the remaining finally statements run. Reproduced today via the already-fixed `SwitchDispatch` route: `async function* f(){ try { switch (thrower()) { case 1: yield 1 } } finally { yield 'f1'; console.log('f2') } }` prints no `f2` in jsse, `f2` in node. Sync is correct. Keep yielding-`finally` cases out of the async test file; list it under §7 and mention it in the PR body.
 
 ## 5. Test surface
 
@@ -147,4 +150,8 @@ requires: uncatchable, no routing, no disposal, no promise settlement.
 - Any restructuring of the `InlineYield`/`generator_context` fallback (#625), deduplicating the sync/async terminator tails, or a shared "finish generator with throw" helper.
 - Editing `generator_transform.rs`, `test262-pass.txt`, `spec/`, `test262/`.
 
-PR title suggestion (squash subject): `fix(generators): route if/while/for/conditional test throws through enclosing try`
+- Async generator `yield` inside a `finally` entered via a routed throw drops the remainder of the finally body (see slice notes); pre-existing, independent of `ConditionalGoto`.
+
+Decision on async `Return` (slice 6): kept in this PR because it is the *same* bare-throw-then-`dispose_resources` pattern the issue asks to audit "in the same pass" and has a verified red repro; the two other audit findings (`yield*`, `return <rejecting promise>`) are a different shape/mechanism and are deferred. Because it is bundled, the title must name both.
+
+PR title suggestion (squash subject): `fix(generators): route condition and async return-expression throws through enclosing try`
