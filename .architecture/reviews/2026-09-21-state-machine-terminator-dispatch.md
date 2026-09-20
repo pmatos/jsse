@@ -525,4 +525,165 @@ behaviour is what a sibling driver already produces for the same program.
 
 ## Design
 
-Written at step 4 — see below.
+Three designs were produced in parallel by sub-agents, each briefed to a different
+principle, and each given the file paths, the coupling details, and both vocabularies.
+All three independently converged on the same seam *name* and the same operation —
+"evaluate a terminator operand and classify the completion" — which is itself evidence the
+seam is where something actually varies rather than where a design wanted it to be.
+
+**The census was corrected twice during design, upward both times.** The candidate card
+above says 15 operand sites and 8 defects; the designs found **22 operand sites** (the
+`Yield`, `Return` and `Throw` terminator operands were missed) and **11 sites that swallow
+`Completion::Exit`**. The corrected census is the one implemented against:
+
+| Driver | Operand sites | Sites swallowing `Exit` |
+|---|---|---|
+| sync generator | 7 — `:885, :1196, :1248, :1339, :1449, :1455, :1502` | 0 (the catch-all `other => return other` propagates) |
+| async generator | 8 — `:4315, :4778, :5118, :5198, :5316, :5325, :5395, :5820` | 4 — `:4315, :5118, :5395, :5820` |
+| async function | 7 — `:8845, :8896, :8917, :8945, :9033, :9043, :9081` | **7 — all of them** |
+
+A second finding the candidate card did not carry: the `Completion::TailCall` drain
+(`while let Completion::TailCall { .. } = result`) is present at only **6 of 22** sites.
+Reachability could not be proven statically, so the seam normalises it as hardening and
+**no test claims it as a fixed bug**.
+
+### Design A — minimal surface
+
+```rust
+pub(crate) fn eval_terminator_operand(&mut self, operand: &Expression, env: &EnvRef)
+    -> Result<JsValue, Completion>
+```
+
+No new types at all. Each site writes `Ok(v) => v`, `Err(Completion::Throw(e)) => <route>`,
+`Err(other) => <teardown; return other>`. What it hides: the Normal/abrupt classification
+and the tail-call drain. What it leaves: throw routing and Exit teardown, at every site.
+Its own strongest self-criticism was that the seam does not fix the bug and the bug does
+not need the seam — the 11 defects are fixed by adding a missing `Exit` arm at 11 sites.
+
+### Design B — maximum flexibility, type-driven
+
+A new `eval/terminator_operand.rs` module: a total `classify(Completion) -> OperandClass`
+with no catch-all arm, payload newtypes (`Thrown`, `Yielded`, `Returned`, `LoopJump`), two
+outcome enums (`OperandStep`, `Diverted`), and a `TerminatorOperandDriver` trait with six
+hooks and no default bodies, implemented once per driver. The signature move is that
+`on_host_exit(&mut self, interp: &mut Interpreter)` **takes no exit code and returns
+`()`** — the seam constructs `OperandStep::Escape(Completion::Exit(code))` itself, so a
+driver structurally cannot turn a host exit into a value. Makes four things fail to
+compile that compile today: E0004 when `Completion` grows a variant, E0046 when a driver
+forgets a case, E0308 on the yield-as-value confusion, plus the absent exit code.
+
+### Design C — optimised for the most common caller (**winner**)
+
+A hybrid: a pure classifier plus one thin `operand!` macro per driver.
+
+```rust
+/// What a `StateTerminator` operand expression produced, once any tail-call
+/// chain has been driven to a real completion.
+pub(crate) enum Operand {
+    Value(JsValue),      // Completion::Normal
+    Throw(JsValue),      // catchable; routing is driver-specific
+    Suspend(JsValue),    // Completion::Yield
+    Abort(Completion),   // Completion::Exit — the driver MUST tear down and propagate
+    Other(Completion),   // Return / Break / Continue / Empty — each driver keeps today's answer
+}
+
+/// Pure: no interpreter, no control flow. This is the rule that drifted.
+pub(crate) fn classify_operand(completion: Completion) -> Operand;
+
+impl Interpreter {
+    /// Evaluate, drive any tail-call chain to a real completion, then classify.
+    pub(crate) fn eval_operand(&mut self, operand: &Expression, env: &EnvRef) -> Operand;
+}
+```
+
+plus, next to each driver's existing `route_exception!`, one `operand!` macro carrying that
+driver's default throw tail and its Exit teardown, with an override form for the sites
+whose tails genuinely differ.
+
+The five-variant split is the load-bearing decision: keeping `Return`/`Break`/`Continue`/
+`Empty` in a separate `Other` variant rather than folding them into `Abort` is what keeps
+the change **an `Exit` fix plus a dedup**. Folding them would silently flip the async
+drivers from "→ `UNDEFINED`, keep going" to "tear down and return" at every site.
+
+### Adjudication
+
+**Adjudicated without an advisor** — it was rate-limited for this run — so the verdict was
+made against the three written designs above rather than from memory, per the skill's
+stated fallback. Criteria in the skill's fixed order:
+
+**1. Depth — leverage at the interface.** A caller of C learns one token,
+`operand!(expr, env)`, and gets classification, the driver's throw tail and the driver's
+Exit teardown. **8 of 22 sites become true one-liners** preserving today's behaviour
+exactly, 15 of 22 if the spec-correct defaults are also adopted. A caller of A learns a
+`Result` and then writes the 10–11 line generator teardown itself; A produces **no
+one-liner at any of the 22 sites**. A caller of B learns six hooks, four types, two enums
+and a macro. On behaviour-hidden per unit of interface: **C, then B, then A.**
+
+**2. Locality.** The measured line counts settle this. Call-site lines across the 22
+sites: **323 today → 267 under A → 85 under C**. A's `Err(other) => <teardown; return
+other>` arm forces the generator teardown into all 14 generator sites — it
+*re-duplicates precisely the code the refactor exists to remove*, which is disqualifying
+for a deepening. B and C both put each driver's teardown in exactly one place. **B and C
+tie; A loses.**
+
+**3. Seam placement.** The thing that varies is the **driver** — there are three, so this
+is a real seam and not a hypothetical one. B and C both place the seam there. A places a
+seam only at the *invariant* point (classification) and leaves the varying part
+duplicated at 22 sites, which is a seam in the wrong place. **B and C tie; A loses.**
+
+**4. Test surface.** A is best in the abstract — a plain function, fully unit-testable.
+But A has already lost criteria 1, 2 and 3, and criterion order is not advisory. Between
+B and C the test surface is equivalent: both expose a pure classifier that is directly
+unit-testable, and in both the per-driver wiring (B's trait hooks needing a live
+activation; C's macros) is reachable only end-to-end. Critically, **C satisfies this run's
+test-first requirement**: the drifted rule itself — *which completion kinds carry a value*
+— lives in `classify_operand`, a pure `Completion -> Operand` function with no
+interpreter, which is exactly the unit under test. **B and C tie.**
+
+**5. Blast radius.** C adds ~75 lines of shared code and removes 238 from call sites. B
+adds four types, two enums, a trait with 18 method bodies across three drivers, three
+macros *and* loop labels on all three state loops — and by its own admission "the line
+count barely moves; it may go up". **C wins.**
+
+**Winner: Design C.** It takes criteria 1, 2 and 3, ties 4, and wins 5.
+
+**Runner-up design: B**, and the reason it lost is worth stating precisely, because it is
+not "too complex" in the abstract. B and C place the seam identically — per driver — and
+B still needs a macro, for the same reason C does: `continue` and `return` cannot cross a
+function boundary, which is why `route_exception!` is already a macro at
+`generator_runtime.rs:724`. **B is therefore C plus a trait**, and the trait's marginal
+purchase is E0046 (a driver that forgets a case fails to compile) at a cost of 18 method
+bodies for 22 call sites. B's own analysis concedes the charge — *"six hooks × three
+drivers is 18 method bodies where there are 15 inline matches today"* — and concedes that
+its `Thrown`/`Returned`/`LoopJump` newtypes exist only to make an accessor greppable.
+That is a poor trade on criteria 1 and 5 for a compile error that criterion 1's winner
+also gets, more cheaply: C's `classify_operand` is a single total match over `Completion`,
+so adding a variant is a compile error there too, in one place.
+
+**Design A is recorded as rejected rather than second**, despite being the smallest and
+most testable, because its `Err(other)` arm re-duplicates the teardown at 14 sites. A
+design that leaves the duplication it was commissioned to remove is not a deepening.
+
+### One piece of B that is adopted into the implementation
+
+B's observation that a driver should never *see* the exit code is correct and cheap, so
+the implementation keeps `Operand::Abort(Completion)` opaque at the call sites: the
+`operand!` macros propagate the completion verbatim and no macro arm can substitute a
+value for it.
+
+### Deliberately out of scope, and why
+
+Design C surfaced **three further drift findings** that are *not* about `Completion::Exit`
+and are therefore **not** fixed here. Each is preserved byte-for-byte via an explicit
+macro override, and each is reported for its own PR with its own test:
+
+1. `generator_runtime.rs:1196` (sync `Return` operand) omits `route_exception!`, so a throw
+   from a `return` expression inside a `try` does not reach the `catch`.
+2. `generator_runtime.rs:885`, `:1502`, `:4315`, `:5395` omit `dispose_resources` where
+   their sibling sites call it (§27.5.3.3 / §27.6.3.3).
+3. `generator_runtime.rs:4778` omits `drain_microtasks()` where `:5198` calls it.
+
+Letting a macro default silently absorb these would turn a reviewable Exit fix into four
+unreviewable behaviour changes. They are recorded in `.architecture/backlog.md`.
+Unifying the two `route_exception!` copies (`:724`, `:3988`, one token apart) is likewise
+adjacent and left alone.
