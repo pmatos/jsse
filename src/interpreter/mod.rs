@@ -22,6 +22,8 @@ pub(crate) use helpers::*;
 mod builtins;
 pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
+mod dispose;
+pub(crate) use dispose::{AsyncDisposal, DisposeCursor};
 mod env_helpers;
 mod eval;
 mod exec;

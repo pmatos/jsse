@@ -388,6 +388,9 @@ impl Interpreter {
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
+        for disposal in self.scheduler.iter_async_disposals() {
+            disposal.for_each_value(|v| Self::collect_value_roots(v, &mut roots));
+        }
         for afs in self.scheduler.iter_async_function_states() {
             Self::collect_env_roots(&afs.func_env, &mut roots, &mut seen_envs);
             Self::collect_value_roots(&afs.resolve_fn, &mut roots);

@@ -511,17 +511,7 @@ impl Interpreter {
         // disposeAsync()
         let dispose_async_fn =
             self.define_method(ads_proto_id, "disposeAsync", 0, |interp, this, _args| {
-                let result = interp.async_disposable_stack_dispose(this);
-                // A disposer that called `__host_exit` (issue #242) surfaces as
-                // `Completion::Exit`; it must propagate abruptly (via the `other`
-                // arm) rather than being wrapped into a resolved/rejected promise
-                // returned as `Normal`, which would let the caller keep
-                // evaluating in expression position.
-                match result {
-                    Completion::Normal(_) => interp.create_resolved_promise(JsValue::UNDEFINED),
-                    Completion::Throw(e) => interp.create_rejected_promise(e),
-                    other => other,
-                }
+                interp.async_disposable_stack_dispose(this)
             });
 
         // Symbol.asyncDispose = disposeAsync
@@ -910,91 +900,62 @@ impl Interpreter {
         }
     }
 
+    /// AsyncDisposableStack.prototype.disposeAsync: the promise capability is
+    /// created before DisposeResources runs and settles only after its `Await`s.
     fn async_disposable_stack_dispose(&mut self, this: &JsValue) -> Completion {
-        if let Some(object_id) = this.as_object_id()
-            && self.get_object_cell(object_id).is_some()
-        {
-            enum Probe {
-                NotStack,
-                AlreadyDisposed,
-                Active(Vec<DisposableResource>),
-            }
-            let probe = {
-                let cell = self.get_object_cell_expect(object_id);
-                let mut b = cell.borrow_mut();
-                if b.class_name != "AsyncDisposableStack" {
-                    Probe::NotStack
-                } else {
-                    match b.disposable_stack_mut() {
-                        Some(ds) => {
-                            if ds.disposed {
-                                Probe::AlreadyDisposed
-                            } else {
-                                ds.disposed = true;
-                                Probe::Active(std::mem::take(&mut ds.stack))
-                            }
-                        }
-                        None => Probe::NotStack,
-                    }
-                }
-            };
-            let stack = match probe {
-                Probe::NotStack => {
-                    return Completion::Throw(
-                        self.create_type_error("Not an AsyncDisposableStack"),
-                    );
-                }
-                Probe::AlreadyDisposed => return Completion::Normal(JsValue::UNDEFINED),
-                Probe::Active(s) => s,
-            };
-
-            let mut current_error: Option<JsValue> = None;
-            let mut needs_await = false;
-            let mut has_awaited = false;
-            for resource in stack.iter().rev() {
-                if resource.hint == DisposeHint::Async && (resource.dispose_method).is_undefined() {
-                    needs_await = true;
-                    continue;
-                }
-                let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
-                // A disposer that called `__host_exit` (issue #242) stops async
-                // disposal immediately; propagate the exit. Inert off-path.
-                if let Completion::Exit(code) = result {
-                    return Completion::Exit(code);
-                }
-                match result {
-                    Completion::Normal(v) if resource.hint == DisposeHint::Async => {
-                        needs_await = true;
-                        has_awaited = true;
-                        let awaited = self.await_value(&v);
-                        if let Completion::Exit(code) = awaited {
-                            return Completion::Exit(code);
-                        }
-                        if let Completion::Throw(e) = awaited {
-                            current_error = Some(self.wrap_suppressed_error(e, current_error));
-                        }
-                    }
-                    Completion::Throw(e) => {
-                        current_error = Some(self.wrap_suppressed_error(e, current_error));
-                    }
-                    _ => {}
-                }
-            }
-            if needs_await && !has_awaited {
-                // The final await may have run a job that called `__host_exit`
-                // (issue #242): propagate the `Completion::Exit` abruptly.
-                if let Completion::Exit(code) = self.await_value(&JsValue::UNDEFINED) {
-                    return Completion::Exit(code);
-                }
-            }
-
-            if let Some(err) = current_error {
-                Completion::Throw(err)
-            } else {
-                Completion::Normal(JsValue::UNDEFINED)
-            }
-        } else {
-            Completion::Throw(self.create_type_error("Not an AsyncDisposableStack"))
+        let stack = match self.take_async_disposable_stack(this) {
+            Ok(Some(stack)) => stack,
+            Ok(None) => return self.create_resolved_promise(JsValue::UNDEFINED),
+            Err(e) => return self.create_rejected_promise(e),
+        };
+        let (resolve, reject, promise) = self.create_promise_parts();
+        let id = self.scheduler.alloc_async_function_id();
+        self.scheduler.insert_async_disposal(
+            id,
+            AsyncDisposal {
+                cursor: DisposeCursor::new(stack, Completion::Normal(JsValue::UNDEFINED)),
+                promise: promise.clone(),
+                resolve,
+                reject,
+            },
+        );
+        // A disposer that called `__host_exit` (issue #242) surfaces as
+        // `Completion::Exit`; it must propagate abruptly rather than be
+        // wrapped into the returned promise.
+        match self.async_disposal_step(id, None) {
+            Completion::Exit(code) => Completion::Exit(code),
+            _ => Completion::Normal(promise),
         }
+    }
+
+    /// Marks the stack disposed and hands over its resources: `Ok(None)` when
+    /// it was already disposed, `Err` when `this` is not an AsyncDisposableStack.
+    fn take_async_disposable_stack(
+        &mut self,
+        this: &JsValue,
+    ) -> Result<Option<Vec<DisposableResource>>, JsValue> {
+        let not_a_stack = "Not an AsyncDisposableStack";
+        let Some(object_id) = this.as_object_id() else {
+            return Err(self.create_type_error(not_a_stack));
+        };
+        let Some(cell) = self.get_object_cell(object_id) else {
+            return Err(self.create_type_error(not_a_stack));
+        };
+        let taken = {
+            let mut b = cell.borrow_mut();
+            if b.class_name != "AsyncDisposableStack" {
+                None
+            } else {
+                b.disposable_stack_mut().map(|ds| {
+                    if ds.disposed {
+                        None
+                    } else {
+                        ds.disposed = true;
+                        Some(std::mem::take(&mut ds.stack))
+                    }
+                })
+            }
+        };
+        taken.ok_or_else(|| self.create_type_error(not_a_stack))
     }
 }
