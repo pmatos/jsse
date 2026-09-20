@@ -1044,6 +1044,33 @@ class AsyncBenchmarkEndToEndTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(len(result["raw_times"]), 2)
 
+    def test_async_validate_failure_through_console_assert_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bench.js").write_text(
+                "class Benchmark { async runIteration() {}"
+                " validate() { console.assert(false, 'bad state'); } }\n",
+                encoding="utf-8",
+            )
+
+            result = self.runner.run_benchmark_once(
+                "bench",
+                "async",
+                ["bench.js"],
+                None,
+                1,
+                False,
+                0,
+                engine_command_or_skip(self),
+                str(root),
+                60,
+                False,
+                None,
+            )
+
+        self.assertEqual(result["status"], "error", result)
+        self.assertIn("Assertion failed: bad state", result["reason"])
+
     def test_async_benchmark_failure_is_reported_with_its_message(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
