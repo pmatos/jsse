@@ -143,4 +143,121 @@ asyncTest(async function () {
   }
   assert.sameValue(caught && caught.message, 'from-block', 'throw survives disposal');
   assert.compareArray(log, ['dispose-a'], 'throw disposes first');
+
+  log = [];
+  var r = 0;
+  while (true) {
+    await 0;
+    try {
+      {
+        await using a = resource(log, 'a');
+        if (++r > 1) break;
+        log.push('body' + r);
+      }
+    } finally {
+      log.push('finally' + r);
+    }
+  }
+  log.push('after');
+  assert.compareArray(
+    log,
+    ['body1', 'dispose-a', 'finally1', 'dispose-a', 'finally2', 'after'],
+    'break out of a block inside try runs disposal then finally'
+  );
+
+  log = [];
+  outerFinally: for (var s = 0; s < 2; s++) {
+    for (var t = 0; t < 2; t++) {
+      await 0;
+      try {
+        {
+          await using a = resource(log, 'a' + s + t);
+          continue outerFinally;
+        }
+      } finally {
+        log.push('finally' + s + t);
+      }
+    }
+  }
+  log.push('after');
+  assert.compareArray(
+    log,
+    ['dispose-a00', 'finally00', 'dispose-a10', 'finally10', 'after'],
+    'labeled continue out of a block inside try runs disposal then finally'
+  );
+
+  log = [];
+  var iterable = {
+    [Symbol.iterator]() {
+      return {
+        i: 0,
+        next() {
+          return { done: this.i > 3, value: this.i++ };
+        },
+        return() {
+          log.push('iterator-closed');
+          return {};
+        }
+      };
+    }
+  };
+  for (var x of iterable) {
+    try {
+      {
+        await using a = resource(log, 'a' + x);
+        if (x === 1) break;
+      }
+    } catch (e) {
+    }
+  }
+  log.push('after');
+  assert.compareArray(
+    log,
+    ['dispose-a0', 'dispose-a1', 'iterator-closed', 'after'],
+    'break out of a block inside a for-of body disposes before the iterator closes'
+  );
+
+  log = [];
+  for (var u = 0; u < 2; u++) {
+    try {
+      {
+        await using a = resource(log, 'a' + u);
+        throw u;
+      }
+    } catch (e) {
+      log.push('caught' + e);
+      continue;
+    } finally {
+      log.push('finally' + u);
+    }
+  }
+  log.push('after');
+  assert.compareArray(
+    log,
+    ['dispose-a0', 'caught0', 'finally0', 'dispose-a1', 'caught1', 'finally1', 'after'],
+    'throw out of a block inside try is caught after disposal, then continue runs finally'
+  );
+
+  log = [];
+  var w = 0;
+  outerSwitch: while (w < 3) {
+    w++;
+    switch (w) {
+      case 1: {
+        await using a = resource(log, 'a' + w);
+        continue outerSwitch;
+      }
+      case 2: {
+        await using a = resource(log, 'a' + w);
+        break;
+      }
+    }
+    log.push('tail' + w);
+  }
+  log.push('after');
+  assert.compareArray(
+    log,
+    ['dispose-a1', 'dispose-a2', 'tail2', 'tail3', 'after'],
+    'continue and break out of switch-case blocks'
+  );
 });
