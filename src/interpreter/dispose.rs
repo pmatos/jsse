@@ -158,6 +158,25 @@ impl DisposeCursor {
     }
 }
 
+/// What an async function does once the disposal of its function-level
+/// resources finishes, i.e. which completion the disposal was entered with.
+#[derive(Clone, Copy)]
+pub(crate) enum DisposeThen {
+    /// A `return` left the body; a throw from disposal is routed as an
+    /// exception.
+    Return,
+    /// An uncaught throw left the body.
+    Throw,
+    /// The body ran to its end.
+    Complete,
+}
+
+/// A function-level DisposeResources parked at one of its `Await`s.
+pub(crate) struct PendingDispose {
+    pub(crate) cursor: DisposeCursor,
+    pub(crate) then: DisposeThen,
+}
+
 /// A `disposeAsync()` call suspended at one of DisposeResources' `Await`s.
 pub(crate) struct AsyncDisposal {
     pub(crate) cursor: DisposeCursor,
@@ -176,6 +195,30 @@ impl AsyncDisposal {
 }
 
 impl Interpreter {
+    /// Takes `env`'s pending resources, or `None` when it has none (so no
+    /// disposal, and no `Await`, is due).
+    pub(crate) fn take_dispose_stack(&mut self, env: &EnvRef) -> Option<Vec<DisposableResource>> {
+        env.borrow_mut()
+            .dispose_stack
+            .take()
+            .filter(|stack| !stack.is_empty())
+    }
+
+    /// GetDisposeMethod for `async-dispose` falling back to `@@dispose`: the
+    /// wrapper calls `method` and discards its result, so a promise returned
+    /// by a synchronous disposer is never awaited.
+    pub(crate) fn async_from_sync_dispose_method(&mut self, method: JsValue) -> JsValue {
+        self.create_function(JsFunction::native(
+            String::new(),
+            0,
+            move |interp, this, _args| match interp.call_function(&method, this, &[]) {
+                Completion::Throw(e) => interp.create_rejected_promise(e),
+                Completion::Exit(code) => Completion::Exit(code),
+                _ => interp.create_resolved_promise(JsValue::UNDEFINED),
+            },
+        ))
+    }
+
     /// Drive `cursor` to completion, draining the microtask queue inline at
     /// each `Await`. For callers that cannot suspend the running execution
     /// context.

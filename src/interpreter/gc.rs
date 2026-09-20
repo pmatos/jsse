@@ -398,6 +398,11 @@ impl Interpreter {
             if let Some(ref v) = afs.pending_return {
                 Self::collect_value_roots(v, &mut roots);
             }
+            if let Some(ref pending) = afs.pending_dispose {
+                pending
+                    .cursor
+                    .for_each_value(|v| Self::collect_value_roots(v, &mut roots));
+            }
             if let Some(ref v) = afs.saved_finally_exception {
                 Self::collect_value_roots(v, &mut roots);
             }

@@ -23,7 +23,7 @@ mod builtins;
 pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
 mod dispose;
-pub(crate) use dispose::{AsyncDisposal, DisposeCursor};
+pub(crate) use dispose::{AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, PendingDispose};
 mod env_helpers;
 mod eval;
 mod exec;
@@ -3891,6 +3891,7 @@ impl Interpreter {
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
+                pending_dispose: None,
                 state_machine: sm,
                 func_env: module_env,
                 is_strict: true,

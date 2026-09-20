@@ -599,7 +599,7 @@ impl Interpreter {
                 }
                 // Try Symbol.asyncDispose first, then Symbol.dispose
                 let mut method = JsValue::UNDEFINED;
-                let mut hint = DisposeHint::Async;
+                let hint = DisposeHint::Async;
                 if let Some(key) = interp.get_symbol_key("asyncDispose")
                     && let Some(value_id) = value.as_object_id()
                 {
@@ -620,8 +620,12 @@ impl Interpreter {
                         other => return other,
                     };
                     if !(m).is_nullish() {
-                        method = m;
-                        hint = DisposeHint::Sync;
+                        if !interp.is_callable(&m) {
+                            return Completion::Throw(
+                                interp.create_type_error("dispose method is not a function"),
+                            );
+                        }
+                        method = interp.async_from_sync_dispose_method(m);
                     }
                 }
                 if (method).is_undefined() {

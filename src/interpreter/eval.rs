@@ -8186,6 +8186,7 @@ impl Interpreter {
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
+                pending_dispose: None,
                 state_machine: sm,
                 func_env,
                 is_strict,
@@ -8250,6 +8251,7 @@ impl Interpreter {
             reject_fn,
             for_of_stack: saved_for_of_stack,
             module_path: async_module_path,
+            pending_dispose: restored_pending_dispose,
         } = state;
 
         if let Some(ref mp) = async_module_path {
@@ -8294,13 +8296,30 @@ impl Interpreter {
             }
         }
 
+        // A resumption from a parked disposal Await belongs to the disposal's
+        // cursor, not to the body: a rejection is that resource's throw
+        // completion, never an exception to route through the try stack.
+        let mut pending_dispose = restored_pending_dispose;
+        let mut dispose_awaited = pending_dispose.is_some().then(|| {
+            if is_error {
+                Err(sent_value.clone())
+            } else {
+                Ok(sent_value.clone())
+            }
+        });
+
         // If the sent_value is an error (from a rejected promise), route through try stack
-        let mut pending_exception: Option<JsValue> = if is_error { Some(sent_value) } else { None };
+        let mut pending_exception: Option<JsValue> = if is_error && pending_dispose.is_none() {
+            Some(sent_value)
+        } else {
+            None
+        };
 
         // Re-insert state so GC can trace it during execution
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
+                pending_dispose: None,
                 state_machine: state_machine.clone(),
                 func_env: func_env.clone(),
                 is_strict,
@@ -8427,25 +8446,15 @@ impl Interpreter {
                 if let Some((_, finally_state)) = routed_to {
                     pending_return = Some(ret_val);
                     current_id = finally_state;
+                } else if let Some(stack) = self.take_dispose_stack(&func_env) {
+                    pending_dispose = Some(PendingDispose {
+                        cursor: DisposeCursor::new(stack, Completion::Return(ret_val)),
+                        then: DisposeThen::Return,
+                    });
                 } else {
-                    let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
-                    match disp {
-                        Completion::Return(v) => {
-                            self.scheduler.remove_async_function_state(async_id);
-                            let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[v]);
-                            return Completion::Normal(JsValue::UNDEFINED);
-                        }
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                        }
-                        // A disposer that called `__host_exit` (issue #242)
-                        // propagates out uncatchably rather than settling.
-                        Completion::Exit(code) => {
-                            self.scheduler.remove_async_function_state(async_id);
-                            return Completion::Exit(code);
-                        }
-                        _ => {}
-                    }
+                    self.scheduler.remove_async_function_state(async_id);
+                    let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[ret_val]);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
             }};
         }
@@ -8498,7 +8507,82 @@ impl Interpreter {
             }};
         }
 
+        // Completes the function-level disposal that a `return`, an uncaught
+        // throw, or the end of the body started. The cursor parks the function
+        // at each `Await` of DisposeResources so no other job is drained inline.
+        macro_rules! complete_function {
+            () => {{
+                match self.take_dispose_stack(&func_env) {
+                    Some(stack) => {
+                        pending_dispose = Some(PendingDispose {
+                            cursor: DisposeCursor::new(
+                                stack,
+                                Completion::Normal(JsValue::UNDEFINED),
+                            ),
+                            then: DisposeThen::Complete,
+                        });
+                        continue;
+                    }
+                    None => return self.async_fn_complete(async_id, &resolve_fn),
+                }
+            }};
+        }
+
         loop {
+            if let Some(mut disposal) = pending_dispose.take() {
+                match disposal.cursor.step(self, dispose_awaited.take()) {
+                    DisposeStep::Await(value) => {
+                        self.async_fn_suspend_at_await(
+                            async_id,
+                            &state_machine,
+                            &func_env,
+                            is_strict,
+                            current_id,
+                            &try_stack,
+                            None,
+                            pending_return.take(),
+                            pending_loop_control.take(),
+                            saved_finally_exception.take(),
+                            pending_for_of_unwind.take(),
+                            &resolve_fn,
+                            &reject_fn,
+                            &value,
+                            &for_of_stack,
+                        );
+                        self.scheduler.park_async_function_dispose(async_id, disposal);
+                        return Completion::Normal(JsValue::UNDEFINED);
+                    }
+                    // A disposer that called `__host_exit` (issue #242)
+                    // propagates out uncatchably instead of settling.
+                    DisposeStep::Done(Completion::Exit(code)) => {
+                        self.scheduler.remove_async_function_state(async_id);
+                        return Completion::Exit(code);
+                    }
+                    DisposeStep::Done(done) => match (disposal.then, done) {
+                        (DisposeThen::Return, Completion::Throw(e)) => pending_exception = Some(e),
+                        (_, Completion::Throw(e)) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                        (_, Completion::Return(v)) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[v]);
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                        _ => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            let _ = self.call_function(
+                                &resolve_fn,
+                                &JsValue::UNDEFINED,
+                                &[JsValue::UNDEFINED],
+                            );
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                    },
+                }
+            }
+
             // §10.4.4.3 Dispose step 3: async-dispose resources need Await(result),
             // which must truly suspend the async function. dispose_resources already
             // resolved the promise synchronously via await_value; this flag triggers
@@ -8526,7 +8610,7 @@ impl Interpreter {
             }
 
             if current_id >= state_machine.states.len() {
-                return self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
+                complete_function!();
             }
             let terminator = state_machine.states[current_id].terminator.clone();
 
@@ -8645,17 +8729,13 @@ impl Interpreter {
                     continue;
                 }
 
-                let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
-                // A disposer that called `__host_exit` (issue #242) propagates
-                // out uncatchably instead of rejecting the promise.
-                if let Completion::Exit(code) = disp {
-                    self.scheduler.remove_async_function_state(async_id);
-                    return Completion::Exit(code);
+                if let Some(stack) = self.take_dispose_stack(&func_env) {
+                    pending_dispose = Some(PendingDispose {
+                        cursor: DisposeCursor::new(stack, Completion::Throw(exc)),
+                        then: DisposeThen::Throw,
+                    });
+                    continue;
                 }
-                let exc = match disp {
-                    Completion::Throw(e) => e,
-                    _ => JsValue::UNDEFINED,
-                };
                 self.scheduler.remove_async_function_state(async_id);
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exc]);
                 return Completion::Normal(JsValue::UNDEFINED);
@@ -9248,7 +9328,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::Completed => {
-                    return self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
+                    complete_function!();
                 }
 
                 StateTerminator::Yield { .. } => {
@@ -9385,28 +9465,10 @@ impl Interpreter {
         completion
     }
 
-    fn async_fn_complete(
-        &mut self,
-        async_id: u64,
-        func_env: &EnvRef,
-        resolve_fn: &JsValue,
-        reject_fn: &JsValue,
-    ) -> Completion {
-        let disp = self.dispose_resources(func_env, Completion::Normal(JsValue::UNDEFINED));
+    fn async_fn_complete(&mut self, async_id: u64, resolve_fn: &JsValue) -> Completion {
         self.scheduler.remove_async_function_state(async_id);
-        match disp {
-            // A disposer that called `__host_exit` (issue #242) propagates out
-            // uncatchably instead of settling the result promise.
-            Completion::Exit(code) => Completion::Exit(code),
-            Completion::Throw(e) => {
-                let _ = self.call_function(reject_fn, &JsValue::UNDEFINED, &[e]);
-                Completion::Normal(JsValue::UNDEFINED)
-            }
-            _ => {
-                let _ = self.call_function(resolve_fn, &JsValue::UNDEFINED, &[JsValue::UNDEFINED]);
-                Completion::Normal(JsValue::UNDEFINED)
-            }
-        }
+        let _ = self.call_function(resolve_fn, &JsValue::UNDEFINED, &[JsValue::UNDEFINED]);
+        Completion::Normal(JsValue::UNDEFINED)
     }
 
     fn async_fn_suspend_at_await(
@@ -9441,6 +9503,7 @@ impl Interpreter {
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
+                pending_dispose: None,
                 state_machine: state_machine.clone(),
                 func_env: func_env.clone(),
                 is_strict,

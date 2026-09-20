@@ -2631,7 +2631,10 @@ impl Interpreter {
                 let obj_id = o.id;
                 match self.get_object_property(obj_id, key, value) {
                     Completion::Normal(v) if !(v).is_nullish() => {
-                        method = v;
+                        if !self.is_callable(&v) {
+                            return Err(self.create_type_error("[Symbol.dispose] is not a function"));
+                        }
+                        method = self.async_from_sync_dispose_method(v);
                     }
                     Completion::Throw(e) => return Err(e),
                     _ => {}
@@ -2664,14 +2667,10 @@ impl Interpreter {
     }
 
     pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
-        let stack = env.borrow_mut().dispose_stack.take();
-        let Some(stack) = stack else {
-            return completion;
-        };
-        if stack.is_empty() {
-            return completion;
+        match self.take_dispose_stack(env) {
+            Some(stack) => self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion)),
+            None => completion,
         }
-        self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion))
     }
 
     pub(crate) fn wrap_suppressed_error(

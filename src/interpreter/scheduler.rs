@@ -13,6 +13,7 @@ use super::AsyncFunctionState;
 use super::AsyncGenRequest;
 use super::Completion;
 use super::Interpreter;
+use super::PendingDispose;
 
 pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
 
@@ -271,6 +272,12 @@ impl JobScheduler {
 
     pub(crate) fn remove_async_function_state(&mut self, id: u64) -> Option<AsyncFunctionState> {
         self.async_function_states.remove(&id)
+    }
+
+    pub(crate) fn park_async_function_dispose(&mut self, id: u64, pending: PendingDispose) {
+        if let Some(state) = self.async_function_states.get_mut(&id) {
+            state.pending_dispose = Some(pending);
+        }
     }
 
     pub(crate) fn iter_async_function_states(&self) -> impl Iterator<Item = &AsyncFunctionState> {
