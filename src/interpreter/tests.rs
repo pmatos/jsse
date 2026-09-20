@@ -3284,6 +3284,69 @@ mod string_to_number_seam_tests {
     }
 }
 
+/// §19.2.5 parseInt must round the digit prefix's exact value to a Number once.
+/// Radices outside {2, 4, 8, 10, 16, 32} may legally be approximated, so exactness
+/// there is an engine policy checked here rather than in test262-extra. The
+/// reference is a BigInt fold of the same digits, converted with a single
+/// `Number(...)` rounding.
+mod parse_int_large_value_seam_tests {
+    use super::*;
+
+    const REFERENCE: &str = r#"
+        function reference(s, r) {
+          var v = 0n;
+          for (var i = 0; i < s.length; i++) {
+            v = v * BigInt(r) + BigInt(parseInt(s[i], 36));
+          }
+          return Number(v);
+        }
+        function agree(s, r) { return parseInt(s, r) === reference(s, r) ? 1 : 0; }
+    "#;
+
+    fn run_with_reference(body: &str) -> Interpreter {
+        run_script(&format!("{REFERENCE}\n{body}"))
+    }
+
+    #[test]
+    fn non_power_of_two_radices_round_once() {
+        let interp = run_with_reference(
+            r#"
+            var d30 = agree("123456789012345678901234567890", 10);
+            var r3  = agree("1212221201211100110020212202202002002002211", 3);
+            var r5  = agree("4321043210432104321043210432104321043210", 5);
+            var r7  = agree("6543210654321065432106543210654321065432", 7);
+            var r36 = agree("zyxwvutsrqponmlkjihgfedcba9876543210zyxw", 36);
+            "#,
+        );
+        for name in ["d30", "r3", "r5", "r7", "r36"] {
+            assert_eq!(global_number(&interp, name), 1.0, "{name}");
+        }
+    }
+
+    #[test]
+    fn digit_runs_beyond_the_finite_range_are_infinite() {
+        let interp = run_with_reference(
+            r#"
+            var zeros = "0".repeat(3000);
+            var huge7   = parseInt("6".repeat(1000000), 7);
+            var padded  = parseInt(zeros + "1" + "0".repeat(1025), 3);
+            var wide36  = parseInt("z".repeat(206), 36);
+            var maxFinite36 = agree("1" + "0".repeat(198), 36);
+            var negZero = 1 / parseInt("-" + zeros, 36);
+            var zeroRun = parseInt(zeros, 7);
+            var one     = parseInt(zeros + "1", 7);
+            "#,
+        );
+        assert_eq!(global_number(&interp, "huge7"), f64::INFINITY);
+        assert_eq!(global_number(&interp, "padded"), f64::INFINITY);
+        assert_eq!(global_number(&interp, "wide36"), f64::INFINITY);
+        assert_eq!(global_number(&interp, "maxFinite36"), 1.0);
+        assert_eq!(global_number(&interp, "negZero"), f64::NEG_INFINITY);
+        assert_eq!(global_number(&interp, "zeroRun"), 0.0);
+        assert_eq!(global_number(&interp, "one"), 1.0);
+    }
+}
+
 /// §10.4.3 String-exotic objects expose an own indexed character property only
 /// when the key is the CanonicalNumericIndexString of an in-range integer.
 /// These exercise the public seams (member read, `in`, GetOwnPropertyDescriptor,

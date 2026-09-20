@@ -1855,25 +1855,15 @@ impl Interpreter {
                 } else {
                     s
                 };
-                // Parse digits character by character (partial parsing)
-                let mut result: f64 = 0.0;
-                let mut found_digit = false;
-                for ch in s.chars() {
-                    let digit = match ch {
-                        '0'..='9' => ch as i32 - '0' as i32,
-                        'a'..='z' => ch as i32 - 'a' as i32 + 10,
-                        'A'..='Z' => ch as i32 - 'A' as i32 + 10,
-                        _ => break,
-                    };
-                    if digit >= radix {
-                        break;
-                    }
-                    found_digit = true;
-                    result = result * (radix as f64) + (digit as f64);
-                }
-                if !found_digit {
+                // §19.2.5 steps 11-12: Z is the longest prefix of radix-R digits
+                let radix = radix as u32;
+                let end = s.find(|c: char| !c.is_digit(radix)).unwrap_or(s.len());
+                let digits = &s[..end];
+                if digits.is_empty() {
                     return Completion::Normal(JsValue::number(f64::NAN));
                 }
+                let mut result =
+                    crate::interpreter::helpers::prevalidated_radix_digits_to_f64(digits, radix);
                 if negative {
                     result = -result;
                 }

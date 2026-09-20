@@ -162,15 +162,34 @@ pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
     )
 }
 
-// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as an
-// exact integer, then convert it to f64 once. Parsing through the exact decimal
-// representation gives Rust's float parser the full mathematical value to round,
-// avoiding both fixed-width overflow and intermediate floating-point rounding.
+// Digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as a Number.
 // Empty or invalid input → NaN.
 fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
     if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
         return f64::NAN;
     }
+    prevalidated_radix_digits_to_f64(digits, radix)
+}
+
+// Exact integer value of a non-empty run of ASCII radix-`radix` digits, rounded to
+// f64 once (§6.1.6.1 𝔽(x)), so no intermediate floating-point rounding or
+// fixed-width overflow. Shared by §7.1.4.1 StringToNumber and §19.2.5 parseInt,
+// whose digit prefix Z is already known to be valid; callers must guarantee that.
+pub(crate) fn prevalidated_radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
+    debug_assert!(!digits.is_empty() && digits.bytes().all(|b| (b as char).is_digit(radix)));
+    if let Ok(v) = u64::from_str_radix(digits, radix) {
+        return v as f64;
+    }
+    if radix == 10 {
+        return digits.parse::<f64>().unwrap_or(f64::NAN);
+    }
+    // n significant digits are >= radix^(n-1) >= 2^((n-1) * floor(log2 radix)); at
+    // 2^1024 the value rounds to +∞, so skip building an arbitrarily large integer.
+    let significant = digits.trim_start_matches('0').len() as u64;
+    if significant.saturating_sub(1) * u64::from(radix.ilog2()) >= 1024 {
+        return f64::INFINITY;
+    }
+    // Via the exact decimal string: f64::from_str rounds the full value once.
     num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
         .and_then(|exact| exact.to_string().parse::<f64>().ok())
         .unwrap_or(f64::NAN)
