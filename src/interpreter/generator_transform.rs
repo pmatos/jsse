@@ -74,6 +74,7 @@ pub(crate) enum StateTerminator {
         #[allow(dead_code)]
         after_state: usize,
         is_await: bool,
+        is_for_in: bool,
     },
     ForOfHead {
         iter_var: String,
@@ -1991,17 +1992,58 @@ fn transform_for_statement(
 }
 
 fn transform_for_in_statement(
-    _for_in_stmt: &ForInStatement,
+    for_in_stmt: &ForInStatement,
     ctx: &mut TransformContext,
-    _after_state: usize,
+    after_state: usize,
 ) {
-    // For-in with yields is complex - for now emit as-is and let runtime handle
-    // A full implementation would need to capture the iterator state
-    ctx.emit_statement(Statement::Empty);
+    // Annex B.3.5: `for (var x = init in obj)` evaluates the initializer once,
+    // before the head's RHS.
+    let mut left = for_in_stmt.left.clone();
+    if let ForInOfLeft::Variable(decl) = &mut left
+        && decl.kind == VarKind::Var
+        && decl.declarations.first().is_some_and(|d| d.init.is_some())
+    {
+        transform_variable_declaration(decl, ctx, usize::MAX);
+        for declarator in &mut decl.declarations {
+            declarator.init = None;
+        }
+    }
+    transform_for_in_of_loop(
+        &left,
+        &for_in_stmt.right,
+        &for_in_stmt.body,
+        false,
+        true,
+        ctx,
+        after_state,
+    );
 }
 
 fn transform_for_of_statement(
     for_of_stmt: &ForOfStatement,
+    ctx: &mut TransformContext,
+    after_state: usize,
+) {
+    transform_for_in_of_loop(
+        &for_of_stmt.left,
+        &for_of_stmt.right,
+        &for_of_stmt.body,
+        for_of_stmt.is_await,
+        false,
+        ctx,
+        after_state,
+    );
+}
+
+/// Lowers for-in, for-of and for-await-of onto the same `ForOfInit`/`ForOfHead`
+/// pair. A for-in loop is a for-of over the spec's internal enumerator
+/// (§14.7.5.10), so `is_for_in` only changes how `ForOfInit` builds the iterator.
+fn transform_for_in_of_loop(
+    left: &ForInOfLeft,
+    right: &Expression,
+    body: &Statement,
+    is_await: bool,
+    is_for_in: bool,
     ctx: &mut TransformContext,
     after_state: usize,
 ) {
@@ -2026,13 +2068,13 @@ fn transform_for_of_statement(
         ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     // If the iterable expression contains a suspension point, evaluate it first
-    let iterable_expr = if expr_has_suspension(&for_of_stmt.right, ctx.is_async) {
+    let iterable_expr = if expr_has_suspension(right, ctx.is_async) {
         let temp_var = ctx.new_temp_var("forof_iterable");
         let iterable_binding = SentValueBindingKind::Variable(temp_var.clone());
-        transform_yielding_expression(&for_of_stmt.right, ctx, usize::MAX, Some(iterable_binding));
+        transform_yielding_expression(right, ctx, usize::MAX, Some(iterable_binding));
         Expression::Identifier(temp_var)
     } else {
-        for_of_stmt.right.clone()
+        right.clone()
     };
 
     ctx.finalize_current_state(StateTerminator::ForOfInit {
@@ -2040,31 +2082,32 @@ fn transform_for_of_statement(
         iter_var: iter_var.clone(),
         label_set: iteration_labels.clone(),
         next_var: next_var.clone(),
-        left: for_of_stmt.left.clone(),
+        left: left.clone(),
         head_state,
         after_state: after_loop,
-        is_await: for_of_stmt.is_await,
+        is_await,
+        is_for_in,
     });
 
     ctx.current_state_id = head_state;
     ctx.finalize_current_state(StateTerminator::ForOfHead {
         iter_var: iter_var.clone(),
         next_var: next_var.clone(),
-        left: for_of_stmt.left.clone(),
+        left: left.clone(),
         body_state,
         after_state: after_loop,
-        is_await: for_of_stmt.is_await,
+        is_await,
     });
 
     ctx.current_state_id = body_state;
     ctx.for_of_depth += 1;
-    if stmt_has_suspension(&for_of_stmt.body, ctx.is_async, ctx.detect_for_await) {
-        transform_yielding_statement(&for_of_stmt.body, ctx, head_state);
+    if stmt_has_suspension(body, ctx.is_async, ctx.detect_for_await) {
+        transform_yielding_statement(body, ctx, head_state);
         if ctx.current_state_id != head_state {
             ctx.finalize_current_state(StateTerminator::Goto(head_state));
         }
     } else {
-        ctx.emit_statement(*for_of_stmt.body.clone());
+        ctx.emit_statement(body.clone());
         ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
     ctx.for_of_depth -= 1;

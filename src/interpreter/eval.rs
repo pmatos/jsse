@@ -9044,6 +9044,7 @@ impl Interpreter {
                     head_state,
                     after_state: forinit_after,
                     is_await,
+                    is_for_in,
                     ..
                 } => {
                     // §14.7.5.12 ForIn/OfHeadEvaluation: create TDZ bindings
@@ -9069,7 +9070,7 @@ impl Interpreter {
                             }
                         }
                     } else {
-                        match self.get_iterator(&iterable_val) {
+                        match self.for_of_init_iterator(&iterable_val, is_for_in) {
                             Ok(it) => it,
                             Err(e) => {
                                 pending_exception = Some(e);

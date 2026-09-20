@@ -1488,6 +1488,7 @@ impl Interpreter {
                     head_state,
                     after_state: forinit_after,
                     is_await: _,
+                    is_for_in,
                 } => {
                     // §14.7.5.5: lexical head names are in TDZ while the RHS
                     // is evaluated, but that temporary environment is not the
@@ -1510,7 +1511,7 @@ impl Interpreter {
                         }
                         other => return other,
                     };
-                    let iterator = match self.get_iterator(&iterable_val) {
+                    let iterator = match self.for_of_init_iterator(&iterable_val, *is_for_in) {
                         Ok(iter) => iter,
                         Err(e) => {
                             let e = route_exception!(e);
@@ -5379,6 +5380,7 @@ impl Interpreter {
                     head_state,
                     after_state: forinit_after,
                     is_await,
+                    is_for_in,
                 } => {
                     let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
@@ -5427,7 +5429,7 @@ impl Interpreter {
                             }
                         }
                     } else {
-                        match self.get_iterator(&iterable_val) {
+                        match self.for_of_init_iterator(&iterable_val, *is_for_in) {
                             Ok(iter) => iter,
                             Err(e) => {
                                 let e = route_exception!(e);

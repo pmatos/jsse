@@ -1008,6 +1008,7 @@ impl Interpreter {
             IteratorState::TypedArrayIterator { typed_array_id, .. } => {
                 worklist.push(*typed_array_id)
             }
+            IteratorState::ForInEnumerator { obj_id, .. } => worklist.extend(*obj_id),
             IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
             IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
             IteratorState::Generator {

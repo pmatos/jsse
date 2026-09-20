@@ -560,6 +560,30 @@ impl Interpreter {
         result
     }
 
+    /// The keys `EnumerateObjectProperties` walks for for-in over `obj_id`:
+    /// proxy-aware, own keys before inherited, shadowed and non-enumerable
+    /// names excluded. Shared by the tree-walker's `exec_for_in` and the
+    /// state-machine drivers' for-in enumerator so the two cannot diverge.
+    pub(crate) fn for_in_enumerable_keys(
+        &mut self,
+        obj_id: u64,
+    ) -> Result<Vec<JsPropertyKey>, JsValue> {
+        let needs_proxy_path = self
+            .get_object_cell(obj_id)
+            .map(|obj| {
+                let b = obj.borrow();
+                b.is_proxy() || b.module_namespace().is_some()
+            })
+            .unwrap_or(false);
+        if needs_proxy_path {
+            self.proxy_enumerable_keys_with_proto(obj_id)
+        } else if self.get_object_cell(obj_id).is_some() {
+            Ok(self.enumerable_keys_with_proto_on_id(obj_id))
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     /// §10.4.2.4 ArraySetLength(A, Desc)
     ///
     /// Roots `obj_id` for the whole operation: ToUint32/ToNumber on
