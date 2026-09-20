@@ -1437,9 +1437,28 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let target: Result<usize, JsValue> = 'dispatch: {
+                        let disc_val = match self.eval_expr(discriminant, &term_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => break 'dispatch Err(e),
+                            other => return other,
+                        };
+                        for case in cases {
+                            let case_val = match self.eval_expr(&case.test, &term_env) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => break 'dispatch Err(e),
+                                other => return other,
+                            };
+                            if strict_equality(&disc_val, &case_val) {
+                                break 'dispatch Ok(case.state);
+                            }
+                        }
+                        Ok(default_state.unwrap_or(*after_state))
+                    };
+                    match target {
+                        Ok(state) => current_id = state,
+                        Err(e) => {
+                            let e = route_exception!(e);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::completed_state_machine_generator(
@@ -1450,34 +1469,6 @@ impl Interpreter {
                                 );
                             return Completion::Throw(e);
                         }
-                        other => return other,
-                    };
-
-                    let mut matched = false;
-                    for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &term_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                return Completion::Throw(e);
-                            }
-                            other => return other,
-                        };
-                        if strict_equality(&disc_val, &case_val) {
-                            current_id = case.state;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if !matched {
-                        current_id = default_state.unwrap_or(*after_state);
                     }
                 }
 
@@ -5273,9 +5264,40 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let target: Result<usize, JsValue> = 'dispatch: {
+                        let disc_val = match self.eval_expr(discriminant, &term_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => break 'dispatch Err(e),
+                            other => {
+                                if let Completion::Yield(yv) = other {
+                                    yv
+                                } else {
+                                    JsValue::UNDEFINED
+                                }
+                            }
+                        };
+                        for case in cases {
+                            let case_val = match self.eval_expr(&case.test, &term_env) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => break 'dispatch Err(e),
+                                other => {
+                                    if let Completion::Yield(yv) = other {
+                                        yv
+                                    } else {
+                                        JsValue::UNDEFINED
+                                    }
+                                }
+                            };
+                            if strict_equality(&disc_val, &case_val) {
+                                break 'dispatch Ok(case.state);
+                            }
+                        }
+                        Ok(default_state.unwrap_or(*after_state))
+                    };
+                    match target {
+                        Ok(state) => current_id = state,
+                        Err(e) => {
+                            let e = route_exception!(e);
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -5289,49 +5311,6 @@ impl Interpreter {
                             self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::UNDEFINED
-                            }
-                        }
-                    };
-
-                    let mut matched = false;
-                    for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &term_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::UNDEFINED
-                                }
-                            }
-                        };
-                        if strict_equality(&disc_val, &case_val) {
-                            current_id = case.state;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if !matched {
-                        current_id = default_state.unwrap_or(*after_state);
                     }
                 }
 
