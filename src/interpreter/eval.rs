@@ -4883,35 +4883,20 @@ impl Interpreter {
                         }
                     }
                     MemberProperty::Private(name) => {
-                        let func_val = match self.private_get(&obj_val, name, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        // Evaluate the call arguments through the shared spread
-                        // seam so a non-iterable spread throws (rather than being
-                        // silently dropped) and every argument is GC-rooted, exactly
-                        // as the ordinary member-call path does.
-                        let gc_frame = self.gc_root_frame();
-                        self.gc_root_value(&func_val);
-                        self.gc_root_value(&obj_val);
-                        let evaluated_args = match self.eval_spread_args(args, env) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                self.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
+                        let func_val = propagate!(self.private_get(&obj_val, name, env));
+                        return self.with_gc_root_scope(|i| {
+                            i.gc_root_value(&func_val);
+                            i.gc_root_value(&obj_val);
+                            let evaluated_args = propagate!(i.eval_spread_args(args, env));
+                            if saved_tail {
+                                return Completion::TailCall {
+                                    func: func_val,
+                                    this: obj_val,
+                                    args: evaluated_args,
+                                };
                             }
-                        };
-                        if saved_tail {
-                            self.gc_unroot_frame(gc_frame);
-                            return Completion::TailCall {
-                                func: func_val,
-                                this: obj_val,
-                                args: evaluated_args,
-                            };
-                        }
-                        let result = self.call_function(&func_val, &obj_val, &evaluated_args);
-                        self.gc_unroot_frame(gc_frame);
-                        return result;
+                            i.call_function(&func_val, &obj_val, &evaluated_args)
+                        });
                     }
                 };
                 // super.method() - look up on [[Prototype]] of HomeObject, bind this

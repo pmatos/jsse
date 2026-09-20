@@ -40,10 +40,10 @@ impl Interpreter {
                             }
                         }
                         MemberProperty::Private(name) => {
-                            return match self.private_get(&this_val, name, env) {
-                                Completion::Normal(v) => Ok((v, this_val)),
-                                other => Err(other),
-                            };
+                            return self
+                                .private_get(&this_val, name, env)
+                                .into_abrupt()
+                                .map(|v| (v, this_val));
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
@@ -77,10 +77,10 @@ impl Interpreter {
                             }
                         }
                         MemberProperty::Private(name) => {
-                            return match self.private_get(&obj_val, name, env) {
-                                Completion::Normal(v) => Ok((v, obj_val)),
-                                other => Err(other),
-                            };
+                            return self
+                                .private_get(&obj_val, name, env)
+                                .into_abrupt()
+                                .map(|v| (v, obj_val));
                         }
                     };
                     let prop_val = match self.access_property_on_value(&obj_val, &key) {
@@ -151,14 +151,10 @@ impl Interpreter {
                 self.with_gc_root_scope(|i| {
                     i.gc_root_value(&func_val);
                     i.gc_root_value(&this_val);
-                    let evaluated_args = match i.eval_spread_args(args, env) {
-                        Ok(v) => v,
-                        Err(e) => return Err(Completion::Throw(e)),
-                    };
-                    match i.call_function(&func_val, &this_val, &evaluated_args) {
-                        Completion::Normal(v) => Ok((v, JsValue::UNDEFINED)),
-                        other => Err(other),
-                    }
+                    let evaluated_args = i.eval_spread_args(args, env).into_abrupt()?;
+                    i.call_function(&func_val, &this_val, &evaluated_args)
+                        .into_abrupt()
+                        .map(|v| (v, JsValue::UNDEFINED))
                 })
             }
             Expression::Member(inner, mp, _) => {
@@ -188,48 +184,37 @@ impl Interpreter {
                         };
                         Ok((val, inner_val))
                     }
-                    MemberProperty::Computed(expr) => self.with_gc_root_scope(|i| {
-                        i.gc_root_value(&inner_val);
-                        let key_val = match i.eval_expr(expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return Err(other),
-                        };
-                        let key = match i.to_property_key(&key_val) {
-                            Ok(s) => s,
-                            Err(e) => return Err(Completion::Throw(e)),
-                        };
-                        let val = match i.access_property_on_value(&inner_val, &key) {
-                            Completion::Normal(v) => v,
-                            other => return Err(other),
-                        };
-                        Ok((val, inner_val.clone()))
-                    }),
-                    MemberProperty::Private(name) => {
-                        match self.private_get(&inner_val, name, env) {
-                            Completion::Normal(v) => Ok((v, inner_val)),
-                            other => Err(other),
-                        }
+                    MemberProperty::Computed(expr) => {
+                        let val = self.oc_computed_get(&inner_val, expr, env)?;
+                        Ok((val, inner_val))
                     }
+                    MemberProperty::Private(name) => self
+                        .private_get(&inner_val, name, env)
+                        .into_abrupt()
+                        .map(|v| (v, inner_val)),
                 }
             }
-            other => self.with_gc_root_scope(|i| {
-                // Computed property access (e.g., x?.[expr])
-                i.gc_root_value(base_val);
-                let key_val = match i.eval_expr(other, env) {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
-                let key = match i.to_property_key(&key_val) {
-                    Ok(s) => s,
-                    Err(e) => return Err(Completion::Throw(e)),
-                };
-                let val = match i.access_property_on_value(base_val, &key) {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
+            key_expr => {
+                let val = self.oc_computed_get(base_val, key_expr, env)?;
                 Ok((val, base_val.clone()))
-            }),
+            }
         }
+    }
+
+    /// `base[key_expr]` inside an optional-chain tail, keeping `base` rooted
+    /// while the key expression runs.
+    fn oc_computed_get(
+        &mut self,
+        base: &JsValue,
+        key_expr: &Expression,
+        env: &EnvRef,
+    ) -> Result<JsValue, Completion> {
+        self.with_gc_root_scope(|i| {
+            i.gc_root_value(base);
+            let key_val = i.eval_expr(key_expr, env).into_abrupt()?;
+            let key = i.to_property_key(&key_val).into_abrupt()?;
+            i.access_property_on_value(base, &key).into_abrupt()
+        })
     }
 
     /// Handle `delete obj?.prop` and `delete obj?.['prop']` etc.
