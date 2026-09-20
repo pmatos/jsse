@@ -2234,18 +2234,21 @@ fn transform_switch_statement(
             after_switch
         };
 
-        if case
-            .consequent
-            .iter()
-            .any(|s| stmt_has_suspension(s, ctx.is_async, ctx.detect_for_await))
-        {
+        // A yield-free body is emitted verbatim, where a `break`/`continue` would
+        // surface as a raw completion the state driver drops, falling through.
+        if case.consequent.iter().any(|s| {
+            stmt_has_suspension(s, ctx.is_async, ctx.detect_for_await)
+                || stmt_has_break_or_continue(s)
+        }) {
             transform_statements(&case.consequent, ctx, next_state);
         } else {
             for stmt in &case.consequent {
                 ctx.emit_statement(stmt.clone());
             }
         }
-        ctx.finalize_current_state(StateTerminator::Goto(next_state));
+        if ctx.current_state_id != next_state {
+            ctx.finalize_current_state(StateTerminator::Goto(next_state));
+        }
     }
 
     if let Some(prev) = prev_break {
