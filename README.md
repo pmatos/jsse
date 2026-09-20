@@ -165,6 +165,15 @@ cluster when Linux cpufreq data and `taskset` are available. Use `--repeats` and
 diagnostic or parallel runs. JSON output includes the repeat samples and a
 host/load/topology fingerprint.
 
+The runner drives workloads with its own harness rather than JetStream's
+`cli.js`, so it emulates the few shell globals they rely on: `self`
+(`=== globalThis`) and a `JetStream` object with `preload` paths and an async
+`getString` backed by the embedded preload files (`getBinary` rejects as
+unsupported). These live only in the generated script, never in jsse's own
+globals. An async workload that rejects is reported as `benchmark threw: ...`,
+and every failed workload keeps its clipped `stdout`/`stderr` in the `--json`
+report and the first line of it on the `FAIL` line.
+
 A refused run exits **3** (distinct from argparse's 2) and leaves any existing
 `jetstream-results.json` untouched, so a truncated suite cannot overwrite a
 complete baseline. This protection also applies when `--json` names that file

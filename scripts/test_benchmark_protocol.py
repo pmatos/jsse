@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import math
 import os
@@ -37,6 +38,29 @@ def load_runner_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def engine_command_or_skip(case):
+    """Real engine when built, else node: the generated JS is engine-neutral."""
+    engine = REPO_ROOT / "target" / "release" / "jsse"
+    if engine.exists():
+        return [str(engine)]
+    if shutil.which("node"):
+        return ["node"]
+    case.skipTest("neither target/release/jsse nor node is available")
+
+
+def run_js(case, program, timeout=60):
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "program.js"
+        script.write_text(program, encoding="utf-8")
+        return subprocess.run(
+            engine_command_or_skip(case) + [str(script)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
 
 
 def assert_scores_are_self_consistent(case, scores):
@@ -481,24 +505,18 @@ class HarnessNameHygieneTests(unittest.TestCase):
 
     def test_harnesses_declare_nothing_at_top_level(self):
         for name, harness in (
+            ("preamble", self.runner.build_polyfill_preamble()),
+            ("random", self.runner.build_deterministic_random_code()),
             ("sync", self.runner.build_sync_harness(1, False, 3)),
             ("async", self.runner.build_async_harness(1, False, 3)),
         ):
             with self.subTest(harness=name):
                 self.assertIsNone(
-                    re.search(self.TOP_LEVEL_DECLARATION, harness, re.M),
+                    re.search(self.TOP_LEVEL_DECLARATION, harness, re.MULTILINE),
                     harness,
                 )
 
     def test_sync_harness_runs_beside_colliding_benchmark_names(self):
-        engine = REPO_ROOT / "target" / "release" / "jsse"
-        if engine.exists():
-            command = [str(engine)]
-        elif shutil.which("node"):
-            command = ["node"]
-        else:
-            self.skipTest("neither target/release/jsse nor node is available")
-
         program = (
             self.runner.build_polyfill_preamble()
             + textwrap.dedent(
@@ -513,19 +531,572 @@ class HarnessNameHygieneTests(unittest.TestCase):
             )
             + self.runner.build_sync_harness(1, False, 3)
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            script = Path(tmp) / "collision.js"
-            script.write_text(program, encoding="utf-8")
-            result = subprocess.run(
-                command + [str(script)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+
+        result = run_js(self, program)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout.strip().splitlines()[-1])
         self.assertEqual(len(payload["results"]), 1)
+
+
+class PolyfillPreambleTests(unittest.TestCase):
+    """JetStream's shell driver runs benchmarks with `self === globalThis`.
+
+    Sources such as bigint-paillier and the noble-* bundles probe `self` and
+    fail with a ReferenceError when the runner's prelude does not define it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def test_self_aliases_the_global_object(self):
+        program = self.runner.build_polyfill_preamble() + textwrap.dedent(
+            """
+            print(typeof self, self === globalThis);
+            """
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ["object", "true"])
+
+    def test_self_is_readable_as_a_bare_identifier_in_a_function(self):
+        program = self.runner.build_polyfill_preamble() + textwrap.dedent(
+            """
+            function probe() {
+                return typeof self === "object" && "Math" in self;
+            }
+            print(probe());
+            """
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true")
+
+    def test_print_err_does_not_throw_when_console_has_no_error(self):
+        program = (
+            'Object.defineProperty(console, "error", '
+            "{ value: undefined, configurable: true });\n"
+            + self.runner.build_polyfill_preamble()
+            + 'printErr("diagnostic");\nprint("survived");\n'
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("survived", result.stdout)
+
+    def test_existing_self_is_not_clobbered(self):
+        program = (
+            "globalThis.self = 42;\n"
+            + self.runner.build_polyfill_preamble()
+            + "print(self);\n"
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "42")
+
+
+class PreloadShimTests(unittest.TestCase):
+    """JetStream 3 workloads read preloaded resources through a `JetStream`
+    object (`JetStream.preload.<name>` paths resolved by `getString`), not
+    through bare globals; the runner must provide that object (issue #655).
+    """
+
+    TRICKY_CONTENT = (
+        "`tick` ${notInterpolated} back\\slash \\` </script> line\u2028sep\r\n"
+        "crlf caf\u00e9 \U0001f600 \"quoted\" 'single'\n"
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "dir").mkdir()
+        (self.root / "dir" / "blob.js").write_bytes(self.TRICKY_CONTENT.encode("utf-8"))
+
+    def run_with_shim(self, preloads, check):
+        code = self.runner.build_preload_code(preloads, str(self.root))
+        program = code + "\n" + textwrap.dedent(check)
+        return run_js(self, program)
+
+    def test_get_string_returns_the_file_bytes_verbatim(self):
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js"},
+            f"""
+            (async () => {{
+                const text = await JetStream.getString(JetStream.preload.blob);
+                console.log(JSON.stringify({{ same: text === {json.dumps(self.TRICKY_CONTENT)} }}));
+            }})();
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"same": True})
+
+    def test_preload_maps_each_name_to_a_path_that_get_string_accepts(self):
+        (self.root / "dir" / "other.js").write_text("other", encoding="utf-8")
+
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js", "other": "dir/other.js"},
+            """
+            (async () => {
+                const names = Object.keys(JetStream.preload).sort();
+                const other = await JetStream.getString(JetStream.preload.other);
+                console.log(JSON.stringify({ names, other }));
+            })();
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout), {"names": ["blob", "other"], "other": "other"}
+        )
+
+    def test_get_string_rejects_a_path_that_was_not_preloaded(self):
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js"},
+            """
+            JetStream.getString("nope.js").then(
+                () => console.log("resolved"),
+                (e) => console.log("rejected: " + e.message),
+            );
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rejected:", result.stdout)
+        self.assertIn("nope.js", result.stdout)
+
+    def test_get_binary_rejects_as_unsupported_by_the_runner(self):
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js"},
+            """
+            JetStream.getBinary(JetStream.preload.blob).then(
+                () => console.log("resolved"),
+                (e) => console.log("rejected: " + e.message),
+            );
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rejected:", result.stdout)
+        self.assertIn("run-jetstream.py", result.stdout)
+
+    def test_missing_preload_file_yields_none(self):
+        self.assertIsNone(
+            self.runner.build_preload_code({"gone": "dir/missing.js"}, str(self.root))
+        )
+
+    def test_preload_code_declares_nothing_at_top_level(self):
+        code = self.runner.build_preload_code({"blob": "dir/blob.js"}, str(self.root))
+
+        self.assertIsNone(
+            re.search(
+                HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, code, re.MULTILINE
+            ),
+            code,
+        )
+
+
+class AsyncHarnessRejectionTests(unittest.TestCase):
+    """An async benchmark that rejects must say so on stdout and stderr.
+
+    A shell drops an unobserved rejection and exits 0 with no output, which
+    the runner used to report as an opaque "no JSON output" (issue #655).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def run_benchmark_source(self, source):
+        program = (
+            self.runner.build_polyfill_preamble()
+            + textwrap.dedent(source)
+            + self.runner.build_async_harness(1, False, 3)
+        )
+        return run_js(self, program)
+
+    def test_harness_attaches_a_rejection_handler(self):
+        harness = self.runner.build_async_harness(1, False, 3)
+
+        self.assertIn(".catch(", harness)
+        self.assertIn("printErr(", harness)
+
+    def test_init_rejection_prints_a_json_error_line(self):
+        result = self.run_benchmark_source(
+            """
+            class Benchmark {
+                async init() { throw new Error("boom"); }
+                runIteration() {}
+            }
+            """
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertIn("boom", payload["error"])
+
+    def test_non_error_rejection_value_is_reported(self):
+        result = self.run_benchmark_source(
+            """
+            class Benchmark {
+                runIteration() { return Promise.reject("plain string"); }
+            }
+            """
+        )
+
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertIn("plain string", payload["error"])
+
+    def test_successful_run_still_prints_only_results(self):
+        result = self.run_benchmark_source(
+            """
+            class Benchmark {
+                async runIteration() {}
+            }
+            """
+        )
+
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertNotIn("error", payload)
+        self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(result.stderr, "")
+
+    def test_async_harness_declares_nothing_at_top_level(self):
+        harness = self.runner.build_async_harness(1, False, 3)
+
+        self.assertIsNone(
+            re.search(
+                HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, harness, re.MULTILINE
+            ),
+            harness,
+        )
+
+
+def write_fake_engine(directory, body):
+    """Executable stand-in for an engine; `body` is Python run per invocation."""
+    engine = Path(directory) / "fake-engine.py"
+    engine.write_text(
+        f"#!{sys.executable}\nimport sys\n" + textwrap.dedent(body),
+        encoding="utf-8",
+    )
+    engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+    return [str(engine)]
+
+
+class RunBenchmarkOnceFailureTests(unittest.TestCase):
+    """Every failure result keeps enough output to diagnose it afterwards."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.jetstream = self.root / "JetStream"
+        self.jetstream.mkdir()
+        (self.jetstream / "bench.js").write_text("class Benchmark {}\n")
+
+    def run_once(self, engine_body, btype="sync", verbose=False):
+        return self.runner.run_benchmark_once(
+            "bench",
+            btype,
+            ["bench.js"],
+            None,
+            1,
+            False,
+            0,
+            write_fake_engine(self.root, engine_body),
+            str(self.jetstream),
+            30,
+            verbose,
+            None,
+        )
+
+    def test_error_line_becomes_an_error_result_with_the_message(self):
+        result = self.run_once(
+            """
+            print('{"error": "Error: boom"}')
+            sys.stderr.write("Error: boom\\n")
+            """,
+            btype="async",
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("boom", result["reason"])
+        self.assertIn("boom", result["stdout"])
+        self.assertIn("boom", result["stderr"])
+
+    def test_no_json_keeps_stdout_and_stderr(self):
+        result = self.run_once(
+            """
+            print("chatter")
+            sys.stderr.write("warn")
+            """
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "no JSON output")
+        self.assertEqual(result["stdout"].strip(), "chatter")
+        self.assertEqual(result["stderr"], "warn")
+
+    def test_silent_async_exit_is_reported_as_never_settled(self):
+        result = self.run_once("", btype="async")
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("never settled", result["reason"])
+        self.assertNotEqual(result["reason"], "no JSON output")
+        self.assertEqual(result["stderr"], "")
+
+    def test_nonzero_exit_keeps_both_streams(self):
+        result = self.run_once(
+            """
+            print("partial output")
+            sys.stderr.write("SyntaxError: nope")
+            sys.exit(1)
+            """
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "exit code 1")
+        self.assertIn("partial output", result["stdout"])
+        self.assertIn("SyntaxError: nope", result["stderr"])
+
+    def test_malformed_json_line_keeps_the_output(self):
+        result = self.run_once('print("{not json")')
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("JSON parse error", result["reason"])
+        self.assertIn("{not json", result["stdout"])
+
+    def test_empty_results_keep_the_output(self):
+        result = self.run_once('print(\'{"results": [], "iterations": 0}\')')
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "no benchmark iterations")
+        self.assertIn("results", result["stdout"])
+
+    def test_oversized_output_is_clipped_keeping_head_and_tail(self):
+        result = self.run_once(
+            """
+            sys.stderr.write("HEAD" + "x" * 100000 + "TAIL")
+            sys.exit(1)
+            """
+        )
+
+        stderr = result["stderr"]
+        self.assertLess(len(stderr), 5000)
+        self.assertTrue(stderr.startswith("HEAD"))
+        self.assertTrue(stderr.endswith("TAIL"))
+        self.assertIn("truncated", stderr)
+
+    def test_short_output_is_not_marked_truncated(self):
+        result = self.run_once('sys.stderr.write("short"); sys.exit(2)')
+
+        self.assertEqual(result["stderr"], "short")
+
+    def test_verbose_prints_output_for_a_silent_failure(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.run_once(
+                """
+                print("chatter")
+                sys.stderr.write("warn")
+                """,
+                verbose=True,
+            )
+
+        self.assertIn("warn", err.getvalue())
+        self.assertIn("chatter", err.getvalue())
+
+    def test_successful_run_is_unchanged(self):
+        result = self.run_once(
+            """
+            print('{"results": [4, 6], "iterations": 2, "worstCaseCount": 0}')
+            """
+        )
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["raw_times"], [4, 6])
+
+
+class FailureReportTests(unittest.TestCase):
+    """The CLI surfaces why a workload failed, on screen and in --json."""
+
+    def run_cli(self, engine_body, *extra):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "JetStream" / "simple").mkdir(parents=True)
+        (root / "JetStream" / "JetStreamDriver.js").touch()
+        (root / "JetStream" / "simple" / "hash-map.js").write_text(
+            "class Benchmark {}\n", encoding="utf-8"
+        )
+        engine = write_fake_engine(root, engine_body)[0]
+        report = root / "report.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER_PATH),
+                "--engine",
+                engine,
+                "--jetstream",
+                str(root / "JetStream"),
+                "--test",
+                "hash-map",
+                "--iterations",
+                "1",
+                "--no-idle-gate",
+                "--json",
+                str(report),
+                *extra,
+            ],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result, json.loads(report.read_text(encoding="utf-8"))
+
+    def test_fail_line_shows_first_line_of_stderr(self):
+        result, _ = self.run_cli(
+            """
+            sys.stderr.write("ReferenceError: self is not defined\\nat x\\n")
+            sys.exit(1)
+            """
+        )
+
+        fail_line = next(line for line in result.stdout.splitlines() if "FAIL" in line)
+        self.assertIn("exit code 1", fail_line)
+        self.assertIn("ReferenceError: self is not defined", fail_line)
+        self.assertNotIn("at x", fail_line)
+
+    def test_json_report_keeps_stdout_and_stderr_of_failures(self):
+        _, report = self.run_cli(
+            """
+            print("chatter")
+            sys.stderr.write("warn")
+            """
+        )
+
+        entry = report["results"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["stderr"], "warn")
+        self.assertEqual(entry["stdout"].strip(), "chatter")
+
+
+class AsyncBenchmarkEndToEndTests(unittest.TestCase):
+    """A JetStream 3 style async workload runs through the whole runner path."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def test_async_benchmark_using_self_and_preload_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blob.txt").write_text("payload ${x} `y`", encoding="utf-8")
+            (root / "bench.js").write_text(
+                textwrap.dedent(
+                    """
+                    class Benchmark {
+                        async init() {
+                            if (self !== globalThis) throw new Error("no self");
+                            this.text = await JetStream.getString(JetStream.preload.blob);
+                        }
+                        runIteration() {
+                            if (this.text !== "payload ${x} `y`") throw new Error("bad text");
+                        }
+                    }
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.runner.run_benchmark_once(
+                "bench",
+                "async",
+                ["bench.js"],
+                {"blob": "blob.txt"},
+                2,
+                False,
+                0,
+                engine_command_or_skip(self),
+                str(root),
+                60,
+                False,
+                None,
+            )
+
+        self.assertEqual(result["status"], "pass", result)
+        self.assertEqual(len(result["raw_times"]), 2)
+
+    def test_async_validate_failure_through_console_assert_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bench.js").write_text(
+                "class Benchmark { async runIteration() {}"
+                " validate() { console.assert(false, 'bad state'); } }\n",
+                encoding="utf-8",
+            )
+
+            result = self.runner.run_benchmark_once(
+                "bench",
+                "async",
+                ["bench.js"],
+                None,
+                1,
+                False,
+                0,
+                engine_command_or_skip(self),
+                str(root),
+                60,
+                False,
+                None,
+            )
+
+        self.assertEqual(result["status"], "error", result)
+        self.assertIn("Assertion failed: bad state", result["reason"])
+
+    def test_async_benchmark_failure_is_reported_with_its_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bench.js").write_text(
+                "class Benchmark { async init() { throw new TypeError('kaput'); }"
+                " runIteration() {} }\n",
+                encoding="utf-8",
+            )
+
+            result = self.runner.run_benchmark_once(
+                "bench",
+                "async",
+                ["bench.js"],
+                None,
+                1,
+                False,
+                0,
+                engine_command_or_skip(self),
+                str(root),
+                60,
+                False,
+                None,
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("TypeError: kaput", result["reason"])
 
 
 if __name__ == "__main__":

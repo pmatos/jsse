@@ -478,7 +478,11 @@ if (typeof print === "undefined") {
     var print = function(...args) { console.log(...args); };
 }
 if (typeof printErr === "undefined") {
-    var printErr = function(...args) { console.error(...args); };
+    // jsse's console has no `error`; fall back to stdout rather than throw.
+    var printErr = function(...args) {
+        (typeof console.error === "function" ? console.error : console.log)
+            .apply(console, args);
+    };
 }
 if (typeof performance === "undefined") {
     var performance = {};
@@ -492,6 +496,11 @@ if (typeof performance.mark !== "function") {
 }
 if (typeof performance.measure !== "function") {
     performance.measure = function() {};
+}
+// JetStream's shell driver sets globalObject.self = globalObject; sources such
+// as bigint-paillier and the noble-* bundles feature-detect it.
+if (typeof self === "undefined") {
+    globalThis.self = globalThis;
 }
 // The runner keys off the exit code, so a failed validate() must throw (as
 // JetStream's shell-config.js does) instead of using the non-throwing host assert.
@@ -579,24 +588,54 @@ def build_async_harness(iterations, deterministic_random, worst_case_count):
         iterations: __iterations,
         worstCaseCount: {worst_case_count}
     }}));
-}})();
+}})().catch((e) => {{
+    // A shell drops an unobserved rejection and exits 0 with no output, which
+    // reads as "no JSON output"; report it so the failure is diagnosable.
+    const message = e instanceof Error ? `${{e.name}}: ${{e.message}}` : String(e);
+    printErr(message);
+    print(JSON.stringify({{ error: message }}));
+}});
 """
 
 
 def build_preload_code(preloads, jetstream_dir):
-    """Build code that injects preloaded file contents as globals."""
-    code = ""
-    for var_name, file_path in preloads.items():
+    """Build the `JetStream` host object that serves preloaded resources.
+
+    JetStream 3 workloads read resources through
+    `await JetStream.getString(JetStream.preload.<name>)`. jsse has no file
+    reads, so the contents are embedded, keyed by the same path strings the
+    `preload` map hands out. Returns None when a preload file is missing.
+    """
+    paths = {}
+    contents = {}
+    for name, file_path in preloads.items():
         full_path = os.path.join(jetstream_dir, file_path)
         if not os.path.exists(full_path):
-            return None  # Can't preload
-        content = Path(full_path).read_text(encoding="utf-8", errors="replace")
-        # Escape for embedding in a JS string
-        escaped = (
-            content.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+            return None
+        # Bytes, not read_text: text mode would rewrite CRLF line endings.
+        contents[file_path] = (
+            Path(full_path).read_bytes().decode("utf-8", errors="replace")
         )
-        code += f"globalThis.{var_name} = `{escaped}`;\n"
-    return code
+        paths[name] = file_path
+    return f"""
+// --- JetStream preload shim ---
+;(() => {{
+    const contents = {json.dumps(contents)};
+    globalThis.JetStream = {{
+        preload: {json.dumps(paths)},
+        getString: async (path) => {{
+            if (!Object.hasOwn(contents, path)) {{
+                throw new Error(`JetStream.getString: ${{path}} was not preloaded`);
+            }}
+            return contents[path];
+        }},
+        getBinary: async (path) => {{
+            throw new Error(
+                `JetStream.getBinary(${{path}}) is not supported by run-jetstream.py`);
+        }},
+    }};
+}})();
+"""
 
 
 def to_score(time_ms):
@@ -644,6 +683,46 @@ def compute_scores(results, worst_case_count):
 
     avg_time = sum(rest) / len(rest) if rest else first_time
     return scores_from_times(first_time, avg_time, worst_time)
+
+
+def _clip(text, limit=2000):
+    """Bound captured output for reports, keeping the head and the tail."""
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    dropped = len(text) - 2 * half
+    return f"{text[:half]}\n... [{dropped} chars truncated] ...\n{text[-half:]}"
+
+
+def _first_line(text):
+    """First non-empty line of `text`, for one-line failure summaries."""
+    for line in str(text).splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _failure_summary(result):
+    """Reason plus the first line of retained output, when it adds anything."""
+    reason = result.get("reason", "")
+    if reason.startswith("benchmark threw"):
+        return reason
+    detail = _first_line(result.get("stderr") or result.get("stdout") or "")
+    if not detail:
+        return reason
+    return f"{reason}: {detail[:160]}"
+
+
+def _failure(name, reason, result, elapsed):
+    """Error result that keeps the run's stdout and stderr for diagnosis."""
+    return {
+        "name": name,
+        "status": "error",
+        "reason": reason,
+        "stdout": _clip(result.stdout or ""),
+        "stderr": _clip(result.stderr or ""),
+        "elapsed": elapsed,
+    }
 
 
 def run_benchmark_once(
@@ -714,25 +793,23 @@ def run_benchmark_once(
             text=True,
             timeout=timeout,
             cwd=jetstream_dir,
+            check=False,
         )
         elapsed = time.time() - start
 
-        if result.returncode != 0:
-            stderr_preview = result.stderr[:500] if result.stderr else ""
-            stdout_preview = result.stdout[:500] if result.stdout else ""
+        def fail(reason):
             if verbose:
-                print(f"  FAIL: exit code {result.returncode}", file=sys.stderr)
-                if stderr_preview:
-                    print(f"  stderr: {stderr_preview}", file=sys.stderr)
-                if stdout_preview:
-                    print(f"  stdout: {stdout_preview}", file=sys.stderr)
-            return {
-                "name": name,
-                "status": "error",
-                "reason": f"exit code {result.returncode}",
-                "stderr": stderr_preview,
-                "elapsed": elapsed,
-            }
+                print(f"  FAIL: {reason}", file=sys.stderr)
+                for label, text in (
+                    ("stderr", result.stderr),
+                    ("stdout", result.stdout),
+                ):
+                    if text:
+                        print(f"  {label}: {_clip(text)}", file=sys.stderr)
+            return _failure(name, reason, result, elapsed)
+
+        if result.returncode != 0:
+            return fail(f"exit code {result.returncode}")
 
         # Parse JSON output from last line of stdout
         output_lines = result.stdout.strip().split("\n")
@@ -744,22 +821,23 @@ def run_benchmark_once(
                 break
 
         if not json_line:
-            return {
-                "name": name,
-                "status": "error",
-                "reason": "no JSON output",
-                "stdout": result.stdout[:500],
-                "elapsed": elapsed,
-            }
+            if btype == "async":
+                return fail(
+                    "async harness never settled: no result and no error reported"
+                )
+            return fail("no JSON output")
 
-        data = json.loads(json_line)
+        try:
+            data = json.loads(json_line)
+        except json.JSONDecodeError as e:
+            return fail(f"JSON parse error: {e}")
+
+        if data.get("error"):
+            return fail(f"benchmark threw: {_first_line(data['error'])}")
+
         scores = compute_scores(data["results"], data.get("worstCaseCount", worst_case))
         if scores is None:
-            return {
-                "name": name,
-                "status": "error",
-                "reason": "no benchmark iterations",
-            }
+            return fail("no benchmark iterations")
 
         return {
             "name": name,
@@ -772,8 +850,6 @@ def run_benchmark_once(
 
     except subprocess.TimeoutExpired:
         return {"name": name, "status": "timeout", "reason": f"exceeded {timeout}s"}
-    except json.JSONDecodeError as e:
-        return {"name": name, "status": "error", "reason": f"JSON parse error: {e}"}
     finally:
         os.unlink(tmp_path)
 
@@ -1071,7 +1147,7 @@ def main():
             print(f"  BUSY  {name:40s}  ({result.get('reason', '')})")
         else:
             errors.append(name)
-            print(f"  FAIL  {name:40s}  ({result.get('reason', '')})")
+            print(f"  FAIL  {name:40s}  ({_failure_summary(result)})")
 
     if args.j > 1:
         with ProcessPoolExecutor(max_workers=args.j) as executor:
