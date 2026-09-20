@@ -2841,4 +2841,45 @@ mod tests {
         });
         assert!(has_try_enter);
     }
+
+    fn switch_body(discriminant: Expression, tests: Vec<Expression>) -> Vec<Statement> {
+        vec![Statement::Switch(SwitchStatement {
+            discriminant,
+            cases: tests
+                .into_iter()
+                .map(|test| SwitchCase {
+                    test: Some(test),
+                    consequent: vec![Statement::Expression(make_yield())],
+                })
+                .collect(),
+        })]
+    }
+
+    fn has_switch_dispatch(sm: &GeneratorStateMachine) -> bool {
+        sm.states
+            .iter()
+            .any(|s| matches!(s.terminator, StateTerminator::SwitchDispatch { .. }))
+    }
+
+    #[test]
+    fn test_switch_with_suspending_case_test_is_lowered() {
+        let one = Expression::Literal(Literal::Number(1.0));
+        let body = switch_body(one.clone(), vec![make_yield_expr(5.0), one]);
+        let sm = transform_generator(&body, &[]);
+
+        assert!(!has_switch_dispatch(&sm));
+    }
+
+    #[test]
+    fn test_switch_without_suspending_case_test_keeps_dispatch() {
+        let one = Expression::Literal(Literal::Number(1.0));
+        let plain = switch_body(one.clone(), vec![one.clone()]);
+        assert!(has_switch_dispatch(&transform_generator(&plain, &[])));
+
+        let yielding_discriminant = switch_body(make_yield_expr(5.0), vec![one]);
+        assert!(has_switch_dispatch(&transform_generator(
+            &yielding_discriminant,
+            &[]
+        )));
+    }
 }
