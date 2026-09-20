@@ -1,3 +1,10 @@
+## [0.8.2](https://github.com/pmatos/jsse/compare/v0.8.1...v0.8.2) (2026-09-20)
+
+
+### Performance Improvements
+
+* **json:** skip descriptor-object round trip in enumerable_own_keys ([#656](https://github.com/pmatos/jsse/issues/656)) ([ef13eef](https://github.com/pmatos/jsse/commit/ef13eeff869c7fb8ac8e37d7378f6fa921603531))
+
 ## [0.8.1](https://github.com/pmatos/jsse/compare/v0.8.0...v0.8.1) (2026-09-18)
 
 
