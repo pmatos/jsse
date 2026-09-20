@@ -50,6 +50,14 @@ _Avoid_: divergence class, mismatch level.
 The unwrap-or-early-return of the interpreter's `Completion` type behind the `propagate!(expr)` macro and its `IntoAbrupt` trait (`src/interpreter/types.rs`): the success value (`Completion::Normal`, or a `Result` `Ok`) is bound, and any abrupt completion early-returns out of the enclosing `-> Completion` function. `IntoAbrupt` adapts the three propagation source shapes into one spelling — a `Completion`, a `Result<T, JsValue>` (a Rust `Err` is a JS throw, wrapped in `Completion::Throw`), and a `Result<T, Completion>` (passed through) — replacing the hand-rolled two-line `match` heads scattered across the natives. `Completion::Empty` is not abrupt but is still propagated verbatim, matching the sites it replaces. A new source shape is one added `IntoAbrupt` impl, with no call-site churn.
 _Avoid_: try macro, error unwrap, ReturnIfAbrupt helper.
 
+**Isolated Block**:
+A `Block` that directly declares `await using`, emitted intact as the last statement of its own async-function state (`generator_transform.rs`, `Statement::Block` arm). Its block environment and dispose stack stay whole, so `async_function_resume` can park the block's `DisposeCursor` and suspend at each DisposeResources `Await` instead of draining the microtask queue inline. `has_suspendable_await_using_block` (`generator_analysis.rs`) decides which containers (`try`/`catch`/`finally` bodies, loop bodies, `switch` cases, `if`, labeled statements, plain blocks) the transform lowers to reach one; a container whose lowering would flatten an observable lexical scope is left on the tree-walker.
+_Avoid_: dispose block, await-using state.
+
+**Block Exits**:
+The transform-time table (`GeneratorState.block_exits`, `BlockExits`) of `break`/`continue` targets, keyed by label, in scope where an **Isolated Block** was emitted. The block runs verbatim, so a jump leaving it surfaces as a raw `Completion::Break`/`Continue` after its disposal; the driver resolves it through this table into `route_loop_control!`, which runs intervening `finally` blocks and closes crossed `for-of` iterators. A side table rather than a `StateTerminator` variant so the generator executors stay untouched.
+_Avoid_: jump table, loop targets.
+
 ## Memory
 
 **Temp-Root Frame**:
