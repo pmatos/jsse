@@ -1,7 +1,7 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
-use crate::interpreter::property::SetOutcome;
 use crate::interpreter::generator_analysis::block_has_await_using;
+use crate::interpreter::property::SetOutcome;
 
 mod access;
 mod generator_runtime;
@@ -8554,7 +8554,8 @@ impl Interpreter {
                             &value,
                             &for_of_stack,
                         );
-                        self.scheduler.park_async_function_dispose(async_id, disposal);
+                        self.scheduler
+                            .park_async_function_dispose(async_id, disposal);
                         return Completion::Normal(JsValue::UNDEFINED);
                     }
                     // A disposer that called `__host_exit` (issue #242)
@@ -8742,7 +8743,8 @@ impl Interpreter {
                     });
                     let outer_block =
                         std::mem::replace(&mut self.suspendable_dispose_block, isolated_block);
-                    let result = self.exec_state_machine_body(state_body, &term_env, &state_machine);
+                    let result =
+                        self.exec_state_machine_body(state_body, &term_env, &state_machine);
                     self.suspendable_dispose_block = outer_block;
                     self.in_state_machine = saved_in_state_machine;
                     if let Some(cursor) = self.parked_block_dispose.take() {

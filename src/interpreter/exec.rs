@@ -2630,7 +2630,9 @@ impl Interpreter {
                 match self.get_object_property(obj_id, key, value) {
                     Completion::Normal(v) if !(v).is_nullish() => {
                         if !self.is_callable(&v) {
-                            return Err(self.create_type_error("[Symbol.dispose] is not a function"));
+                            return Err(
+                                self.create_type_error("[Symbol.dispose] is not a function")
+                            );
                         }
                         method = self.async_from_sync_dispose_method(v);
                     }
