@@ -2048,7 +2048,75 @@ fn parse_legacy_date(s: &str) -> Option<f64> {
     {
         return None;
     }
-    parse_legacy_numeric_slash(s)
+    if s.contains('/') {
+        parse_legacy_numeric_slash(s)
+    } else {
+        parse_legacy_written_month(s)
+    }
+}
+
+const LEGACY_MONTH_NAMES: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+const LEGACY_WEEKDAY_NAMES: [&str; 7] = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+];
+
+fn legacy_name_index(word: &str, names: &[&str]) -> Option<usize> {
+    names.iter().position(|name| {
+        word.eq_ignore_ascii_case(name) || (word.len() == 3 && name[..3].eq_ignore_ascii_case(word))
+    })
+}
+
+fn parse_legacy_written_month(s: &str) -> Option<f64> {
+    let mut month = None;
+    let mut has_weekday = false;
+    let mut numbers = Vec::with_capacity(2);
+    for token in s.split([' ', ',']).filter(|t| !t.is_empty()) {
+        if let Some(value) = parse_legacy_digits(token) {
+            if numbers.len() == 2 {
+                return None;
+            }
+            numbers.push((token, value));
+        } else if let Some(index) = legacy_name_index(token, &LEGACY_MONTH_NAMES) {
+            if month.replace(index as u32 + 1).is_some() {
+                return None;
+            }
+        } else if legacy_name_index(token, &LEGACY_WEEKDAY_NAMES).is_some() {
+            if std::mem::replace(&mut has_weekday, true) {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    let month = month?;
+    let [(first, first_value), (second, second_value)] = numbers[..] else {
+        return None;
+    };
+    if first.len() >= 3 || first_value > 31 {
+        make_legacy_local_date(expand_legacy_year(first, first_value), month, second_value)
+    } else {
+        make_legacy_local_date(expand_legacy_year(second, second_value), month, first_value)
+    }
 }
 
 fn parse_legacy_digits(token: &str) -> Option<u32> {

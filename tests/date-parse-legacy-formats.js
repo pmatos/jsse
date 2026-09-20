@@ -54,3 +54,28 @@ var invalidShort = ["13/1/1", "31/1/1", "99/1/99", "0/10/0"];
 for (var j = 0; j < invalidShort.length; j++) {
   sameValue(Date.parse(invalidShort[j]), NaN, JSON.stringify(invalidShort[j]));
 }
+
+// Written months: one month name, two numbers, optional weekday name.
+var may2000 = local(2000, 4, 1);
+var writtenMay2000 = [
+  "may 1 2000", "1 may 2000", "1 2000 may", "may 2000 1", "2000 may 1",
+  "2000 1 may", "May 1, 2000", "Mon, May 1 2000", "MAY 1 2000",
+  "Monday May 1 2000", "1 May, 2000",
+];
+for (var k = 0; k < writtenMay2000.length; k++) {
+  sameValue(Date.parse(writtenMay2000[k]), may2000, JSON.stringify(writtenMay2000[k]));
+}
+sameValue(Date.parse("September 3 2001"), local(2001, 8, 3), "September 3 2001");
+sameValue(Date.parse("dec 31 1999"), local(1999, 11, 31), "dec 31 1999");
+sameValue(Date.parse("may 1 5"), local(2005, 4, 1), "may 1 5");
+sameValue(Date.parse("may 1 0"), Date.parse("5/1/0"), "may 1 0");
+sameValue(Date.parse("may 1 100"), Date.parse("5/1/100"), "may 1 100");
+
+var invalidWritten = [
+  "may 1999 1999", "may 0 0", "may 32 2000", "invalid date", "foo", "may",
+  "may 1", "Mon May", "5/1 may 2000", "may may 1 2000", "Mon Tue may 1 2000",
+  "may 1 2000 2001", "may 1st 2000", "may-1-2000",
+];
+for (var n = 0; n < invalidWritten.length; n++) {
+  sameValue(Date.parse(invalidWritten[n]), NaN, JSON.stringify(invalidWritten[n]));
+}
