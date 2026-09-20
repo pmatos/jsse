@@ -189,6 +189,7 @@ pub(crate) fn prevalidated_radix_digits_to_f64(digits: &str, radix: u32) -> f64 
     if significant.saturating_sub(1) * u64::from(radix.ilog2()) >= 1024 {
         return f64::INFINITY;
     }
+    // Via the exact decimal string: f64::from_str rounds the full value once.
     num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
         .and_then(|exact| exact.to_string().parse::<f64>().ok())
         .unwrap_or(f64::NAN)

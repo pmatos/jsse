@@ -1833,17 +1833,14 @@ impl Interpreter {
                     s
                 };
                 // §19.2.5 steps 11-12: Z is the longest prefix of radix-R digits
-                let end = s
-                    .find(|c: char| !c.is_digit(radix as u32))
-                    .unwrap_or(s.len());
+                let radix = radix as u32;
+                let end = s.find(|c: char| !c.is_digit(radix)).unwrap_or(s.len());
                 let digits = &s[..end];
                 if digits.is_empty() {
                     return Completion::Normal(JsValue::number(f64::NAN));
                 }
-                let mut result = crate::interpreter::helpers::prevalidated_radix_digits_to_f64(
-                    digits,
-                    radix as u32,
-                );
+                let mut result =
+                    crate::interpreter::helpers::prevalidated_radix_digits_to_f64(digits, radix);
                 if negative {
                     result = -result;
                 }
