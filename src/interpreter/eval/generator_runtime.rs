@@ -5273,13 +5273,8 @@ impl Interpreter {
                             abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
                                 break 'dispatch Err(abrupt);
                             }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::UNDEFINED
-                                }
-                            }
+                            Completion::Yield(yv) => yv,
+                            _ => JsValue::UNDEFINED,
                         };
                         for case in cases {
                             let case_val = match self.eval_expr(&case.test, &term_env) {
@@ -5287,13 +5282,8 @@ impl Interpreter {
                                 abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
                                     break 'dispatch Err(abrupt);
                                 }
-                                other => {
-                                    if let Completion::Yield(yv) = other {
-                                        yv
-                                    } else {
-                                        JsValue::UNDEFINED
-                                    }
-                                }
+                                Completion::Yield(yv) => yv,
+                                _ => JsValue::UNDEFINED,
                             };
                             if strict_equality(&disc_val, &case_val) {
                                 break 'dispatch Ok(case.state);
@@ -5303,19 +5293,6 @@ impl Interpreter {
                     };
                     match target {
                         Ok(state) => current_id = state,
-                        Err(Completion::Exit(code)) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            self.generator_for_of_stacks.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            return Completion::Exit(code);
-                        }
                         Err(Completion::Throw(e)) => {
                             let e = route_exception!(e);
                             // §27.6.3.3: DisposeResources when async generator throws
@@ -5338,8 +5315,21 @@ impl Interpreter {
                             self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
-                        Err(_) => {
-                            unreachable!("switch dispatch only breaks out with throw or exit")
+                        Err(exit) => {
+                            self.discard_generator_for_of_loops_on_exit(
+                                o.id,
+                                &mut for_of_stack,
+                                &func_env,
+                            );
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::completed_state_machine_async_generator(
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                    ),
+                                );
+                            return exit;
                         }
                     }
                 }

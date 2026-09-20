@@ -3756,39 +3756,29 @@ mod node_host_tests {
     }
 
     #[test]
-    fn host_exit_in_async_generator_switch_discriminant_is_not_swallowed() {
-        let (interp, c) = run_node_script(
-            r#"
-            globalThis.reached = "before";
-            async function* g() {
-              switch (__host_exit(3)) { case 1: yield 1; }
-              globalThis.reached = "after";
-              yield 2;
-            }
-            g().next();
-            "#,
-        );
-        assert_eq!(interp.pending_exit, Some(3));
-        assert_eq!(global_string(&interp, "reached"), "before");
-        assert!(matches!(c, Completion::Exit(3)));
-    }
-
-    #[test]
-    fn host_exit_in_async_generator_switch_case_test_is_not_swallowed() {
-        let (interp, c) = run_node_script(
-            r#"
-            globalThis.reached = "before";
-            async function* g() {
-              switch (0) { case __host_exit(4): yield 1; }
-              globalThis.reached = "after";
-              yield 2;
-            }
-            g().next();
-            "#,
-        );
-        assert_eq!(interp.pending_exit, Some(4));
-        assert_eq!(global_string(&interp, "reached"), "before");
-        assert!(matches!(c, Completion::Exit(4)));
+    fn host_exit_in_async_generator_switch_dispatch_is_not_swallowed() {
+        for (switch_head, code) in [
+            ("switch (__host_exit(3)) { case 1: yield 1; }", 3),
+            ("switch (0) { case __host_exit(4): yield 1; }", 4),
+        ] {
+            let (interp, c) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                async function* g() {{
+                  {switch_head}
+                  globalThis.reached = "after";
+                  yield 2;
+                }}
+                g().next();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{switch_head}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{switch_head}");
+            assert!(
+                matches!(c, Completion::Exit(x) if x == code),
+                "{switch_head}"
+            );
+        }
     }
 
     #[test]
