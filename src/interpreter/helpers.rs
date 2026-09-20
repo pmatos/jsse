@@ -3143,3 +3143,26 @@ mod string_to_bigint_tests {
         assert_eq!(b("0x10000000000000000"), Some(BigInt::from(1u128 << 64)));
     }
 }
+
+#[cfg(test)]
+mod jiff_chrono_tz_name_parity_tests {
+    // Guards against IANA-name skew between chrono-tz (used for zone-name
+    // validation/enumeration) and jiff (used for offset computation, issue
+    // #631). Without this, a name that validates via chrono-tz but fails to
+    // resolve in jiff would silently fall back to the "+00:00" fallback
+    // issue #630 already fixed once.
+    use super::resolve_named_time_zone;
+
+    #[test]
+    fn every_chrono_tz_variant_resolves_in_jiff() {
+        let unresolved: Vec<&str> = chrono_tz::TZ_VARIANTS
+            .iter()
+            .map(|tz| tz.name())
+            .filter(|name| resolve_named_time_zone(name).is_none())
+            .collect();
+        assert!(
+            unresolved.is_empty(),
+            "chrono-tz zone names that jiff failed to resolve: {unresolved:?}"
+        );
+    }
+}
