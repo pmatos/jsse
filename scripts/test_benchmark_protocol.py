@@ -39,6 +39,28 @@ def load_runner_module():
     return module
 
 
+def engine_command_or_skip(case):
+    """Real engine when built, else node: the generated JS is engine-neutral."""
+    engine = REPO_ROOT / "target" / "release" / "jsse"
+    if engine.exists():
+        return [str(engine)]
+    if shutil.which("node"):
+        return ["node"]
+    case.skipTest("neither target/release/jsse nor node is available")
+
+
+def run_js(case, program, timeout=60):
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "program.js"
+        script.write_text(program, encoding="utf-8")
+        return subprocess.run(
+            engine_command_or_skip(case) + [str(script)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+
 def assert_scores_are_self_consistent(case, scores):
     """Assert overall_score is the geometric mean of the sub-scores beside it.
 
@@ -481,6 +503,8 @@ class HarnessNameHygieneTests(unittest.TestCase):
 
     def test_harnesses_declare_nothing_at_top_level(self):
         for name, harness in (
+            ("preamble", self.runner.build_polyfill_preamble()),
+            ("random", self.runner.build_deterministic_random_code()),
             ("sync", self.runner.build_sync_harness(1, False, 3)),
             ("async", self.runner.build_async_harness(1, False, 3)),
         ):
@@ -491,14 +515,6 @@ class HarnessNameHygieneTests(unittest.TestCase):
                 )
 
     def test_sync_harness_runs_beside_colliding_benchmark_names(self):
-        engine = REPO_ROOT / "target" / "release" / "jsse"
-        if engine.exists():
-            command = [str(engine)]
-        elif shutil.which("node"):
-            command = ["node"]
-        else:
-            self.skipTest("neither target/release/jsse nor node is available")
-
         program = (
             self.runner.build_polyfill_preamble()
             + textwrap.dedent(
@@ -513,19 +529,63 @@ class HarnessNameHygieneTests(unittest.TestCase):
             )
             + self.runner.build_sync_harness(1, False, 3)
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            script = Path(tmp) / "collision.js"
-            script.write_text(program, encoding="utf-8")
-            result = subprocess.run(
-                command + [str(script)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+
+        result = run_js(self, program)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout.strip().splitlines()[-1])
         self.assertEqual(len(payload["results"]), 1)
+
+
+class PolyfillPreambleTests(unittest.TestCase):
+    """JetStream's shell driver runs benchmarks with `self === globalThis`.
+
+    Sources such as bigint-paillier and the noble-* bundles probe `self` and
+    fail with a ReferenceError when the runner's prelude does not define it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def test_self_aliases_the_global_object(self):
+        program = self.runner.build_polyfill_preamble() + textwrap.dedent(
+            """
+            print(typeof self, self === globalThis);
+            """
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ["object", "true"])
+
+    def test_self_is_readable_as_a_bare_identifier_in_a_function(self):
+        program = self.runner.build_polyfill_preamble() + textwrap.dedent(
+            """
+            function probe() {
+                return typeof self === "object" && "Math" in self;
+            }
+            print(probe());
+            """
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true")
+
+    def test_existing_self_is_not_clobbered(self):
+        program = (
+            "globalThis.self = 42;\n"
+            + self.runner.build_polyfill_preamble()
+            + "print(self);\n"
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "42")
 
 
 if __name__ == "__main__":

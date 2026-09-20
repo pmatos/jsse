@@ -493,6 +493,11 @@ if (typeof performance.mark !== "function") {
 if (typeof performance.measure !== "function") {
     performance.measure = function() {};
 }
+// JetStream's shell driver sets globalObject.self = globalObject; sources such
+// as bigint-paillier and the noble-* bundles feature-detect it.
+if (typeof self === "undefined") {
+    globalThis.self = globalThis;
+}
 """
 
 
