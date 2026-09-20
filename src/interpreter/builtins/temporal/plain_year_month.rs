@@ -1098,17 +1098,13 @@ impl Interpreter {
                         interp.create_type_error("argument must be an object with a day property"),
                     );
                 }
-                let d_val = match get_prop(interp, &item, "day") {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if is_undefined(&d_val) {
-                    return Completion::Throw(interp.create_type_error("day is required"));
-                }
-                let d = match to_integer_with_truncation(interp, &d_val) {
-                    Ok(n) => n as u8,
+                let (d, has_d) = match read_field_positive_int(interp, &item, "day", 1) {
+                    Ok(v) => v,
                     Err(c) => return c,
                 };
+                if !has_d {
+                    return Completion::Throw(interp.create_type_error("day is required"));
+                }
 
                 if cal != "iso8601" {
                     // For non-ISO calendars, convert through calendar space
@@ -1120,7 +1116,7 @@ impl Interpreter {
                             None,
                             d,
                             &cal,
-                            "reject",
+                            "constrain",
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 if !super::iso_date_within_limits(iso_y, iso_m, iso_d) {
@@ -1134,8 +1130,7 @@ impl Interpreter {
                             }
                             None => {
                                 return Completion::Throw(
-                                    interp
-                                        .create_range_error("Invalid day for this calendar month"),
+                                    interp.create_range_error("Invalid calendar date"),
                                 );
                             }
                         }
