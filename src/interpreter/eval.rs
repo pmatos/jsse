@@ -8537,6 +8537,12 @@ impl Interpreter {
             if let Some(mut disposal) = pending_dispose.take() {
                 match disposal.cursor.step(self, dispose_awaited.take()) {
                     DisposeStep::Await(value) => {
+                        // Suspending reads `value.constructor`, which can run
+                        // user code and collect; until the cursor is parked in
+                        // the saved state it is reachable only from `disposal`.
+                        let gc_frame = self.gc_root_frame();
+                        disposal.cursor.for_each_value(|v| self.gc_root_value(v));
+                        self.gc_root_value(&value);
                         self.async_fn_suspend_at_await(
                             async_id,
                             &state_machine,
@@ -8554,6 +8560,7 @@ impl Interpreter {
                             &value,
                             &for_of_stack,
                         );
+                        self.gc_unroot_frame(gc_frame);
                         self.scheduler
                             .park_async_function_dispose(async_id, disposal);
                         return Completion::Normal(JsValue::UNDEFINED);

@@ -319,8 +319,13 @@ impl Interpreter {
         match step {
             DisposeStep::Await(value) => {
                 self.scheduler.insert_async_disposal(id, disposal);
-                self.await_then(&value, move |interp, outcome| {
-                    interp.async_disposal_step(id, Some(outcome))
+                self.with_gc_root_scope(|interp| {
+                    // `await_then` reads `value.constructor`, which can run user
+                    // code and collect.
+                    interp.gc_root_value(&value);
+                    interp.await_then(&value, move |interp, outcome| {
+                        interp.async_disposal_step(id, Some(outcome))
+                    });
                 });
                 Completion::Normal(JsValue::UNDEFINED)
             }
