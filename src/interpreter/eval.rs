@@ -1325,7 +1325,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
             }
             Expression::OptionalChain(base, prop) => {
-                let (base_val, base_this) = match self.eval_oc_base(base, prop, env) {
+                let (base_val, base_this) = match self.eval_oc_base(base, env) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };

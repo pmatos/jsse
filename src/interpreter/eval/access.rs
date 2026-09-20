@@ -9,7 +9,7 @@ impl Interpreter {
         chain: &Expression,
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
-        let (base_val, base_this) = self.eval_oc_base(base, chain, env)?;
+        let (base_val, base_this) = self.eval_oc_base(base, env)?;
         if (base_val).is_nullish() {
             return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
         }
@@ -20,7 +20,6 @@ impl Interpreter {
     pub(super) fn eval_oc_base(
         &mut self,
         base: &Expression,
-        chain: &Expression,
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
         match base {
@@ -105,47 +104,10 @@ impl Interpreter {
                             }
                         }
                         MemberProperty::Private(name) => {
-                            let branded = self.resolve_private_name(name, env);
-                            if let Some(o) = (obj_val)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                                && let Some(obj) = self.get_object_cell(o.id)
-                            {
-                                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                match elem {
-                                    Some(PrivateElement::Field(v))
-                                    | Some(PrivateElement::Method(v)) => {
-                                        if (v).is_nullish() {
-                                            return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
-                                        }
-                                        return self.eval_oc_tail_with_this(&v, chain, env);
-                                    }
-                                    Some(PrivateElement::Accessor { get, .. }) => {
-                                        if let Some(getter) = get {
-                                            let v = match self.call_function(&getter, &obj_val, &[])
-                                            {
-                                                Completion::Normal(v) => v,
-                                                other => return Err(other),
-                                            };
-                                            if (v).is_nullish() {
-                                                return Ok((
-                                                    JsValue::UNDEFINED,
-                                                    JsValue::UNDEFINED,
-                                                ));
-                                            }
-                                            return self.eval_oc_tail_with_this(&v, chain, env);
-                                        }
-                                        return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
-                                    }
-                                    None => {
-                                        return Err(Completion::Throw(self.create_type_error(
-                                            &format!("Cannot read private member #{name}"),
-                                        )));
-                                    }
-                                }
-                            } else {
-                                return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
-                            }
+                            return match self.private_get(&obj_val, name, env) {
+                                Completion::Normal(v) => Ok((v, obj_val)),
+                                other => Err(other),
+                            };
                         }
                     };
                     let prop_val = match self.access_property_on_value(&obj_val, &key) {
@@ -183,16 +145,6 @@ impl Interpreter {
             Ok((v, _)) => Completion::Normal(v),
             Err(c) => c,
         }
-    }
-
-    /// Evaluate optional chain tail, returning (value, this_for_call).
-    pub(super) fn eval_oc_tail_with_this(
-        &mut self,
-        base_val: &JsValue,
-        prop: &Expression,
-        env: &EnvRef,
-    ) -> Result<(JsValue, JsValue), Completion> {
-        self.eval_oc_tail_with_this_ctx(base_val, &JsValue::UNDEFINED, prop, env)
     }
 
     /// Core optional chain tail evaluator with explicit this context.
@@ -275,36 +227,9 @@ impl Interpreter {
                         Ok((val, inner_val))
                     }
                     MemberProperty::Private(name) => {
-                        let branded = self.resolve_private_name(name, env);
-                        if let Some(o) = inner_val
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                            && let Some(obj) = self.get_object_cell(o.id)
-                        {
-                            let elem = obj.borrow().private_fields.get(&branded).cloned();
-                            match elem {
-                                Some(PrivateElement::Field(v))
-                                | Some(PrivateElement::Method(v)) => {
-                                    Ok((v, inner_val))
-                                }
-                                Some(PrivateElement::Accessor { get, .. }) => {
-                                    if let Some(getter) = get {
-                                        match self.call_function(&getter, &inner_val, &[]) {
-                                            Completion::Normal(v) => Ok((v, inner_val)),
-                                            other => Err(other),
-                                        }
-                                    } else {
-                                        Err(Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot read private member #{name} which has no getter"
-                                        ))))
-                                    }
-                                }
-                                None => Err(Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot read private member #{name} from an object whose class did not declare it"
-                                )))),
-                            }
-                        } else {
-                            Ok((JsValue::UNDEFINED, inner_val))
+                        match self.private_get(&inner_val, name, env) {
+                            Completion::Normal(v) => Ok((v, inner_val)),
+                            other => Err(other),
                         }
                     }
                 }
@@ -336,7 +261,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         // Evaluate the base of the optional chain
-        let (base_val, _base_this) = match self.eval_oc_base(base, chain, env) {
+        let (base_val, _base_this) = match self.eval_oc_base(base, env) {
             Ok(v) => v,
             Err(c) => return c,
         };
