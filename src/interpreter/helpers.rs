@@ -1671,14 +1671,18 @@ fn extreme_range_anchor_epoch_secs() -> i64 {
     day_from_year(EXTREME_RANGE_ANCHOR_YEAR as f64) as i64 * 86_400
 }
 
-/// Map a UTC epoch instant to a `jiff::Timestamp`, shifting by whole 400-year
-/// cycles when it falls outside jiff's ~9999-year range (Temporal's Instant
-/// range is much wider, ~±273,790 years).
-pub(crate) fn named_time_zone_timestamp(
-    epoch_secs: i64,
-    subsec_nanos: u32,
-) -> Option<jiff::Timestamp> {
-    if let Ok(ts) = jiff::Timestamp::new(epoch_secs, subsec_nanos as i32) {
+/// Map the whole UTC epoch second containing an instant to a
+/// `jiff::Timestamp`, shifting by whole 400-year cycles when it falls outside
+/// jiff's ~9999-year range (Temporal's Instant range is much wider,
+/// ~±273,790 years).
+///
+/// Callers pass the floor second and drop the sub-second part on purpose:
+/// offset transitions land on whole seconds, and jiff's offset lookup
+/// truncates a negative timestamp's fractional second toward zero, which
+/// would select the wrong side of a transition for an instant just before
+/// one in the pre-1970 region.
+pub(crate) fn named_time_zone_timestamp(epoch_secs: i64) -> Option<jiff::Timestamp> {
+    if let Ok(ts) = jiff::Timestamp::new(epoch_secs, 0) {
         return Some(ts);
     }
     if epoch_secs < 0 {
@@ -1689,20 +1693,13 @@ pub(crate) fn named_time_zone_timestamp(
         return Some(jiff::Timestamp::MIN);
     }
     let cycles = (epoch_secs - extreme_range_anchor_epoch_secs()).div_euclid(GREGORIAN_CYCLE_SECS);
-    jiff::Timestamp::new(
-        epoch_secs - cycles * GREGORIAN_CYCLE_SECS,
-        subsec_nanos as i32,
-    )
-    .ok()
+    jiff::Timestamp::new(epoch_secs - cycles * GREGORIAN_CYCLE_SECS, 0).ok()
 }
 
-/// Offset in seconds of `tz` at the given UTC epoch instant.
-pub(crate) fn named_time_zone_offset_secs(
-    tz: &jiff::tz::TimeZone,
-    epoch_secs: i64,
-    subsec_nanos: u32,
-) -> i32 {
-    named_time_zone_timestamp(epoch_secs, subsec_nanos)
+/// Offset in seconds of `tz` at the UTC epoch second `epoch_secs` (the floor
+/// second of the instant of interest).
+pub(crate) fn named_time_zone_offset_secs(tz: &jiff::tz::TimeZone, epoch_secs: i64) -> i32 {
+    named_time_zone_timestamp(epoch_secs)
         .map(|ts| tz.to_offset_info(ts).offset().seconds())
         .unwrap_or(0)
 }
@@ -1771,10 +1768,8 @@ pub(crate) fn local_tza(t: f64) -> f64 {
     let Some(tz) = system_time_zone_jiff() else {
         return 0.0;
     };
-    let epoch_ms = t.floor() as i64;
-    let epoch_secs = epoch_ms.div_euclid(1000);
-    let subsec_nanos = (epoch_ms.rem_euclid(1000) as u32) * 1_000_000;
-    named_time_zone_offset_secs(tz, epoch_secs, subsec_nanos) as f64 * 1000.0
+    let epoch_secs = (t.floor() as i64).div_euclid(1000);
+    named_time_zone_offset_secs(tz, epoch_secs) as f64 * 1000.0
 }
 
 pub(crate) fn local_time(t: f64) -> f64 {
@@ -1823,10 +1818,8 @@ fn local_time_zone_abbreviation(t: f64) -> String {
     if !t.is_finite() {
         return system_time_zone_identifier();
     }
-    let epoch_ms = t.floor() as i64;
-    let epoch_secs = epoch_ms.div_euclid(1000);
-    let subsec_nanos = (epoch_ms.rem_euclid(1000) as u32) * 1_000_000;
-    match named_time_zone_timestamp(epoch_secs, subsec_nanos) {
+    let epoch_secs = (t.floor() as i64).div_euclid(1000);
+    match named_time_zone_timestamp(epoch_secs) {
         Some(ts) => tz.to_offset_info(ts).abbreviation().to_string(),
         None => system_time_zone_identifier(),
     }

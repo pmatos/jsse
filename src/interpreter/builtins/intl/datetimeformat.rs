@@ -218,10 +218,8 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
     if tz_str.parse::<Tz>().is_ok()
         && let Some(tz_parsed) = resolve_named_time_zone(&tz_str)
     {
-        let epoch_ms_floor = epoch_ms.floor() as i64;
-        let epoch_secs = epoch_ms_floor.div_euclid(1000);
-        let subsec_nanos = (epoch_ms_floor.rem_euclid(1000) as u32) * 1_000_000;
-        return named_time_zone_offset_secs(&tz_parsed, epoch_secs, subsec_nanos) as f64 * 1000.0;
+        let epoch_secs = (epoch_ms.floor() as i64).div_euclid(1000);
+        return named_time_zone_offset_secs(&tz_parsed, epoch_secs) as f64 * 1000.0;
     }
 
     // Fallback to static lookup
@@ -4252,8 +4250,7 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
             && let Some(tz_parsed) = resolve_named_time_zone(&tz_str)
         {
             let epoch_secs = (epoch_ms / 1000.0).floor() as i64;
-            let nanos = ((epoch_ms % 1000.0) * 1_000_000.0).abs() as u32;
-            if let Some(ts) = named_time_zone_timestamp(epoch_secs, nanos) {
+            if let Some(ts) = named_time_zone_timestamp(epoch_secs) {
                 let info = tz_parsed.to_offset_info(ts);
                 let abbr = info.abbreviation().to_string();
                 let offset_secs = info.offset().seconds();

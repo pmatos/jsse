@@ -198,20 +198,12 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
     let zero = BigInt::from(0i64);
     let q = epoch_ns / &ns_per_sec_bi;
     let r = epoch_ns % &ns_per_sec_bi;
-    let (epoch_secs_bi, rem_bi) = if r < zero {
-        (q - BigInt::from(1i64), r + &ns_per_sec_bi)
-    } else {
-        (q, r)
-    };
+    let epoch_secs_bi = if r < zero { q - BigInt::from(1i64) } else { q };
     let epoch_secs: i64 = epoch_secs_bi.try_into().unwrap_or(0);
-    let nanos: u32 = {
-        let r: i64 = rem_bi.try_into().unwrap_or(0);
-        r as u32
-    };
 
     if let Some(tz_parsed) = crate::interpreter::helpers::resolve_named_time_zone(tz) {
         let offset_secs =
-            crate::interpreter::helpers::named_time_zone_offset_secs(&tz_parsed, epoch_secs, nanos);
+            crate::interpreter::helpers::named_time_zone_offset_secs(&tz_parsed, epoch_secs);
         return offset_secs as i64 * NS_PER_SEC as i64;
     }
     0
@@ -422,7 +414,7 @@ pub(crate) fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
 
 /// Get total UTC offset in seconds at a given UTC epoch second.
 fn get_total_offset_secs(tz_parsed: &jiff::tz::TimeZone, epoch_secs: i64) -> i32 {
-    crate::interpreter::helpers::named_time_zone_offset_secs(tz_parsed, epoch_secs, 0)
+    crate::interpreter::helpers::named_time_zone_offset_secs(tz_parsed, epoch_secs)
 }
 
 /// Find the exact transition point (in nanoseconds) between lo_ns and hi_ns,
