@@ -1,6 +1,7 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
 use crate::interpreter::property::SetOutcome;
+use crate::interpreter::generator_analysis::block_has_await_using;
 
 mod access;
 mod generator_runtime;
@@ -8507,6 +8508,10 @@ impl Interpreter {
             }};
         }
 
+        // The completion of a block whose disposal just finished, standing in
+        // for re-running the state body that produced it.
+        let mut preloaded_stmt_result: Option<Completion> = None;
+
         // Completes the function-level disposal that a `return`, an uncaught
         // throw, or the end of the body started. The cursor parks the function
         // at each `Await` of DisposeResources so no other job is drained inline.
@@ -8559,6 +8564,7 @@ impl Interpreter {
                         return Completion::Exit(code);
                     }
                     DisposeStep::Done(done) => match (disposal.then, done) {
+                        (DisposeThen::Block, finished) => preloaded_stmt_result = Some(finished),
                         (DisposeThen::Return, Completion::Throw(e)) => pending_exception = Some(e),
                         (_, Completion::Throw(e)) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -8581,32 +8587,6 @@ impl Interpreter {
                         }
                     },
                 }
-            }
-
-            // §10.4.4.3 Dispose step 3: async-dispose resources need Await(result),
-            // which must truly suspend the async function. dispose_resources already
-            // resolved the promise synchronously via await_value; this flag triggers
-            // an additional suspension so the continuation runs in a new microtask.
-            if self.pending_async_dispose_await {
-                self.pending_async_dispose_await = false;
-                self.async_fn_suspend_at_await(
-                    async_id,
-                    &state_machine,
-                    &func_env,
-                    is_strict,
-                    current_id,
-                    &try_stack,
-                    None,
-                    pending_return.take(),
-                    pending_loop_control.take(),
-                    saved_finally_exception.take(),
-                    pending_for_of_unwind.take(),
-                    &resolve_fn,
-                    &reject_fn,
-                    &JsValue::UNDEFINED,
-                    &for_of_stack,
-                );
-                return Completion::Normal(JsValue::UNDEFINED);
             }
 
             if current_id >= state_machine.states.len() {
@@ -8741,17 +8721,40 @@ impl Interpreter {
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            self.in_state_machine = true;
             let term_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
-            let mut stmt_result = self.exec_state_machine_body(
-                &state_machine.states[current_id].body,
-                &term_env,
-                &state_machine,
-            );
-            self.in_state_machine = saved_in_state_machine;
+            let mut stmt_result = match preloaded_stmt_result.take() {
+                Some(finished) => finished,
+                None => {
+                    self.in_state_machine = true;
+                    let state_body = &state_machine.states[current_id].body;
+                    // §14.2.2 Block: an `await using` block that ends its state
+                    // hands its DisposeResources to this executor instead of
+                    // draining the queue inline, so the function can suspend.
+                    let isolated_block = state_body.as_slice().last().and_then(|last| {
+                        matches!(
+                            last,
+                            Statement::Block(stmts) if block_has_await_using(stmts)
+                        )
+                        .then_some(last as *const Statement as usize)
+                    });
+                    let outer_block =
+                        std::mem::replace(&mut self.suspendable_dispose_block, isolated_block);
+                    let result = self.exec_state_machine_body(state_body, &term_env, &state_machine);
+                    self.suspendable_dispose_block = outer_block;
+                    self.in_state_machine = saved_in_state_machine;
+                    if let Some(cursor) = self.parked_block_dispose.take() {
+                        pending_dispose = Some(PendingDispose {
+                            cursor,
+                            then: DisposeThen::Block,
+                        });
+                        continue;
+                    }
+                    result
+                }
+            };
             // `__host_exit` in the async body (issue #242) propagates out as
             // `Completion::Exit` instead of settling the result promise; the
             // caller re-raises it uncatchably.

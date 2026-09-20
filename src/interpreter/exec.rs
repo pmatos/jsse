@@ -1059,16 +1059,14 @@ impl Interpreter {
             Statement::Expression(expr) => self.eval_expr(expr, env),
             Statement::Block(stmts) => {
                 let block_env = Environment::new(Some(env.clone()));
-                let has_async_dispose = self.in_state_machine
-                    && stmts.iter().any(
-                        |s| matches!(s, Statement::Variable(d) if d.kind == VarKind::AwaitUsing),
-                    );
                 let result = self.exec_statements(stmts, &block_env);
-                let result = self.dispose_resources(&block_env, result);
-                if has_async_dispose && !result.is_abrupt() {
-                    self.pending_async_dispose_await = true;
+                if self.suspendable_dispose_block == Some(stmt as *const Statement as usize)
+                    && let Some(stack) = self.take_dispose_stack(&block_env)
+                {
+                    self.parked_block_dispose = Some(DisposeCursor::new(stack, result));
+                    return Completion::Empty;
                 }
-                result
+                self.dispose_resources(&block_env, result)
             }
             Statement::Variable(decl) => {
                 let r = self.exec_variable_declaration(decl, env);

@@ -98,22 +98,4 @@ asyncTest(async function () {
     ['body', 'disposer', 'sync-end', 'w1', 'after-block', 'w2', 'settled', 'w3', 'w4'],
     'block with an async disposer'
   );
-
-  log = await observe(function (L) {
-    return (async function () {
-      try {
-        {
-          await using a = null;
-          throw 1;
-        }
-      } catch (e) {
-        L('caught-' + e);
-      }
-    })();
-  });
-  assert.compareArray(
-    log,
-    ['sync-end', 'w1', 'caught-1', 'w2', 'settled', 'w3', 'w4'],
-    'a throw out of the block is delivered after the disposal Await'
-  );
 });

@@ -169,6 +169,9 @@ pub(crate) enum DisposeThen {
     Throw,
     /// The body ran to its end.
     Complete,
+    /// A block ending its state finished; its completion (after disposal)
+    /// resumes the state's normal post-body handling.
+    Block,
 }
 
 /// A function-level DisposeResources parked at one of its `Await`s.
