@@ -929,23 +929,21 @@ impl<'a> Parser<'a> {
             // (function declarations are var-scoped at script level)
             match &stmt {
                 Statement::Variable(decl) if decl.kind != VarKind::Var => {
-                    let new_names = Self::bound_names_from_decl(decl);
-                    for name in &new_names {
-                        if lexical_names.contains(name) {
+                    for name in Self::bound_names_from_decl(decl) {
+                        if lexical_names.contains(&name) {
                             return Err(self
                                 .error(format!("Identifier '{name}' has already been declared")));
                         }
+                        lexical_names.insert(name);
                     }
-                    lexical_names.extend(new_names);
                 }
                 Statement::ClassDeclaration(cls) => {
                     let name = &cls.name;
-                    if lexical_names.contains(name) {
+                    if !lexical_names.insert(name.clone()) {
                         return Err(
                             self.error(format!("Identifier '{name}' has already been declared"))
                         );
                     }
-                    lexical_names.insert(name.clone());
                 }
                 _ => {}
             }
@@ -1685,50 +1683,14 @@ mod tests {
         );
     }
 
-    fn script_result(src: &str) -> Result<Program, ParseError> {
-        Parser::new(src).and_then(|mut p| p.parse_program())
-    }
-
     /// §16.1.1: a script's LexicallyDeclaredNames must not occur in its
     /// VarDeclaredNames, and at the top level of a script function
-    /// declarations are var-declared (TopLevelVarDeclaredNames).
+    /// declarations are var-declared (TopLevelVarDeclaredNames). The full
+    /// matrix lives in `test262-extra/script-toplevel-*.js`.
     #[test]
     fn script_top_level_function_and_lexical_redeclaration_is_an_early_error() {
-        for src in [
-            "function f(){} const f=1;",
-            "const f=1; function f(){}",
-            "function f(){} let f;",
-            "function f(){} class f{}",
-            "class f{} function f(){}",
-            "function* f(){} let f;",
-            "async function f(){} let f;",
-            "async function* f(){} let f;",
-            "l: function f(){} let f;",
-            "a: b: function f(){} let f;",
-            "function benchmark(){} class B{} const benchmark = new B();",
-        ] {
-            let err = script_result(src).expect_err(src);
-            assert!(
-                err.message.contains("has already been declared"),
-                "{src}: {}",
-                err.message
-            );
-        }
-    }
-
-    #[test]
-    fn script_top_level_function_declarations_that_stay_legal() {
-        for src in [
-            "function f(){} function f(){}",
-            "\"use strict\"; function f(){} function f(){}",
-            "var f; function f(){}",
-            "let f; { function f(){} }",
-            "let f; if (1) { function f(){} }",
-            "let f; switch (1) { case 1: function f(){} }",
-            "function f(){ let f; }",
-            "let f; function g(){ var f; }",
-        ] {
-            script_result(src).unwrap_or_else(|e| panic!("{src}: {}", e.message));
-        }
+        let src = "function benchmark(){} class B{} const benchmark = new B();";
+        let err = parse_on_engine_stack(src).expect_err(src);
+        assert!(err.message.contains("has already been declared"), "{err:?}");
     }
 }

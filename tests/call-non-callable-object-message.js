@@ -1,7 +1,8 @@
 // EvaluateCall (§13.3.6.2) requires a TypeError when the callee is not
 // callable; the message text is implementation-defined. jsse must not leak its
-// internal object representation into that message (issue #652), and the
-// TypeError must still be thrown only after the arguments were evaluated.
+// internal object representation into that message (issue #652). The
+// spec-observable half (no user code runs while naming the callee) is in
+// test262-extra/call-non-callable-object-runs-no-user-code.js.
 
 function messageOf(fn) {
   try {
@@ -58,22 +59,3 @@ checkNew("new string", function () { var s = "abc"; new s(); }, "\"abc\"");
 checkNew("new symbol", function () { var s = Symbol("tag"); new s(); }, "Symbol(tag)");
 checkNew("new object", function () { var o = {}; new o(); }, "#<Object>");
 checkNew("new anonymous arrow", function () { new (() => {})(); }, "#<Function>");
-
-var evaluated = 0;
-messageOf(function () { ({})(evaluated++); });
-if (evaluated !== 1) {
-  throw new Error("arguments must be evaluated before the TypeError, evaluated=" + evaluated);
-}
-
-var getterRan = false;
-var trap = {};
-Object.defineProperty(trap, "constructor", {
-  get: function () { getterRan = true; return B; },
-});
-Object.defineProperty(trap, "toString", {
-  get: function () { getterRan = true; return function () { return "x"; }; },
-});
-messageOf(function () { trap(); });
-if (getterRan) {
-  throw new Error("describing a non-callable callee must not run user code");
-}

@@ -527,17 +527,17 @@ def build_sync_harness(iterations, deterministic_random, worst_case_count):
 ;(() => {{
     const __iterations = {iterations};
     const __results = [];
-    const __benchmark = new Benchmark();
-    if (__benchmark.init) __benchmark.init();
-    for (let __i = 0; __i < __iterations; __i++) {{
-        if (__benchmark.prepareForNextIteration) __benchmark.prepareForNextIteration();
+    const benchmark = new Benchmark();
+    if (benchmark.init) benchmark.init();
+    for (let i = 0; i < __iterations; i++) {{
+        if (benchmark.prepareForNextIteration) benchmark.prepareForNextIteration();
         {reset_code}
-        const __start = performance.now();
-        __benchmark.runIteration(__i);
-        const __end = performance.now();
-        __results.push(Math.max(1, __end - __start));
+        const start = performance.now();
+        benchmark.runIteration(i);
+        const end = performance.now();
+        __results.push(Math.max(1, end - start));
     }}
-    if (__benchmark.validate) __benchmark.validate(__iterations);
+    if (benchmark.validate) benchmark.validate(__iterations);
 
     // Output results as JSON
     print(JSON.stringify({{

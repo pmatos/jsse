@@ -6575,12 +6575,12 @@ impl Interpreter {
                         Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
                         None => String::new(),
                     };
+                    drop(b);
                     let name = if name.is_empty() {
-                        format!("#<{}>", b.class_name)
+                        self.describe_non_callable(&callee_val)
                     } else {
                         name
                     };
-                    drop(b);
                     self.gc_unroot_frame(gc_frame);
                     return Completion::Throw(
                         self.create_type_error(&format!("{} is not a constructor", name)),

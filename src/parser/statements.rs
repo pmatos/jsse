@@ -410,13 +410,12 @@ impl<'a> Parser<'a> {
     /// VarDeclaredNames, function declarations directly in the list (also
     /// under labels) count as var-declared.
     pub(super) fn collect_top_level_var_declared_names(stmt: &Statement, names: &mut Vec<String>) {
-        let mut item = stmt;
-        while let Statement::Labeled(_, inner) = item {
-            item = inner;
-        }
-        match item {
+        match stmt {
             Statement::FunctionDeclaration(f) => names.push(f.name.clone()),
-            _ => Self::collect_var_declared_names(item, names),
+            Statement::Labeled(_, inner) => {
+                Self::collect_top_level_var_declared_names(inner, names)
+            }
+            _ => Self::collect_var_declared_names(stmt, names),
         }
     }
 
