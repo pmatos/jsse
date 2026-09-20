@@ -1832,7 +1832,7 @@ impl Interpreter {
                 } else {
                     s
                 };
-                // §19.2.5 steps 13-14: Z is the longest prefix of radix-R digits
+                // §19.2.5 steps 11-12: Z is the longest prefix of radix-R digits
                 let end = s
                     .find(|c: char| !c.is_digit(radix as u32))
                     .unwrap_or(s.len());

@@ -162,10 +162,7 @@ pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
     )
 }
 
-// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as an
-// exact integer, then convert it to f64 once. Parsing through the exact decimal
-// representation gives Rust's float parser the full mathematical value to round,
-// avoiding both fixed-width overflow and intermediate floating-point rounding.
+// Digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as a Number.
 // Empty or invalid input → NaN.
 fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
     if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
@@ -174,34 +171,22 @@ fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
     prevalidated_radix_digits_to_f64(digits, radix)
 }
 
-// Value of a non-empty run of ASCII radix-`radix` digits, rounded to f64 exactly
-// once (§6.1.6.1 𝔽(x)). Shared by §7.1.4.1 StringToNumber and §19.2.5 parseInt,
+// Exact integer value of a non-empty run of ASCII radix-`radix` digits, rounded to
+// f64 once (§6.1.6.1 𝔽(x)), so no intermediate floating-point rounding or
+// fixed-width overflow. Shared by §7.1.4.1 StringToNumber and §19.2.5 parseInt,
 // whose digit prefix Z is already known to be valid; callers must guarantee that.
 pub(crate) fn prevalidated_radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
-    let mut acc: u64 = 0;
-    let mut fits = true;
-    for b in digits.bytes() {
-        let digit = (b as char).to_digit(radix).unwrap_or(0) as u64;
-        match acc
-            .checked_mul(radix as u64)
-            .and_then(|v| v.checked_add(digit))
-        {
-            Some(v) => acc = v,
-            None => {
-                fits = false;
-                break;
-            }
-        }
-    }
-    if fits {
-        return acc as f64;
+    debug_assert!(!digits.is_empty() && digits.bytes().all(|b| (b as char).is_digit(radix)));
+    if let Ok(v) = u64::from_str_radix(digits, radix) {
+        return v as f64;
     }
     if radix == 10 {
         return digits.parse::<f64>().unwrap_or(f64::NAN);
     }
-    // More than 1024 significant digits is >= 2^1024 for every radix >= 2, which
-    // rounds to +∞; skip building an arbitrarily large integer for it.
-    if digits.trim_start_matches('0').len() > 1024 {
+    // n significant digits are >= radix^(n-1) >= 2^((n-1) * floor(log2 radix)); at
+    // 2^1024 the value rounds to +∞, so skip building an arbitrarily large integer.
+    let significant = digits.trim_start_matches('0').len() as u64;
+    if significant.saturating_sub(1) * u64::from(radix.ilog2()) >= 1024 {
         return f64::INFINITY;
     }
     num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
