@@ -1413,12 +1413,10 @@ impl Interpreter {
                 };
                 match interp.proxy_has_property(target_id, &key) {
                     Ok(true) => {
-                        return Completion::Normal(
-                            interp.create_iter_result_object(
-                                JsValue::string(key.to_js_string()),
-                                false,
-                            ),
-                        );
+                        return Completion::Normal(interp.create_iter_result_object(
+                            JsValue::string(key.to_js_string()),
+                            false,
+                        ));
                     }
                     Ok(false) => {}
                     Err(e) => return Completion::Throw(e),
