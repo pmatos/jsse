@@ -3756,6 +3756,32 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_async_generator_switch_dispatch_is_not_swallowed() {
+        for (switch_head, code) in [
+            ("switch (__host_exit(3)) { case 1: yield 1; }", 3),
+            ("switch (0) { case __host_exit(4): yield 1; }", 4),
+        ] {
+            let (interp, c) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                async function* g() {{
+                  {switch_head}
+                  globalThis.reached = "after";
+                  yield 2;
+                }}
+                g().next();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{switch_head}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{switch_head}");
+            assert!(
+                matches!(c, Completion::Exit(x) if x == code),
+                "{switch_head}"
+            );
+        }
+    }
+
+    #[test]
     fn host_exit_in_dependency_stops_sibling_import_and_parent_body() {
         // #596: inner_module_evaluation's DFS must stop advancing once a
         // dependency's body has latched pending_exit — otherwise a later
