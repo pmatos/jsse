@@ -1616,27 +1616,6 @@ impl Interpreter {
                     "prototype".to_string(),
                     PropertyDescriptor::data(proto_val.clone(), false, false, false),
                 );
-
-            // supportedLocalesOf static method
-            let slof = self.create_function(JsFunction::native(
-                "supportedLocalesOf".to_string(),
-                1,
-                |interp, _this, args| {
-                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
-                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    let requested = match interp.intl_canonicalize_locale_list(locales) {
-                        Ok(list) => list,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    match interp.intl_supported_locales(&requested, &options) {
-                        Ok(v) => Completion::Normal(v),
-                        Err(e) => Completion::Throw(e),
-                    }
-                },
-            ));
-            self.get_object_cell_expect(ctor_id)
-                .borrow_mut()
-                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
