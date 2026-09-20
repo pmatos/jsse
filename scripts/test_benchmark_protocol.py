@@ -512,7 +512,7 @@ class HarnessNameHygieneTests(unittest.TestCase):
         ):
             with self.subTest(harness=name):
                 self.assertIsNone(
-                    re.search(self.TOP_LEVEL_DECLARATION, harness, re.M),
+                    re.search(self.TOP_LEVEL_DECLARATION, harness, re.MULTILINE),
                     harness,
                 )
 
@@ -702,7 +702,9 @@ class PreloadShimTests(unittest.TestCase):
         code = self.runner.build_preload_code({"blob": "dir/blob.js"}, str(self.root))
 
         self.assertIsNone(
-            re.search(HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, code, re.M),
+            re.search(
+                HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, code, re.MULTILINE
+            ),
             code,
         )
 
@@ -776,7 +778,9 @@ class AsyncHarnessRejectionTests(unittest.TestCase):
         harness = self.runner.build_async_harness(1, False, 3)
 
         self.assertIsNone(
-            re.search(HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, harness, re.M),
+            re.search(
+                HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, harness, re.MULTILINE
+            ),
             harness,
         )
 
