@@ -17,6 +17,18 @@ description: >
   suspending sub-expression. This test exists so a future, accidental
   change to this ordering is caught and made a deliberate decision instead
   of silent drift. See jsse issue #625.
+
+  The gap is broader than the heritage-throws case pinned below. Because
+  only suspending sub-expressions are hoisted: (1) any non-suspending
+  heritage or earlier computed key runs after a later suspending key
+  (side-effect order, and a computed key with a side-effecting counter is
+  bound to the wrong method); (2) a hoisted key's ToPropertyKey is deferred to
+  class-definition time, so a throwing toString on a resumed key value is
+  observed after later keys' expressions and yields instead of before them;
+  (3) hoisted expressions are evaluated outside the class scope, so a named
+  class expression's inner binding is not seen (no TDZ ReferenceError).
+  Only case (heritage) is pinned by the assertion below; when any of these is
+  fixed, this file's expected order must be revisited deliberately.
 esid: sec-runtime-semantics-classdefinitionevaluation
 info: |
   Runtime Semantics: ClassDefinitionEvaluation (15.7.14) evaluates

@@ -551,6 +551,12 @@ fn labels_iteration_statement(stmt: &Statement) -> bool {
     }
 }
 
+fn is_generated_temp_name(name: &str) -> bool {
+    name.strip_prefix('$')
+        .and_then(|rest| rest.rsplit_once('_'))
+        .is_some_and(|(_, id)| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn expr_has_suspension(expr: &Expression, is_async: bool) -> bool {
     if is_async {
         expr_contains_suspension(expr)
@@ -580,12 +586,15 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
     }
 }
 
-/// Hoist suspending sub-expressions out of a class's heritage clause and
-/// computed element keys, in source order (heritage before any element key,
-/// each key in declaration order), per ClassDefinitionEvaluation (spec
-/// §15.7.14): both evaluate in the enclosing scope, so a `yield`/`await`
-/// there is a real suspension point in the surrounding generator, not inside
-/// a nested function/class scope.
+/// Hoist the sub-expressions of a class heritage clause and computed element
+/// keys that themselves contain a `yield`/`await` into temp vars (heritage
+/// first, then each key in declaration order), so the suspension belongs to
+/// the enclosing generator rather than to the class.
+///
+/// Only suspending sub-expressions move: non-suspending siblings stay in the
+/// rebuilt class and run when it is evaluated, after every hoisted suspension,
+/// and a hoisted key's ToPropertyKey is likewise deferred to that point. Both
+/// depart from the source order of ClassDefinitionEvaluation (spec §15.7.14).
 fn hoist_class_suspensions(
     super_class: Option<&Expression>,
     elements: &[ClassElement],
@@ -605,46 +614,31 @@ fn hoist_class_suspensions(
     let new_elements = elements
         .iter()
         .enumerate()
-        .map(|(i, element)| match element {
-            ClassElement::Method(m) => ClassElement::Method(ClassMethod {
-                key: hoist_class_element_key(&m.key, i, ctx),
-                kind: m.kind,
-                value: m.value.clone(),
-                is_static: m.is_static,
-                computed: m.computed,
-            }),
-            ClassElement::Property(p) => ClassElement::Property(ClassProperty {
-                key: hoist_class_element_key(&p.key, i, ctx),
-                value: p.value.clone(),
-                is_static: p.is_static,
-                computed: p.computed,
-            }),
-            ClassElement::AutoAccessor(p) => ClassElement::AutoAccessor(ClassProperty {
-                key: hoist_class_element_key(&p.key, i, ctx),
-                value: p.value.clone(),
-                is_static: p.is_static,
-                computed: p.computed,
-            }),
-            ClassElement::StaticBlock(_) => element.clone(),
+        .map(|(i, element)| {
+            let mut element = element.clone();
+            match &mut element {
+                ClassElement::Method(ClassMethod { key, .. })
+                | ClassElement::Property(ClassProperty { key, .. })
+                | ClassElement::AutoAccessor(ClassProperty { key, .. }) => {
+                    hoist_class_element_key(key, i, ctx);
+                }
+                ClassElement::StaticBlock(_) => {}
+            }
+            element
         })
         .collect();
 
     (new_super_class, new_elements)
 }
 
-fn hoist_class_element_key(
-    key: &PropertyKey,
-    index: usize,
-    ctx: &mut TransformContext,
-) -> PropertyKey {
-    match key {
-        PropertyKey::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-            let temp_var = ctx.new_temp_var(&format!("class_key_{index}"));
-            let binding = SentValueBindingKind::Variable(temp_var.clone());
-            transform_yielding_expression(e, ctx, usize::MAX, Some(binding));
-            PropertyKey::Computed(Box::new(Expression::Identifier(temp_var)))
-        }
-        _ => key.clone(),
+fn hoist_class_element_key(key: &mut PropertyKey, index: usize, ctx: &mut TransformContext) {
+    if let PropertyKey::Computed(e) = key
+        && expr_has_suspension(e, ctx.is_async)
+    {
+        let temp_var = ctx.new_temp_var(&format!("class_key_{index}"));
+        let binding = SentValueBindingKind::Variable(temp_var.clone());
+        transform_yielding_expression(e, ctx, usize::MAX, Some(binding));
+        *key = PropertyKey::Computed(Box::new(Expression::Identifier(temp_var)));
     }
 }
 
@@ -1224,12 +1218,22 @@ fn transform_yielding_expression(
         Expression::Class(class_expr) => {
             let (super_class, body) =
                 hoist_class_suspensions(class_expr.super_class.as_deref(), &class_expr.body, ctx);
-            let combined = Expression::Class(ClassExpr {
+            let class = Expression::Class(ClassExpr {
                 name: class_expr.name.clone(),
                 super_class,
                 body,
                 source_text: class_expr.source_text.clone(),
             });
+            // Assigning an anonymous class straight to an internal temp would
+            // apply NamedEvaluation and leak the temp's name as `.name`.
+            let combined = match &binding {
+                Some(SentValueBindingKind::Variable(name))
+                    if class_expr.name.is_none() && is_generated_temp_name(name) =>
+                {
+                    Expression::Sequence(vec![Expression::Literal(Literal::Number(0.0)), class])
+                }
+                _ => class,
+            };
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -2678,47 +2682,86 @@ mod tests {
         assert!(sm.states.len() > 1);
     }
 
+    fn plain_class_decl() -> Statement {
+        Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: Some(Box::new(Expression::Identifier("Base".to_string()))),
+            body: vec![ClassElement::Method(ClassMethod {
+                key: PropertyKey::Identifier("method".to_string()),
+                kind: ClassMethodKind::Method,
+                value: FunctionExpr {
+                    name: None,
+                    params: vec![],
+                    body: Body::new(vec![]),
+                    is_async: false,
+                    is_generator: false,
+                    source_text: None,
+                    body_is_strict: false,
+                },
+                is_static: false,
+                computed: false,
+            })],
+            source_text: None,
+        })
+    }
+
     #[test]
-    fn test_class_with_no_suspension_is_unaffected() {
-        // A class with no yield/await in its heritage or computed keys must
-        // stay on the yield_points-empty create_simple_machine fast path —
-        // the new class-hoisting logic should never fire for the overwhelming
-        // common case of a plain class declaration.
-        let body = vec![
-            Statement::Expression(make_yield()),
-            Statement::ClassDeclaration(ClassDecl {
-                name: "C".to_string(),
-                super_class: Some(Box::new(Expression::Identifier("Base".to_string()))),
-                body: vec![ClassElement::Method(ClassMethod {
-                    key: PropertyKey::Identifier("method".to_string()),
-                    kind: ClassMethodKind::Method,
-                    value: FunctionExpr {
-                        name: None,
-                        params: vec![],
-                        body: Body::new(vec![]),
-                        is_async: false,
-                        is_generator: false,
-                        source_text: None,
-                        body_is_strict: false,
-                    },
-                    is_static: false,
-                    computed: false,
-                })],
-                source_text: None,
-            }),
-        ];
+    fn test_class_without_suspension_takes_simple_machine_fast_path() {
+        let sm = transform_generator(&[plain_class_decl()], &[]);
+
+        assert_eq!(sm.num_yields, 0);
+        assert_eq!(sm.states.len(), 1);
+    }
+
+    #[test]
+    fn test_class_without_suspension_is_not_hoisted_in_decomposed_generator() {
+        // The leading yield forces full decomposition; the class itself has no
+        // suspending heritage/key, so it must go through the plain statement
+        // path and create no hoisting temp vars.
+        let body = vec![Statement::Expression(make_yield()), plain_class_decl()];
         let sm = transform_generator(&body, &[]);
 
-        // Only the leading `yield` counts; the class contributes no yield
-        // points and is emitted verbatim by the plain statement path.
         assert_eq!(sm.num_yields, 1);
-        let class_emitted_verbatim = sm.states.iter().any(|s| {
+        assert!(sm.temp_vars.is_empty());
+        let class_emitted = sm.states.iter().any(|s| {
             s.body
                 .as_slice()
                 .iter()
                 .any(|stmt| matches!(stmt, Statement::ClassDeclaration(_)))
         });
-        assert!(class_emitted_verbatim);
+        assert!(class_emitted);
+    }
+
+    #[test]
+    fn test_generated_temp_names_are_told_apart_from_user_names() {
+        let mut ctx = TransformContext::new(analyze_generator_body(&[], &[]), false);
+        let generated = ctx.new_temp_var("call_arg_0");
+
+        assert!(is_generated_temp_name(&generated));
+        assert!(is_generated_temp_name("$class_key_2_7"));
+        assert!(!is_generated_temp_name("$el"));
+        assert!(!is_generated_temp_name("C"));
+        assert!(!is_generated_temp_name("$"));
+    }
+
+    #[test]
+    fn test_yield_in_class_expression_heritage_is_decomposed() {
+        let body = vec![Statement::Variable(VariableDeclaration {
+            kind: VarKind::Let,
+            declarations: vec![VariableDeclarator {
+                pattern: Pattern::Identifier("C".to_string()),
+                init: Some(Expression::Class(ClassExpr {
+                    name: None,
+                    super_class: Some(Box::new(make_yield())),
+                    body: vec![],
+                    source_text: None,
+                })),
+            }],
+        })];
+        let sm = transform_generator(&body, &[]);
+
+        assert_eq!(sm.num_yields, 1);
+        assert!(sm.states.len() > 1);
     }
 
     #[test]

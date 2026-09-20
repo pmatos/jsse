@@ -403,9 +403,10 @@ fn analyze_statement(
         }
 
         Statement::ClassDeclaration(class_decl) => {
-            // The class body (method/field values, static blocks) creates its own
-            // scope, but the heritage expression and computed element keys run in
-            // the enclosing scope per spec ClassDefinitionEvaluation (§15.7.14).
+            // Method/field values and static blocks are their own function
+            // scopes, but the heritage and computed keys are evaluated by the
+            // class definition itself in the generator's execution context
+            // (ClassDefinitionEvaluation, §15.7.14).
             analyze_class(
                 class_decl.super_class.as_deref(),
                 &class_decl.body,
@@ -416,24 +417,27 @@ fn analyze_statement(
     }
 }
 
+/// The heritage and computed keys of a class, in ClassDefinitionEvaluation
+/// order: the only class sub-expressions that can suspend the enclosing
+/// generator (method/field values and static blocks are separate function
+/// scopes).
+fn class_scope_exprs<'a>(
+    super_class: Option<&'a Expression>,
+    elements: &'a [ClassElement],
+) -> impl Iterator<Item = &'a Expression> {
+    super_class
+        .into_iter()
+        .chain(elements.iter().filter_map(ClassElement::computed_key))
+}
+
 fn analyze_class(
     super_class: Option<&Expression>,
     elements: &[ClassElement],
     analysis: &mut GeneratorAnalysis,
     ctx: &mut AnalysisContext,
 ) {
-    if let Some(super_class) = super_class {
-        analyze_expression(super_class, analysis, ctx, true);
-    }
-    for element in elements {
-        let key = match element {
-            ClassElement::Method(m) => &m.key,
-            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
-            ClassElement::StaticBlock(_) => continue,
-        };
-        if let PropertyKey::Computed(key_expr) = key {
-            analyze_expression(key_expr, analysis, ctx, true);
-        }
+    for expr in class_scope_exprs(super_class, elements) {
+        analyze_expression(expr, analysis, ctx, true);
     }
 }
 
@@ -502,8 +506,17 @@ fn analyze_expression(
             }
         }
 
-        Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => {
-            // Don't descend into nested functions/classes
+        Expression::Function(_) | Expression::ArrowFunction(_) => {
+            // Don't descend into nested functions
+        }
+
+        Expression::Class(class_expr) => {
+            analyze_class(
+                class_expr.super_class.as_deref(),
+                &class_expr.body,
+                analysis,
+                ctx,
+            );
         }
 
         Expression::Unary(_, inner) => {
@@ -723,15 +736,7 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
 }
 
 fn class_contains_yield(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
-    super_class.is_some_and(expr_contains_yield)
-        || elements.iter().any(|e| {
-            let key = match e {
-                ClassElement::Method(m) => &m.key,
-                ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
-                ClassElement::StaticBlock(_) => return false,
-            };
-            matches!(key, PropertyKey::Computed(e) if expr_contains_yield(e))
-        })
+    class_scope_exprs(super_class, elements).any(expr_contains_yield)
 }
 
 pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
@@ -931,15 +936,7 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
 }
 
 fn class_contains_suspension(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
-    super_class.is_some_and(expr_contains_suspension)
-        || elements.iter().any(|e| {
-            let key = match e {
-                ClassElement::Method(m) => &m.key,
-                ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
-                ClassElement::StaticBlock(_) => return false,
-            };
-            matches!(key, PropertyKey::Computed(e) if expr_contains_suspension(e))
-        })
+    class_scope_exprs(super_class, elements).any(expr_contains_suspension)
 }
 
 #[cfg(test)]
@@ -960,6 +957,31 @@ mod tests {
             source_text: None,
             body_is_strict: false,
         }
+    }
+
+    fn let_class_expr(super_class: Option<Expression>, body: Vec<ClassElement>) -> Statement {
+        Statement::Variable(VariableDeclaration {
+            kind: VarKind::Let,
+            declarations: vec![VariableDeclarator {
+                pattern: Pattern::Identifier("C".to_string()),
+                init: Some(Expression::Class(ClassExpr {
+                    name: None,
+                    super_class: super_class.map(Box::new),
+                    body,
+                    source_text: None,
+                })),
+            }],
+        })
+    }
+
+    fn computed_method(key: Expression) -> ClassElement {
+        ClassElement::Method(ClassMethod {
+            key: PropertyKey::Computed(Box::new(key)),
+            kind: ClassMethodKind::Method,
+            value: make_function_expr(),
+            is_static: false,
+            computed: true,
+        })
     }
 
     #[test]
@@ -1160,6 +1182,79 @@ mod tests {
         })];
 
         assert!(contains_suspension(&body[0]));
+    }
+
+    #[test]
+    fn test_yield_in_class_expression_heritage() {
+        let body = vec![let_class_expr(Some(make_yield(false)), vec![])];
+        let analysis = analyze_generator_body(&body, &[]);
+
+        assert_eq!(analysis.yield_points.len(), 1);
+        assert!(contains_yield(&body[0]));
+    }
+
+    #[test]
+    fn test_yield_in_class_expression_computed_method_key() {
+        let body = vec![let_class_expr(
+            None,
+            vec![computed_method(make_yield(false))],
+        )];
+        let analysis = analyze_generator_body(&body, &[]);
+
+        assert_eq!(analysis.yield_points.len(), 1);
+        assert!(contains_yield(&body[0]));
+    }
+
+    #[test]
+    fn test_yield_in_nested_class_expression_heritage() {
+        let inner = Expression::Class(ClassExpr {
+            name: None,
+            super_class: Some(Box::new(make_yield(false))),
+            body: vec![],
+            source_text: None,
+        });
+        let body = vec![Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: Some(Box::new(inner)),
+            body: vec![],
+            source_text: None,
+        })];
+        let analysis = analyze_generator_body(&body, &[]);
+
+        assert_eq!(analysis.yield_points.len(), 1);
+        assert!(contains_yield(&body[0]));
+    }
+
+    #[test]
+    fn test_await_in_class_expression_computed_method_key() {
+        let body = [let_class_expr(
+            None,
+            vec![computed_method(Expression::Await(Box::new(
+                Expression::Literal(Literal::Number(1.0)),
+            )))],
+        )];
+
+        assert!(contains_suspension(&body[0]));
+    }
+
+    #[test]
+    fn test_class_method_body_yield_is_not_a_class_scope_yield() {
+        let mut method = make_function_expr();
+        method.body = Body::new(vec![Statement::Expression(make_yield(false))]);
+        let body = vec![let_class_expr(
+            None,
+            vec![ClassElement::Method(ClassMethod {
+                key: PropertyKey::Identifier("m".to_string()),
+                kind: ClassMethodKind::Method,
+                value: method,
+                is_static: false,
+                computed: false,
+            })],
+        )];
+        let analysis = analyze_generator_body(&body, &[]);
+
+        assert!(analysis.yield_points.is_empty());
+        assert!(!contains_yield(&body[0]));
     }
 
     #[test]

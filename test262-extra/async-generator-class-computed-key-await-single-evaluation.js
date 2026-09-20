@@ -17,7 +17,7 @@ info: |
   as ordinary Evaluation in the same execution context as the enclosing
   async generator.
 flags: [async]
-features: [async-generators, computed-property-names]
+features: [async-iteration, computed-property-names]
 ---*/
 
 var beforeClassRuns = 0;

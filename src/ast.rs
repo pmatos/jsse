@@ -670,6 +670,22 @@ pub(crate) enum ClassElement {
     StaticBlock(Vec<Statement>),
 }
 
+impl ClassElement {
+    /// The computed property-name expression, if any. Static blocks have their
+    /// own scope per spec §15.7.13, so they never contribute one.
+    pub(crate) fn computed_key(&self) -> Option<&Expression> {
+        let key = match self {
+            ClassElement::Method(m) => &m.key,
+            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
+            ClassElement::StaticBlock(_) => return None,
+        };
+        match key {
+            PropertyKey::Computed(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ClassMethod {
     pub key: PropertyKey,
@@ -1173,14 +1189,9 @@ fn class_elements_contain_matching(
     body: &[ClassElement],
     pred: &dyn Fn(&Expression) -> bool,
 ) -> bool {
-    body.iter().any(|elem| match elem {
-        ClassElement::Method(m) => {
-            matches!(&m.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
-        }
-        ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
-            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
-        }
-        ClassElement::StaticBlock(_) => false,
+    body.iter().any(|elem| {
+        elem.computed_key()
+            .is_some_and(|e| expr_contains_matching(e, pred))
     })
 }
 
@@ -1899,16 +1910,8 @@ fn class_extends_or_computed_keys_use_arguments(
     if super_class.is_some_and(expr_uses_arguments) {
         return true;
     }
-    body.iter().any(|el| match el {
-        ClassElement::Method(m) => {
-            matches!(&m.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
-        }
-        ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
-            matches!(&p.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
-        }
-        // Static blocks have their own scope per spec §15.7.13 — do not recurse.
-        ClassElement::StaticBlock(_) => false,
-    })
+    body.iter()
+        .any(|el| el.computed_key().is_some_and(expr_uses_arguments))
 }
 
 #[cfg(test)]
