@@ -17,8 +17,11 @@ info: |
   CaseBlockEvaluation propagates the abrupt completion and stops evaluating
   further case tests. TryStatement Evaluation then routes the throw completion
   through the enclosing catch and finally clauses.
+
+  An unhandled throw completion leaves the generator body, which disposes the
+  resources of its function-level `using` declarations before the throw escapes.
 includes: [compareArray.js]
-features: [generators]
+features: [generators, explicit-resource-management]
 ---*/
 
 function thrower() {
@@ -229,4 +232,46 @@ assert.compareArray(
   ['return'],
   'the for-of iterator is closed exactly once when the throw escapes'
 );
+assert.sameValue(iter.next().done, true);
+
+var disposeLog = [];
+function* discriminantThrowsDisposesResources() {
+  using resource = {
+    [Symbol.dispose]() {
+      disposeLog.push('dispose');
+    },
+  };
+  switch (thrower()) {
+    case 1:
+      yield 'z';
+      break;
+  }
+}
+
+iter = discriminantThrowsDisposesResources();
+assert.throws(Test262Error, function () {
+  iter.next();
+}, 'unhandled discriminant throw escapes next()');
+assert.compareArray(disposeLog, ['dispose'], 'the using resource is disposed when the discriminant throws');
+assert.sameValue(iter.next().done, true);
+
+var caseDisposeLog = [];
+function* caseTestThrowsDisposesResources() {
+  using resource = {
+    [Symbol.dispose]() {
+      caseDisposeLog.push('dispose');
+    },
+  };
+  switch (0) {
+    case thrower():
+      yield 'z';
+      break;
+  }
+}
+
+iter = caseTestThrowsDisposesResources();
+assert.throws(Test262Error, function () {
+  iter.next();
+}, 'unhandled case test throw escapes next()');
+assert.compareArray(caseDisposeLog, ['dispose'], 'the using resource is disposed when a case test throws');
 assert.sameValue(iter.next().done, true);

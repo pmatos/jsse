@@ -1459,6 +1459,8 @@ impl Interpreter {
                         Ok(state) => current_id = state,
                         Err(e) => {
                             let e = route_exception!(e);
+                            // §27.5.3.3: DisposeResources when generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::completed_state_machine_generator(
@@ -1467,7 +1469,8 @@ impl Interpreter {
                                         is_strict,
                                     ),
                                 );
-                            return Completion::Throw(e);
+                            self.generator_inline_iters.remove(&o.id);
+                            return disp;
                         }
                     }
                 }
@@ -5264,10 +5267,12 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let target: Result<usize, JsValue> = 'dispatch: {
+                    let target: Result<usize, Completion> = 'dispatch: {
                         let disc_val = match self.eval_expr(discriminant, &term_env) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => break 'dispatch Err(e),
+                            abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
+                                break 'dispatch Err(abrupt);
+                            }
                             other => {
                                 if let Completion::Yield(yv) = other {
                                     yv
@@ -5279,7 +5284,9 @@ impl Interpreter {
                         for case in cases {
                             let case_val = match self.eval_expr(&case.test, &term_env) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => break 'dispatch Err(e),
+                                abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
+                                    break 'dispatch Err(abrupt);
+                                }
                                 other => {
                                     if let Completion::Yield(yv) = other {
                                         yv
@@ -5296,8 +5303,28 @@ impl Interpreter {
                     };
                     match target {
                         Ok(state) => current_id = state,
-                        Err(e) => {
+                        Err(Completion::Exit(code)) => {
+                            self.generator_inline_iters.remove(&o.id);
+                            self.generator_for_of_stacks.remove(&o.id);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::completed_state_machine_async_generator(
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                    ),
+                                );
+                            return Completion::Exit(code);
+                        }
+                        Err(Completion::Throw(e)) => {
                             let e = route_exception!(e);
+                            // §27.6.3.3: DisposeResources when async generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            let e = match disp {
+                                Completion::Throw(e) => e,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -5310,6 +5337,9 @@ impl Interpreter {
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
                             self.drain_microtasks();
                             return Completion::Normal(promise);
+                        }
+                        Err(_) => {
+                            unreachable!("switch dispatch only breaks out with throw or exit")
                         }
                     }
                 }
