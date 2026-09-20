@@ -397,9 +397,42 @@ fn analyze_statement(
             analyze_statement(inner_stmt, analysis, ctx);
         }
 
-        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {
-            // Function/class declarations create their own scope
+        Statement::FunctionDeclaration(_) => {
+            // Function declarations create their own scope
             // We don't descend into them for generator analysis
+        }
+
+        Statement::ClassDeclaration(class_decl) => {
+            // The class body (method/field values, static blocks) creates its own
+            // scope, but the heritage expression and computed element keys run in
+            // the enclosing scope per spec ClassDefinitionEvaluation (§15.7.14).
+            analyze_class(
+                class_decl.super_class.as_deref(),
+                &class_decl.body,
+                analysis,
+                ctx,
+            );
+        }
+    }
+}
+
+fn analyze_class(
+    super_class: Option<&Expression>,
+    elements: &[ClassElement],
+    analysis: &mut GeneratorAnalysis,
+    ctx: &mut AnalysisContext,
+) {
+    if let Some(super_class) = super_class {
+        analyze_expression(super_class, analysis, ctx, true);
+    }
+    for element in elements {
+        let key = match element {
+            ClassElement::Method(m) => &m.key,
+            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
+            ClassElement::StaticBlock(_) => continue,
+        };
+        if let PropertyKey::Computed(key_expr) = key {
+            analyze_expression(key_expr, analysis, ctx, true);
         }
     }
 }
@@ -684,8 +717,21 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
         }
         Statement::Labeled(_, inner) => contains_yield(inner),
         Statement::With(e, s) => expr_contains_yield(e) || contains_yield(s),
-        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        Statement::FunctionDeclaration(_) => false,
+        Statement::ClassDeclaration(c) => class_contains_yield(c.super_class.as_deref(), &c.body),
     }
+}
+
+fn class_contains_yield(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
+    super_class.is_some_and(expr_contains_yield)
+        || elements.iter().any(|e| {
+            let key = match e {
+                ClassElement::Method(m) => &m.key,
+                ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
+                ClassElement::StaticBlock(_) => return false,
+            };
+            matches!(key, PropertyKey::Computed(e) if expr_contains_yield(e))
+        })
 }
 
 pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
@@ -703,7 +749,8 @@ pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
             matches!(&p.key, PropertyKey::Computed(e) if expr_contains_yield(e))
                 || expr_contains_yield(&p.value)
         }),
-        Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => false,
+        Expression::Function(_) | Expression::ArrowFunction(_) => false,
+        Expression::Class(c) => class_contains_yield(c.super_class.as_deref(), &c.body),
         Expression::Unary(_, e)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -887,6 +934,18 @@ mod tests {
         Expression::Yield(None, delegate)
     }
 
+    fn make_function_expr() -> FunctionExpr {
+        FunctionExpr {
+            name: None,
+            params: vec![],
+            body: Body::new(vec![]),
+            is_async: false,
+            is_generator: false,
+            source_text: None,
+            body_is_strict: false,
+        }
+    }
+
     #[test]
     fn test_simple_yields() {
         let body = vec![
@@ -1017,6 +1076,40 @@ mod tests {
 
         assert!(contains_yield(&stmt_with_yield));
         assert!(!contains_yield(&stmt_without_yield));
+    }
+
+    #[test]
+    fn test_yield_in_class_computed_method_key() {
+        let body = vec![Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: None,
+            body: vec![ClassElement::Method(ClassMethod {
+                key: PropertyKey::Computed(Box::new(make_yield(false))),
+                kind: ClassMethodKind::Method,
+                value: make_function_expr(),
+                is_static: false,
+                computed: true,
+            })],
+            source_text: None,
+        })];
+        let analysis = analyze_generator_body(&body, &[]);
+
+        assert_eq!(analysis.yield_points.len(), 1);
+        assert!(contains_yield(&body[0]));
+    }
+
+    #[test]
+    fn test_yield_in_class_heritage() {
+        let body = vec![Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: Some(Box::new(make_yield(false))),
+            body: vec![],
+            source_text: None,
+        })];
+        let analysis = analyze_generator_body(&body, &[]);
+
+        assert_eq!(analysis.yield_points.len(), 1);
+        assert!(contains_yield(&body[0]));
     }
 
     #[test]

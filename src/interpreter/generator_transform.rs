@@ -2553,6 +2553,38 @@ mod tests {
     }
 
     #[test]
+    fn test_yield_in_class_computed_key_detected_but_not_yet_decomposed() {
+        // Detection-only slice: analyze_generator_body now sees the yield inside
+        // a class computed method key, so this no longer takes the
+        // yield_points-empty create_simple_machine fast path. Decomposition into
+        // its own state (so the class statement doesn't get replayed whole) is a
+        // later slice.
+        let body = vec![Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: None,
+            body: vec![ClassElement::Method(ClassMethod {
+                key: PropertyKey::Computed(Box::new(make_yield())),
+                kind: ClassMethodKind::Method,
+                value: FunctionExpr {
+                    name: None,
+                    params: vec![],
+                    body: Body::new(vec![]),
+                    is_async: false,
+                    is_generator: false,
+                    source_text: None,
+                    body_is_strict: false,
+                },
+                is_static: false,
+                computed: true,
+            })],
+            source_text: None,
+        })];
+        let sm = transform_generator(&body, &[]);
+
+        assert_eq!(sm.num_yields, 1);
+    }
+
+    #[test]
     fn test_try_with_yield() {
         let body = vec![Statement::Try(TryStatement {
             block: vec![Statement::Expression(make_yield())],
