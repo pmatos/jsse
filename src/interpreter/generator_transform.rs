@@ -2246,7 +2246,9 @@ fn transform_switch_statement(
                 ctx.emit_statement(stmt.clone());
             }
         }
-        ctx.finalize_current_state(StateTerminator::Goto(next_state));
+        if ctx.current_state_id != next_state {
+            ctx.finalize_current_state(StateTerminator::Goto(next_state));
+        }
     }
 
     if let Some(prev) = prev_break {
