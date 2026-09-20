@@ -2178,6 +2178,16 @@ fn make_legacy_local_date(year: LegacyNumber, month: u32, day: u32) -> Option<f6
     Some(make_date_clipped(d, 0.0, true))
 }
 
+fn iso_time_in_bounds(hour: i32, minute: i32, second: i32, ms: i32) -> bool {
+    if hour < 0 || minute < 0 || second < 0 || ms < 0 {
+        return false;
+    }
+    if hour == 24 {
+        return minute == 0 && second == 0 && ms == 0;
+    }
+    hour < 24 && minute <= 59 && second <= 59
+}
+
 fn parse_iso_date(s: &str) -> Option<f64> {
     let bytes = s.as_bytes();
     let len = bytes.len();
@@ -2261,6 +2271,10 @@ fn parse_iso_date(s: &str) -> Option<f64> {
     } else {
         (0, 0, pos)
     };
+
+    if !iso_time_in_bounds(hour, minute, second, ms_val) {
+        return None;
+    }
 
     let d = make_day(year as f64, (month - 1) as f64, day_val as f64);
     let time = make_time(hour as f64, minute as f64, second as f64, ms_val as f64);
@@ -2372,6 +2386,10 @@ fn parse_space_separated_date(s: &str) -> Option<f64> {
     } else {
         (0, 0, pos)
     };
+
+    if !iso_time_in_bounds(hour, minute, second, ms_val) {
+        return None;
+    }
 
     let d = make_day(year as f64, (month - 1) as f64, day_val as f64);
     let time = make_time(hour as f64, minute as f64, second as f64, ms_val as f64);
