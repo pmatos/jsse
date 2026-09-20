@@ -696,6 +696,17 @@ def _first_line(text):
     return ""
 
 
+def _failure_summary(result):
+    """Reason plus the first line of retained output, when it adds anything."""
+    reason = result.get("reason", "")
+    if reason.startswith("benchmark threw"):
+        return reason
+    detail = _first_line(result.get("stderr") or result.get("stdout") or "")
+    if not detail:
+        return reason
+    return f"{reason}: {detail[:160]}"
+
+
 def _failure(name, reason, result, elapsed):
     """Error result that keeps the run's stdout and stderr for diagnosis."""
     return {
@@ -1130,7 +1141,7 @@ def main():
             print(f"  BUSY  {name:40s}  ({result.get('reason', '')})")
         else:
             errors.append(name)
-            print(f"  FAIL  {name:40s}  ({result.get('reason', '')})")
+            print(f"  FAIL  {name:40s}  ({_failure_summary(result)})")
 
     if args.j > 1:
         with ProcessPoolExecutor(max_workers=args.j) as executor:

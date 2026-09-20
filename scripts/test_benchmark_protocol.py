@@ -929,5 +929,144 @@ class RunBenchmarkOnceFailureTests(unittest.TestCase):
         self.assertEqual(result["raw_times"], [4, 6])
 
 
+class FailureReportTests(unittest.TestCase):
+    """The CLI surfaces why a workload failed, on screen and in --json."""
+
+    def run_cli(self, engine_body, *extra):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "JetStream" / "simple").mkdir(parents=True)
+        (root / "JetStream" / "JetStreamDriver.js").touch()
+        (root / "JetStream" / "simple" / "hash-map.js").write_text(
+            "class Benchmark {}\n", encoding="utf-8"
+        )
+        engine = write_fake_engine(root, engine_body)[0]
+        report = root / "report.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER_PATH),
+                "--engine",
+                engine,
+                "--jetstream",
+                str(root / "JetStream"),
+                "--test",
+                "hash-map",
+                "--iterations",
+                "1",
+                "--no-idle-gate",
+                "--json",
+                str(report),
+                *extra,
+            ],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result, json.loads(report.read_text(encoding="utf-8"))
+
+    def test_fail_line_shows_first_line_of_stderr(self):
+        result, _ = self.run_cli(
+            """
+            sys.stderr.write("ReferenceError: self is not defined\\nat x\\n")
+            sys.exit(1)
+            """
+        )
+
+        fail_line = next(line for line in result.stdout.splitlines() if "FAIL" in line)
+        self.assertIn("exit code 1", fail_line)
+        self.assertIn("ReferenceError: self is not defined", fail_line)
+        self.assertNotIn("at x", fail_line)
+
+    def test_json_report_keeps_stdout_and_stderr_of_failures(self):
+        _, report = self.run_cli(
+            """
+            print("chatter")
+            sys.stderr.write("warn")
+            """
+        )
+
+        entry = report["results"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["stderr"], "warn")
+        self.assertEqual(entry["stdout"].strip(), "chatter")
+
+
+class AsyncBenchmarkEndToEndTests(unittest.TestCase):
+    """A JetStream 3 style async workload runs through the whole runner path."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def test_async_benchmark_using_self_and_preload_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blob.txt").write_text("payload ${x} `y`", encoding="utf-8")
+            (root / "bench.js").write_text(
+                textwrap.dedent(
+                    """
+                    class Benchmark {
+                        async init() {
+                            if (self !== globalThis) throw new Error("no self");
+                            this.text = await JetStream.getString(JetStream.preload.blob);
+                        }
+                        runIteration() {
+                            if (this.text !== "payload ${x} `y`") throw new Error("bad text");
+                        }
+                    }
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.runner.run_benchmark_once(
+                "bench",
+                "async",
+                ["bench.js"],
+                {"blob": "blob.txt"},
+                2,
+                False,
+                0,
+                engine_command_or_skip(self),
+                str(root),
+                60,
+                False,
+                None,
+            )
+
+        self.assertEqual(result["status"], "pass", result)
+        self.assertEqual(len(result["raw_times"]), 2)
+
+    def test_async_benchmark_failure_is_reported_with_its_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bench.js").write_text(
+                "class Benchmark { async init() { throw new TypeError('kaput'); }"
+                " runIteration() {} }\n",
+                encoding="utf-8",
+            )
+
+            result = self.runner.run_benchmark_once(
+                "bench",
+                "async",
+                ["bench.js"],
+                None,
+                1,
+                False,
+                0,
+                engine_command_or_skip(self),
+                str(root),
+                60,
+                False,
+                None,
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("TypeError: kaput", result["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
