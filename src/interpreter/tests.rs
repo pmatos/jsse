@@ -3782,6 +3782,72 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_generator_conditional_goto_is_not_swallowed() {
+        for (kind, head, code) in [
+            ("function*", "if (__host_exit(3)) { yield 1; }", 3),
+            ("function*", "while (__host_exit(4)) { yield 1; }", 4),
+            ("function*", "for (; __host_exit(5); ) { yield 1; }", 5),
+            ("async function*", "if (__host_exit(3)) { yield 1; }", 3),
+            ("async function*", "while (__host_exit(4)) { yield 1; }", 4),
+            (
+                "async function*",
+                "for (; __host_exit(5); ) { yield 1; }",
+                5,
+            ),
+        ] {
+            let (interp, c) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                {kind} g() {{
+                  try {{
+                    {head}
+                    globalThis.reached = "after";
+                    yield 2;
+                  }} catch (e) {{
+                    globalThis.reached = "caught";
+                  }} finally {{
+                    globalThis.reached = "finally";
+                  }}
+                }}
+                g().next();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{kind} {head}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{kind} {head}");
+            assert!(
+                matches!(c, Completion::Exit(x) if x == code),
+                "{kind} {head}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_exit_in_async_generator_return_expression_is_not_swallowed() {
+        let (interp, _) = run_node_script(
+            r#"
+            globalThis.reached = "before";
+            async function* g() {
+              try {
+                yield 1;
+                return __host_exit(6);
+              } catch (e) {
+                globalThis.reached = "caught";
+              } finally {
+                globalThis.reached = "finally";
+              }
+            }
+            (async () => {
+              const it = g();
+              await it.next();
+              await it.next();
+            })();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(6));
+        assert_eq!(global_string(&interp, "reached"), "before");
+    }
+
+    #[test]
     fn host_exit_in_dependency_stops_sibling_import_and_parent_body() {
         // #596: inner_module_evaluation's DFS must stop advancing once a
         // dependency's body has latched pending_exit — otherwise a later
