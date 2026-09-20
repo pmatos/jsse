@@ -583,19 +583,43 @@ def build_async_harness(iterations, deterministic_random, worst_case_count):
 
 
 def build_preload_code(preloads, jetstream_dir):
-    """Build code that injects preloaded file contents as globals."""
-    code = ""
-    for var_name, file_path in preloads.items():
+    """Build the `JetStream` host object that serves preloaded resources.
+
+    JetStream 3 workloads read resources through
+    `await JetStream.getString(JetStream.preload.<name>)`. jsse has no file
+    reads, so the contents are embedded, keyed by the same path strings the
+    `preload` map hands out. Returns None when a preload file is missing.
+    """
+    paths = {}
+    contents = {}
+    for name, file_path in preloads.items():
         full_path = os.path.join(jetstream_dir, file_path)
         if not os.path.exists(full_path):
-            return None  # Can't preload
-        content = Path(full_path).read_text(encoding="utf-8", errors="replace")
-        # Escape for embedding in a JS string
-        escaped = (
-            content.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+            return None
+        # Bytes, not read_text: text mode would rewrite CRLF line endings.
+        contents[file_path] = (
+            Path(full_path).read_bytes().decode("utf-8", errors="replace")
         )
-        code += f"globalThis.{var_name} = `{escaped}`;\n"
-    return code
+        paths[name] = file_path
+    return f"""
+// --- JetStream preload shim ---
+;(() => {{
+    const contents = {json.dumps(contents)};
+    globalThis.JetStream = {{
+        preload: {json.dumps(paths)},
+        getString: async (path) => {{
+            if (!Object.hasOwn(contents, path)) {{
+                throw new Error(`JetStream.getString: ${{path}} was not preloaded`);
+            }}
+            return contents[path];
+        }},
+        getBinary: async (path) => {{
+            throw new Error(
+                `JetStream.getBinary(${{path}}) is not supported by run-jetstream.py`);
+        }},
+    }};
+}})();
+"""
 
 
 def to_score(time_ms):

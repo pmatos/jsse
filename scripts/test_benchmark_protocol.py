@@ -58,6 +58,7 @@ def run_js(case, program, timeout=60):
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
 
 
@@ -586,6 +587,110 @@ class PolyfillPreambleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "42")
+
+
+class PreloadShimTests(unittest.TestCase):
+    """JetStream 3 workloads read preloaded resources through a `JetStream`
+    object (`JetStream.preload.<name>` paths resolved by `getString`), not
+    through bare globals; the runner must provide that object (issue #655).
+    """
+
+    TRICKY_CONTENT = (
+        "`tick` ${notInterpolated} back\\slash \\` </script> line\u2028sep\r\n"
+        "crlf caf\u00e9 \U0001f600 \"quoted\" 'single'\n"
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "dir").mkdir()
+        (self.root / "dir" / "blob.js").write_bytes(self.TRICKY_CONTENT.encode("utf-8"))
+
+    def run_with_shim(self, preloads, check):
+        code = self.runner.build_preload_code(preloads, str(self.root))
+        program = code + "\n" + textwrap.dedent(check)
+        return run_js(self, program)
+
+    def test_get_string_returns_the_file_bytes_verbatim(self):
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js"},
+            f"""
+            (async () => {{
+                const text = await JetStream.getString(JetStream.preload.blob);
+                console.log(JSON.stringify({{ same: text === {json.dumps(self.TRICKY_CONTENT)} }}));
+            }})();
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"same": True})
+
+    def test_preload_maps_each_name_to_a_path_that_get_string_accepts(self):
+        (self.root / "dir" / "other.js").write_text("other", encoding="utf-8")
+
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js", "other": "dir/other.js"},
+            """
+            (async () => {
+                const names = Object.keys(JetStream.preload).sort();
+                const other = await JetStream.getString(JetStream.preload.other);
+                console.log(JSON.stringify({ names, other }));
+            })();
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout), {"names": ["blob", "other"], "other": "other"}
+        )
+
+    def test_get_string_rejects_a_path_that_was_not_preloaded(self):
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js"},
+            """
+            JetStream.getString("nope.js").then(
+                () => console.log("resolved"),
+                (e) => console.log("rejected: " + e.message),
+            );
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rejected:", result.stdout)
+        self.assertIn("nope.js", result.stdout)
+
+    def test_get_binary_rejects_as_unsupported_by_the_runner(self):
+        result = self.run_with_shim(
+            {"blob": "dir/blob.js"},
+            """
+            JetStream.getBinary(JetStream.preload.blob).then(
+                () => console.log("resolved"),
+                (e) => console.log("rejected: " + e.message),
+            );
+            """,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rejected:", result.stdout)
+        self.assertIn("run-jetstream.py", result.stdout)
+
+    def test_missing_preload_file_yields_none(self):
+        self.assertIsNone(
+            self.runner.build_preload_code({"gone": "dir/missing.js"}, str(self.root))
+        )
+
+    def test_preload_code_declares_nothing_at_top_level(self):
+        code = self.runner.build_preload_code({"blob": "dir/blob.js"}, str(self.root))
+
+        self.assertIsNone(
+            re.search(HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, code, re.M),
+            code,
+        )
 
 
 if __name__ == "__main__":
