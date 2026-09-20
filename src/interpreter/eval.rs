@@ -8745,6 +8745,17 @@ impl Interpreter {
                 }
             }
 
+            // The jump's target is exact, so the for-of heuristics below only
+            // see the completions the transform did not resolve.
+            let terminator =
+                match state_machine.states[current_id].inline_jump_terminator(&stmt_result) {
+                    Some(jump) => {
+                        stmt_result = Completion::Normal(JsValue::UNDEFINED);
+                        jump
+                    }
+                    None => terminator,
+                };
+
             match &stmt_result {
                 Completion::Throw(e) => {
                     let e = e.clone();

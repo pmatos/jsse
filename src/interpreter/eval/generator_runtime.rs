@@ -870,6 +870,10 @@ impl Interpreter {
                 return self.generator_return_state_machine(this, v);
             }
 
+            let terminator = state_machine.states[current_id]
+                .inline_jump_terminator(&stmt_result)
+                .unwrap_or(terminator);
+
             match &terminator {
                 StateTerminator::Yield {
                     value,
@@ -4295,6 +4299,10 @@ impl Interpreter {
                 self.drain_microtasks();
                 return Completion::Normal(promise);
             }
+
+            let terminator = state_machine.states[current_id]
+                .inline_jump_terminator(&stmt_result)
+                .unwrap_or(terminator);
 
             match &terminator {
                 StateTerminator::Yield {
