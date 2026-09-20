@@ -521,8 +521,10 @@ def build_sync_harness(iterations, deterministic_random, worst_case_count):
 // --- JetStream harness ---
 // Wrapped so no binding lands in the script scope shared with the benchmark
 // sources: a top-level `const benchmark` beside a benchmark's own
-// `function benchmark()` is an early SyntaxError (ECMAScript 16.1.1).
-(() => {{
+// `function benchmark()` is an early SyntaxError (ECMAScript 16.1.1). The
+// leading `;` keeps a benchmark source that ends without one from absorbing
+// the `(` as a call.
+;(() => {{
     const __iterations = {iterations};
     const __results = [];
     const __benchmark = new Benchmark();
@@ -551,7 +553,7 @@ def build_async_harness(iterations, deterministic_random, worst_case_count):
     reset_code = "Math.random.__resetSeed();" if deterministic_random else ""
     return f"""
 // --- JetStream async harness ---
-(async () => {{
+;(async () => {{
     const __iterations = {iterations};
     const __results = [];
     const benchmark = new Benchmark();

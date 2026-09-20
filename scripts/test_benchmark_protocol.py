@@ -503,11 +503,10 @@ class HarnessNameHygieneTests(unittest.TestCase):
             self.runner.build_polyfill_preamble()
             + textwrap.dedent(
                 """
-                var start, end, i;
                 var __iterations = "workload";
                 function __results() {}
                 function benchmark() { return 1; }
-                class Benchmark {
+                var Benchmark = class {
                     runIteration() { benchmark(); }
                 }
                 """

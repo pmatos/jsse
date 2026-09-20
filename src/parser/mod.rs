@@ -899,7 +899,7 @@ impl<'a> Parser<'a> {
         let mut in_directive_prologue = true;
         let mut body_is_strict = false;
         let mut prologue_had_legacy_octal = false;
-        let mut lexical_names: Vec<String> = Vec::new();
+        let mut lexical_names: HashSet<String> = HashSet::new();
 
         while self.current != Token::Eof {
             let stmt = self.parse_statement_or_declaration()?;
@@ -945,7 +945,7 @@ impl<'a> Parser<'a> {
                             self.error(format!("Identifier '{name}' has already been declared"))
                         );
                     }
-                    lexical_names.push(name.clone());
+                    lexical_names.insert(name.clone());
                 }
                 _ => {}
             }

@@ -40,6 +40,24 @@ check("string", function () { var s = "str"; s(); }, "\"str\"");
 check("symbol", function () { var s = Symbol("tag"); s(); }, "Symbol(tag)");
 check("symbol without description", function () { var s = Symbol(); s(); }, "Symbol()");
 check("bigint", function () { var b = 12n; b(); }, "12n");
+check("infinity", function () { var n = Infinity; n(); }, "Infinity");
+check("negative zero", function () { var n = -0; n(); }, "0");
+check("large number", function () { var n = 1e21; n(); }, "1e+21");
+
+function checkNew(label, fn, expectedSubject) {
+  var message = messageOf(fn);
+  if (message !== expectedSubject + " is not a constructor") {
+    throw new Error(
+      label + ": expected '" + expectedSubject + " is not a constructor', got '" + message + "'"
+    );
+  }
+}
+
+checkNew("new number", function () { var n = 5; new n(); }, "5");
+checkNew("new string", function () { var s = "abc"; new s(); }, "\"abc\"");
+checkNew("new symbol", function () { var s = Symbol("tag"); new s(); }, "Symbol(tag)");
+checkNew("new object", function () { var o = {}; new o(); }, "#<Object>");
+checkNew("new anonymous arrow", function () { new (() => {})(); }, "#<Function>");
 
 var evaluated = 0;
 messageOf(function () { ({})(evaluated++); });

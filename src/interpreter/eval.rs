@@ -5926,31 +5926,19 @@ impl Interpreter {
     /// Never runs user code (no ToString, no getters) and never exposes
     /// engine-internal object state.
     fn describe_non_callable(&self, val: &JsValue) -> String {
-        if val.is_undefined() {
-            "undefined".to_string()
-        } else if val.is_null() {
-            "null".to_string()
-        } else if let Some(b) = val.as_boolean() {
-            b.to_string()
-        } else if let Some(n) = val.as_number() {
-            n.to_string()
-        } else if let Some(s) = val.as_string() {
-            let preview: String = s.to_rust_string().chars().take(30).collect();
+        if let Some(s) = val.as_string() {
+            let preview: String = char::decode_utf16(s.code_units.iter().copied())
+                .take(30)
+                .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect();
             format!("\"{preview}\"")
-        } else if let Some(sym) = val.as_symbol() {
-            match sym.description() {
-                Some(desc) => format!("Symbol({desc})"),
-                None => "Symbol()".to_string(),
-            }
-        } else if let Some(big) = val.as_bigint() {
-            format!("{}n", big.value)
         } else if let Some(id) = val.as_object_id() {
             match self.get_object_cell(id) {
                 Some(obj) => format!("#<{}>", obj.borrow().class_name),
                 None => "#<Object>".to_string(),
             }
         } else {
-            "value".to_string()
+            val.to_string()
         }
     }
 
@@ -6587,6 +6575,11 @@ impl Interpreter {
                         Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
                         None => String::new(),
                     };
+                    let name = if name.is_empty() {
+                        format!("#<{}>", b.class_name)
+                    } else {
+                        name
+                    };
                     drop(b);
                     self.gc_unroot_frame(gc_frame);
                     return Completion::Throw(
@@ -6596,8 +6589,9 @@ impl Interpreter {
             }
         } else {
             self.gc_unroot_frame(gc_frame);
+            let desc = self.describe_non_callable(&callee_val);
             return Completion::Throw(
-                self.create_type_error(&format!("{:?} is not a constructor", callee_val)),
+                self.create_type_error(&format!("{desc} is not a constructor")),
             );
         }
         // Proxy construct trap

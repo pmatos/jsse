@@ -17,6 +17,7 @@ info: |
     LabelledItem : FunctionDeclaration
       Return the BoundNames of FunctionDeclaration.
 features: [generators, async-functions, async-iteration]
+flags: [noStrict]
 ---*/
 
 var functions = [
