@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import math
 import os
@@ -576,6 +577,19 @@ class PolyfillPreambleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "true")
 
+    def test_print_err_does_not_throw_when_console_has_no_error(self):
+        program = (
+            'Object.defineProperty(console, "error", '
+            "{ value: undefined, configurable: true });\n"
+            + self.runner.build_polyfill_preamble()
+            + 'printErr("diagnostic");\nprint("survived");\n'
+        )
+
+        result = run_js(self, program)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("survived", result.stdout)
+
     def test_existing_self_is_not_clobbered(self):
         program = (
             "globalThis.self = 42;\n"
@@ -691,6 +705,228 @@ class PreloadShimTests(unittest.TestCase):
             re.search(HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, code, re.M),
             code,
         )
+
+
+class AsyncHarnessRejectionTests(unittest.TestCase):
+    """An async benchmark that rejects must say so on stdout and stderr.
+
+    A shell drops an unobserved rejection and exits 0 with no output, which
+    the runner used to report as an opaque "no JSON output" (issue #655).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def run_benchmark_source(self, source):
+        program = (
+            self.runner.build_polyfill_preamble()
+            + textwrap.dedent(source)
+            + self.runner.build_async_harness(1, False, 3)
+        )
+        return run_js(self, program)
+
+    def test_harness_attaches_a_rejection_handler(self):
+        harness = self.runner.build_async_harness(1, False, 3)
+
+        self.assertIn(".catch(", harness)
+        self.assertIn("printErr(", harness)
+
+    def test_init_rejection_prints_a_json_error_line(self):
+        result = self.run_benchmark_source(
+            """
+            class Benchmark {
+                async init() { throw new Error("boom"); }
+                runIteration() {}
+            }
+            """
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertIn("boom", payload["error"])
+
+    def test_non_error_rejection_value_is_reported(self):
+        result = self.run_benchmark_source(
+            """
+            class Benchmark {
+                runIteration() { return Promise.reject("plain string"); }
+            }
+            """
+        )
+
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertIn("plain string", payload["error"])
+
+    def test_successful_run_still_prints_only_results(self):
+        result = self.run_benchmark_source(
+            """
+            class Benchmark {
+                async runIteration() {}
+            }
+            """
+        )
+
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertNotIn("error", payload)
+        self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(result.stderr, "")
+
+    def test_async_harness_declares_nothing_at_top_level(self):
+        harness = self.runner.build_async_harness(1, False, 3)
+
+        self.assertIsNone(
+            re.search(HarnessNameHygieneTests.TOP_LEVEL_DECLARATION, harness, re.M),
+            harness,
+        )
+
+
+def write_fake_engine(directory, body):
+    """Executable stand-in for an engine; `body` is Python run per invocation."""
+    engine = Path(directory) / "fake-engine.py"
+    engine.write_text(
+        f"#!{sys.executable}\nimport sys\n" + textwrap.dedent(body),
+        encoding="utf-8",
+    )
+    engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+    return [str(engine)]
+
+
+class RunBenchmarkOnceFailureTests(unittest.TestCase):
+    """Every failure result keeps enough output to diagnose it afterwards."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.jetstream = self.root / "JetStream"
+        self.jetstream.mkdir()
+        (self.jetstream / "bench.js").write_text("class Benchmark {}\n")
+
+    def run_once(self, engine_body, btype="sync", verbose=False):
+        return self.runner.run_benchmark_once(
+            "bench",
+            btype,
+            ["bench.js"],
+            None,
+            1,
+            False,
+            0,
+            write_fake_engine(self.root, engine_body),
+            str(self.jetstream),
+            30,
+            verbose,
+            None,
+        )
+
+    def test_error_line_becomes_an_error_result_with_the_message(self):
+        result = self.run_once(
+            """
+            print('{"error": "Error: boom"}')
+            sys.stderr.write("Error: boom\\n")
+            """,
+            btype="async",
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("boom", result["reason"])
+        self.assertIn("boom", result["stdout"])
+        self.assertIn("boom", result["stderr"])
+
+    def test_no_json_keeps_stdout_and_stderr(self):
+        result = self.run_once(
+            """
+            print("chatter")
+            sys.stderr.write("warn")
+            """
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "no JSON output")
+        self.assertEqual(result["stdout"].strip(), "chatter")
+        self.assertEqual(result["stderr"], "warn")
+
+    def test_silent_async_exit_is_reported_as_never_settled(self):
+        result = self.run_once("", btype="async")
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("never settled", result["reason"])
+        self.assertNotEqual(result["reason"], "no JSON output")
+        self.assertEqual(result["stderr"], "")
+
+    def test_nonzero_exit_keeps_both_streams(self):
+        result = self.run_once(
+            """
+            print("partial output")
+            sys.stderr.write("SyntaxError: nope")
+            sys.exit(1)
+            """
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "exit code 1")
+        self.assertIn("partial output", result["stdout"])
+        self.assertIn("SyntaxError: nope", result["stderr"])
+
+    def test_malformed_json_line_keeps_the_output(self):
+        result = self.run_once('print("{not json")')
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("JSON parse error", result["reason"])
+        self.assertIn("{not json", result["stdout"])
+
+    def test_empty_results_keep_the_output(self):
+        result = self.run_once('print(\'{"results": [], "iterations": 0}\')')
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "no benchmark iterations")
+        self.assertIn("results", result["stdout"])
+
+    def test_oversized_output_is_clipped_keeping_head_and_tail(self):
+        result = self.run_once(
+            """
+            sys.stderr.write("HEAD" + "x" * 100000 + "TAIL")
+            sys.exit(1)
+            """
+        )
+
+        stderr = result["stderr"]
+        self.assertLess(len(stderr), 5000)
+        self.assertTrue(stderr.startswith("HEAD"))
+        self.assertTrue(stderr.endswith("TAIL"))
+        self.assertIn("truncated", stderr)
+
+    def test_short_output_is_not_marked_truncated(self):
+        result = self.run_once('sys.stderr.write("short"); sys.exit(2)')
+
+        self.assertEqual(result["stderr"], "short")
+
+    def test_verbose_prints_output_for_a_silent_failure(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.run_once(
+                """
+                print("chatter")
+                sys.stderr.write("warn")
+                """,
+                verbose=True,
+            )
+
+        self.assertIn("warn", err.getvalue())
+        self.assertIn("chatter", err.getvalue())
+
+    def test_successful_run_is_unchanged(self):
+        result = self.run_once(
+            """
+            print('{"results": [4, 6], "iterations": 2, "worstCaseCount": 0}')
+            """
+        )
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["raw_times"], [4, 6])
 
 
 if __name__ == "__main__":

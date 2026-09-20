@@ -478,7 +478,11 @@ if (typeof print === "undefined") {
     var print = function(...args) { console.log(...args); };
 }
 if (typeof printErr === "undefined") {
-    var printErr = function(...args) { console.error(...args); };
+    // jsse's console has no `error`; fall back to stdout rather than throw.
+    var printErr = function(...args) {
+        (typeof console.error === "function" ? console.error : console.log)
+            .apply(console, args);
+    };
 }
 if (typeof performance === "undefined") {
     var performance = {};
@@ -578,7 +582,13 @@ def build_async_harness(iterations, deterministic_random, worst_case_count):
         iterations: __iterations,
         worstCaseCount: {worst_case_count}
     }}));
-}})();
+}})().catch((e) => {{
+    // A shell drops an unobserved rejection and exits 0 with no output, which
+    // reads as "no JSON output"; report it so the failure is diagnosable.
+    const message = e instanceof Error ? `${{e.name}}: ${{e.message}}` : String(e);
+    printErr(message);
+    print(JSON.stringify({{ error: message }}));
+}});
 """
 
 
@@ -669,6 +679,35 @@ def compute_scores(results, worst_case_count):
     return scores_from_times(first_time, avg_time, worst_time)
 
 
+def _clip(text, limit=2000):
+    """Bound captured output for reports, keeping the head and the tail."""
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    dropped = len(text) - 2 * half
+    return f"{text[:half]}\n... [{dropped} chars truncated] ...\n{text[-half:]}"
+
+
+def _first_line(text):
+    """First non-empty line of `text`, for one-line failure summaries."""
+    for line in str(text).splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _failure(name, reason, result, elapsed):
+    """Error result that keeps the run's stdout and stderr for diagnosis."""
+    return {
+        "name": name,
+        "status": "error",
+        "reason": reason,
+        "stdout": _clip(result.stdout or ""),
+        "stderr": _clip(result.stderr or ""),
+        "elapsed": elapsed,
+    }
+
+
 def run_benchmark_once(
     name,
     btype,
@@ -737,25 +776,23 @@ def run_benchmark_once(
             text=True,
             timeout=timeout,
             cwd=jetstream_dir,
+            check=False,
         )
         elapsed = time.time() - start
 
-        if result.returncode != 0:
-            stderr_preview = result.stderr[:500] if result.stderr else ""
-            stdout_preview = result.stdout[:500] if result.stdout else ""
+        def fail(reason):
             if verbose:
-                print(f"  FAIL: exit code {result.returncode}", file=sys.stderr)
-                if stderr_preview:
-                    print(f"  stderr: {stderr_preview}", file=sys.stderr)
-                if stdout_preview:
-                    print(f"  stdout: {stdout_preview}", file=sys.stderr)
-            return {
-                "name": name,
-                "status": "error",
-                "reason": f"exit code {result.returncode}",
-                "stderr": stderr_preview,
-                "elapsed": elapsed,
-            }
+                print(f"  FAIL: {reason}", file=sys.stderr)
+                for label, text in (
+                    ("stderr", result.stderr),
+                    ("stdout", result.stdout),
+                ):
+                    if text:
+                        print(f"  {label}: {_clip(text)}", file=sys.stderr)
+            return _failure(name, reason, result, elapsed)
+
+        if result.returncode != 0:
+            return fail(f"exit code {result.returncode}")
 
         # Parse JSON output from last line of stdout
         output_lines = result.stdout.strip().split("\n")
@@ -767,22 +804,23 @@ def run_benchmark_once(
                 break
 
         if not json_line:
-            return {
-                "name": name,
-                "status": "error",
-                "reason": "no JSON output",
-                "stdout": result.stdout[:500],
-                "elapsed": elapsed,
-            }
+            if btype == "async":
+                return fail(
+                    "async harness never settled: no result and no error reported"
+                )
+            return fail("no JSON output")
 
-        data = json.loads(json_line)
+        try:
+            data = json.loads(json_line)
+        except json.JSONDecodeError as e:
+            return fail(f"JSON parse error: {e}")
+
+        if data.get("error"):
+            return fail(f"benchmark threw: {_first_line(data['error'])}")
+
         scores = compute_scores(data["results"], data.get("worstCaseCount", worst_case))
         if scores is None:
-            return {
-                "name": name,
-                "status": "error",
-                "reason": "no benchmark iterations",
-            }
+            return fail("no benchmark iterations")
 
         return {
             "name": name,
@@ -795,8 +833,6 @@ def run_benchmark_once(
 
     except subprocess.TimeoutExpired:
         return {"name": name, "status": "timeout", "reason": f"exceeded {timeout}s"}
-    except json.JSONDecodeError as e:
-        return {"name": name, "status": "error", "reason": f"JSON parse error: {e}"}
     finally:
         os.unlink(tmp_path)
 
