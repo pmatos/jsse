@@ -462,9 +462,29 @@ impl Interpreter {
         {
             self.current_realm_id = realm_id;
         }
+        let saved_base = self.enter_iter_close_scope();
         let result = self.generator_next_state_machine_impl(this, sent_value);
+        self.leave_iter_close_scope(saved_base);
         self.current_realm_id = caller_realm;
         result
+    }
+
+    fn enter_iter_close_scope(&mut self) -> usize {
+        std::mem::replace(&mut self.iter_close_base, self.pending_iter_close.len())
+    }
+
+    fn leave_iter_close_scope(&mut self, saved_base: usize) {
+        self.pending_iter_close.truncate(self.iter_close_base);
+        self.iter_close_base = saved_base;
+    }
+
+    fn take_pending_iter_close(&mut self) -> Vec<JsValue> {
+        if self.pending_iter_close.len() <= self.iter_close_base {
+            return Vec::new();
+        }
+        self.pending_iter_close
+            .drain(self.iter_close_base..)
+            .collect()
     }
 
     fn generator_next_state_machine_impl(
@@ -780,7 +800,7 @@ impl Interpreter {
                 let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
                 let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
                 // Save any iterators that need IteratorClose if generator.return() is called
-                let pending = std::mem::take(&mut self.pending_iter_close);
+                let pending = self.take_pending_iter_close();
                 if pending.is_empty() {
                     self.generator_inline_iters.remove(&o.id);
                 } else {
@@ -1161,7 +1181,7 @@ impl Interpreter {
                     }
 
                     // Save any iterators that need IteratorClose if generator.return() is called
-                    let pending = std::mem::take(&mut self.pending_iter_close);
+                    let pending = self.take_pending_iter_close();
                     if pending.is_empty() {
                         self.generator_inline_iters.remove(&o.id);
                     } else {
@@ -3287,9 +3307,11 @@ impl Interpreter {
         {
             self.current_realm_id = realm_id;
         }
+        let saved_base = self.enter_iter_close_scope();
         let result = self.async_generator_next_state_machine_impl(
             this, sent_value, promise, resolve_fn, reject_fn,
         );
+        self.leave_iter_close_scope(saved_base);
         self.current_realm_id = caller_realm;
         result
     }
@@ -4291,7 +4313,7 @@ impl Interpreter {
                     }
                     _ => yield_val,
                 };
-                let pending = std::mem::take(&mut self.pending_iter_close);
+                let pending = self.take_pending_iter_close();
                 if pending.is_empty() {
                     self.generator_inline_iters.remove(&o.id);
                 } else {
@@ -4636,7 +4658,7 @@ impl Interpreter {
                     let wrapped_state = self.get_promise_state(wrapped_id);
 
                     if matches!(wrapped_state, Some(PromiseState::Pending)) {
-                        let pending = std::mem::take(&mut self.pending_iter_close);
+                        let pending = self.take_pending_iter_close();
                         if pending.is_empty() {
                             self.generator_inline_iters.remove(&o.id);
                         } else {
@@ -4761,7 +4783,7 @@ impl Interpreter {
                         yield_val
                     };
 
-                    let pending = std::mem::take(&mut self.pending_iter_close);
+                    let pending = self.take_pending_iter_close();
                     if pending.is_empty() {
                         self.generator_inline_iters.remove(&o.id);
                     } else {

@@ -245,7 +245,11 @@ pub(crate) struct Interpreter {
     gc_marks: Vec<bool>,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
+    /// Iterators of the `for-of` loops currently open in the running generator
+    /// activation, at `iter_close_base..`. Entries below `iter_close_base` belong
+    /// to enclosing activations and must not be touched by the running one.
     pub(crate) pending_iter_close: Vec<JsValue>,
+    pub(crate) iter_close_base: usize,
     /// Object IDs whose `Array.prototype.join` calls are currently converting
     /// elements. Re-entering `join` for the same receiver through element
     /// stringification contributes an empty string instead of recursing until
@@ -591,6 +595,7 @@ impl Interpreter {
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
+            iter_close_base: 0,
             active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
             generator_for_of_stacks: FxHashMap::default(),
