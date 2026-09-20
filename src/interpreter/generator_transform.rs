@@ -580,10 +580,89 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
     }
 }
 
+/// Hoist suspending sub-expressions out of a class's heritage clause and
+/// computed element keys, in source order (heritage before any element key,
+/// each key in declaration order), per ClassDefinitionEvaluation (spec
+/// §15.7.14): both evaluate in the enclosing scope, so a `yield`/`await`
+/// there is a real suspension point in the surrounding generator, not inside
+/// a nested function/class scope.
+fn hoist_class_suspensions(
+    super_class: Option<&Expression>,
+    elements: &[ClassElement],
+    ctx: &mut TransformContext,
+) -> (Option<Box<Expression>>, Vec<ClassElement>) {
+    let new_super_class = super_class.map(|sc| {
+        if expr_has_suspension(sc, ctx.is_async) {
+            let temp_var = ctx.new_temp_var("class_heritage");
+            let binding = SentValueBindingKind::Variable(temp_var.clone());
+            transform_yielding_expression(sc, ctx, usize::MAX, Some(binding));
+            Box::new(Expression::Identifier(temp_var))
+        } else {
+            Box::new(sc.clone())
+        }
+    });
+
+    let new_elements = elements
+        .iter()
+        .enumerate()
+        .map(|(i, element)| match element {
+            ClassElement::Method(m) => ClassElement::Method(ClassMethod {
+                key: hoist_class_element_key(&m.key, i, ctx),
+                kind: m.kind,
+                value: m.value.clone(),
+                is_static: m.is_static,
+                computed: m.computed,
+            }),
+            ClassElement::Property(p) => ClassElement::Property(ClassProperty {
+                key: hoist_class_element_key(&p.key, i, ctx),
+                value: p.value.clone(),
+                is_static: p.is_static,
+                computed: p.computed,
+            }),
+            ClassElement::AutoAccessor(p) => ClassElement::AutoAccessor(ClassProperty {
+                key: hoist_class_element_key(&p.key, i, ctx),
+                value: p.value.clone(),
+                is_static: p.is_static,
+                computed: p.computed,
+            }),
+            ClassElement::StaticBlock(_) => element.clone(),
+        })
+        .collect();
+
+    (new_super_class, new_elements)
+}
+
+fn hoist_class_element_key(
+    key: &PropertyKey,
+    index: usize,
+    ctx: &mut TransformContext,
+) -> PropertyKey {
+    match key {
+        PropertyKey::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
+            let temp_var = ctx.new_temp_var(&format!("class_key_{index}"));
+            let binding = SentValueBindingKind::Variable(temp_var.clone());
+            transform_yielding_expression(e, ctx, usize::MAX, Some(binding));
+            PropertyKey::Computed(Box::new(Expression::Identifier(temp_var)))
+        }
+        _ => key.clone(),
+    }
+}
+
 fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, after_state: usize) {
     match stmt {
         Statement::Expression(expr) => {
             transform_yielding_expression(expr, ctx, after_state, None);
+        }
+
+        Statement::ClassDeclaration(class_decl) => {
+            let (super_class, body) =
+                hoist_class_suspensions(class_decl.super_class.as_deref(), &class_decl.body, ctx);
+            ctx.emit_statement(Statement::ClassDeclaration(ClassDecl {
+                name: class_decl.name.clone(),
+                super_class,
+                body,
+                source_text: class_decl.source_text.clone(),
+            }));
         }
 
         Statement::Block(stmts) => {
@@ -1139,6 +1218,18 @@ fn transform_yielding_expression(
                 });
             }
             let combined = Expression::Object(new_props, *trailing_flag);
+            emit_expression_with_binding(&combined, &binding, ctx);
+        }
+
+        Expression::Class(class_expr) => {
+            let (super_class, body) =
+                hoist_class_suspensions(class_expr.super_class.as_deref(), &class_expr.body, ctx);
+            let combined = Expression::Class(ClassExpr {
+                name: class_expr.name.clone(),
+                super_class,
+                body,
+                source_text: class_expr.source_text.clone(),
+            });
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -2553,12 +2644,14 @@ mod tests {
     }
 
     #[test]
-    fn test_yield_in_class_computed_key_detected_but_not_yet_decomposed() {
-        // Detection-only slice: analyze_generator_body now sees the yield inside
-        // a class computed method key, so this no longer takes the
-        // yield_points-empty create_simple_machine fast path. Decomposition into
-        // its own state (so the class statement doesn't get replayed whole) is a
-        // later slice.
+    fn test_yield_in_class_computed_key_is_decomposed() {
+        // analyze_generator_body sees the yield inside a class computed method
+        // key, so this no longer takes the yield_points-empty
+        // create_simple_machine fast path (num_yields == 1, not 0). The
+        // transform also hoists the computed key into its own state, so the
+        // class declaration is no longer replayed whole on resume
+        // (states.len() > 1, matching the yield/no-replay contract every
+        // other yield site gets).
         let body = vec![Statement::ClassDeclaration(ClassDecl {
             name: "C".to_string(),
             super_class: None,
@@ -2582,6 +2675,50 @@ mod tests {
         let sm = transform_generator(&body, &[]);
 
         assert_eq!(sm.num_yields, 1);
+        assert!(sm.states.len() > 1);
+    }
+
+    #[test]
+    fn test_class_with_no_suspension_is_unaffected() {
+        // A class with no yield/await in its heritage or computed keys must
+        // stay on the yield_points-empty create_simple_machine fast path —
+        // the new class-hoisting logic should never fire for the overwhelming
+        // common case of a plain class declaration.
+        let body = vec![
+            Statement::Expression(make_yield()),
+            Statement::ClassDeclaration(ClassDecl {
+                name: "C".to_string(),
+                super_class: Some(Box::new(Expression::Identifier("Base".to_string()))),
+                body: vec![ClassElement::Method(ClassMethod {
+                    key: PropertyKey::Identifier("method".to_string()),
+                    kind: ClassMethodKind::Method,
+                    value: FunctionExpr {
+                        name: None,
+                        params: vec![],
+                        body: Body::new(vec![]),
+                        is_async: false,
+                        is_generator: false,
+                        source_text: None,
+                        body_is_strict: false,
+                    },
+                    is_static: false,
+                    computed: false,
+                })],
+                source_text: None,
+            }),
+        ];
+        let sm = transform_generator(&body, &[]);
+
+        // Only the leading `yield` counts; the class contributes no yield
+        // points and is emitted verbatim by the plain statement path.
+        assert_eq!(sm.num_yields, 1);
+        let class_emitted_verbatim = sm.states.iter().any(|s| {
+            s.body
+                .as_slice()
+                .iter()
+                .any(|stmt| matches!(stmt, Statement::ClassDeclaration(_)))
+        });
+        assert!(class_emitted_verbatim);
     }
 
     #[test]
