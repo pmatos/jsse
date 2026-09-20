@@ -65,7 +65,9 @@ assert.sameValue(Date.parse("2011-08-04T00:00:00Z"), Date.UTC(2011, 7, 4), "expl
   assert.sameValue(Date.parse(s), NaN, "out-of-bounds " + JSON.stringify(s));
 });
 
-["", " ", "invalid date", "foo", "1/1/2000/1", "1//2000"].forEach(
+// Unknown words make a legacy string unrecognizable. (V8 is more lenient about
+// some of these; the specification only requires NaN for unrecognizable input.)
+["", " ", "invalid date", "foo", "not a date 2000", "1/1/2000/1", "1//2000"].forEach(
   function(s) {
     assert.sameValue(Date.parse(s), NaN, "unrecognizable " + JSON.stringify(s));
     assert.sameValue(new Date(s).getTime(), NaN, "constructor " + JSON.stringify(s));

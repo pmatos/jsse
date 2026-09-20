@@ -485,6 +485,27 @@ impl Interpreter {
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
                 .insert_builtin("log".to_string(), log_fn);
+
+            let assert_fn = self.create_function(JsFunction::native(
+                "assert".to_string(),
+                0,
+                |interp, _this, args| {
+                    let condition = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if !interp.to_boolean_val(&condition) {
+                        let parts: Vec<String> =
+                            args.iter().skip(1).map(|v| format!("{v}")).collect();
+                        if parts.is_empty() {
+                            eprintln!("Assertion failed");
+                        } else {
+                            eprintln!("Assertion failed: {}", parts.join(" "));
+                        }
+                    }
+                    Completion::Normal(JsValue::UNDEFINED)
+                },
+            ));
+            self.get_object_cell_expect(console_id)
+                .borrow_mut()
+                .insert_builtin("assert".to_string(), assert_fn);
         }
         let console_val = JsValue::object(console_id);
         self.realm()
