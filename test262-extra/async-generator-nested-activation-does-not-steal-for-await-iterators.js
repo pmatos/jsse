@@ -93,6 +93,27 @@ async function* outerClosesOwn() {
   }
 }
 
+var nestedLog = [];
+function trackedIterableNamed(name) {
+  var i = 0;
+  return {
+    [Symbol.asyncIterator]() { return this; },
+    next() { return Promise.resolve({ value: ++i, done: false }); },
+    return() { nestedLog.push('close:' + name); return Promise.resolve({}); },
+  };
+}
+async function* suspendedInLoop() {
+  for await (var y of trackedIterableNamed('B')) yield y;
+}
+async function* callerReturnsNested() {
+  for await (var x of trackedIterableNamed('A')) {
+    var b = suspendedInLoop();
+    await b.next();
+    await b.return();
+    yield x;
+  }
+}
+
 (async function () {
   assert.compareArray(await collect(outer()), [1, 2, 3, 4], 'outer async generator keeps producing');
   assert.sameValue(wrapperReturns, 0, 'nested return() did not close the outer iterator');
@@ -110,4 +131,15 @@ async function* outerClosesOwn() {
   assert.compareArray(log, [], 'not closed while suspended');
   await oc.return();
   assert.compareArray(log, ['close:tracked'], 'outer return() closes its own iterator exactly once');
+
+  var cr = callerReturnsNested();
+  assert.sameValue((await cr.next()).value, 1, 'caller first value');
+  assert.sameValue((await cr.next()).value, 2, 'caller second value');
+  assert.compareArray(nestedLog, ['close:B', 'close:B'], 'only the nested generator iterator was closed');
+  await cr.return();
+  assert.compareArray(
+    nestedLog,
+    ['close:B', 'close:B', 'close:A'],
+    'caller return() closes its own iterator exactly once'
+  );
 })().then($DONE, $DONE);

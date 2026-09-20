@@ -160,3 +160,37 @@ assert.sameValue(oc.next().value, 2, 'second value');
 assert.compareArray(log, [], 'not closed while suspended');
 oc.return();
 assert.compareArray(log, ['close:tracked'], 'outer return() closes its own iterator exactly once');
+
+// return() on a nested generator that is itself suspended inside a for-of
+// closes only that generator's iterator, and leaves the caller's open
+// for-of iterator alone.
+var nestedLog = [];
+function trackedIterableNamed(name) {
+  var i = 0;
+  return {
+    [Symbol.iterator]() { return this; },
+    next() { return { value: ++i, done: false }; },
+    return() { nestedLog.push('close:' + name); return {}; },
+  };
+}
+function* suspendedInLoop() {
+  for (var y of trackedIterableNamed('B')) yield y;
+}
+function* callerReturnsNested() {
+  for (var x of trackedIterableNamed('A')) {
+    var b = suspendedInLoop();
+    b.next();
+    b.return();
+    yield x;
+  }
+}
+var cr = callerReturnsNested();
+assert.sameValue(cr.next().value, 1, 'caller first value');
+assert.sameValue(cr.next().value, 2, 'caller second value');
+assert.compareArray(nestedLog, ['close:B', 'close:B'], 'only the nested generator iterator was closed');
+cr.return();
+assert.compareArray(
+  nestedLog,
+  ['close:B', 'close:B', 'close:A'],
+  'caller return() closes its own iterator exactly once'
+);
