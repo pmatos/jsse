@@ -36,6 +36,11 @@ fn is_identifier_name(s: &str) -> bool {
     true
 }
 
+fn format_host_args(args: &[JsValue]) -> String {
+    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
+    parts.join(" ")
+}
+
 fn sanitize_native_fn_name(name: &str) -> String {
     if name.is_empty() {
         return String::new();
@@ -477,14 +482,33 @@ impl Interpreter {
                 "log".to_string(),
                 0,
                 |_interp, _this, args| {
-                    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                    println!("{}", parts.join(" "));
+                    println!("{}", format_host_args(args));
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
                 .insert_builtin("log".to_string(), log_fn);
+
+            let assert_fn = self.create_function(JsFunction::native(
+                "assert".to_string(),
+                0,
+                |interp, _this, args| {
+                    use std::io::Write as _;
+                    if !args.first().is_some_and(|v| interp.to_boolean_val(v)) {
+                        let line = if args.len() > 1 {
+                            format!("Assertion failed: {}\n", format_host_args(&args[1..]))
+                        } else {
+                            "Assertion failed\n".to_string()
+                        };
+                        let _ = std::io::stderr().write_all(line.as_bytes());
+                    }
+                    Completion::Normal(JsValue::UNDEFINED)
+                },
+            ));
+            self.get_object_cell_expect(console_id)
+                .borrow_mut()
+                .insert_builtin("assert".to_string(), assert_fn);
         }
         let console_val = JsValue::object(console_id);
         self.realm()
@@ -502,8 +526,7 @@ impl Interpreter {
                 "print".to_string(),
                 1,
                 |_interp, _this, args| {
-                    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                    println!("{}", parts.join(" "));
+                    println!("{}", format_host_args(args));
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));

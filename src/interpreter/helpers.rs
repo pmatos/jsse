@@ -2033,7 +2033,130 @@ pub(crate) fn parse_date_string(s: &str) -> f64 {
         return t;
     }
 
+    // Implementation-defined legacy formats: "08/04/2011"
+    if let Some(t) = parse_legacy_date(s) {
+        return t;
+    }
+
     f64::NAN
+}
+
+type LegacyNumber<'a> = (&'a str, u32);
+
+fn parse_legacy_date(s: &str) -> Option<f64> {
+    if s.contains('/') {
+        parse_legacy_numeric_slash(s)
+    } else {
+        parse_legacy_written_month(s)
+    }
+}
+
+const LEGACY_MONTH_NAMES: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+const LEGACY_WEEKDAY_NAMES: [&str; 7] = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+];
+
+fn legacy_name_index(word: &str, names: &[&str]) -> Option<usize> {
+    names
+        .iter()
+        .position(|name| word.eq_ignore_ascii_case(name) || name[..3].eq_ignore_ascii_case(word))
+}
+
+fn parse_legacy_written_month(s: &str) -> Option<f64> {
+    let mut month = None;
+    let mut has_weekday = false;
+    let mut numbers = Vec::new();
+    for token in s.split([' ', ',']).filter(|t| !t.is_empty()) {
+        if let Some(value) = parse_legacy_digits(token) {
+            numbers.push((token, value));
+        } else if let Some(index) = legacy_name_index(token, &LEGACY_MONTH_NAMES) {
+            if month.replace(index as u32 + 1).is_some() {
+                return None;
+            }
+        } else if legacy_name_index(token, &LEGACY_WEEKDAY_NAMES).is_some() {
+            if has_weekday {
+                return None;
+            }
+            has_weekday = true;
+        } else {
+            return None;
+        }
+    }
+    let month = month?;
+    let [first, second] = numbers[..] else {
+        return None;
+    };
+    if is_legacy_year_first(first) {
+        make_legacy_local_date(first, month, second.1)
+    } else {
+        make_legacy_local_date(second, month, first.1)
+    }
+}
+
+fn parse_legacy_digits(token: &str) -> Option<u32> {
+    if token.len() > 6 || !token.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    token.parse().ok()
+}
+
+fn parse_legacy_numeric_slash(s: &str) -> Option<f64> {
+    let numbers = s
+        .split('/')
+        .map(|t| parse_legacy_digits(t).map(|v| (t, v)))
+        .collect::<Option<Vec<_>>>()?;
+    let [first, second, third] = numbers[..] else {
+        return None;
+    };
+    if is_legacy_year_first(first) {
+        make_legacy_local_date(first, second.1, third.1)
+    } else {
+        make_legacy_local_date(third, first.1, second.1)
+    }
+}
+
+fn is_legacy_year_first((text, value): LegacyNumber) -> bool {
+    text.len() >= 3 || value > 31
+}
+
+fn expand_legacy_year((text, value): LegacyNumber) -> u32 {
+    match (text.len(), value) {
+        (1..=2, 0..=49) => value + 2000,
+        (1..=2, _) => value + 1900,
+        _ => value,
+    }
+}
+
+fn make_legacy_local_date(year: LegacyNumber, month: u32, day: u32) -> Option<f64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let d = make_day(
+        expand_legacy_year(year) as f64,
+        (month - 1) as f64,
+        day as f64,
+    );
+    Some(make_date_clipped(d, 0.0, true))
 }
 
 fn parse_iso_date(s: &str) -> Option<f64> {

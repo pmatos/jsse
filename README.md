@@ -77,7 +77,7 @@ Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262
   - `Intl.NumberFormat` (partial)
   - `ShadowRealm` (constructor, `evaluate`, `importValue`; full cross-realm value wrapping with WrappedFunction exotic objects)
   - `globalThis`
-  - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
+  - Built-ins: `console.log`, `console.assert`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
 ## Building & Running
 
