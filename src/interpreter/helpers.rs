@@ -2081,9 +2081,9 @@ const LEGACY_WEEKDAY_NAMES: [&str; 7] = [
 ];
 
 fn legacy_name_index(word: &str, names: &[&str]) -> Option<usize> {
-    names.iter().position(|name| {
-        word.eq_ignore_ascii_case(name) || (word.len() == 3 && name[..3].eq_ignore_ascii_case(word))
-    })
+    names
+        .iter()
+        .position(|name| word.eq_ignore_ascii_case(name) || name[..3].eq_ignore_ascii_case(word))
 }
 
 fn parse_legacy_written_month(s: &str) -> Option<f64> {

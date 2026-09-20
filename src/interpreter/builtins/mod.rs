@@ -36,6 +36,11 @@ fn is_identifier_name(s: &str) -> bool {
     true
 }
 
+fn format_host_args(args: &[JsValue]) -> String {
+    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
+    parts.join(" ")
+}
+
 fn sanitize_native_fn_name(name: &str) -> String {
     if name.is_empty() {
         return String::new();
@@ -477,8 +482,7 @@ impl Interpreter {
                 "log".to_string(),
                 0,
                 |_interp, _this, args| {
-                    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                    println!("{}", parts.join(" "));
+                    println!("{}", format_host_args(args));
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
@@ -490,15 +494,14 @@ impl Interpreter {
                 "assert".to_string(),
                 0,
                 |interp, _this, args| {
-                    let condition = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if !interp.to_boolean_val(&condition) {
-                        let parts: Vec<String> =
-                            args.iter().skip(1).map(|v| format!("{v}")).collect();
-                        if parts.is_empty() {
-                            eprintln!("Assertion failed");
+                    use std::io::Write as _;
+                    if !args.first().is_some_and(|v| interp.to_boolean_val(v)) {
+                        let line = if args.len() > 1 {
+                            format!("Assertion failed: {}\n", format_host_args(&args[1..]))
                         } else {
-                            eprintln!("Assertion failed: {}", parts.join(" "));
-                        }
+                            "Assertion failed\n".to_string()
+                        };
+                        let _ = std::io::stderr().write_all(line.as_bytes());
                     }
                     Completion::Normal(JsValue::UNDEFINED)
                 },
@@ -523,8 +526,7 @@ impl Interpreter {
                 "print".to_string(),
                 1,
                 |_interp, _this, args| {
-                    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                    println!("{}", parts.join(" "));
+                    println!("{}", format_host_args(args));
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));

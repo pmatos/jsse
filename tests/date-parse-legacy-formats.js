@@ -1,7 +1,10 @@
 // Date.parse (§21.4.3.2) may fall back to implementation-specific formats for
-// strings outside the Date Time String Format. jsse accepts the legacy
-// `M/D/YYYY` numeric form (interpreted as local midnight), matching V8 and
-// SpiderMonkey, and returns NaN for anything unrecognizable or out of bounds.
+// strings outside the Date Time String Format. jsse accepts date-only legacy
+// forms (numeric `M/D/YYYY` and `Y/M/D`, two-digit years, and written months
+// such as `May 1, 2000`), interpreted as local midnight, and returns NaN for
+// anything unrecognizable or out of bounds. Like V8 and SpiderMonkey it does
+// not validate the day against the month length (`2/30/2000` rolls over), but
+// unlike V8 it takes zero-padded 3+ digit years literally.
 
 function sameValue(actual, expected, label) {
   if (!Object.is(actual, expected)) {
@@ -43,6 +46,10 @@ literalYear.setFullYear(100);
 sameValue(Date.parse("1/1/100"), literalYear.getTime(), "1/1/100");
 literalYear.setFullYear(999);
 sameValue(Date.parse("1/1/999"), literalYear.getTime(), "1/1/999");
+literalYear.setFullYear(99);
+sameValue(Date.parse("1/1/0099"), literalYear.getTime(), "1/1/0099 is a literal year");
+
+sameValue(Date.parse("2/30/2000"), local(2000, 2, 1), "2/30/2000 rolls over");
 
 // A first component that cannot be a month selects year-first Y/M/D.
 sameValue(Date.parse("2011/08/04"), local(2011, 7, 4), "2011/08/04");
@@ -68,8 +75,10 @@ for (var k = 0; k < writtenMay2000.length; k++) {
 sameValue(Date.parse("September 3 2001"), local(2001, 8, 3), "September 3 2001");
 sameValue(Date.parse("dec 31 1999"), local(1999, 11, 31), "dec 31 1999");
 sameValue(Date.parse("may 1 5"), local(2005, 4, 1), "may 1 5");
-sameValue(Date.parse("may 1 0"), Date.parse("5/1/0"), "may 1 0");
-sameValue(Date.parse("may 1 100"), Date.parse("5/1/100"), "may 1 100");
+sameValue(Date.parse("may 1 0"), local(2000, 4, 1), "may 1 0");
+literalYear.setFullYear(100);
+literalYear.setMonth(4);
+sameValue(Date.parse("may 1 100"), literalYear.getTime(), "may 1 100");
 
 var invalidWritten = [
   "may 1999 1999", "may 0 0", "may 32 2000", "invalid date", "foo", "may",

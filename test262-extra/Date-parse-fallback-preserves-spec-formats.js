@@ -43,7 +43,10 @@ var samples = [
 
 samples.forEach(function(x) {
   var expected = x.valueOf();
-  assert.sameValue(Date.parse(x.toString()), expected, "toString " + x.toString());
+  // toString cannot render a sub-minute UTC offset (e.g. Africa/Monrovia before 1972).
+  if (Number.isInteger(x.getTimezoneOffset())) {
+    assert.sameValue(Date.parse(x.toString()), expected, "toString " + x.toString());
+  }
   assert.sameValue(Date.parse(x.toUTCString()), expected, "toUTCString " + x.toUTCString());
   assert.sameValue(Date.parse(x.toISOString()), expected, "toISOString " + x.toISOString());
 });
