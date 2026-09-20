@@ -502,6 +502,12 @@ if (typeof performance.measure !== "function") {
 if (typeof self === "undefined") {
     globalThis.self = globalThis;
 }
+// The runner keys off the exit code, so a failed validate() must throw (as
+// JetStream's shell-config.js does) instead of using the non-throwing host assert.
+console.assert = function(condition, message) {
+    if (!condition)
+        throw new Error(`Assertion failed: ${message}`);
+};
 """
 
 
