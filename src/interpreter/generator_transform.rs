@@ -142,16 +142,6 @@ pub(crate) enum StateTerminator {
     Completed,
 }
 
-impl StateTerminator {
-    fn jump_target_state(&self) -> Option<usize> {
-        match self {
-            StateTerminator::Goto(state) => Some(*state),
-            StateTerminator::LoopControl(target) => Some(target.target_state),
-            _ => None,
-        }
-    }
-}
-
 /// State-machine target for an abrupt `break` or `continue` completion.
 ///
 /// The depths describe the execution context that remains active at
@@ -386,31 +376,30 @@ impl TransformContext {
             return;
         }
         for (kind, label) in escaping_jumps(stmt) {
-            let targets = match kind {
-                JumpKind::Break => &self.break_targets,
-                JumpKind::Continue => &self.continue_targets,
-            };
-            let Some(target) = targets.get(&label).copied() else {
-                continue;
-            };
-            let terminator = self.jump_terminator(target);
-            let known = self
+            let recorded = self
                 .pending_inline_jumps
                 .iter()
-                .find(|jump| jump.kind == kind && jump.label == label);
-            match known {
-                Some(jump) => debug_assert_eq!(
-                    jump.terminator.jump_target_state(),
-                    terminator.jump_target_state(),
-                    "one state resolved a jump to two different targets"
-                ),
-                None => self.pending_inline_jumps.push(InlineJump {
+                .any(|jump| jump.kind == kind && jump.label == label);
+            if recorded {
+                continue;
+            }
+            if let Some(target) = self.jump_target(kind, &label) {
+                let terminator = self.jump_terminator(target);
+                self.pending_inline_jumps.push(InlineJump {
                     kind,
                     label,
                     terminator,
-                }),
+                });
             }
         }
+    }
+
+    fn jump_target(&self, kind: JumpKind, label: &Option<String>) -> Option<LoopControlTarget> {
+        let targets = match kind {
+            JumpKind::Break => &self.break_targets,
+            JumpKind::Continue => &self.continue_targets,
+        };
+        targets.get(label).copied()
     }
 
     fn jump_terminator(&self, target: LoopControlTarget) -> StateTerminator {
@@ -671,8 +660,9 @@ struct JumpScope {
     continue_labels: Vec<String>,
 }
 
-/// The distinct `break`/`continue` completions that escape `stmt` when it runs
-/// natively, i.e. those not consumed by a loop, switch, or label inside it.
+/// The `break`/`continue` completions that escape `stmt` when it runs natively,
+/// i.e. those not consumed by a loop, switch, or label inside it. Repeats are
+/// not collapsed.
 fn escaping_jumps(stmt: &Statement) -> Vec<(JumpKind, Option<String>)> {
     let mut out = Vec::new();
     collect_escaping_jumps(stmt, &mut JumpScope::default(), &mut out);
@@ -684,26 +674,24 @@ fn collect_escaping_jumps(
     scope: &mut JumpScope,
     out: &mut Vec<(JumpKind, Option<String>)>,
 ) {
-    let mut report = |kind: JumpKind, label: &Option<String>, consumed: bool| {
-        let jump = (kind, label.clone());
-        if !consumed && !out.contains(&jump) {
-            out.push(jump);
-        }
-    };
     match stmt {
         Statement::Break(label) => {
             let consumed = match label {
                 None => scope.breakable,
                 Some(l) => scope.break_labels.contains(l),
             };
-            report(JumpKind::Break, label, consumed);
+            if !consumed {
+                out.push((JumpKind::Break, label.clone()));
+            }
         }
         Statement::Continue(label) => {
             let consumed = match label {
                 None => scope.in_loop,
                 Some(l) => scope.continue_labels.contains(l),
             };
-            report(JumpKind::Continue, label, consumed);
+            if !consumed {
+                out.push((JumpKind::Continue, label.clone()));
+            }
         }
         Statement::Block(stmts) => {
             for s in stmts {
@@ -988,11 +976,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Break(label) => {
-            let target = match label {
-                Some(label) => ctx.break_targets.get(&Some(label.clone())).copied(),
-                None => ctx.break_targets.get(&None).copied(),
-            };
-            if let Some(target) = target {
+            if let Some(target) = ctx.jump_target(JumpKind::Break, label) {
                 let terminator = ctx.jump_terminator(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
@@ -1002,11 +986,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Continue(label) => {
-            let target = match label {
-                Some(label) => ctx.continue_targets.get(&Some(label.clone())).copied(),
-                None => ctx.continue_targets.get(&None).copied(),
-            };
-            if let Some(target) = target {
+            if let Some(target) = ctx.jump_target(JumpKind::Continue, label) {
                 let terminator = ctx.jump_terminator(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
@@ -3213,11 +3193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_escaping_jumps_dedupe_and_skip_functions() {
-        assert_eq!(
-            escaping_in("while (1) { { break; break; } }"),
-            vec![brk(None)]
-        );
+    fn test_escaping_jumps_cover_branches_and_skip_functions() {
         assert_eq!(
             escaping_in("while (1) { if (a) { break; } else { continue; } }"),
             vec![brk(None), cont(None)]

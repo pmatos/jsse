@@ -8745,13 +8745,16 @@ impl Interpreter {
                 }
             }
 
-            // A yield-free statement in this state surfaced a `break`/`continue`
-            // that no native statement consumed: take that jump's route. Its
-            // target is exact, so the for-of heuristics below only see the
-            // completions the transform did not resolve.
-            let inline_jump = state_machine.states[current_id].inline_jump_terminator(&stmt_result);
-            let inline_jumped = inline_jump.is_some();
-            let terminator = inline_jump.unwrap_or(terminator);
+            // The jump's target is exact, so the for-of heuristics below only
+            // see the completions the transform did not resolve.
+            let terminator =
+                match state_machine.states[current_id].inline_jump_terminator(&stmt_result) {
+                    Some(jump) => {
+                        stmt_result = Completion::Normal(JsValue::UNDEFINED);
+                        jump
+                    }
+                    None => terminator,
+                };
 
             match &stmt_result {
                 Completion::Throw(e) => {
@@ -8764,7 +8767,7 @@ impl Interpreter {
                     route_return!(v.clone());
                     continue;
                 }
-                Completion::Break(label, _) if !inline_jumped => {
+                Completion::Break(label, _) => {
                     if let Some(target) = state_machine.states[current_id]
                         .block_exits
                         .as_ref()
@@ -8781,7 +8784,7 @@ impl Interpreter {
                         continue;
                     }
                 }
-                Completion::Continue(label, _) if !inline_jumped => {
+                Completion::Continue(label, _) => {
                     if let Some(target) = state_machine.states[current_id]
                         .block_exits
                         .as_ref()
