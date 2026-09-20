@@ -25,6 +25,10 @@ pub(crate) struct GeneratorState {
     /// Break/continue targets for an `await using` block left intact as the
     /// last statement of this state; see [`BlockExits`].
     pub block_exits: Option<Rc<BlockExits>>,
+    /// Jumps that a yield-free statement in `body` can surface as a raw
+    /// `break`/`continue` completion, with the terminator that stands in for
+    /// the state's own when one does.
+    pub inline_jumps: Vec<InlineJump>,
 }
 
 /// Where a `break` or `continue` that escapes an isolated `await using` block
@@ -35,6 +39,37 @@ pub(crate) struct GeneratorState {
 pub(crate) struct BlockExits {
     pub breaks: HashMap<Option<String>, LoopControlTarget>,
     pub continues: HashMap<Option<String>, LoopControlTarget>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InlineJump {
+    pub kind: JumpKind,
+    pub label: Option<String>,
+    pub terminator: StateTerminator,
+}
+
+impl GeneratorState {
+    /// The terminator to run instead of `self.terminator` when the state body
+    /// completed with a `break`/`continue` that a native statement in it could
+    /// not consume. `None` for any other completion.
+    pub(crate) fn inline_jump_terminator(
+        &self,
+        completion: &crate::interpreter::types::Completion,
+    ) -> Option<StateTerminator> {
+        use crate::interpreter::types::Completion;
+        if self.inline_jumps.is_empty() {
+            return None;
+        }
+        let (kind, label) = match completion {
+            Completion::Break(label, _) => (JumpKind::Break, label),
+            Completion::Continue(label, _) => (JumpKind::Continue, label),
+            _ => return None,
+        };
+        self.inline_jumps
+            .iter()
+            .find(|jump| jump.kind == kind && jump.label == *label)
+            .map(|jump| jump.terminator.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +140,16 @@ pub(crate) enum StateTerminator {
         sent_value_binding: Option<SentValueBinding>,
     },
     Completed,
+}
+
+impl StateTerminator {
+    fn jump_target_state(&self) -> Option<usize> {
+        match self {
+            StateTerminator::Goto(state) => Some(*state),
+            StateTerminator::LoopControl(target) => Some(target.target_state),
+            _ => None,
+        }
+    }
 }
 
 /// State-machine target for an abrupt `break` or `continue` completion.
@@ -230,6 +275,7 @@ struct TransformContext {
     states: Vec<GeneratorState>,
     current_state_id: usize,
     current_statements: Vec<Statement>,
+    pending_inline_jumps: Vec<InlineJump>,
     #[allow(dead_code)]
     analysis: GeneratorAnalysis,
     yield_counter: usize,
@@ -260,6 +306,7 @@ impl TransformContext {
             states: Vec::new(),
             current_state_id: 0,
             current_statements: Vec::new(),
+            pending_inline_jumps: Vec::new(),
             analysis,
             yield_counter: 0,
             temp_counter: 0,
@@ -292,6 +339,7 @@ impl TransformContext {
             body: Body::new(Vec::new()),
             terminator: StateTerminator::Completed,
             block_exits: None,
+            inline_jumps: Vec::new(),
         });
         id
     }
@@ -320,11 +368,57 @@ impl TransformContext {
             clear_terminator_ic_sites(&mut terminator);
             self.states[self.current_state_id].body = body;
             self.states[self.current_state_id].terminator = terminator;
+            self.states[self.current_state_id].inline_jumps =
+                std::mem::take(&mut self.pending_inline_jumps);
         }
     }
 
     fn emit_statement(&mut self, stmt: Statement) {
+        self.record_inline_jumps(&stmt);
         self.current_statements.push(stmt);
+    }
+
+    /// A statement emitted verbatim runs natively, so a `break`/`continue` it
+    /// cannot consume surfaces as a raw completion from the state body. Record
+    /// where each such jump must go so the driver can honour it.
+    fn record_inline_jumps(&mut self, stmt: &Statement) {
+        if self.break_targets.is_empty() && self.continue_targets.is_empty() {
+            return;
+        }
+        for (kind, label) in escaping_jumps(stmt) {
+            let targets = match kind {
+                JumpKind::Break => &self.break_targets,
+                JumpKind::Continue => &self.continue_targets,
+            };
+            let Some(target) = targets.get(&label).copied() else {
+                continue;
+            };
+            let terminator = self.jump_terminator(target);
+            let known = self
+                .pending_inline_jumps
+                .iter()
+                .find(|jump| jump.kind == kind && jump.label == label);
+            match known {
+                Some(jump) => debug_assert_eq!(
+                    jump.terminator.jump_target_state(),
+                    terminator.jump_target_state(),
+                    "one state resolved a jump to two different targets"
+                ),
+                None => self.pending_inline_jumps.push(InlineJump {
+                    kind,
+                    label,
+                    terminator,
+                }),
+            }
+        }
+    }
+
+    fn jump_terminator(&self, target: LoopControlTarget) -> StateTerminator {
+        if self.is_async && self.detect_for_await {
+            StateTerminator::LoopControl(target)
+        } else {
+            StateTerminator::Goto(target.target_state)
+        }
     }
 
     fn loop_control_target(&self, target_state: usize, for_of_depth: usize) -> LoopControlTarget {
@@ -451,6 +545,7 @@ fn create_simple_machine(
             body,
             terminator: StateTerminator::Completed,
             block_exits: None,
+            inline_jumps: Vec::new(),
         }],
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
@@ -557,6 +652,112 @@ fn stmt_has_break_or_continue(stmt: &Statement) -> bool {
         Statement::Labeled(_, inner) => stmt_has_break_or_continue(inner),
         // Don't recurse into nested loops/switch — their break/continue targets are separate
         _ => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JumpKind {
+    Break,
+    Continue,
+}
+
+/// Which `break`/`continue` completions the native statement currently being
+/// walked would consume itself.
+#[derive(Default)]
+struct JumpScope {
+    breakable: bool,
+    in_loop: bool,
+    break_labels: Vec<String>,
+    continue_labels: Vec<String>,
+}
+
+/// The distinct `break`/`continue` completions that escape `stmt` when it runs
+/// natively, i.e. those not consumed by a loop, switch, or label inside it.
+fn escaping_jumps(stmt: &Statement) -> Vec<(JumpKind, Option<String>)> {
+    let mut out = Vec::new();
+    collect_escaping_jumps(stmt, &mut JumpScope::default(), &mut out);
+    out
+}
+
+fn collect_escaping_jumps(
+    stmt: &Statement,
+    scope: &mut JumpScope,
+    out: &mut Vec<(JumpKind, Option<String>)>,
+) {
+    let mut report = |kind: JumpKind, label: &Option<String>, consumed: bool| {
+        let jump = (kind, label.clone());
+        if !consumed && !out.contains(&jump) {
+            out.push(jump);
+        }
+    };
+    match stmt {
+        Statement::Break(label) => {
+            let consumed = match label {
+                None => scope.breakable,
+                Some(l) => scope.break_labels.contains(l),
+            };
+            report(JumpKind::Break, label, consumed);
+        }
+        Statement::Continue(label) => {
+            let consumed = match label {
+                None => scope.in_loop,
+                Some(l) => scope.continue_labels.contains(l),
+            };
+            report(JumpKind::Continue, label, consumed);
+        }
+        Statement::Block(stmts) => {
+            for s in stmts {
+                collect_escaping_jumps(s, scope, out);
+            }
+        }
+        Statement::If(if_stmt) => {
+            collect_escaping_jumps(&if_stmt.consequent, scope, out);
+            if let Some(alt) = &if_stmt.alternate {
+                collect_escaping_jumps(alt, scope, out);
+            }
+        }
+        Statement::Try(try_stmt) => {
+            let handler = try_stmt.handler.iter().flat_map(|h| h.body.iter());
+            let finalizer = try_stmt.finalizer.iter().flatten();
+            for s in try_stmt.block.iter().chain(handler).chain(finalizer) {
+                collect_escaping_jumps(s, scope, out);
+            }
+        }
+        Statement::With(_, body) => collect_escaping_jumps(body, scope, out),
+        Statement::Labeled(label, inner) => {
+            let labels_loop = labels_iteration_statement(inner);
+            scope.break_labels.push(label.clone());
+            if labels_loop {
+                scope.continue_labels.push(label.clone());
+            }
+            collect_escaping_jumps(inner, scope, out);
+            scope.break_labels.pop();
+            if labels_loop {
+                scope.continue_labels.pop();
+            }
+        }
+        Statement::While(WhileStatement { body, .. })
+        | Statement::DoWhile(DoWhileStatement { body, .. })
+        | Statement::For(ForStatement { body, .. })
+        | Statement::ForIn(ForInStatement { body, .. })
+        | Statement::ForOf(ForOfStatement { body, .. }) => {
+            let saved = (scope.breakable, scope.in_loop);
+            scope.breakable = true;
+            scope.in_loop = true;
+            collect_escaping_jumps(body, scope, out);
+            (scope.breakable, scope.in_loop) = saved;
+        }
+        Statement::Switch(switch_stmt) => {
+            let saved = scope.breakable;
+            scope.breakable = true;
+            for s in switch_stmt.cases.iter().flat_map(|c| c.consequent.iter()) {
+                collect_escaping_jumps(s, scope, out);
+            }
+            scope.breakable = saved;
+        }
+        // Function and class bodies have their own jump targets, and
+        // expressions cannot contain a `break`/`continue` statement.
+        _ => {}
     }
 }
 
@@ -792,11 +993,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 None => ctx.break_targets.get(&None).copied(),
             };
             if let Some(target) = target {
-                let terminator = if ctx.is_async && ctx.detect_for_await {
-                    StateTerminator::LoopControl(target)
-                } else {
-                    StateTerminator::Goto(target.target_state)
-                };
+                let terminator = ctx.jump_terminator(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -810,11 +1007,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 None => ctx.continue_targets.get(&None).copied(),
             };
             if let Some(target) = target {
-                let terminator = if ctx.is_async && ctx.detect_for_await {
-                    StateTerminator::LoopControl(target)
-                } else {
-                    StateTerminator::Goto(target.target_state)
-                };
+                let terminator = ctx.jump_terminator(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -2924,5 +3117,176 @@ mod tests {
             &yielding_discriminant,
             &[]
         )));
+    }
+
+    fn parse_fn_body(src: &str) -> Vec<Statement> {
+        let mut parser = crate::parser::Parser::new(src).expect("parser init");
+        let program = parser.parse_program().expect("parse");
+        match program.body.as_slice().first() {
+            Some(Statement::FunctionDeclaration(f)) => f.body.as_slice().to_vec(),
+            other => panic!("expected a function declaration, got {other:?}"),
+        }
+    }
+
+    /// The first statement of the innermost loop/label/block wrapper, i.e. the
+    /// statement under test once wrapped in `<wrapper> { STMT }`.
+    fn wrapped_stmt(stmt: &Statement) -> Statement {
+        match stmt {
+            Statement::Labeled(_, inner) => wrapped_stmt(inner),
+            Statement::While(w) => wrapped_stmt(&w.body),
+            Statement::For(f) => wrapped_stmt(&f.body),
+            Statement::Block(stmts) => stmts.first().cloned().expect("non-empty block"),
+            other => other.clone(),
+        }
+    }
+
+    fn escaping_in(wrapper_src: &str) -> Vec<(JumpKind, Option<String>)> {
+        let body = parse_fn_body(&format!("function f() {{ {wrapper_src} }}"));
+        escaping_jumps(&wrapped_stmt(&body[0]))
+    }
+
+    fn brk(label: Option<&str>) -> (JumpKind, Option<String>) {
+        (JumpKind::Break, label.map(str::to_owned))
+    }
+
+    fn cont(label: Option<&str>) -> (JumpKind, Option<String>) {
+        (JumpKind::Continue, label.map(str::to_owned))
+    }
+
+    #[test]
+    fn test_escaping_jumps_reports_try_and_with_bodies() {
+        assert_eq!(
+            escaping_in("while (1) { try { break; } finally {} }"),
+            vec![brk(None)]
+        );
+        assert_eq!(
+            escaping_in("while (1) { try { throw 0; } catch (e) { continue; } }"),
+            vec![cont(None)]
+        );
+        assert_eq!(
+            escaping_in("while (1) { try { } finally { break; } }"),
+            vec![brk(None)]
+        );
+        assert_eq!(
+            escaping_in("while (1) { with (o) { break; } }"),
+            vec![brk(None)]
+        );
+    }
+
+    #[test]
+    fn test_escaping_jumps_native_targets_consume_jumps() {
+        assert_eq!(escaping_in("x: { while (1) { break; } }"), vec![]);
+        assert_eq!(escaping_in("x: { while (1) { continue; } }"), vec![]);
+        assert_eq!(escaping_in("x: { switch (y) { case 0: break; } }"), vec![]);
+        assert_eq!(
+            escaping_in("while (1) { switch (y) { case 0: continue; } }"),
+            vec![cont(None)]
+        );
+        assert_eq!(
+            escaping_in("while (1) { for (;;) { switch (y) { case 0: continue; } } }"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn test_escaping_jumps_are_label_aware() {
+        assert_eq!(
+            escaping_in("while (1) { outer: while (1) { break outer; } }"),
+            vec![]
+        );
+        assert_eq!(
+            escaping_in("while (1) { outer: while (1) { continue outer; } }"),
+            vec![]
+        );
+        assert_eq!(
+            escaping_in("outer: while (1) { while (1) { break outer; } }"),
+            vec![brk(Some("outer"))]
+        );
+        assert_eq!(
+            escaping_in("outer: while (1) { while (1) { continue outer; } }"),
+            vec![cont(Some("outer"))]
+        );
+        assert_eq!(
+            escaping_in("outer: while (1) { blk: { break blk; } }"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn test_escaping_jumps_dedupe_and_skip_functions() {
+        assert_eq!(
+            escaping_in("while (1) { { break; break; } }"),
+            vec![brk(None)]
+        );
+        assert_eq!(
+            escaping_in("while (1) { if (a) { break; } else { continue; } }"),
+            vec![brk(None), cont(None)]
+        );
+        assert_eq!(
+            escaping_in("while (1) { function g() { while (1) { break; } } }"),
+            vec![]
+        );
+    }
+
+    fn state_with_inline_jump(sm: &GeneratorStateMachine, kind: JumpKind) -> Vec<&GeneratorState> {
+        sm.states
+            .iter()
+            .filter(|s| s.inline_jumps.iter().any(|j| j.kind == kind))
+            .collect()
+    }
+
+    #[test]
+    fn test_yield_free_try_break_in_switch_case_records_inline_jump() {
+        let body = parse_fn_body(
+            "function* g(x) { switch (x) { case 1: try { break; } finally { f(); } case 2: g(); break; case 3: yield 0; } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let Some(after_switch) = sm.states.iter().find_map(|s| match &s.terminator {
+            StateTerminator::SwitchDispatch { after_state, .. } => Some(*after_state),
+            _ => None,
+        }) else {
+            panic!("no switch dispatch state");
+        };
+
+        let with_jump = state_with_inline_jump(&sm, JumpKind::Break);
+        assert_eq!(with_jump.len(), 1);
+        let jump = &with_jump[0].inline_jumps[0];
+        assert_eq!(jump.label, None);
+        assert!(matches!(jump.terminator, StateTerminator::Goto(t) if t == after_switch));
+        assert_eq!(with_jump[0].inline_jumps.len(), 1);
+    }
+
+    #[test]
+    fn test_natively_consumed_jump_records_nothing() {
+        let body = parse_fn_body(
+            "function* g(x) { switch (x) { case 1: while (1) { try { break; } finally {} } case 2: yield 0; } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        assert!(sm.states.iter().all(|s| s.inline_jumps.is_empty()));
+    }
+
+    #[test]
+    fn test_labeled_continue_out_of_yield_free_try_records_inline_jump() {
+        let body = parse_fn_body(
+            "function* g() { outer: for (var i = 0; i < 3; i++) { for (;;) { try { continue outer; } finally {} } yield i; } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let with_jump = state_with_inline_jump(&sm, JumpKind::Continue);
+        assert_eq!(with_jump.len(), 1);
+        assert_eq!(with_jump[0].inline_jumps[0].label.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn test_async_function_inline_jump_uses_loop_control() {
+        let body = parse_fn_body(
+            "async function f(x) { for (var i = 0; i < 3; i++) { try { if (i == 1) break; } finally {} await i; } }",
+        );
+        let sm = transform_async_function(&body, &[]);
+        let with_jump = state_with_inline_jump(&sm, JumpKind::Break);
+        assert_eq!(with_jump.len(), 1);
+        assert!(matches!(
+            with_jump[0].inline_jumps[0].terminator,
+            StateTerminator::LoopControl(_)
+        ));
     }
 }
