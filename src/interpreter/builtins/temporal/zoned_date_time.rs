@@ -188,9 +188,9 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
         return parse_offset_to_ns(tz);
     }
 
-    // IANA timezone — use chrono-tz
-    use chrono::{Offset, TimeZone, Utc};
-    use chrono_tz::Tz;
+    // IANA timezone — evaluate via jiff, which (unlike chrono-tz's
+    // materialized transition tables) applies a tzif file's POSIX footer
+    // rule past the last tabulated transition (issue #631).
     // Use floor division to correctly handle negative epoch nanoseconds.
     // Truncation toward zero would place e.g. -59004000000000001ns in second
     // -59004000 instead of -59004001, giving the wrong offset near transitions.
@@ -209,25 +209,10 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
         r as u32
     };
 
-    if let Ok(tz_parsed) = tz.parse::<Tz>() {
-        // chrono's timestamp_opt covers roughly ±262k years, but Instant's
-        // range is ~±274k years. Beyond chrono's edge, chrono-tz applies the
-        // zone's proleptic tail rule, which repeats with the 400-year
-        // Gregorian cycle — so shift an unrepresentable epoch by whole cycles
-        // (preserving calendar position) instead of falling back to 0.
-        const GREGORIAN_CYCLE_SECS: i64 = 146_097 * 86_400; // 400 years
-        let utc_dt = Utc.timestamp_opt(epoch_secs, nanos).single().or_else(|| {
-            let cycles = epoch_secs / GREGORIAN_CYCLE_SECS;
-            if cycles == 0 {
-                return None;
-            }
-            Utc.timestamp_opt(epoch_secs - cycles * GREGORIAN_CYCLE_SECS, nanos)
-                .single()
-        });
-        if let Some(dt) = utc_dt {
-            let offset = dt.with_timezone(&tz_parsed).offset().fix();
-            return offset.local_minus_utc() as i64 * NS_PER_SEC as i64;
-        }
+    if let Some(tz_parsed) = crate::interpreter::helpers::resolve_named_time_zone(tz) {
+        let offset_secs =
+            crate::interpreter::helpers::named_time_zone_offset_secs(&tz_parsed, epoch_secs, nanos);
+        return offset_secs as i64 * NS_PER_SEC as i64;
     }
     0
 }
@@ -244,46 +229,39 @@ pub(crate) fn get_possible_epoch_ns(tz: &str, local_ns: i128) -> Vec<i128> {
         return vec![local_ns - off];
     }
 
-    use chrono::{MappedLocalTime, Offset, TimeZone};
-    use chrono_tz::Tz;
+    use crate::interpreter::helpers::{named_time_zone_ambiguous_offset, resolve_named_time_zone};
+    use jiff::tz::AmbiguousOffset;
 
-    let tz_parsed = match tz.parse::<Tz>() {
-        Ok(t) => t,
-        Err(_) => {
-            let off = get_tz_offset_ns(tz, &BigInt::from(local_ns)) as i128;
-            return vec![local_ns - off];
-        }
+    let Some(tz_parsed) = resolve_named_time_zone(tz) else {
+        let off = get_tz_offset_ns(tz, &BigInt::from(local_ns)) as i128;
+        return vec![local_ns - off];
     };
 
-    let epoch_secs = local_ns.div_euclid(NS_PER_SEC) as i64;
-    let sub_sec_ns = local_ns.rem_euclid(NS_PER_SEC);
-    let nanos = sub_sec_ns as u32;
+    let epoch_days = local_ns.div_euclid(NS_PER_DAY);
+    let day_ns = local_ns.rem_euclid(NS_PER_DAY);
+    let (year, month, day) = super::epoch_days_to_iso_date(epoch_days as i64);
+    let nanosecond = (day_ns % NS_PER_SEC) as u32;
+    let second = ((day_ns / NS_PER_SEC) % 60) as u8;
+    let minute = ((day_ns / NS_PER_MIN) % 60) as u8;
+    let hour = ((day_ns / NS_PER_HOUR) % 24) as u8;
 
-    let naive = match chrono::DateTime::from_timestamp(epoch_secs, nanos) {
-        Some(dt) => dt.naive_utc(),
-        None => {
-            let off = get_tz_offset_ns(tz, &BigInt::from(local_ns)) as i128;
-            return vec![local_ns - off];
-        }
-    };
-
-    match tz_parsed.from_local_datetime(&naive) {
-        MappedLocalTime::Single(dt) => {
-            let off = dt.offset().fix().local_minus_utc() as i128 * NS_PER_SEC;
+    match named_time_zone_ambiguous_offset(
+        &tz_parsed, year, month, day, hour, minute, second, nanosecond,
+    ) {
+        AmbiguousOffset::Unambiguous { offset } => {
+            let off = offset.seconds() as i128 * NS_PER_SEC;
             vec![local_ns - off]
         }
-        MappedLocalTime::Ambiguous(dt1, dt2) => {
-            let off1 = dt1.offset().fix().local_minus_utc() as i128 * NS_PER_SEC;
-            let off2 = dt2.offset().fix().local_minus_utc() as i128 * NS_PER_SEC;
+        AmbiguousOffset::Gap { .. } => vec![],
+        AmbiguousOffset::Fold { before, after } => {
+            let off1 = before.seconds() as i128 * NS_PER_SEC;
+            let off2 = after.seconds() as i128 * NS_PER_SEC;
             let e1 = local_ns - off1;
             let e2 = local_ns - off2;
             let mut results = vec![e1, e2];
             results.sort();
             results.dedup();
             results
-        }
-        MappedLocalTime::None => {
-            vec![]
         }
     }
 }
@@ -443,33 +421,13 @@ pub(crate) fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
 }
 
 /// Get total UTC offset in seconds at a given UTC epoch second.
-/// Uses OffsetComponents to get base_utc_offset + dst_offset.
-fn get_total_offset_secs(tz_parsed: &chrono_tz::Tz, epoch_secs: i64) -> i32 {
-    use chrono_tz::OffsetComponents;
-    let utc_dt = match chrono::DateTime::from_timestamp(epoch_secs, 0) {
-        Some(dt) => dt,
-        None => {
-            if epoch_secs < 0 {
-                chrono::NaiveDate::MIN
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap()
-                    .and_utc()
-            } else {
-                chrono::NaiveDate::MAX
-                    .and_hms_opt(23, 59, 59)
-                    .unwrap()
-                    .and_utc()
-            }
-        }
-    };
-    let tz_dt = utc_dt.with_timezone(tz_parsed);
-    let offset = tz_dt.offset();
-    (offset.base_utc_offset().num_seconds() + offset.dst_offset().num_seconds()) as i32
+fn get_total_offset_secs(tz_parsed: &jiff::tz::TimeZone, epoch_secs: i64) -> i32 {
+    crate::interpreter::helpers::named_time_zone_offset_secs(tz_parsed, epoch_secs, 0)
 }
 
 /// Find the exact transition point (in nanoseconds) between lo_ns and hi_ns,
 /// where offsets are known to differ. Binary search at second granularity.
-fn find_exact_transition(tz_parsed: &chrono_tz::Tz, lo_ns: i128, hi_ns: i128) -> i128 {
+fn find_exact_transition(tz_parsed: &jiff::tz::TimeZone, lo_ns: i128, hi_ns: i128) -> i128 {
     let mut lo = lo_ns;
     let mut hi = hi_ns;
     let lo_off = get_total_offset_secs(tz_parsed, (lo / NS_PER_SEC) as i64);
@@ -492,10 +450,8 @@ fn find_exact_transition(tz_parsed: &chrono_tz::Tz, lo_ns: i128, hi_ns: i128) ->
 /// First window uses 1-day steps (catches close-together transitions near start).
 /// Subsequent windows use 90-day coarse steps for fast far-distance scanning.
 fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
-    use chrono_tz::Tz;
-
     let ns_max: i128 = 8_640_000_000_000_000_000_000;
-    let tz_parsed: Tz = tz.parse().ok()?;
+    let tz_parsed = crate::interpreter::helpers::resolve_named_time_zone(tz)?;
 
     let ref_sec = epoch_ns.div_euclid(NS_PER_SEC);
     let start_ns = (ref_sec + 1) * NS_PER_SEC;
@@ -561,10 +517,8 @@ fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
 /// First window uses 1-day steps (catches close-together transitions near start).
 /// Subsequent windows use 90-day coarse steps for fast far-distance scanning.
 fn get_previous_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
-    use chrono_tz::Tz;
-
     let ns_min: i128 = -8_640_000_000_000_000_000_000;
-    let tz_parsed: Tz = tz.parse().ok()?;
+    let tz_parsed = crate::interpreter::helpers::resolve_named_time_zone(tz)?;
 
     let ref_sec = (epoch_ns - 1).div_euclid(NS_PER_SEC);
     let ref_ns = ref_sec * NS_PER_SEC;

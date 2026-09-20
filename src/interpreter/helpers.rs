@@ -1636,71 +1636,153 @@ pub(crate) fn system_time_zone_identifier() -> String {
     system_time_zone().name().to_string()
 }
 
-fn time_zone_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
-    use chrono::Datelike;
+fn system_time_zone_jiff() -> Option<&'static jiff::tz::TimeZone> {
+    use std::sync::OnceLock;
 
-    if !t.is_finite() {
-        return None;
+    static SYSTEM_TIME_ZONE_JIFF: OnceLock<Option<jiff::tz::TimeZone>> = OnceLock::new();
+    SYSTEM_TIME_ZONE_JIFF
+        .get_or_init(|| resolve_named_time_zone(&system_time_zone_identifier()))
+        .as_ref()
+}
+
+/// Resolve an IANA zone name to a `jiff` time zone, which (unlike chrono-tz's
+/// materialized transition tables) evaluates a tzif file's POSIX footer rule
+/// for instants past the last tabulated transition (issue #631).
+pub(crate) fn resolve_named_time_zone(tz: &str) -> Option<jiff::tz::TimeZone> {
+    jiff::tz::TimeZone::get(tz).ok()
+}
+
+/// 400 Gregorian years = 146,097 days = exactly 20,871 weeks. Shifting an
+/// epoch time or a civil year by a whole multiple of this cycle preserves
+/// the weekday, leap-year-ness and calendar position exactly, unlike a
+/// nearest-matching-year proxy search (which fails for zones whose rules
+/// don't follow a repeating Gregorian pattern, e.g. Africa/Casablanca's
+/// Ramadan-linked carve-out).
+const GREGORIAN_CYCLE_SECS: i64 = 146_097 * 86_400;
+const GREGORIAN_CYCLE_YEARS: i32 = 400;
+
+/// A year safely inside jiff's representable civil range (-9999..=9999) but
+/// past every zone's tabulated transition data, so a lookup shifted here
+/// exercises the zone's permanent POSIX-footer rule rather than a historical
+/// snapshot that may since have changed (e.g. a zone that abolished DST).
+const EXTREME_RANGE_ANCHOR_YEAR: i32 = 9200;
+
+fn extreme_range_anchor_epoch_secs() -> i64 {
+    day_from_year(EXTREME_RANGE_ANCHOR_YEAR as f64) as i64 * 86_400
+}
+
+/// Map a UTC epoch instant to a `jiff::Timestamp`, shifting by whole 400-year
+/// cycles when it falls outside jiff's ~9999-year range (Temporal's Instant
+/// range is much wider, ~±273,790 years).
+fn named_time_zone_timestamp(epoch_secs: i64, subsec_nanos: u32) -> Option<jiff::Timestamp> {
+    if let Ok(ts) = jiff::Timestamp::new(epoch_secs, subsec_nanos as i32) {
+        return Some(ts);
     }
-    let epoch_ms = t.floor() as i64;
-    let epoch_secs = epoch_ms.div_euclid(1000);
-    let nanos = epoch_ms.rem_euclid(1000) as u32 * 1_000_000;
-    let direct = chrono::DateTime::from_timestamp(epoch_secs, nanos).map(|dt| dt.naive_utc());
-
-    // chrono-tz's generated transition tables include recurring rules through
-    // 2099. Beyond that they retain the final fixed offset, so project future
-    // dates onto the last complete 28-year calendar cycle instead.
-    if direct.as_ref().is_some_and(|dt| dt.year() <= 2099) {
-        return direct;
+    if epoch_secs < 0 {
+        // Before jiff's range, and therefore before every real zone's first
+        // tabulated transition too (the earliest is ~1880s) — there is no
+        // recurring rule to extrapolate here, only the initial/LMT offset a
+        // tzif file's first record would give.
+        return Some(jiff::Timestamp::MIN);
     }
-
-    // A time before chrono's range also precedes every recorded IANA
-    // transition. Its earliest datetime therefore selects the zone's first
-    // historical offset.
-    if t.is_sign_negative() {
-        return Some(chrono::NaiveDateTime::MIN);
-    }
-
-    let year = year_from_time(t);
-    if !(i32::MIN as f64..=i32::MAX as f64).contains(&year) {
-        return None;
-    }
-    let year = year as i32;
-    let year_start_weekday = week_day(time_from_year(year as f64));
-    let days_in_target_year = days_in_year(year as f64);
-    let proxy_year = (2072..=2099).rev().find(|candidate| {
-        days_in_year(*candidate as f64) == days_in_target_year
-            && week_day(time_from_year(*candidate as f64)) == year_start_weekday
-    })?;
-
-    chrono::NaiveDate::from_ymd_opt(
-        proxy_year,
-        month_from_time(t) as u32 + 1,
-        date_from_time(t) as u32,
-    )?
-    .and_hms_milli_opt(
-        hour_from_time(t) as u32,
-        min_from_time(t) as u32,
-        sec_from_time(t) as u32,
-        ms_from_time(t) as u32,
+    let cycles = (epoch_secs - extreme_range_anchor_epoch_secs()).div_euclid(GREGORIAN_CYCLE_SECS);
+    jiff::Timestamp::new(
+        epoch_secs - cycles * GREGORIAN_CYCLE_SECS,
+        subsec_nanos as i32,
     )
+    .ok()
+}
+
+/// Offset in seconds of `tz` at the given UTC epoch instant.
+pub(crate) fn named_time_zone_offset_secs(
+    tz: &jiff::tz::TimeZone,
+    epoch_secs: i64,
+    subsec_nanos: u32,
+) -> i32 {
+    named_time_zone_timestamp(epoch_secs, subsec_nanos)
+        .map(|ts| tz.to_offset_info(ts).offset().seconds())
+        .unwrap_or(0)
+}
+
+fn shift_year_into_jiff_civil_range(year: i32) -> i32 {
+    if (-9999..=9999).contains(&year) {
+        return year;
+    }
+    if year < -9999 {
+        return -9999;
+    }
+    let cycles = (year - EXTREME_RANGE_ANCHOR_YEAR).div_euclid(GREGORIAN_CYCLE_YEARS);
+    year - cycles * GREGORIAN_CYCLE_YEARS
+}
+
+/// Map local civil wall-clock fields to a `jiff::civil::DateTime`, shifting
+/// the year (see [`shift_year_into_jiff_civil_range`]) when out of jiff's
+/// representable range.
+fn named_time_zone_civil_datetime(
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanosecond: u32,
+) -> jiff::civil::DateTime {
+    let shifted_year = shift_year_into_jiff_civil_range(year);
+    jiff::civil::DateTime::new(
+        shifted_year as i16,
+        month as i8,
+        day as i8,
+        hour as i8,
+        minute as i8,
+        second as i8,
+        nanosecond as i32,
+    )
+    .unwrap_or(if year < 0 {
+        jiff::civil::DateTime::MIN
+    } else {
+        jiff::civil::DateTime::MAX
+    })
+}
+
+/// Resolve the possible UTC offset(s) for a local civil wall-clock time in
+/// `tz` — unambiguous, or ambiguous because of a gap (spring-forward) or a
+/// fold (fall-back).
+pub(crate) fn named_time_zone_ambiguous_offset(
+    tz: &jiff::tz::TimeZone,
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanosecond: u32,
+) -> jiff::tz::AmbiguousOffset {
+    let dt = named_time_zone_civil_datetime(year, month, day, hour, minute, second, nanosecond);
+    tz.to_ambiguous_timestamp(dt).offset()
 }
 
 pub(crate) fn named_time_zone_offset_ms(time_zone: chrono_tz::Tz, t: f64) -> Option<f64> {
-    use chrono::{Offset, TimeZone};
-
-    let utc = time_zone_datetime_from_time_value(t)?;
-    Some(
-        time_zone
-            .offset_from_utc_datetime(&utc)
-            .fix()
-            .local_minus_utc() as f64
-            * 1000.0,
-    )
+    if !t.is_finite() {
+        return None;
+    }
+    let tz = resolve_named_time_zone(time_zone.name())?;
+    let epoch_ms = t.floor() as i64;
+    let epoch_secs = epoch_ms.div_euclid(1000);
+    let subsec_nanos = (epoch_ms.rem_euclid(1000) as u32) * 1_000_000;
+    Some(named_time_zone_offset_secs(&tz, epoch_secs, subsec_nanos) as f64 * 1000.0)
 }
 
 pub(crate) fn local_tza(t: f64) -> f64 {
-    named_time_zone_offset_ms(system_time_zone(), t).unwrap_or(0.0)
+    if !t.is_finite() {
+        return 0.0;
+    }
+    let Some(tz) = system_time_zone_jiff() else {
+        return 0.0;
+    };
+    let epoch_ms = t.floor() as i64;
+    let epoch_secs = epoch_ms.div_euclid(1000);
+    let subsec_nanos = (epoch_ms.rem_euclid(1000) as u32) * 1_000_000;
+    named_time_zone_offset_secs(tz, epoch_secs, subsec_nanos) as f64 * 1000.0
 }
 
 pub(crate) fn local_time(t: f64) -> f64 {
@@ -1708,60 +1790,54 @@ pub(crate) fn local_time(t: f64) -> f64 {
 }
 
 pub(crate) fn utc_time(t: f64) -> f64 {
-    use chrono::{MappedLocalTime, Offset, TimeDelta, TimeZone};
+    use jiff::tz::AmbiguousOffset;
 
-    let Some(local) = time_zone_datetime_from_time_value(t) else {
+    if !t.is_finite() {
+        return t;
+    }
+    let Some(tz) = system_time_zone_jiff() else {
         return t;
     };
-    let tz = system_time_zone();
-    let offset = match tz.offset_from_local_datetime(&local) {
-        MappedLocalTime::Single(offset) => offset.fix().local_minus_utc(),
-        MappedLocalTime::Ambiguous(first, second) => {
-            // The larger offset maps the repeated local time to the earlier
-            // instant, matching possibleInstants[0] in UTC.
-            first
-                .fix()
-                .local_minus_utc()
-                .max(second.fix().local_minus_utc())
-        }
-        MappedLocalTime::None => {
-            let mut offset_before = None;
-            for minutes in 1..=2 * 24 * 60 {
-                let Some(probe) = local.checked_sub_signed(TimeDelta::minutes(minutes)) else {
-                    break;
-                };
-                match tz.offset_from_local_datetime(&probe) {
-                    MappedLocalTime::Single(offset) => {
-                        offset_before = Some(offset.fix().local_minus_utc());
-                        break;
-                    }
-                    MappedLocalTime::Ambiguous(first, second) => {
-                        // The smaller offset maps the repeated local time to
-                        // the later instant, the last possible instant before
-                        // a gap.
-                        offset_before = Some(
-                            first
-                                .fix()
-                                .local_minus_utc()
-                                .min(second.fix().local_minus_utc()),
-                        );
-                        break;
-                    }
-                    MappedLocalTime::None => {}
-                }
-            }
-            offset_before.unwrap_or(0)
-        }
+    let year = year_from_time(t);
+    if !(i32::MIN as f64..=i32::MAX as f64).contains(&year) {
+        return t;
+    }
+    let offset = named_time_zone_ambiguous_offset(
+        tz,
+        year as i32,
+        month_from_time(t) as u8 + 1,
+        date_from_time(t) as u8,
+        hour_from_time(t) as u8,
+        min_from_time(t) as u8,
+        sec_from_time(t) as u8,
+        ms_from_time(t) as u32 * 1_000_000,
+    );
+    // Matches jiff's own `AmbiguousTimestamp::compatible()`: for a fold, the
+    // larger ("before") offset selects the earlier instant; for a gap, the
+    // pre-transition ("before") offset shifts the nonexistent local time
+    // forward by the gap duration ("spring forward").
+    let offset_secs = match offset {
+        AmbiguousOffset::Unambiguous { offset } => offset.seconds(),
+        AmbiguousOffset::Gap { before, .. } => before.seconds(),
+        AmbiguousOffset::Fold { before, .. } => before.seconds(),
     };
-    t - offset as f64 * 1000.0
+    t - offset_secs as f64 * 1000.0
 }
 
 fn local_time_zone_abbreviation(t: f64) -> String {
-    use chrono::TimeZone;
-
-    time_zone_datetime_from_time_value(t)
-        .map(|dt| system_time_zone().offset_from_utc_datetime(&dt).to_string())
-        .unwrap_or_else(system_time_zone_identifier)
+    let Some(tz) = system_time_zone_jiff() else {
+        return system_time_zone_identifier();
+    };
+    if !t.is_finite() {
+        return system_time_zone_identifier();
+    }
+    let epoch_ms = t.floor() as i64;
+    let epoch_secs = epoch_ms.div_euclid(1000);
+    let subsec_nanos = (epoch_ms.rem_euclid(1000) as u32) * 1_000_000;
+    match named_time_zone_timestamp(epoch_secs, subsec_nanos) {
+        Some(ts) => tz.to_offset_info(ts).abbreviation().to_string(),
+        None => system_time_zone_identifier(),
+    }
 }
 
 /// Shared final step of every `Date.prototype.set*` method: combine a day

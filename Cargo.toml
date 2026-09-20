@@ -18,6 +18,7 @@ chrono = "0.4"
 ryu-js = "1.0.2"
 iana-time-zone = "0.1"
 chrono-tz = "0.10"
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 icu = { version = "2.0", features = ["experimental"] }
 icu_calendar = { version = "2.0", features = ["unstable"] }
 # ICU4X 2's semantic field sets have one shared text length. ICU4X 1.5 retains

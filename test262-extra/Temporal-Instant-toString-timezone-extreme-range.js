@@ -7,23 +7,25 @@ description: Named zones never silently render as UTC at the extreme end of the 
 features: [Temporal]
 ---*/
 
-// Near the maximum Instant epoch, chrono's representable range is exceeded.
-// The offset must still come from the zone's own data (via 400-year Gregorian
-// cycle shifting), never the bare-0 fallback that renders named zones as UTC.
-// Note: the DST-vs-standard phase this far past the tz transition table
-// depends on POSIX footer evaluation (tracked separately); this test pins
-// only the absence of the silent-UTC fallback.
+// Near the maximum Instant epoch, jiff's representable range (~9999 years) is
+// exceeded. The offset must still come from the zone's own recurring POSIX
+// footer rule (via 400-year Gregorian cycle shifting into a fixed anchor
+// window past every zone's tabulated data), never the bare-0 fallback that
+// renders named zones as UTC.
 const maxInstant = new Temporal.Instant(8640000000000000000000n);
 
-assert.notSameValue(
-  maxInstant.toString({ timeZone: "CET" }).slice(-6),
-  "+00:00",
-  "CET resolves a zone offset at the range edge, not the UTC fallback"
+// +275760-09-13 (UTC) falls in September, which is DST season for both CET
+// (Northern-hemisphere summer) and America/New_York — pinning the exact
+// recurring-rule offset, not just the absence of the silent-UTC fallback.
+assert.sameValue(
+  maxInstant.toString({ timeZone: "CET" }),
+  "+275760-09-13T02:00:00+02:00",
+  "CET resolves its recurring daylight-saving offset at the range edge"
 );
-assert.notSameValue(
-  maxInstant.toString({ timeZone: "America/New_York" }).slice(-6),
-  "+00:00",
-  "America/New_York resolves a zone offset at the range edge, not the UTC fallback"
+assert.sameValue(
+  maxInstant.toString({ timeZone: "America/New_York" }),
+  "+275760-09-12T20:00:00-04:00",
+  "America/New_York resolves its recurring daylight-saving offset at the range edge"
 );
 assert.sameValue(
   maxInstant.toString({ timeZone: "UTC" }),
