@@ -388,6 +388,9 @@ pub(crate) struct AsyncFunctionState {
     pub reject_fn: JsValue,
     pub for_of_stack: Vec<ForOfLoopState>,
     pub module_path: Option<super::ModuleKey>,
+    /// Set while the function-level disposal is parked at an `Await`; the
+    /// resumption feeds its outcome to this cursor instead of the body.
+    pub pending_dispose: Option<super::PendingDispose>,
 }
 
 #[derive(Clone)]

@@ -22,6 +22,8 @@ pub(crate) use helpers::*;
 mod builtins;
 pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
+mod dispose;
+pub(crate) use dispose::{AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, PendingDispose};
 mod env_helpers;
 mod eval;
 mod exec;
@@ -296,7 +298,12 @@ pub(crate) struct Interpreter {
     )>,
     pub(crate) iterator_next_cache: FxHashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
-    pub(crate) pending_async_dispose_await: bool,
+    /// Address of the `await using` block that the running async-function
+    /// executor will finish suspendably (see `parked_block_dispose`).
+    pub(crate) suspendable_dispose_block: Option<usize>,
+    /// The disposal of the block at `suspendable_dispose_block`, parked for the
+    /// executor to step once the state body returns.
+    pub(crate) parked_block_dispose: Option<DisposeCursor>,
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
     module_async_info: FxHashMap<u64, ModuleKey>,
@@ -636,7 +643,8 @@ impl Interpreter {
             )),
             iterator_next_cache: FxHashMap::default(),
             last_identifier_with_base: None,
-            pending_async_dispose_await: false,
+            suspendable_dispose_block: None,
+            parked_block_dispose: None,
             static_module_load_depth: 0,
             module_async_evaluation_count: 0,
             module_async_info: FxHashMap::default(),
@@ -3889,6 +3897,7 @@ impl Interpreter {
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
+                pending_dispose: None,
                 state_machine: sm,
                 func_env: module_env,
                 is_strict: true,

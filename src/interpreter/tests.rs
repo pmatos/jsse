@@ -4370,22 +4370,42 @@ mod node_host_tests {
     }
 
     #[test]
-    fn host_exit_during_dispose_async_await_propagates_abrupt() {
-        // A microtask that calls __host_exit while AsyncDisposableStack's
-        // disposeAsync is awaiting must make the disposeAsync() call return
-        // abruptly, so a sibling in expression position does not run.
-        // (PR #237 review round 7, Codex P2.)
+    fn host_exit_during_dispose_async_await_stops_the_drain() {
+        // disposeAsync() suspends at DisposeResources' Await instead of
+        // draining the queue inline, so the sibling in expression position runs
+        // first; the microtask that calls __host_exit then runs while the
+        // disposal is parked and the exit must still latch.
         let (interp, _c) = run_node_script(
             r#"
             globalThis.after = "no";
+            globalThis.settled = "no";
             Promise.resolve().then(() => { __host_exit(23); });
             const s = new AsyncDisposableStack();
             s.use(null);
-            s.disposeAsync(), (globalThis.after = "yes"); // RHS must NOT run
+            s.disposeAsync().then(() => { globalThis.settled = "yes"; }),
+              (globalThis.after = "yes");
             "#,
         );
         assert_eq!(interp.pending_exit, Some(23));
-        assert_eq!(global_string(&interp, "after"), "no");
+        assert_eq!(global_string(&interp, "after"), "yes");
+        assert_eq!(global_string(&interp, "settled"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_resumed_async_disposal_step_stops_the_drain() {
+        // The exiting disposer runs after the first disposer's Await, i.e. from
+        // a microtask job rather than from the disposeAsync() call itself.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.settled = "no";
+            const s = new AsyncDisposableStack();
+            s.defer(() => { __host_exit(24); });
+            s.defer(async () => {});
+            s.disposeAsync().then(() => { globalThis.settled = "yes"; });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(24));
+        assert_eq!(global_string(&interp, "settled"), "no");
     }
 
     #[test]

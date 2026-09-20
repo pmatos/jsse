@@ -8,10 +8,12 @@ use rustc_hash::FxHashMap;
 
 use crate::types::JsValue;
 
+use super::AsyncDisposal;
 use super::AsyncFunctionState;
 use super::AsyncGenRequest;
 use super::Completion;
 use super::Interpreter;
+use super::PendingDispose;
 
 pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
 
@@ -189,6 +191,7 @@ pub(crate) struct JobScheduler {
     async_gen_queues: FxHashMap<u64, VecDeque<AsyncGenRequest>>,
     async_gen_yield_pending: bool,
     async_function_states: FxHashMap<u64, AsyncFunctionState>,
+    async_disposals: FxHashMap<u64, AsyncDisposal>,
     next_async_function_id: u64,
     /// Count of host-async worker jobs that may later enqueue completions.
     pending_async_jobs: Arc<AtomicUsize>,
@@ -271,8 +274,26 @@ impl JobScheduler {
         self.async_function_states.remove(&id)
     }
 
+    pub(crate) fn park_async_function_dispose(&mut self, id: u64, pending: PendingDispose) {
+        if let Some(state) = self.async_function_states.get_mut(&id) {
+            state.pending_dispose = Some(pending);
+        }
+    }
+
     pub(crate) fn iter_async_function_states(&self) -> impl Iterator<Item = &AsyncFunctionState> {
         self.async_function_states.values()
+    }
+
+    pub(crate) fn insert_async_disposal(&mut self, id: u64, disposal: AsyncDisposal) {
+        self.async_disposals.insert(id, disposal);
+    }
+
+    pub(crate) fn remove_async_disposal(&mut self, id: u64) -> Option<AsyncDisposal> {
+        self.async_disposals.remove(&id)
+    }
+
+    pub(crate) fn iter_async_disposals(&self) -> impl Iterator<Item = &AsyncDisposal> {
+        self.async_disposals.values()
     }
 
     pub(crate) fn pending_async_jobs_handle(&self) -> Arc<AtomicUsize> {

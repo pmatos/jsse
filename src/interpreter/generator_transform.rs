@@ -640,10 +640,10 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         Statement::Block(stmts) => {
             if ctx.is_async && block_has_await_using(stmts) {
                 // Block with `await using` — keep the block intact so it creates
-                // a block_env with its own dispose_stack. The disposal will call
-                // await_value synchronously and set pending_async_dispose_await.
-                // Create a state boundary after the block so the async function
-                // executor can detect the flag and suspend.
+                // a block_env with its own dispose_stack. It stays the last
+                // statement of its state: the async function executor parks the
+                // block's DisposeResources and suspends at its Awaits, then
+                // continues at the state boundary created after the block.
                 let resume_state = if after_state == usize::MAX {
                     ctx.new_state()
                 } else {

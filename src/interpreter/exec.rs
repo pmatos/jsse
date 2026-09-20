@@ -1059,16 +1059,14 @@ impl Interpreter {
             Statement::Expression(expr) => self.eval_expr(expr, env),
             Statement::Block(stmts) => {
                 let block_env = Environment::new(Some(env.clone()));
-                let has_async_dispose = self.in_state_machine
-                    && stmts.iter().any(
-                        |s| matches!(s, Statement::Variable(d) if d.kind == VarKind::AwaitUsing),
-                    );
                 let result = self.exec_statements(stmts, &block_env);
-                let result = self.dispose_resources(&block_env, result);
-                if has_async_dispose && !result.is_abrupt() {
-                    self.pending_async_dispose_await = true;
+                if self.suspendable_dispose_block == Some(stmt as *const Statement as usize)
+                    && let Some(stack) = self.take_dispose_stack(&block_env)
+                {
+                    self.parked_block_dispose = Some(DisposeCursor::new(stack, result));
+                    return Completion::Empty;
                 }
-                result
+                self.dispose_resources(&block_env, result)
             }
             Statement::Variable(decl) => {
                 let r = self.exec_variable_declaration(decl, env);
@@ -2631,7 +2629,12 @@ impl Interpreter {
                 let obj_id = o.id;
                 match self.get_object_property(obj_id, key, value) {
                     Completion::Normal(v) if !(v).is_nullish() => {
-                        method = v;
+                        if !self.is_callable(&v) {
+                            return Err(
+                                self.create_type_error("[Symbol.dispose] is not a function")
+                            );
+                        }
+                        method = self.async_from_sync_dispose_method(v);
                     }
                     Completion::Throw(e) => return Err(e),
                     _ => {}
@@ -2664,64 +2667,9 @@ impl Interpreter {
     }
 
     pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
-        // A `Completion::Exit` (issue #242) makes the exit immediate: skip
-        // running `Symbol.dispose`/`Symbol.asyncDispose` (user code that could
-        // re-enter `__host_exit` or overwrite the code), matching Node's
-        // `process.exit`, and propagate the exit unchanged.
-        if matches!(completion, Completion::Exit(_)) {
-            return completion;
-        }
-        let stack = env.borrow_mut().dispose_stack.take();
-        let Some(mut stack) = stack else {
-            return completion;
-        };
-        if stack.is_empty() {
-            return completion;
-        }
-
-        stack.reverse();
-        let mut current_error: Option<JsValue> = match &completion {
-            Completion::Throw(e) => Some(e.clone()),
-            _ => None,
-        };
-        let _had_error = current_error.is_some();
-
-        for resource in &stack {
-            // §10.4.4.3 Dispose: If method is undefined, result is undefined; else Call(method, V)
-            let result = if (resource.dispose_method).is_undefined() {
-                Completion::Normal(JsValue::UNDEFINED)
-            } else {
-                self.call_function(&resource.dispose_method, &resource.value, &[])
-            };
-            // A disposer that called `__host_exit` (issue #242) makes the exit
-            // immediate: propagate the `Completion::Exit` before running the
-            // remaining disposers or `wrap_suppressed_error` (a user-replaceable
-            // `SuppressedError` constructor — arbitrary JS after the exit).
-            if let Completion::Exit(code) = result {
-                return Completion::Exit(code);
-            }
-            match result {
-                Completion::Normal(v) if resource.hint == DisposeHint::Async => {
-                    let awaited = self.await_value(&v);
-                    // Awaiting an async disposer may likewise have exited.
-                    if let Completion::Exit(code) = awaited {
-                        return Completion::Exit(code);
-                    }
-                    if let Completion::Throw(e) = awaited {
-                        current_error = Some(self.wrap_suppressed_error(e, current_error));
-                    }
-                }
-                Completion::Throw(e) => {
-                    current_error = Some(self.wrap_suppressed_error(e, current_error));
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(err) = current_error {
-            Completion::Throw(err)
-        } else {
-            completion
+        match self.take_dispose_stack(env) {
+            Some(stack) => self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion)),
+            None => completion,
         }
     }
 
