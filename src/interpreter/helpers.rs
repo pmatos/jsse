@@ -1674,7 +1674,10 @@ fn extreme_range_anchor_epoch_secs() -> i64 {
 /// Map a UTC epoch instant to a `jiff::Timestamp`, shifting by whole 400-year
 /// cycles when it falls outside jiff's ~9999-year range (Temporal's Instant
 /// range is much wider, ~±273,790 years).
-fn named_time_zone_timestamp(epoch_secs: i64, subsec_nanos: u32) -> Option<jiff::Timestamp> {
+pub(crate) fn named_time_zone_timestamp(
+    epoch_secs: i64,
+    subsec_nanos: u32,
+) -> Option<jiff::Timestamp> {
     if let Ok(ts) = jiff::Timestamp::new(epoch_secs, subsec_nanos as i32) {
         return Some(ts);
     }
@@ -1759,17 +1762,6 @@ pub(crate) fn named_time_zone_ambiguous_offset(
 ) -> jiff::tz::AmbiguousOffset {
     let dt = named_time_zone_civil_datetime(year, month, day, hour, minute, second, nanosecond);
     tz.to_ambiguous_timestamp(dt).offset()
-}
-
-pub(crate) fn named_time_zone_offset_ms(time_zone: chrono_tz::Tz, t: f64) -> Option<f64> {
-    if !t.is_finite() {
-        return None;
-    }
-    let tz = resolve_named_time_zone(time_zone.name())?;
-    let epoch_ms = t.floor() as i64;
-    let epoch_secs = epoch_ms.div_euclid(1000);
-    let subsec_nanos = (epoch_ms.rem_euclid(1000) as u32) * 1_000_000;
-    Some(named_time_zone_offset_secs(&tz, epoch_secs, subsec_nanos) as f64 * 1000.0)
 }
 
 pub(crate) fn local_tza(t: f64) -> f64 {
