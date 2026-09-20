@@ -406,6 +406,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// TopLevelVarDeclaredNames of a StatementList: unlike the block-level
+    /// VarDeclaredNames, function declarations directly in the list (also
+    /// under labels) count as var-declared.
+    pub(super) fn collect_top_level_var_declared_names(stmt: &Statement, names: &mut Vec<String>) {
+        match stmt {
+            Statement::FunctionDeclaration(f) => names.push(f.name.clone()),
+            Statement::Labeled(_, inner) => {
+                Self::collect_top_level_var_declared_names(inner, names)
+            }
+            _ => Self::collect_var_declared_names(stmt, names),
+        }
+    }
+
     fn check_for_in_of_early_errors(
         kind: VarKind,
         decls: &[VariableDeclarator],

@@ -5917,40 +5917,29 @@ impl Interpreter {
                 return result;
             }
         }
-        let desc = if func_val.is_undefined() {
-            "undefined is not a function".to_string()
-        } else if func_val.is_null() {
-            "null is not a function".to_string()
-        } else if let Some(b) = func_val.as_boolean() {
-            format!("{} is not a function", b)
-        } else if let Some(n) = func_val.as_number() {
-            format!("{} is not a function", n)
-        } else if let Some(s) = func_val.as_string() {
-            let preview: String = s.to_rust_string().chars().take(30).collect();
-            format!("\"{}\" is not a function", preview)
-        } else if let Some(id) = func_val.as_object_id() {
-            if let Some(obj) = self.get_object_cell(id) {
-                let class = obj.borrow().class_name.clone();
-                let has_callable = obj.borrow().callable.is_some();
-                let keys: Vec<JsPropertyKey> = obj
-                    .borrow()
-                    .property_order
-                    .iter()
-                    .take(10)
-                    .cloned()
-                    .collect();
-                format!(
-                    "object (class={}, callable={}, id={}, keys={:?}) is not a function",
-                    class, has_callable, id, keys
-                )
-            } else {
-                format!("object (id={}, GC'd?) is not a function", id)
-            }
-        } else {
-            "is not a function".to_string()
-        };
+        let desc = format!("{} is not a function", self.describe_non_callable(func_val));
         let err = self.create_type_error(&desc);
         Completion::Throw(err)
+    }
+
+    /// Names a non-callable value for a "... is not a function" message.
+    /// Never runs user code (no ToString, no getters) and never exposes
+    /// engine-internal object state.
+    fn describe_non_callable(&self, val: &JsValue) -> String {
+        if let Some(s) = val.as_string() {
+            let preview: String = char::decode_utf16(s.code_units.iter().copied())
+                .take(30)
+                .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect();
+            format!("\"{preview}\"")
+        } else if let Some(id) = val.as_object_id() {
+            match self.get_object_cell(id) {
+                Some(obj) => format!("#<{}>", obj.borrow().class_name),
+                None => "#<Object>".to_string(),
+            }
+        } else {
+            val.to_string()
+        }
     }
 
     fn eval_spread_args(
@@ -6587,6 +6576,11 @@ impl Interpreter {
                         None => String::new(),
                     };
                     drop(b);
+                    let name = if name.is_empty() {
+                        self.describe_non_callable(&callee_val)
+                    } else {
+                        name
+                    };
                     self.gc_unroot_frame(gc_frame);
                     return Completion::Throw(
                         self.create_type_error(&format!("{} is not a constructor", name)),
@@ -6595,8 +6589,9 @@ impl Interpreter {
             }
         } else {
             self.gc_unroot_frame(gc_frame);
+            let desc = self.describe_non_callable(&callee_val);
             return Completion::Throw(
-                self.create_type_error(&format!("{:?} is not a constructor", callee_val)),
+                self.create_type_error(&format!("{desc} is not a constructor")),
             );
         }
         // Proxy construct trap

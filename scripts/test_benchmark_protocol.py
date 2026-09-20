@@ -2,6 +2,8 @@ import importlib.util
 import json
 import math
 import os
+import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -461,6 +463,69 @@ class RunnerCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("requires --no-idle-gate", result.stderr)
+
+
+class HarnessNameHygieneTests(unittest.TestCase):
+    """The generated harness shares one Script with the benchmark sources.
+
+    A top-level `const benchmark` next to a benchmark's own top-level
+    `function benchmark()` is an early SyntaxError per ECMAScript 16.1.1, so
+    the harness must not introduce any top-level binding (issue #652).
+    """
+
+    TOP_LEVEL_DECLARATION = r"^(?:const|let|var|class|function|async\s+function)\b"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = load_runner_module()
+
+    def test_harnesses_declare_nothing_at_top_level(self):
+        for name, harness in (
+            ("sync", self.runner.build_sync_harness(1, False, 3)),
+            ("async", self.runner.build_async_harness(1, False, 3)),
+        ):
+            with self.subTest(harness=name):
+                self.assertIsNone(
+                    re.search(self.TOP_LEVEL_DECLARATION, harness, re.M),
+                    harness,
+                )
+
+    def test_sync_harness_runs_beside_colliding_benchmark_names(self):
+        engine = REPO_ROOT / "target" / "release" / "jsse"
+        if engine.exists():
+            command = [str(engine)]
+        elif shutil.which("node"):
+            command = ["node"]
+        else:
+            self.skipTest("neither target/release/jsse nor node is available")
+
+        program = (
+            self.runner.build_polyfill_preamble()
+            + textwrap.dedent(
+                """
+                var __iterations = "workload";
+                function __results() {}
+                function benchmark() { return 1; }
+                var Benchmark = class {
+                    runIteration() { benchmark(); }
+                }
+                """
+            )
+            + self.runner.build_sync_harness(1, False, 3)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "collision.js"
+            script.write_text(program, encoding="utf-8")
+            result = subprocess.run(
+                command + [str(script)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(len(payload["results"]), 1)
 
 
 if __name__ == "__main__":

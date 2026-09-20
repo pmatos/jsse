@@ -911,7 +911,7 @@ impl<'a> Parser<'a> {
         let mut in_directive_prologue = true;
         let mut body_is_strict = false;
         let mut prologue_had_legacy_octal = false;
-        let mut lexical_names: Vec<String> = Vec::new();
+        let mut lexical_names: HashSet<String> = HashSet::new();
 
         while self.current != Token::Eof {
             let stmt = self.parse_statement_or_declaration()?;
@@ -941,23 +941,21 @@ impl<'a> Parser<'a> {
             // (function declarations are var-scoped at script level)
             match &stmt {
                 Statement::Variable(decl) if decl.kind != VarKind::Var => {
-                    let new_names = Self::bound_names_from_decl(decl);
-                    for name in &new_names {
-                        if lexical_names.contains(name) {
+                    for name in Self::bound_names_from_decl(decl) {
+                        if lexical_names.contains(&name) {
                             return Err(self
                                 .error(format!("Identifier '{name}' has already been declared")));
                         }
+                        lexical_names.insert(name);
                     }
-                    lexical_names.extend(new_names);
                 }
                 Statement::ClassDeclaration(cls) => {
                     let name = &cls.name;
-                    if lexical_names.contains(name) {
+                    if !lexical_names.insert(name.clone()) {
                         return Err(
                             self.error(format!("Identifier '{name}' has already been declared"))
                         );
                     }
-                    lexical_names.push(name.clone());
                 }
                 _ => {}
             }
@@ -969,7 +967,7 @@ impl<'a> Parser<'a> {
         if !lexical_names.is_empty() {
             let mut var_names = Vec::new();
             for stmt in &body {
-                Self::collect_var_declared_names(stmt, &mut var_names);
+                Self::collect_top_level_var_declared_names(stmt, &mut var_names);
             }
             for name in &var_names {
                 if lexical_names.contains(name) {
@@ -1695,5 +1693,16 @@ mod tests {
             parse_on_engine_stack(&source).is_ok(),
             "64-deep array nesting should parse"
         );
+    }
+
+    /// §16.1.1: a script's LexicallyDeclaredNames must not occur in its
+    /// VarDeclaredNames, and at the top level of a script function
+    /// declarations are var-declared (TopLevelVarDeclaredNames). The full
+    /// matrix lives in `test262-extra/script-toplevel-*.js`.
+    #[test]
+    fn script_top_level_function_and_lexical_redeclaration_is_an_early_error() {
+        let src = "function benchmark(){} class B{} const benchmark = new B();";
+        let err = parse_on_engine_stack(src).expect_err(src);
+        assert!(err.message.contains("has already been declared"), "{err:?}");
     }
 }

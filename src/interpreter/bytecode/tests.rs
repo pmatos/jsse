@@ -616,6 +616,13 @@ fn end_to_end_compound_computed_write_undefined_base_message_matches_tree_walker
 }
 
 #[test]
+fn end_to_end_call_non_callable_object_message_matches_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(o){ var f = o.x; return f(); })({x: {}}); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
 fn compound_computed_assignment_coerces_key_exactly_once() {
     // Pins both halves of sec-getvalue's ordering: the base-nullish check runs
     // before ToPropertyKey's side effect (the null/undefined-base tests above),

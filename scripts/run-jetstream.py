@@ -519,26 +519,33 @@ def build_sync_harness(iterations, deterministic_random, worst_case_count):
     reset_code = "Math.random.__resetSeed();" if deterministic_random else ""
     return f"""
 // --- JetStream harness ---
-const __iterations = {iterations};
-const __results = [];
-const benchmark = new Benchmark();
-if (benchmark.init) benchmark.init();
-for (let i = 0; i < __iterations; i++) {{
-    if (benchmark.prepareForNextIteration) benchmark.prepareForNextIteration();
-    {reset_code}
-    const start = performance.now();
-    benchmark.runIteration(i);
-    const end = performance.now();
-    __results.push(Math.max(1, end - start));
-}}
-if (benchmark.validate) benchmark.validate(__iterations);
+// Wrapped so no binding lands in the script scope shared with the benchmark
+// sources: a top-level `const benchmark` beside a benchmark's own
+// `function benchmark()` is an early SyntaxError (ECMAScript 16.1.1). The
+// leading `;` keeps a benchmark source that ends without one from absorbing
+// the `(` as a call.
+;(() => {{
+    const __iterations = {iterations};
+    const __results = [];
+    const benchmark = new Benchmark();
+    if (benchmark.init) benchmark.init();
+    for (let i = 0; i < __iterations; i++) {{
+        if (benchmark.prepareForNextIteration) benchmark.prepareForNextIteration();
+        {reset_code}
+        const start = performance.now();
+        benchmark.runIteration(i);
+        const end = performance.now();
+        __results.push(Math.max(1, end - start));
+    }}
+    if (benchmark.validate) benchmark.validate(__iterations);
 
-// Output results as JSON
-print(JSON.stringify({{
-    results: __results,
-    iterations: __iterations,
-    worstCaseCount: {worst_case_count}
-}}));
+    // Output results as JSON
+    print(JSON.stringify({{
+        results: __results,
+        iterations: __iterations,
+        worstCaseCount: {worst_case_count}
+    }}));
+}})();
 """
 
 
@@ -546,7 +553,7 @@ def build_async_harness(iterations, deterministic_random, worst_case_count):
     reset_code = "Math.random.__resetSeed();" if deterministic_random else ""
     return f"""
 // --- JetStream async harness ---
-(async () => {{
+;(async () => {{
     const __iterations = {iterations};
     const __results = [];
     const benchmark = new Benchmark();
