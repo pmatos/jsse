@@ -471,8 +471,7 @@ impl Interpreter {
     /// Save the iterators this activation left open at a yield so that
     /// `return()` can close them.
     fn stash_pending_iter_close(&mut self, generator_id: u64) {
-        let start = self.iter_close_base.min(self.pending_iter_close.len());
-        let pending: Vec<JsValue> = self.pending_iter_close.drain(start..).collect();
+        let pending = self.pending_iter_close.split_off(self.iter_close_base);
         if pending.is_empty() {
             self.generator_inline_iters.remove(&generator_id);
         } else {
@@ -1768,7 +1767,6 @@ impl Interpreter {
                                     // for-of with expression LHS is handled via assignment
                                 }
                             }
-                            // Add iterator to pending_iter_close so generator.return() can close it
                             self.push_pending_iter_close(iterator);
                             current_id = *body_state;
                         }

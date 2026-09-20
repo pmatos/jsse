@@ -1383,11 +1383,9 @@ impl Interpreter {
     /// of its own for-of loops already tracks it.
     pub(crate) fn push_pending_iter_close(&mut self, iterator: JsValue) {
         let id = iterator.as_object_id();
-        let already_pending = id.is_some()
-            && self
-                .pending_iter_close
-                .get(self.iter_close_base..)
-                .is_some_and(|own| own.iter().any(|v| v.as_object_id() == id));
+        let already_pending = self.pending_iter_close[self.iter_close_base..]
+            .iter()
+            .any(|v| v.as_object_id() == id);
         if !already_pending {
             self.pending_iter_close.push(iterator);
         }
