@@ -2033,7 +2033,52 @@ pub(crate) fn parse_date_string(s: &str) -> f64 {
         return t;
     }
 
+    // Implementation-defined legacy formats: "08/04/2011"
+    if let Some(t) = parse_legacy_date(s) {
+        return t;
+    }
+
     f64::NAN
+}
+
+fn parse_legacy_date(s: &str) -> Option<f64> {
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b' ' | b','))
+    {
+        return None;
+    }
+    parse_legacy_numeric_slash(s)
+}
+
+fn parse_legacy_digits(token: &str) -> Option<u32> {
+    if token.is_empty() || token.len() > 6 || !token.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    token.parse().ok()
+}
+
+fn parse_legacy_numeric_slash(s: &str) -> Option<f64> {
+    let mut parts = s.split('/');
+    let (first, second, third) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let month = parse_legacy_digits(first)?;
+    let day = parse_legacy_digits(second)?;
+    if third.len() < 3 {
+        return None;
+    }
+    let year = parse_legacy_digits(third)?;
+    make_legacy_local_date(year, month, day)
+}
+
+fn make_legacy_local_date(year: u32, month: u32, day: u32) -> Option<f64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let d = make_day(year as f64, (month - 1) as f64, day as f64);
+    Some(make_date_clipped(d, 0.0, true))
 }
 
 fn parse_iso_date(s: &str) -> Option<f64> {
