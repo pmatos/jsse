@@ -1370,6 +1370,60 @@ impl Interpreter {
         self.define_to_string_tag(str_iter_proto_id, "String Iterator");
 
         self.realm_mut().string_iterator_prototype = Some(str_iter_proto_id);
+
+        // %ForInIteratorPrototype% (§14.7.5.10). Never reachable from script.
+        // Its [[Prototype]] is null so that IteratorClose's GetMethod(iterator,
+        // "return") always finds nothing: for-in never closes its enumerator.
+        let for_in_proto_id = self.alloc_object(JsObjectData::new());
+        self.define_method(for_in_proto_id, "next", 0, |interp, this, _args| {
+            let Some(this_id) = this.as_object_id() else {
+                return Completion::Throw(interp.create_type_error("next called on non-object"));
+            };
+            let Some(obj) = interp.get_object(this_id) else {
+                return Completion::Throw(interp.create_type_error("next called on non-object"));
+            };
+            loop {
+                let step = {
+                    let mut b = obj.borrow_mut();
+                    match &mut b.kind {
+                        ObjectKind::Iterator(IteratorState::ForInEnumerator {
+                            obj_id,
+                            keys,
+                            index,
+                        }) => match keys.get(*index) {
+                            Some(key) => {
+                                let key = key.clone();
+                                *index += 1;
+                                obj_id.map(|id| (id, key))
+                            }
+                            None => None,
+                        },
+                        _ => {
+                            drop(b);
+                            return Completion::Throw(
+                                interp.create_type_error("next called on non-for-in iterator"),
+                            );
+                        }
+                    }
+                };
+                let Some((target_id, key)) = step else {
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                    );
+                };
+                match interp.proxy_has_property(target_id, &key) {
+                    Ok(true) => {
+                        return Completion::Normal(interp.create_iter_result_object(
+                            JsValue::string(key.to_js_string()),
+                            false,
+                        ));
+                    }
+                    Ok(false) => {}
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
+        });
+        self.realm_mut().for_in_iterator_prototype = Some(for_in_proto_id);
     }
 
     fn ensure_iterator_helper_prototype(&mut self) {
@@ -4013,6 +4067,52 @@ impl Interpreter {
             });
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
+    }
+
+    /// The iterator a state-machine `ForOfInit` steps: the for-in enumerator
+    /// for `for (… in …)`, otherwise `GetIterator(value, ~sync~)`.
+    pub(crate) fn for_of_init_iterator(
+        &mut self,
+        value: &JsValue,
+        is_for_in: bool,
+    ) -> Result<JsValue, JsValue> {
+        if is_for_in {
+            self.for_in_head_iterator(value)
+        } else {
+            self.get_iterator(value)
+        }
+    }
+
+    /// §14.7.5.7 ForIn/OfHeadEvaluation, `~enumerate~` branch, from the point
+    /// the RHS value is known: a nullish RHS yields an already-exhausted
+    /// enumerator (the spec's `~break~` completion, observably identical),
+    /// anything else is `ToObject`-ed and enumerated.
+    pub(crate) fn for_in_head_iterator(&mut self, value: &JsValue) -> Result<JsValue, JsValue> {
+        let (obj_id, keys) = if value.is_nullish() {
+            (None, Vec::new())
+        } else {
+            let obj = match self.to_object(value) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(self.create_type_error("Cannot convert value to object")),
+            };
+            let Some(id) = obj.as_object_id() else {
+                return Err(self.create_type_error("Cannot convert value to object"));
+            };
+            self.gc_root_value(&obj);
+            let keys = self.for_in_enumerable_keys(id);
+            self.gc_unroot_value(&obj);
+            (Some(id), keys?)
+        };
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype_id = self.realm().for_in_iterator_prototype;
+        obj_data.class_name = "For-In Iterator".to_string();
+        obj_data.kind = ObjectKind::Iterator(IteratorState::ForInEnumerator {
+            obj_id,
+            keys,
+            index: 0,
+        });
+        Ok(JsValue::object(self.alloc_object(obj_data)))
     }
 
     pub(crate) fn create_typed_array_iterator(

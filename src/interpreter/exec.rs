@@ -2005,24 +2005,9 @@ impl Interpreter {
                 .map(|id| crate::types::JsObject { id })
             {
                 let obj_id = o.id;
-                let keys = {
-                    let needs_proxy_path = self
-                        .get_object_cell(obj_id)
-                        .map(|obj| {
-                            let b = obj.borrow();
-                            b.is_proxy() || b.module_namespace().is_some()
-                        })
-                        .unwrap_or(false);
-                    if needs_proxy_path {
-                        match self.proxy_enumerable_keys_with_proto(obj_id) {
-                            Ok(k) => k,
-                            Err(e) => break 'unroot Completion::Throw(e),
-                        }
-                    } else if self.get_object_cell(obj_id).is_some() {
-                        self.enumerable_keys_with_proto_on_id(obj_id)
-                    } else {
-                        break 'unroot Completion::Normal(JsValue::UNDEFINED);
-                    }
+                let keys = match self.for_in_enumerable_keys(obj_id) {
+                    Ok(k) => k,
+                    Err(e) => break 'unroot Completion::Throw(e),
                 };
                 for key in keys {
                     self.gc_root_value(&v);

@@ -451,6 +451,7 @@ pub(crate) struct Realm {
     pub(crate) regexp_string_iterator_prototype: Option<u64>,
     pub(crate) iterator_prototype: Option<u64>,
     pub(crate) array_iterator_prototype: Option<u64>,
+    pub(crate) for_in_iterator_prototype: Option<u64>,
     pub(crate) string_iterator_prototype: Option<u64>,
     pub(crate) map_prototype: Option<u64>,
     pub(crate) map_iterator_prototype: Option<u64>,
@@ -555,6 +556,7 @@ impl Realm {
             regexp_string_iterator_prototype: None,
             iterator_prototype: None,
             array_iterator_prototype: None,
+            for_in_iterator_prototype: None,
             string_iterator_prototype: None,
             map_prototype: None,
             map_iterator_prototype: None,
@@ -657,6 +659,7 @@ impl Realm {
             self.regexp_string_iterator_prototype,
             self.iterator_prototype,
             self.array_iterator_prototype,
+            self.for_in_iterator_prototype,
             self.string_iterator_prototype,
             self.map_prototype,
             self.map_iterator_prototype,
@@ -1476,6 +1479,14 @@ pub(crate) enum IteratorState {
         input: Rc<Vec<u16>>,
         position: usize,
         done: bool,
+    },
+    /// §14.7.5.10 the internal iterator `EnumerateObjectProperties` yields for
+    /// for-in. It is never reachable from script; the state-machine drivers
+    /// step it through `%ForInIteratorPrototype%.next`.
+    ForInEnumerator {
+        obj_id: Option<u64>,
+        keys: Vec<JsPropertyKey>,
+        index: usize,
     },
 }
 
