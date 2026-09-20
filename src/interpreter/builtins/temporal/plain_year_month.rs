@@ -1106,6 +1106,11 @@ impl Interpreter {
                     return Completion::Throw(interp.create_type_error("day is required"));
                 }
                 let d = match to_integer_with_truncation(interp, &d_val) {
+                    Ok(n) if n < 1.0 => {
+                        return Completion::Throw(
+                            interp.create_range_error("day must be a positive integer"),
+                        );
+                    }
                     Ok(n) => n as u8,
                     Err(c) => return c,
                 };
@@ -1120,7 +1125,7 @@ impl Interpreter {
                             None,
                             d,
                             &cal,
-                            "reject",
+                            "constrain",
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 if !super::iso_date_within_limits(iso_y, iso_m, iso_d) {
