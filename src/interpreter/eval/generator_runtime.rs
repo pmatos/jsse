@@ -1335,6 +1335,9 @@ impl Interpreter {
                     let cond_val = match self.eval_expr(condition, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            let e = route_exception!(e);
+                            // §27.5.3.3: DisposeResources when generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::completed_state_machine_generator(
@@ -1343,7 +1346,8 @@ impl Interpreter {
                                         is_strict,
                                     ),
                                 );
-                            return Completion::Throw(e);
+                            self.generator_inline_iters.remove(&o.id);
+                            return disp;
                         }
                         other => return other,
                     };
@@ -4769,11 +4773,13 @@ impl Interpreter {
                         let ret_val = match result {
                             Completion::Normal(v) => v,
                             Completion::Throw(err) => {
+                                let err = route_exception!(err);
                                 let disp =
                                     self.dispose_resources(&func_env, Completion::Throw(err));
                                 let err = match disp {
                                     Completion::Throw(e) => e,
-                                    _ => unreachable!(),
+                                    Completion::Exit(code) => return Completion::Exit(code),
+                                    _ => unreachable!("disposing a throw must stay abrupt"),
                                 };
                                 self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
@@ -4787,13 +4793,24 @@ impl Interpreter {
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
                                 return Completion::Normal(promise);
                             }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::UNDEFINED
-                                }
+                            exit @ Completion::Exit(_) => {
+                                self.discard_generator_for_of_loops_on_exit(
+                                    o.id,
+                                    &mut for_of_stack,
+                                    &func_env,
+                                );
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::completed_state_machine_async_generator(
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                        ),
+                                    );
+                                return exit;
                             }
+                            Completion::Yield(yv) => yv,
+                            _ => JsValue::UNDEFINED,
                         };
 
                         if current_try_stack.iter().any(|try_info| {
@@ -5172,6 +5189,14 @@ impl Interpreter {
                     let cond_val = match self.eval_expr(condition, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            let e = route_exception!(e);
+                            // §27.6.3.3: DisposeResources when async generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            let e = match disp {
+                                Completion::Throw(e) => e,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -5185,13 +5210,24 @@ impl Interpreter {
                             self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::UNDEFINED
-                            }
+                        exit @ Completion::Exit(_) => {
+                            self.discard_generator_for_of_loops_on_exit(
+                                o.id,
+                                &mut for_of_stack,
+                                &func_env,
+                            );
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::completed_state_machine_async_generator(
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                    ),
+                                );
+                            return exit;
                         }
+                        Completion::Yield(yv) => yv,
+                        _ => JsValue::UNDEFINED,
                     };
                     current_id = if self.to_boolean_val(&cond_val) {
                         *true_state
