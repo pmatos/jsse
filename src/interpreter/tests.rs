@@ -155,6 +155,36 @@ fn function_environment_pool_rejects_escaped_storage() {
 }
 
 #[test]
+fn generator_activations_leave_no_pending_iterators_behind() {
+    let interp = run_script(
+        r#"
+        function* inner() { for (const x of [1, 2, 3]) yield x; }
+        function* thrower() {
+            for (const x of inner()) { yield x; throw new Error("boom"); }
+        }
+        function* outer() {
+            for (const x of inner()) {
+                const h = inner();
+                h.next();
+                h.return();
+                const t = thrower();
+                t.next();
+                try { t.next(); } catch (e) {}
+                yield x;
+            }
+        }
+        globalThis.seen = [...outer()].length;
+        const o = outer();
+        o.next();
+        o.return();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "seen"), 3.0);
+    assert!(interp.pending_iter_close.is_empty());
+    assert_eq!(interp.iter_close_base, 0);
+}
+
+#[test]
 fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
     let interp = run_script(
         r#"
