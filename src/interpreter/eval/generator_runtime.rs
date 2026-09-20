@@ -462,9 +462,21 @@ impl Interpreter {
         {
             self.current_realm_id = realm_id;
         }
-        let result = self.generator_next_state_machine_impl(this, sent_value);
+        let result =
+            self.with_iter_close_scope(|s| s.generator_next_state_machine_impl(this, sent_value));
         self.current_realm_id = caller_realm;
         result
+    }
+
+    /// Save the iterators this activation left open at a yield so that
+    /// `return()` can close them.
+    fn stash_pending_iter_close(&mut self, generator_id: u64) {
+        let pending = self.pending_iter_close.split_off(self.iter_close_base);
+        if pending.is_empty() {
+            self.generator_inline_iters.remove(&generator_id);
+        } else {
+            self.generator_inline_iters.insert(generator_id, pending);
+        }
     }
 
     fn generator_next_state_machine_impl(
@@ -779,13 +791,7 @@ impl Interpreter {
                 self.destructuring_yield = false;
                 let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
                 let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
-                // Save any iterators that need IteratorClose if generator.return() is called
-                let pending = std::mem::take(&mut self.pending_iter_close);
-                if pending.is_empty() {
-                    self.generator_inline_iters.remove(&o.id);
-                } else {
-                    self.generator_inline_iters.insert(o.id, pending);
-                }
+                self.stash_pending_iter_close(o.id);
                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineGenerator {
@@ -1160,13 +1166,7 @@ impl Interpreter {
                         }
                     }
 
-                    // Save any iterators that need IteratorClose if generator.return() is called
-                    let pending = std::mem::take(&mut self.pending_iter_close);
-                    if pending.is_empty() {
-                        self.generator_inline_iters.remove(&o.id);
-                    } else {
-                        self.generator_inline_iters.insert(o.id, pending);
-                    }
+                    self.stash_pending_iter_close(o.id);
                     self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
@@ -1652,22 +1652,7 @@ impl Interpreter {
                     };
                     match self.iterator_complete(&step_result) {
                         Ok(true) => {
-                            self.gc_unroot_value(&iterator);
-                            if let Some(o) = iterator
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let Some(ov) =
-                                        (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                    {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
+                            self.unroot_for_of_iterator(&iterator);
                             for_of_stack.remove(loop_pos);
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
@@ -1782,27 +1767,7 @@ impl Interpreter {
                                     // for-of with expression LHS is handled via assignment
                                 }
                             }
-                            // Add iterator to pending_iter_close so generator.return() can close it
-                            let already_pending = if let Some(o) = iterator
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let id = o.id;
-                                self.pending_iter_close.iter().any(|v| {
-                                    if let Some(ov) =
-                                        (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                    {
-                                        ov.id == id
-                                    } else {
-                                        false
-                                    }
-                                })
-                            } else {
-                                false
-                            };
-                            if !already_pending {
-                                self.pending_iter_close.push(iterator);
-                            }
+                            self.push_pending_iter_close(iterator);
                             current_id = *body_state;
                         }
                         Err(e) => {
@@ -3287,9 +3252,11 @@ impl Interpreter {
         {
             self.current_realm_id = realm_id;
         }
-        let result = self.async_generator_next_state_machine_impl(
-            this, sent_value, promise, resolve_fn, reject_fn,
-        );
+        let result = self.with_iter_close_scope(|s| {
+            s.async_generator_next_state_machine_impl(
+                this, sent_value, promise, resolve_fn, reject_fn,
+            )
+        });
         self.current_realm_id = caller_realm;
         result
     }
@@ -4291,12 +4258,7 @@ impl Interpreter {
                     }
                     _ => yield_val,
                 };
-                let pending = std::mem::take(&mut self.pending_iter_close);
-                if pending.is_empty() {
-                    self.generator_inline_iters.remove(&o.id);
-                } else {
-                    self.generator_inline_iters.insert(o.id, pending);
-                }
+                self.stash_pending_iter_close(o.id);
                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
                 // Any Completion::Yield from exec_statements is an inline yield:
                 // it came from a loop body or complex control flow that isn't
@@ -4636,12 +4598,7 @@ impl Interpreter {
                     let wrapped_state = self.get_promise_state(wrapped_id);
 
                     if matches!(wrapped_state, Some(PromiseState::Pending)) {
-                        let pending = std::mem::take(&mut self.pending_iter_close);
-                        if pending.is_empty() {
-                            self.generator_inline_iters.remove(&o.id);
-                        } else {
-                            self.generator_inline_iters.insert(o.id, pending);
-                        }
+                        self.stash_pending_iter_close(o.id);
                         // Suspend generator and register callbacks for when promise resolves
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineAsyncGenerator {
@@ -4761,12 +4718,7 @@ impl Interpreter {
                         yield_val
                     };
 
-                    let pending = std::mem::take(&mut self.pending_iter_close);
-                    if pending.is_empty() {
-                        self.generator_inline_iters.remove(&o.id);
-                    } else {
-                        self.generator_inline_iters.insert(o.id, pending);
-                    }
+                    self.stash_pending_iter_close(o.id);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -5625,22 +5577,7 @@ impl Interpreter {
                     };
                     match self.iterator_complete(&step_result) {
                         Ok(true) => {
-                            self.gc_unroot_value(&iterator);
-                            if let Some(o) = iterator
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let id = o.id;
-                                self.pending_iter_close.retain(|v| {
-                                    if let Some(ov) =
-                                        (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                    {
-                                        ov.id != id
-                                    } else {
-                                        true
-                                    }
-                                });
-                            }
+                            self.unroot_for_of_iterator(&iterator);
                             for_of_stack.remove(loop_pos);
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
@@ -5774,26 +5711,7 @@ impl Interpreter {
                                 }
                                 ForInOfLeft::Expression(_) => {}
                             }
-                            let already_pending = if let Some(o) = iterator
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let id = o.id;
-                                self.pending_iter_close.iter().any(|v| {
-                                    if let Some(ov) =
-                                        (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                    {
-                                        ov.id == id
-                                    } else {
-                                        false
-                                    }
-                                })
-                            } else {
-                                false
-                            };
-                            if !already_pending {
-                                self.pending_iter_close.push(iterator);
-                            }
+                            self.push_pending_iter_close(iterator);
                             current_id = *body_state;
                         }
                         Err(e) => {

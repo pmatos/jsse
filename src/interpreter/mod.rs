@@ -246,6 +246,9 @@ pub(crate) struct Interpreter {
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
+    /// Start of the running generator activation's window in
+    /// `pending_iter_close`; slots below it belong to enclosing activations.
+    pub(crate) iter_close_base: usize,
     /// Object IDs whose `Array.prototype.join` calls are currently converting
     /// elements. Re-entering `join` for the same receiver through element
     /// stringification contributes an empty string instead of recursing until
@@ -591,6 +594,7 @@ impl Interpreter {
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
+            iter_close_base: 0,
             active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
             generator_for_of_stacks: FxHashMap::default(),
@@ -1360,6 +1364,44 @@ impl Interpreter {
         let result = body(self);
         self.gc_unroot_frame(frame);
         result
+    }
+
+    /// Run `body` as one generator activation: it owns only the
+    /// `pending_iter_close` slots pushed after this call, and whatever it
+    /// leaves there is dropped on exit.
+    #[inline]
+    pub(crate) fn with_iter_close_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let saved_base =
+            std::mem::replace(&mut self.iter_close_base, self.pending_iter_close.len());
+        let result = body(self);
+        self.pending_iter_close.truncate(self.iter_close_base);
+        self.iter_close_base = saved_base;
+        result
+    }
+
+    /// Track `iterator` for `return()` of the running activation, unless one
+    /// of its own for-of loops already tracks it.
+    pub(crate) fn push_pending_iter_close(&mut self, iterator: JsValue) {
+        let id = iterator.as_object_id();
+        let already_pending = self.pending_iter_close[self.iter_close_base..]
+            .iter()
+            .any(|v| v.as_object_id() == id);
+        if !already_pending {
+            self.pending_iter_close.push(iterator);
+        }
+    }
+
+    /// Stop tracking `iterator_id` for the running activation. Slots below
+    /// `iter_close_base` belong to enclosing activations, so removing one would
+    /// shift the running activation's own slots under the base.
+    pub(crate) fn forget_pending_iter_close(&mut self, iterator_id: u64) {
+        let base = self.iter_close_base;
+        let mut slot = 0;
+        self.pending_iter_close.retain(|v| {
+            let keep = slot < base || v.as_object_id() != Some(iterator_id);
+            slot += 1;
+            keep
+        });
     }
 
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
