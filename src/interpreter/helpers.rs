@@ -171,6 +171,39 @@ fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
     if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
         return f64::NAN;
     }
+    prevalidated_radix_digits_to_f64(digits, radix)
+}
+
+// Value of a non-empty run of ASCII radix-`radix` digits, rounded to f64 exactly
+// once (§6.1.6.1 𝔽(x)). Shared by §7.1.4.1 StringToNumber and §19.2.5 parseInt,
+// whose digit prefix Z is already known to be valid; callers must guarantee that.
+pub(crate) fn prevalidated_radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
+    let mut acc: u64 = 0;
+    let mut fits = true;
+    for b in digits.bytes() {
+        let digit = (b as char).to_digit(radix).unwrap_or(0) as u64;
+        match acc
+            .checked_mul(radix as u64)
+            .and_then(|v| v.checked_add(digit))
+        {
+            Some(v) => acc = v,
+            None => {
+                fits = false;
+                break;
+            }
+        }
+    }
+    if fits {
+        return acc as f64;
+    }
+    if radix == 10 {
+        return digits.parse::<f64>().unwrap_or(f64::NAN);
+    }
+    // More than 1024 significant digits is >= 2^1024 for every radix >= 2, which
+    // rounds to +∞; skip building an arbitrarily large integer for it.
+    if digits.trim_start_matches('0').len() > 1024 {
+        return f64::INFINITY;
+    }
     num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
         .and_then(|exact| exact.to_string().parse::<f64>().ok())
         .unwrap_or(f64::NAN)
