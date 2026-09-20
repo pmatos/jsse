@@ -1188,7 +1188,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
             }
             Expression::OptionalChain(base, prop) => {
-                let (base_val, base_this) = match self.eval_oc_base(base, prop, env) {
+                let (base_val, base_this) = match self.eval_oc_base(base, env) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -4746,63 +4746,20 @@ impl Interpreter {
                         }
                     }
                     MemberProperty::Private(name) => {
-                        let branded = self.resolve_private_name(name, env);
-                        if let Some(o) = (obj_val)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                            && let Some(obj) = self.get_object_cell(o.id)
-                        {
-                            let elem = obj.borrow().private_fields.get(&branded).cloned();
-                            let func_val = match elem {
-                                Some(PrivateElement::Field(v))
-                                | Some(PrivateElement::Method(v)) => v,
-                                Some(PrivateElement::Accessor { get, .. }) => {
-                                    if let Some(getter) = get {
-                                        match self.call_function(&getter, &obj_val, &[]) {
-                                            Completion::Normal(v) => v,
-                                            other => return other,
-                                        }
-                                    } else {
-                                        return Completion::Throw(self.create_type_error(&format!(
-                                                "Cannot read private member #{name} which has no getter"
-                                            )));
-                                    }
-                                }
-                                None => {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot read private member #{name} from an object whose class did not declare it"
-                                        )));
-                                }
-                            };
-                            // Evaluate the call arguments through the shared spread
-                            // seam so a non-iterable spread throws (rather than being
-                            // silently dropped) and every argument is GC-rooted, exactly
-                            // as the ordinary member-call path does.
-                            let gc_frame = self.gc_root_frame();
-                            self.gc_root_value(&func_val);
-                            self.gc_root_value(&obj_val);
-                            let evaluated_args = match self.eval_spread_args(args, env) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    self.gc_unroot_frame(gc_frame);
-                                    return Completion::Throw(e);
-                                }
-                            };
+                        let func_val = propagate!(self.private_get(&obj_val, name, env));
+                        return self.with_gc_root_scope(|i| {
+                            i.gc_root_value(&func_val);
+                            i.gc_root_value(&obj_val);
+                            let evaluated_args = propagate!(i.eval_spread_args(args, env));
                             if saved_tail {
-                                self.gc_unroot_frame(gc_frame);
                                 return Completion::TailCall {
                                     func: func_val,
                                     this: obj_val,
                                     args: evaluated_args,
                                 };
                             }
-                            let result = self.call_function(&func_val, &obj_val, &evaluated_args);
-                            self.gc_unroot_frame(gc_frame);
-                            return result;
-                        }
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot read private member #{name} from a non-object"
-                        )));
+                            i.call_function(&func_val, &obj_val, &evaluated_args)
+                        });
                     }
                 };
                 // super.method() - look up on [[Prototype]] of HomeObject, bind this

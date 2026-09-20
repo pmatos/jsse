@@ -9,7 +9,7 @@ impl Interpreter {
         chain: &Expression,
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
-        let (base_val, base_this) = self.eval_oc_base(base, chain, env)?;
+        let (base_val, base_this) = self.eval_oc_base(base, env)?;
         if (base_val).is_nullish() {
             return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
         }
@@ -20,7 +20,6 @@ impl Interpreter {
     pub(super) fn eval_oc_base(
         &mut self,
         base: &Expression,
-        chain: &Expression,
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
         match base {
@@ -41,37 +40,10 @@ impl Interpreter {
                             }
                         }
                         MemberProperty::Private(name) => {
-                            let branded = self.resolve_private_name(name, env);
-                            if let Some(o) = (this_val)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                                && let Some(obj) = self.get_object_cell(o.id)
-                            {
-                                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                match elem {
-                                    Some(PrivateElement::Field(v))
-                                    | Some(PrivateElement::Method(v)) => {
-                                        return Ok((v, this_val));
-                                    }
-                                    Some(PrivateElement::Accessor { get, .. }) => {
-                                        if let Some(getter) = get {
-                                            match self.call_function(&getter, &this_val, &[]) {
-                                                Completion::Normal(v) => return Ok((v, this_val)),
-                                                other => return Err(other),
-                                            }
-                                        }
-                                        return Err(Completion::Throw(self.create_type_error(
-                                            &format!("Cannot read private member #{name}"),
-                                        )));
-                                    }
-                                    None => {
-                                        return Err(Completion::Throw(self.create_type_error(
-                                            &format!("Cannot read private member #{name}"),
-                                        )));
-                                    }
-                                }
-                            }
-                            return Ok((JsValue::UNDEFINED, this_val));
+                            return self
+                                .private_get(&this_val, name, env)
+                                .into_abrupt()
+                                .map(|v| (v, this_val));
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
@@ -105,47 +77,10 @@ impl Interpreter {
                             }
                         }
                         MemberProperty::Private(name) => {
-                            let branded = self.resolve_private_name(name, env);
-                            if let Some(o) = (obj_val)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                                && let Some(obj) = self.get_object_cell(o.id)
-                            {
-                                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                match elem {
-                                    Some(PrivateElement::Field(v))
-                                    | Some(PrivateElement::Method(v)) => {
-                                        if (v).is_nullish() {
-                                            return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
-                                        }
-                                        return self.eval_oc_tail_with_this(&v, chain, env);
-                                    }
-                                    Some(PrivateElement::Accessor { get, .. }) => {
-                                        if let Some(getter) = get {
-                                            let v = match self.call_function(&getter, &obj_val, &[])
-                                            {
-                                                Completion::Normal(v) => v,
-                                                other => return Err(other),
-                                            };
-                                            if (v).is_nullish() {
-                                                return Ok((
-                                                    JsValue::UNDEFINED,
-                                                    JsValue::UNDEFINED,
-                                                ));
-                                            }
-                                            return self.eval_oc_tail_with_this(&v, chain, env);
-                                        }
-                                        return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
-                                    }
-                                    None => {
-                                        return Err(Completion::Throw(self.create_type_error(
-                                            &format!("Cannot read private member #{name}"),
-                                        )));
-                                    }
-                                }
-                            } else {
-                                return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
-                            }
+                            return self
+                                .private_get(&obj_val, name, env)
+                                .into_abrupt()
+                                .map(|v| (v, obj_val));
                         }
                     };
                     let prop_val = match self.access_property_on_value(&obj_val, &key) {
@@ -185,16 +120,6 @@ impl Interpreter {
         }
     }
 
-    /// Evaluate optional chain tail, returning (value, this_for_call).
-    pub(super) fn eval_oc_tail_with_this(
-        &mut self,
-        base_val: &JsValue,
-        prop: &Expression,
-        env: &EnvRef,
-    ) -> Result<(JsValue, JsValue), Completion> {
-        self.eval_oc_tail_with_this_ctx(base_val, &JsValue::UNDEFINED, prop, env)
-    }
-
     /// Core optional chain tail evaluator with explicit this context.
     /// `chain_this` is the `this` value to use for `?.()` direct calls
     /// (from `obj.method?.()` where chain_this = obj).
@@ -223,14 +148,14 @@ impl Interpreter {
             Expression::Call(callee, args, _) => {
                 let (func_val, this_val) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, callee, env)?;
-                let evaluated_args = match self.eval_spread_args(args, env) {
-                    Ok(v) => v,
-                    Err(e) => return Err(Completion::Throw(e)),
-                };
-                match self.call_function(&func_val, &this_val, &evaluated_args) {
-                    Completion::Normal(v) => Ok((v, JsValue::UNDEFINED)),
-                    other => Err(other),
-                }
+                self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&func_val);
+                    i.gc_root_value(&this_val);
+                    let evaluated_args = i.eval_spread_args(args, env).into_abrupt()?;
+                    i.call_function(&func_val, &this_val, &evaluated_args)
+                        .into_abrupt()
+                        .map(|v| (v, JsValue::UNDEFINED))
+                })
             }
             Expression::Member(inner, mp, _) => {
                 let (inner_val, _) =
@@ -260,72 +185,36 @@ impl Interpreter {
                         Ok((val, inner_val))
                     }
                     MemberProperty::Computed(expr) => {
-                        let key_val = match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return Err(other),
-                        };
-                        let key = match self.to_property_key(&key_val) {
-                            Ok(s) => s,
-                            Err(e) => return Err(Completion::Throw(e)),
-                        };
-                        let val = match self.access_property_on_value(&inner_val, &key) {
-                            Completion::Normal(v) => v,
-                            other => return Err(other),
-                        };
+                        let val = self.oc_computed_get(&inner_val, expr, env)?;
                         Ok((val, inner_val))
                     }
-                    MemberProperty::Private(name) => {
-                        let branded = self.resolve_private_name(name, env);
-                        if let Some(o) = inner_val
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                            && let Some(obj) = self.get_object_cell(o.id)
-                        {
-                            let elem = obj.borrow().private_fields.get(&branded).cloned();
-                            match elem {
-                                Some(PrivateElement::Field(v))
-                                | Some(PrivateElement::Method(v)) => {
-                                    Ok((v, inner_val))
-                                }
-                                Some(PrivateElement::Accessor { get, .. }) => {
-                                    if let Some(getter) = get {
-                                        match self.call_function(&getter, &inner_val, &[]) {
-                                            Completion::Normal(v) => Ok((v, inner_val)),
-                                            other => Err(other),
-                                        }
-                                    } else {
-                                        Err(Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot read private member #{name} which has no getter"
-                                        ))))
-                                    }
-                                }
-                                None => Err(Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot read private member #{name} from an object whose class did not declare it"
-                                )))),
-                            }
-                        } else {
-                            Ok((JsValue::UNDEFINED, inner_val))
-                        }
-                    }
+                    MemberProperty::Private(name) => self
+                        .private_get(&inner_val, name, env)
+                        .into_abrupt()
+                        .map(|v| (v, inner_val)),
                 }
             }
-            other => {
-                // Computed property access (e.g., x?.[expr])
-                let key_val = match self.eval_expr(other, env) {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
-                let key = match self.to_property_key(&key_val) {
-                    Ok(s) => s,
-                    Err(e) => return Err(Completion::Throw(e)),
-                };
-                let val = match self.access_property_on_value(base_val, &key) {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
+            key_expr => {
+                let val = self.oc_computed_get(base_val, key_expr, env)?;
                 Ok((val, base_val.clone()))
             }
         }
+    }
+
+    /// `base[key_expr]` inside an optional-chain tail, keeping `base` rooted
+    /// while the key expression runs.
+    fn oc_computed_get(
+        &mut self,
+        base: &JsValue,
+        key_expr: &Expression,
+        env: &EnvRef,
+    ) -> Result<JsValue, Completion> {
+        self.with_gc_root_scope(|i| {
+            i.gc_root_value(base);
+            let key_val = i.eval_expr(key_expr, env).into_abrupt()?;
+            let key = i.to_property_key(&key_val).into_abrupt()?;
+            i.access_property_on_value(base, &key).into_abrupt()
+        })
     }
 
     /// Handle `delete obj?.prop` and `delete obj?.['prop']` etc.
@@ -336,7 +225,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         // Evaluate the base of the optional chain
-        let (base_val, _base_this) = match self.eval_oc_base(base, chain, env) {
+        let (base_val, _base_this) = match self.eval_oc_base(base, env) {
             Ok(v) => v,
             Err(c) => return c,
         };
