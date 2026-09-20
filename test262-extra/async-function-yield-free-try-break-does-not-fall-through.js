@@ -14,7 +14,7 @@ info: |
   CaseBlockEvaluation (sec-runtime-semantics-caseblockevaluation) or the
   iteration (sec-loopcontinues).
 flags: [async]
-includes: [asyncHelpers.js, compareArray.js]
+includes: [asyncHelpers.js]
 features: [async-functions, async-iteration]
 ---*/
 
