@@ -1,10 +1,9 @@
 /*---
 description: >
   A `switch` that is the last statement of a loop body, whose last clause ends in
-  an `if`, a labeled block, or a nested `switch` containing `break` or
-  `continue`, must fall out to the loop's next iteration instead of looping
-  forever, in a generator where another clause of the `switch` contains a
-  `yield`.
+  an `if` or a labeled block containing `break` or `continue`, must fall out to
+  the loop's next iteration instead of looping forever, in a generator where
+  another clause of the `switch` contains a `yield`.
 esid: sec-runtime-semantics-caseblockevaluation
 info: |
   Runtime Semantics: CaseBlockEvaluation
