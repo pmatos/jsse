@@ -417,19 +417,6 @@ fn analyze_statement(
     }
 }
 
-/// The heritage and computed keys of a class, in ClassDefinitionEvaluation
-/// order: the only class sub-expressions that can suspend the enclosing
-/// generator (method/field values and static blocks are separate function
-/// scopes).
-fn class_scope_exprs<'a>(
-    super_class: Option<&'a Expression>,
-    elements: &'a [ClassElement],
-) -> impl Iterator<Item = &'a Expression> {
-    super_class
-        .into_iter()
-        .chain(elements.iter().filter_map(ClassElement::computed_key))
-}
-
 fn analyze_class(
     super_class: Option<&Expression>,
     elements: &[ClassElement],
@@ -947,6 +934,10 @@ mod tests {
         Expression::Yield(None, delegate)
     }
 
+    fn make_await() -> Expression {
+        Expression::Await(Box::new(Expression::Literal(Literal::Number(1.0))))
+    }
+
     fn make_function_expr() -> FunctionExpr {
         FunctionExpr {
             name: None,
@@ -971,6 +962,15 @@ mod tests {
                     source_text: None,
                 })),
             }],
+        })
+    }
+
+    fn class_decl(super_class: Option<Expression>, body: Vec<ClassElement>) -> Statement {
+        Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: super_class.map(Box::new),
+            body,
+            source_text: None,
         })
     }
 
@@ -1118,18 +1118,7 @@ mod tests {
 
     #[test]
     fn test_yield_in_class_computed_method_key() {
-        let body = vec![Statement::ClassDeclaration(ClassDecl {
-            name: "C".to_string(),
-            super_class: None,
-            body: vec![ClassElement::Method(ClassMethod {
-                key: PropertyKey::Computed(Box::new(make_yield(false))),
-                kind: ClassMethodKind::Method,
-                value: make_function_expr(),
-                is_static: false,
-                computed: true,
-            })],
-            source_text: None,
-        })];
+        let body = vec![class_decl(None, vec![computed_method(make_yield(false))])];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1138,12 +1127,7 @@ mod tests {
 
     #[test]
     fn test_yield_in_class_heritage() {
-        let body = vec![Statement::ClassDeclaration(ClassDecl {
-            name: "C".to_string(),
-            super_class: Some(Box::new(make_yield(false))),
-            body: vec![],
-            source_text: None,
-        })];
+        let body = vec![class_decl(Some(make_yield(false)), vec![])];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1152,36 +1136,16 @@ mod tests {
 
     #[test]
     fn test_await_in_class_computed_method_key() {
-        let body = [Statement::ClassDeclaration(ClassDecl {
-            name: "C".to_string(),
-            super_class: None,
-            body: vec![ClassElement::Method(ClassMethod {
-                key: PropertyKey::Computed(Box::new(Expression::Await(Box::new(
-                    Expression::Literal(Literal::Number(1.0)),
-                )))),
-                kind: ClassMethodKind::Method,
-                value: make_function_expr(),
-                is_static: false,
-                computed: true,
-            })],
-            source_text: None,
-        })];
+        let stmt = class_decl(None, vec![computed_method(make_await())]);
 
-        assert!(contains_suspension(&body[0]));
+        assert!(contains_suspension(&stmt));
     }
 
     #[test]
     fn test_await_in_class_heritage() {
-        let body = [Statement::ClassDeclaration(ClassDecl {
-            name: "C".to_string(),
-            super_class: Some(Box::new(Expression::Await(Box::new(Expression::Literal(
-                Literal::Number(1.0),
-            ))))),
-            body: vec![],
-            source_text: None,
-        })];
+        let stmt = class_decl(Some(make_await()), vec![]);
 
-        assert!(contains_suspension(&body[0]));
+        assert!(contains_suspension(&stmt));
     }
 
     #[test]
@@ -1213,12 +1177,7 @@ mod tests {
             body: vec![],
             source_text: None,
         });
-        let body = vec![Statement::ClassDeclaration(ClassDecl {
-            name: "C".to_string(),
-            super_class: Some(Box::new(inner)),
-            body: vec![],
-            source_text: None,
-        })];
+        let body = vec![class_decl(Some(inner), vec![])];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1227,14 +1186,9 @@ mod tests {
 
     #[test]
     fn test_await_in_class_expression_computed_method_key() {
-        let body = [let_class_expr(
-            None,
-            vec![computed_method(Expression::Await(Box::new(
-                Expression::Literal(Literal::Number(1.0)),
-            )))],
-        )];
+        let stmt = let_class_expr(None, vec![computed_method(make_await())]);
 
-        assert!(contains_suspension(&body[0]));
+        assert!(contains_suspension(&stmt));
     }
 
     #[test]

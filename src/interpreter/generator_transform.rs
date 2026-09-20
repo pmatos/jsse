@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
 use crate::types::JsValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -225,6 +225,7 @@ struct TransformContext {
     for_of_depth: usize,
     iteration_labels: Vec<String>,
     temp_vars: Vec<String>,
+    generated_temps: HashSet<String>,
     is_async: bool,
     detect_for_await: bool,
     with_scopes: Vec<String>,
@@ -253,6 +254,7 @@ impl TransformContext {
             for_of_depth: 0,
             iteration_labels: Vec::new(),
             temp_vars: Vec::new(),
+            generated_temps: HashSet::new(),
             is_async,
             detect_for_await: false,
             with_scopes: Vec::new(),
@@ -264,6 +266,7 @@ impl TransformContext {
         self.temp_counter += 1;
         let name = format!("${}_{}", prefix, id);
         self.temp_vars.push(name.clone());
+        self.generated_temps.insert(name.clone());
         name
     }
 
@@ -551,12 +554,6 @@ fn labels_iteration_statement(stmt: &Statement) -> bool {
     }
 }
 
-fn is_generated_temp_name(name: &str) -> bool {
-    name.strip_prefix('$')
-        .and_then(|rest| rest.rsplit_once('_'))
-        .is_some_and(|(_, id)| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
-}
-
 fn expr_has_suspension(expr: &Expression, is_async: bool) -> bool {
     if is_async {
         expr_contains_suspension(expr)
@@ -586,6 +583,20 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
     }
 }
 
+fn hoist_suspending_expr(
+    expr: &Expression,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> Option<Expression> {
+    if !expr_has_suspension(expr, ctx.is_async) {
+        return None;
+    }
+    let temp_var = ctx.new_temp_var(prefix);
+    let binding = SentValueBindingKind::Variable(temp_var.clone());
+    transform_yielding_expression(expr, ctx, usize::MAX, Some(binding));
+    Some(Expression::Identifier(temp_var))
+}
+
 /// Hoist the sub-expressions of a class heritage clause and computed element
 /// keys that themselves contain a `yield`/`await` into temp vars (heritage
 /// first, then each key in declaration order), so the suspension belongs to
@@ -596,49 +607,21 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
 /// and a hoisted key's ToPropertyKey is likewise deferred to that point. Both
 /// depart from the source order of ClassDefinitionEvaluation (spec §15.7.14).
 fn hoist_class_suspensions(
-    super_class: Option<&Expression>,
-    elements: &[ClassElement],
+    super_class: &mut Option<Box<Expression>>,
+    elements: &mut [ClassElement],
     ctx: &mut TransformContext,
-) -> (Option<Box<Expression>>, Vec<ClassElement>) {
-    let new_super_class = super_class.map(|sc| {
-        if expr_has_suspension(sc, ctx.is_async) {
-            let temp_var = ctx.new_temp_var("class_heritage");
-            let binding = SentValueBindingKind::Variable(temp_var.clone());
-            transform_yielding_expression(sc, ctx, usize::MAX, Some(binding));
-            Box::new(Expression::Identifier(temp_var))
-        } else {
-            Box::new(sc.clone())
-        }
-    });
-
-    let new_elements = elements
-        .iter()
-        .enumerate()
-        .map(|(i, element)| {
-            let mut element = element.clone();
-            match &mut element {
-                ClassElement::Method(ClassMethod { key, .. })
-                | ClassElement::Property(ClassProperty { key, .. })
-                | ClassElement::AutoAccessor(ClassProperty { key, .. }) => {
-                    hoist_class_element_key(key, i, ctx);
-                }
-                ClassElement::StaticBlock(_) => {}
-            }
-            element
-        })
-        .collect();
-
-    (new_super_class, new_elements)
-}
-
-fn hoist_class_element_key(key: &mut PropertyKey, index: usize, ctx: &mut TransformContext) {
-    if let PropertyKey::Computed(e) = key
-        && expr_has_suspension(e, ctx.is_async)
+) {
+    if let Some(sc) = super_class
+        && let Some(hoisted) = hoist_suspending_expr(sc, "class_heritage", ctx)
     {
-        let temp_var = ctx.new_temp_var(&format!("class_key_{index}"));
-        let binding = SentValueBindingKind::Variable(temp_var.clone());
-        transform_yielding_expression(e, ctx, usize::MAX, Some(binding));
-        *key = PropertyKey::Computed(Box::new(Expression::Identifier(temp_var)));
+        **sc = hoisted;
+    }
+    for key in elements.iter_mut().filter_map(ClassElement::key_mut) {
+        if let PropertyKey::Computed(e) = key
+            && let Some(hoisted) = hoist_suspending_expr(e, "class_key", ctx)
+        {
+            **e = hoisted;
+        }
     }
 }
 
@@ -649,14 +632,9 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::ClassDeclaration(class_decl) => {
-            let (super_class, body) =
-                hoist_class_suspensions(class_decl.super_class.as_deref(), &class_decl.body, ctx);
-            ctx.emit_statement(Statement::ClassDeclaration(ClassDecl {
-                name: class_decl.name.clone(),
-                super_class,
-                body,
-                source_text: class_decl.source_text.clone(),
-            }));
+            let mut class_decl = class_decl.clone();
+            hoist_class_suspensions(&mut class_decl.super_class, &mut class_decl.body, ctx);
+            ctx.emit_statement(Statement::ClassDeclaration(class_decl));
         }
 
         Statement::Block(stmts) => {
@@ -1216,25 +1194,9 @@ fn transform_yielding_expression(
         }
 
         Expression::Class(class_expr) => {
-            let (super_class, body) =
-                hoist_class_suspensions(class_expr.super_class.as_deref(), &class_expr.body, ctx);
-            let class = Expression::Class(ClassExpr {
-                name: class_expr.name.clone(),
-                super_class,
-                body,
-                source_text: class_expr.source_text.clone(),
-            });
-            // Assigning an anonymous class straight to an internal temp would
-            // apply NamedEvaluation and leak the temp's name as `.name`.
-            let combined = match &binding {
-                Some(SentValueBindingKind::Variable(name))
-                    if class_expr.name.is_none() && is_generated_temp_name(name) =>
-                {
-                    Expression::Sequence(vec![Expression::Literal(Literal::Number(0.0)), class])
-                }
-                _ => class,
-            };
-            emit_expression_with_binding(&combined, &binding, ctx);
+            let mut class_expr = class_expr.clone();
+            hoist_class_suspensions(&mut class_expr.super_class, &mut class_expr.body, ctx);
+            emit_expression_with_binding(&Expression::Class(class_expr), &binding, ctx);
         }
 
         Expression::Member(obj, prop, _) => {
@@ -1563,10 +1525,21 @@ fn emit_expression_with_binding(
 ) {
     match binding {
         Some(SentValueBindingKind::Variable(name)) => {
+            // Assigning an anonymous function/class straight to an internal temp
+            // would apply NamedEvaluation and leak the temp's name as `.name`.
+            let value =
+                if expr.is_anonymous_function_definition() && ctx.generated_temps.contains(name) {
+                    Expression::Sequence(vec![
+                        Expression::Literal(Literal::Number(0.0)),
+                        expr.clone(),
+                    ])
+                } else {
+                    expr.clone()
+                };
             let assign = Expression::Assign(
                 AssignOp::Assign,
                 Box::new(Expression::Identifier(name.clone())),
-                Box::new(expr.clone()),
+                Box::new(value),
             );
             ctx.emit_statement(Statement::Expression(assign));
         }
@@ -2647,30 +2620,29 @@ mod tests {
         assert!(sm.states.len() >= 3);
     }
 
+    fn empty_function_expr() -> FunctionExpr {
+        FunctionExpr {
+            name: None,
+            params: vec![],
+            body: Body::new(vec![]),
+            is_async: false,
+            is_generator: false,
+            source_text: None,
+            body_is_strict: false,
+        }
+    }
+
     #[test]
     fn test_yield_in_class_computed_key_is_decomposed() {
-        // analyze_generator_body sees the yield inside a class computed method
-        // key, so this no longer takes the yield_points-empty
-        // create_simple_machine fast path (num_yields == 1, not 0). The
-        // transform also hoists the computed key into its own state, so the
-        // class declaration is no longer replayed whole on resume
-        // (states.len() > 1, matching the yield/no-replay contract every
-        // other yield site gets).
+        // The computed key is hoisted into its own state rather than replaying
+        // the whole class declaration on resume.
         let body = vec![Statement::ClassDeclaration(ClassDecl {
             name: "C".to_string(),
             super_class: None,
             body: vec![ClassElement::Method(ClassMethod {
                 key: PropertyKey::Computed(Box::new(make_yield())),
                 kind: ClassMethodKind::Method,
-                value: FunctionExpr {
-                    name: None,
-                    params: vec![],
-                    body: Body::new(vec![]),
-                    is_async: false,
-                    is_generator: false,
-                    source_text: None,
-                    body_is_strict: false,
-                },
+                value: empty_function_expr(),
                 is_static: false,
                 computed: true,
             })],
@@ -2689,15 +2661,7 @@ mod tests {
             body: vec![ClassElement::Method(ClassMethod {
                 key: PropertyKey::Identifier("method".to_string()),
                 kind: ClassMethodKind::Method,
-                value: FunctionExpr {
-                    name: None,
-                    params: vec![],
-                    body: Body::new(vec![]),
-                    is_async: false,
-                    is_generator: false,
-                    source_text: None,
-                    body_is_strict: false,
-                },
+                value: empty_function_expr(),
                 is_static: false,
                 computed: false,
             })],
@@ -2733,15 +2697,13 @@ mod tests {
     }
 
     #[test]
-    fn test_generated_temp_names_are_told_apart_from_user_names() {
+    fn test_only_new_temp_var_names_are_generated_temps() {
         let mut ctx = TransformContext::new(analyze_generator_body(&[], &[]), false);
         let generated = ctx.new_temp_var("call_arg_0");
+        ctx.temp_vars.push("$a_1".to_string());
 
-        assert!(is_generated_temp_name(&generated));
-        assert!(is_generated_temp_name("$class_key_2_7"));
-        assert!(!is_generated_temp_name("$el"));
-        assert!(!is_generated_temp_name("C"));
-        assert!(!is_generated_temp_name("$"));
+        assert!(ctx.generated_temps.contains(&generated));
+        assert!(!ctx.generated_temps.contains("$a_1"));
     }
 
     #[test]

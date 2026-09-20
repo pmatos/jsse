@@ -671,8 +671,15 @@ pub(crate) enum ClassElement {
 }
 
 impl ClassElement {
-    /// The computed property-name expression, if any. Static blocks have their
-    /// own scope per spec §15.7.13, so they never contribute one.
+    /// Static blocks have their own scope per spec §15.7.13, so they have no key.
+    pub(crate) fn key_mut(&mut self) -> Option<&mut PropertyKey> {
+        match self {
+            ClassElement::Method(m) => Some(&mut m.key),
+            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => Some(&mut p.key),
+            ClassElement::StaticBlock(_) => None,
+        }
+    }
+
     pub(crate) fn computed_key(&self) -> Option<&Expression> {
         let key = match self {
             ClassElement::Method(m) => &m.key,
@@ -684,6 +691,19 @@ impl ClassElement {
             _ => None,
         }
     }
+}
+
+/// The class sub-expressions evaluated in the enclosing scope, in
+/// ClassDefinitionEvaluation order (§15.7.14): the heritage, then each
+/// computed element key. Method/field values and static blocks are separate
+/// function scopes.
+pub(crate) fn class_scope_exprs<'a>(
+    super_class: Option<&'a Expression>,
+    elements: &'a [ClassElement],
+) -> impl Iterator<Item = &'a Expression> {
+    super_class
+        .into_iter()
+        .chain(elements.iter().filter_map(ClassElement::computed_key))
 }
 
 #[derive(Clone, Debug)]
@@ -1082,10 +1102,8 @@ fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) 
         // Method bodies are opaque, but `extends` and computed element keys
         // evaluate in the enclosing scope.
         Statement::ClassDeclaration(cls) => {
-            cls.super_class
-                .as_ref()
-                .is_some_and(|sc| expr_contains_matching(sc, pred))
-                || class_elements_contain_matching(&cls.body, pred)
+            class_scope_exprs(cls.super_class.as_deref(), &cls.body)
+                .any(|e| expr_contains_matching(e, pred))
         }
     }
 }
@@ -1176,23 +1194,9 @@ pub(crate) fn expr_contains_matching(
         },
         // Method/field bodies are opaque, but `extends` and computed element
         // keys evaluate in the enclosing scope.
-        Expression::Class(cls) => {
-            cls.super_class
-                .as_ref()
-                .is_some_and(|sc| expr_contains_matching(sc, pred))
-                || class_elements_contain_matching(&cls.body, pred)
-        }
+        Expression::Class(cls) => class_scope_exprs(cls.super_class.as_deref(), &cls.body)
+            .any(|e| expr_contains_matching(e, pred)),
     }
-}
-
-fn class_elements_contain_matching(
-    body: &[ClassElement],
-    pred: &dyn Fn(&Expression) -> bool,
-) -> bool {
-    body.iter().any(|elem| {
-        elem.computed_key()
-            .is_some_and(|e| expr_contains_matching(e, pred))
-    })
 }
 
 fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32) {
@@ -1907,11 +1911,7 @@ fn class_extends_or_computed_keys_use_arguments(
     super_class: Option<&Expression>,
     body: &[ClassElement],
 ) -> bool {
-    if super_class.is_some_and(expr_uses_arguments) {
-        return true;
-    }
-    body.iter()
-        .any(|el| el.computed_key().is_some_and(expr_uses_arguments))
+    class_scope_exprs(super_class, body).any(expr_uses_arguments)
 }
 
 #[cfg(test)]
