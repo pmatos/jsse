@@ -2095,17 +2095,8 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
-            if let Some(ref n) = name
-                && (n == "eval" || n == "arguments")
-            {
-                return Err(self.error(format!(
-                    "'{n}' is not allowed as a function name in strict mode"
-                )));
-            }
-            if let Some(ref n) = name
-                && Self::is_strict_reserved_word(n)
-            {
-                return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
+            if let Some(ref n) = name {
+                self.check_strict_function_name(n)?;
             }
             self.check_strict_params(&params)?;
         }
@@ -2157,17 +2148,8 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
-            if let Some(ref n) = name
-                && (n == "eval" || n == "arguments")
-            {
-                return Err(self.error(format!(
-                    "'{n}' is not allowed as a function name in strict mode"
-                )));
-            }
-            if let Some(ref n) = name
-                && Self::is_strict_reserved_word(n)
-            {
-                return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
+            if let Some(ref n) = name {
+                self.check_strict_function_name(n)?;
             }
             self.check_strict_params(&params)?;
         }

@@ -277,14 +277,7 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
-            if name == "eval" || name == "arguments" {
-                return Err(self.error(format!(
-                    "'{name}' is not allowed as a function name in strict mode"
-                )));
-            }
-            if Self::is_strict_reserved_word(&name) {
-                return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
-            }
+            self.check_strict_function_name(&name)?;
             self.check_strict_params(&params)?;
         }
         if body_strict

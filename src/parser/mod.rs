@@ -485,6 +485,18 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn check_strict_function_name(&self, name: &str) -> Result<(), ParseError> {
+        if name == "eval" || name == "arguments" {
+            return Err(self.error(format!(
+                "'{name}' is not allowed as a function name in strict mode"
+            )));
+        }
+        if Self::is_strict_reserved_word(name) {
+            return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
+        }
+        Ok(())
+    }
+
     fn check_strict_params(&self, params: &[Pattern]) -> Result<(), ParseError> {
         let mut names = Vec::new();
         for p in params {
