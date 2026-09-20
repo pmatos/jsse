@@ -2199,6 +2199,64 @@ fn transform_try_statement(
     ctx.current_state_id = after_try;
 }
 
+fn allocate_case_states(switch_stmt: &SwitchStatement, ctx: &mut TransformContext) -> Vec<usize> {
+    switch_stmt.cases.iter().map(|_| ctx.new_state()).collect()
+}
+
+fn default_case_state(switch_stmt: &SwitchStatement, case_states: &[usize]) -> Option<usize> {
+    switch_stmt
+        .cases
+        .iter()
+        .zip(case_states)
+        .find_map(|(case, &state)| case.test.is_none().then_some(state))
+}
+
+/// Lowers a switch whose case tests contain a suspension into a chain of
+/// `ConditionalGoto` states, since `SwitchDispatch` evaluates its tests inside
+/// the terminator where a `yield`/`await` cannot suspend. The discriminant is
+/// captured once so a selector cannot change the value being compared.
+/// Returns the case body states.
+fn lower_switch_dispatch_with_suspending_tests(
+    switch_stmt: &SwitchStatement,
+    ctx: &mut TransformContext,
+    after_switch: usize,
+) -> Vec<usize> {
+    let disc_var = ctx.new_temp_var("switch_disc");
+    let disc_binding = Some(SentValueBindingKind::Variable(disc_var.clone()));
+    if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
+        transform_yielding_expression(&switch_stmt.discriminant, ctx, usize::MAX, disc_binding);
+    } else {
+        emit_expression_with_binding(&switch_stmt.discriminant, &disc_binding, ctx);
+    }
+
+    let case_states = allocate_case_states(switch_stmt, ctx);
+    let case_var = ctx.new_temp_var("switch_case");
+    for (case, &case_state) in switch_stmt.cases.iter().zip(&case_states) {
+        let Some(test) = &case.test else { continue };
+        let selector = if expr_has_suspension(test, ctx.is_async) {
+            let case_binding = SentValueBindingKind::Variable(case_var.clone());
+            transform_yielding_expression(test, ctx, usize::MAX, Some(case_binding));
+            Expression::Identifier(case_var.clone())
+        } else {
+            test.clone()
+        };
+        let next_test_state = ctx.new_state();
+        ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+            condition: Expression::Binary(
+                BinaryOp::StrictEq,
+                Box::new(Expression::Identifier(disc_var.clone())),
+                Box::new(selector),
+            ),
+            true_state: case_state,
+            false_state: next_test_state,
+        });
+        ctx.current_state_id = next_test_state;
+    }
+    let fallback = default_case_state(switch_stmt, &case_states).unwrap_or(after_switch);
+    ctx.finalize_current_state(StateTerminator::Goto(fallback));
+    case_states
+}
+
 fn transform_switch_statement(
     switch_stmt: &SwitchStatement,
     ctx: &mut TransformContext,
@@ -2213,43 +2271,49 @@ fn transform_switch_statement(
     let break_target = ctx.loop_control_target(after_switch, ctx.for_of_depth);
     let prev_break = ctx.break_targets.insert(None, break_target);
 
-    let mut temp_discriminant = switch_stmt.discriminant.clone();
-    if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
-        let temp_var = ctx.new_temp_var("switch_disc");
-        let disc_binding = SentValueBindingKind::Variable(temp_var.clone());
-        transform_yielding_expression(
-            &switch_stmt.discriminant,
-            ctx,
-            usize::MAX,
-            Some(disc_binding),
-        );
-        temp_discriminant = Expression::Identifier(temp_var);
-    }
-
-    let mut case_states = Vec::new();
-    let mut case_targets = Vec::new();
-    let mut default_state = None;
-
-    for case in &switch_stmt.cases {
-        let case_state = ctx.new_state();
-        case_states.push(case_state);
-
-        if let Some(test) = &case.test {
-            case_targets.push(SwitchCaseTarget {
-                test: test.clone(),
-                state: case_state,
-            });
-        } else {
-            default_state = Some(case_state);
-        }
-    }
-
-    ctx.finalize_current_state(StateTerminator::SwitchDispatch {
-        discriminant: temp_discriminant,
-        cases: case_targets,
-        default_state,
-        after_state: after_switch,
+    let tests_suspend = switch_stmt.cases.iter().any(|case| {
+        case.test
+            .as_ref()
+            .is_some_and(|test| expr_has_suspension(test, ctx.is_async))
     });
+
+    let case_states = if tests_suspend {
+        lower_switch_dispatch_with_suspending_tests(switch_stmt, ctx, after_switch)
+    } else {
+        let mut temp_discriminant = switch_stmt.discriminant.clone();
+        if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
+            let temp_var = ctx.new_temp_var("switch_disc");
+            let disc_binding = SentValueBindingKind::Variable(temp_var.clone());
+            transform_yielding_expression(
+                &switch_stmt.discriminant,
+                ctx,
+                usize::MAX,
+                Some(disc_binding),
+            );
+            temp_discriminant = Expression::Identifier(temp_var);
+        }
+
+        let case_states = allocate_case_states(switch_stmt, ctx);
+        let case_targets = switch_stmt
+            .cases
+            .iter()
+            .zip(&case_states)
+            .filter_map(|(case, &state)| {
+                case.test.as_ref().map(|test| SwitchCaseTarget {
+                    test: test.clone(),
+                    state,
+                })
+            })
+            .collect();
+
+        ctx.finalize_current_state(StateTerminator::SwitchDispatch {
+            discriminant: temp_discriminant,
+            cases: case_targets,
+            default_state: default_case_state(switch_stmt, &case_states),
+            after_state: after_switch,
+        });
+        case_states
+    };
 
     for (i, case) in switch_stmt.cases.iter().enumerate() {
         ctx.current_state_id = case_states[i];
