@@ -40,37 +40,10 @@ impl Interpreter {
                             }
                         }
                         MemberProperty::Private(name) => {
-                            let branded = self.resolve_private_name(name, env);
-                            if let Some(o) = (this_val)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                                && let Some(obj) = self.get_object_cell(o.id)
-                            {
-                                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                match elem {
-                                    Some(PrivateElement::Field(v))
-                                    | Some(PrivateElement::Method(v)) => {
-                                        return Ok((v, this_val));
-                                    }
-                                    Some(PrivateElement::Accessor { get, .. }) => {
-                                        if let Some(getter) = get {
-                                            match self.call_function(&getter, &this_val, &[]) {
-                                                Completion::Normal(v) => return Ok((v, this_val)),
-                                                other => return Err(other),
-                                            }
-                                        }
-                                        return Err(Completion::Throw(self.create_type_error(
-                                            &format!("Cannot read private member #{name}"),
-                                        )));
-                                    }
-                                    None => {
-                                        return Err(Completion::Throw(self.create_type_error(
-                                            &format!("Cannot read private member #{name}"),
-                                        )));
-                                    }
-                                }
-                            }
-                            return Ok((JsValue::UNDEFINED, this_val));
+                            return match self.private_get(&this_val, name, env) {
+                                Completion::Normal(v) => Ok((v, this_val)),
+                                other => Err(other),
+                            };
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
@@ -175,14 +148,18 @@ impl Interpreter {
             Expression::Call(callee, args, _) => {
                 let (func_val, this_val) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, callee, env)?;
-                let evaluated_args = match self.eval_spread_args(args, env) {
-                    Ok(v) => v,
-                    Err(e) => return Err(Completion::Throw(e)),
-                };
-                match self.call_function(&func_val, &this_val, &evaluated_args) {
-                    Completion::Normal(v) => Ok((v, JsValue::UNDEFINED)),
-                    other => Err(other),
-                }
+                self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&func_val);
+                    i.gc_root_value(&this_val);
+                    let evaluated_args = match i.eval_spread_args(args, env) {
+                        Ok(v) => v,
+                        Err(e) => return Err(Completion::Throw(e)),
+                    };
+                    match i.call_function(&func_val, &this_val, &evaluated_args) {
+                        Completion::Normal(v) => Ok((v, JsValue::UNDEFINED)),
+                        other => Err(other),
+                    }
+                })
             }
             Expression::Member(inner, mp, _) => {
                 let (inner_val, _) =
@@ -211,21 +188,22 @@ impl Interpreter {
                         };
                         Ok((val, inner_val))
                     }
-                    MemberProperty::Computed(expr) => {
-                        let key_val = match self.eval_expr(expr, env) {
+                    MemberProperty::Computed(expr) => self.with_gc_root_scope(|i| {
+                        i.gc_root_value(&inner_val);
+                        let key_val = match i.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
                             other => return Err(other),
                         };
-                        let key = match self.to_property_key(&key_val) {
+                        let key = match i.to_property_key(&key_val) {
                             Ok(s) => s,
                             Err(e) => return Err(Completion::Throw(e)),
                         };
-                        let val = match self.access_property_on_value(&inner_val, &key) {
+                        let val = match i.access_property_on_value(&inner_val, &key) {
                             Completion::Normal(v) => v,
                             other => return Err(other),
                         };
-                        Ok((val, inner_val))
-                    }
+                        Ok((val, inner_val.clone()))
+                    }),
                     MemberProperty::Private(name) => {
                         match self.private_get(&inner_val, name, env) {
                             Completion::Normal(v) => Ok((v, inner_val)),
@@ -234,22 +212,23 @@ impl Interpreter {
                     }
                 }
             }
-            other => {
+            other => self.with_gc_root_scope(|i| {
                 // Computed property access (e.g., x?.[expr])
-                let key_val = match self.eval_expr(other, env) {
+                i.gc_root_value(base_val);
+                let key_val = match i.eval_expr(other, env) {
                     Completion::Normal(v) => v,
                     other => return Err(other),
                 };
-                let key = match self.to_property_key(&key_val) {
+                let key = match i.to_property_key(&key_val) {
                     Ok(s) => s,
                     Err(e) => return Err(Completion::Throw(e)),
                 };
-                let val = match self.access_property_on_value(base_val, &key) {
+                let val = match i.access_property_on_value(base_val, &key) {
                     Completion::Normal(v) => v,
                     other => return Err(other),
                 };
                 Ok((val, base_val.clone()))
-            }
+            }),
         }
     }
 

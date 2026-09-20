@@ -9,7 +9,7 @@ description: >
 info: |
   13.3.7.2 Runtime Semantics: ChainEvaluation
     OptionalChain : OptionalChain . PrivateIdentifier
-      4. Return MakePrivateReference(newValue, fieldNameString).
+      5. Return MakePrivateReference(newValue, fieldNameString).
 
   6.2.5.5 GetValue ( V )
     3.a. Let baseObj be ? ToObject(V.[[Base]]).
@@ -20,7 +20,7 @@ info: |
     1. Let entry be PrivateElementFind(O, P).
     2. If entry is empty, throw a TypeError exception.
     5. If entry.[[Get]] is undefined, throw a TypeError exception.
-features: [class, class-fields-private, class-methods-private, class-static-methods-private, optional-chaining]
+features: [BigInt, Symbol, class, class-fields-private, class-methods-private, optional-chaining]
 ---*/
 
 class C {
@@ -94,3 +94,32 @@ assert.throws(TypeError, function() { H.call(5); }, "?.() on private method, num
 
 // Set-only private accessor as the base of an optional chain.
 assert.throws(TypeError, function() { F.base(new F()); }, "set-only accessor has no getter");
+
+// Optional private link directly after `?.`: `o?.#x` and `o?.#m()`.
+var getterCalls = 0;
+
+class I {
+  #x = 1;
+  #m() { return this; }
+  get #g() { getterCalls += 1; return { y: "g" }; }
+  static read(o) { return o?.#x; }
+  static call(o) { return o?.#m(); }
+  static viaGetter(o) { return o.#g?.y; }
+}
+
+var i = new I();
+assert.sameValue(I.read(i), 1, "instance with the private name");
+assert.sameValue(I.read(null), undefined, "short-circuit on null");
+assert.sameValue(I.read(undefined), undefined, "short-circuit on undefined");
+assert.throws(TypeError, function() { I.read(5); }, "number base");
+assert.throws(TypeError, function() { I.read("str"); }, "string base");
+assert.throws(TypeError, function() { I.read(true); }, "boolean base");
+assert.throws(TypeError, function() { I.read(Symbol()); }, "symbol base");
+assert.throws(TypeError, function() { I.read(1n); }, "bigint base");
+assert.throws(TypeError, function() { I.read({}); }, "object without the private name");
+assert.sameValue(I.call(i), i, "private method called through ?.#m() gets the base as this");
+assert.throws(TypeError, function() { I.call(5); }, "?.#m() on a number base");
+
+// A private getter behind an optional chain runs exactly once.
+assert.sameValue(I.viaGetter(i), "g", "getter result, chain continues");
+assert.sameValue(getterCalls, 1, "getter invoked once");
