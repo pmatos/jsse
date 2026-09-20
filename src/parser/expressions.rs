@@ -2164,6 +2164,11 @@ impl<'a> Parser<'a> {
                     "'{n}' is not allowed as a function name in strict mode"
                 )));
             }
+            if let Some(ref n) = name
+                && Self::is_strict_reserved_word(n)
+            {
+                return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
+            }
             self.check_strict_params(&params)?;
         }
         self.check_duplicate_params_strict(&params)?;
