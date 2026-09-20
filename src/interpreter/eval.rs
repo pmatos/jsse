@@ -9171,7 +9171,6 @@ impl Interpreter {
                         }
                     };
                     self.gc_root_value(&iterator);
-                    self.pending_iter_close.push(iterator.clone());
                     self.env_set(&func_env, iter_var, iterator).ok();
                     for_of_stack.push(ForOfLoopState {
                         iter_var: iter_var.clone(),
@@ -9435,8 +9434,7 @@ impl Interpreter {
     fn unroot_for_of_iterator(&mut self, iterator: &JsValue) {
         self.gc_unroot_value(iterator);
         if let Some(iterator_id) = iterator.as_object_id() {
-            self.pending_iter_close
-                .retain(|value| value.as_object_id() != Some(iterator_id));
+            self.forget_pending_iter_close(iterator_id);
         }
     }
 
