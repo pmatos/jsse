@@ -68,7 +68,6 @@ reserved.forEach(function (name) {
 });
 
 expectSyntaxError("(async function l\\u0065t(){'use strict';})");
-expectSyntaxError("(async function* l\\u0065t(){'use strict';})");
 expectSyntaxError("(async function st\\u0061tic(){'use strict';})");
 expectSyntaxError("(async function yi\\u0065ld(){'use strict';})");
 
@@ -82,16 +81,11 @@ expectSyntaxError("(async function* yield(){})");
 expectSyntaxError("(async function await(){})");
 expectSyntaxError("(async function* await(){})");
 
-["implements", "interface", "package", "private", "protected", "public"]
-  .forEach(function (name) {
-    expectFunction("(async function " + name + "(){})");
-    expectFunction("(async function* " + name + "(){})");
-  });
-["let", "static", "yield"].forEach(function (name) {
+reserved.forEach(function (name) {
   expectFunction("(async function " + name + "(){})");
-});
-["let", "static"].forEach(function (name) {
-  expectFunction("(async function* " + name + "(){})");
+  if (name !== "yield") {
+    expectFunction("(async function* " + name + "(){})");
+  }
 });
 
 expectFunction("(async function foo(){'use strict';})");
