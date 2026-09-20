@@ -5917,40 +5917,41 @@ impl Interpreter {
                 return result;
             }
         }
-        let desc = if func_val.is_undefined() {
-            "undefined is not a function".to_string()
-        } else if func_val.is_null() {
-            "null is not a function".to_string()
-        } else if let Some(b) = func_val.as_boolean() {
-            format!("{} is not a function", b)
-        } else if let Some(n) = func_val.as_number() {
-            format!("{} is not a function", n)
-        } else if let Some(s) = func_val.as_string() {
-            let preview: String = s.to_rust_string().chars().take(30).collect();
-            format!("\"{}\" is not a function", preview)
-        } else if let Some(id) = func_val.as_object_id() {
-            if let Some(obj) = self.get_object_cell(id) {
-                let class = obj.borrow().class_name.clone();
-                let has_callable = obj.borrow().callable.is_some();
-                let keys: Vec<JsPropertyKey> = obj
-                    .borrow()
-                    .property_order
-                    .iter()
-                    .take(10)
-                    .cloned()
-                    .collect();
-                format!(
-                    "object (class={}, callable={}, id={}, keys={:?}) is not a function",
-                    class, has_callable, id, keys
-                )
-            } else {
-                format!("object (id={}, GC'd?) is not a function", id)
-            }
-        } else {
-            "is not a function".to_string()
-        };
+        let desc = format!("{} is not a function", self.describe_non_callable(func_val));
         let err = self.create_type_error(&desc);
         Completion::Throw(err)
+    }
+
+    /// Names a non-callable value for a "... is not a function" message.
+    /// Never runs user code (no ToString, no getters) and never exposes
+    /// engine-internal object state.
+    fn describe_non_callable(&self, val: &JsValue) -> String {
+        if val.is_undefined() {
+            "undefined".to_string()
+        } else if val.is_null() {
+            "null".to_string()
+        } else if let Some(b) = val.as_boolean() {
+            b.to_string()
+        } else if let Some(n) = val.as_number() {
+            n.to_string()
+        } else if let Some(s) = val.as_string() {
+            let preview: String = s.to_rust_string().chars().take(30).collect();
+            format!("\"{preview}\"")
+        } else if let Some(sym) = val.as_symbol() {
+            match sym.description() {
+                Some(desc) => format!("Symbol({desc})"),
+                None => "Symbol()".to_string(),
+            }
+        } else if let Some(big) = val.as_bigint() {
+            format!("{}n", big.value)
+        } else if let Some(id) = val.as_object_id() {
+            match self.get_object_cell(id) {
+                Some(obj) => format!("#<{}>", obj.borrow().class_name),
+                None => "#<Object>".to_string(),
+            }
+        } else {
+            "value".to_string()
+        }
     }
 
     fn eval_spread_args(
