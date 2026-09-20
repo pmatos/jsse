@@ -79,6 +79,9 @@ reserved.forEach(function (name) {
 ["let", "static", "yield"].forEach(function (name) {
   expectFunction("(async function " + name + "(){})");
 });
+["let", "static"].forEach(function (name) {
+  expectFunction("(async function* " + name + "(){})");
+});
 
 // A non-reserved name with a directive is fine.
 expectFunction("(async function foo(){'use strict';})");
