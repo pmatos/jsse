@@ -5253,9 +5253,13 @@ mod require_callable_arg_tests {
             interp.is_callable(&p),
             "spec IsCallable accepts a Proxy wrapping a function"
         );
-        let (arg, ..) =
-            require_callable_arg(&mut interp, &iter, std::slice::from_ref(&p), "mapper is not a function")
-                .expect("the open-coded probe agrees with is_callable here");
+        let (arg, ..) = require_callable_arg(
+            &mut interp,
+            &iter,
+            std::slice::from_ref(&p),
+            "mapper is not a function",
+        )
+        .expect("the open-coded probe agrees with is_callable here");
         assert_eq!(arg.as_object_id(), p.as_object_id());
         let closed = global(&interp, "closed");
         assert_eq!(
