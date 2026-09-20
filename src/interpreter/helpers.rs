@@ -2064,13 +2064,30 @@ fn parse_legacy_numeric_slash(s: &str) -> Option<f64> {
     if parts.next().is_some() {
         return None;
     }
-    let month = parse_legacy_digits(first)?;
-    let day = parse_legacy_digits(second)?;
-    if third.len() < 3 {
-        return None;
+    let first_value = parse_legacy_digits(first)?;
+    let second_value = parse_legacy_digits(second)?;
+    let third_value = parse_legacy_digits(third)?;
+    if first.len() >= 3 || first_value > 31 {
+        make_legacy_local_date(
+            expand_legacy_year(first, first_value),
+            second_value,
+            third_value,
+        )
+    } else {
+        make_legacy_local_date(
+            expand_legacy_year(third, third_value),
+            first_value,
+            second_value,
+        )
     }
-    let year = parse_legacy_digits(third)?;
-    make_legacy_local_date(year, month, day)
+}
+
+fn expand_legacy_year(token: &str, value: u32) -> u32 {
+    match (token.len(), value) {
+        (1..=2, 0..=49) => value + 2000,
+        (1..=2, _) => value + 1900,
+        _ => value,
+    }
 }
 
 fn make_legacy_local_date(year: u32, month: u32, day: u32) -> Option<f64> {

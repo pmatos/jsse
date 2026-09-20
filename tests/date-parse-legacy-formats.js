@@ -30,3 +30,27 @@ var invalid = [
 for (var i = 0; i < invalid.length; i++) {
   sameValue(Date.parse(invalid[i]), NaN, JSON.stringify(invalid[i]));
 }
+
+// Two-digit years: < 50 maps to 20xx, >= 50 to 19xx; 3+ digits are literal.
+sameValue(Date.parse("1/1/0"), local(2000, 0, 1), "1/1/0");
+sameValue(Date.parse("1/1/49"), local(2049, 0, 1), "1/1/49");
+sameValue(Date.parse("1/1/50"), local(1950, 0, 1), "1/1/50");
+sameValue(Date.parse("1/1/99"), local(1999, 0, 1), "1/1/99");
+sameValue(Date.parse("12/1/1"), local(2001, 11, 1), "12/1/1");
+
+var literalYear = new Date(2000, 0, 1);
+literalYear.setFullYear(100);
+sameValue(Date.parse("1/1/100"), literalYear.getTime(), "1/1/100");
+literalYear.setFullYear(999);
+sameValue(Date.parse("1/1/999"), literalYear.getTime(), "1/1/999");
+
+// A first component that cannot be a month selects year-first Y/M/D.
+sameValue(Date.parse("2011/08/04"), local(2011, 7, 4), "2011/08/04");
+sameValue(Date.parse("2011/8/4"), local(2011, 7, 4), "2011/8/4");
+sameValue(Date.parse("50/1/1"), local(1950, 0, 1), "50/1/1");
+sameValue(Date.parse("32/1/1"), local(2032, 0, 1), "32/1/1");
+
+var invalidShort = ["13/1/1", "31/1/1", "99/1/99", "0/10/0"];
+for (var j = 0; j < invalidShort.length; j++) {
+  sameValue(Date.parse(invalidShort[j]), NaN, JSON.stringify(invalidShort[j]));
+}
