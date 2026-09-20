@@ -838,9 +838,10 @@ pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
     }
 }
 
-/// Checks if a statement is or contains a Block with `await using` declarations.
-/// Only blocks need special handling because their disposal (at block exit) must
-/// trigger an Await suspension. For/try/switch handle disposal internally.
+/// Checks if a statement is, or is reached through `if`/labeled statements from,
+/// a Block that directly declares `await using`. It does not look through
+/// loops, `try` or `switch`; `has_suspendable_await_using_block` extends the
+/// reach to those containers.
 pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
     match stmt {
         Statement::Block(stmts) => block_has_await_using(stmts),
@@ -859,6 +860,123 @@ pub(crate) fn block_has_await_using(stmts: &[Statement]) -> bool {
     stmts
         .iter()
         .any(|s| matches!(s, Statement::Variable(decl) if decl.kind == VarKind::AwaitUsing))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AwaitUsingScan {
+    /// No `await using` block is reachable.
+    None,
+    /// Every reachable `await using` block can be emitted intact as the last
+    /// statement of its own state, and lowering the containers on the way to it
+    /// leaves their lexical scoping unobservable.
+    Isolatable,
+    /// Lowering a container would flatten a lexical scope that user code can
+    /// observe, so the whole statement keeps running in the tree-walker.
+    Blocked,
+}
+
+impl AwaitUsingScan {
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Blocked, _) | (_, Self::Blocked) => Self::Blocked,
+            (Self::Isolatable, _) | (_, Self::Isolatable) => Self::Isolatable,
+            _ => Self::None,
+        }
+    }
+
+    fn blocked_unless_none(self) -> Self {
+        match self {
+            Self::None => Self::None,
+            _ => Self::Blocked,
+        }
+    }
+}
+
+fn declares_lexical_binding(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Variable(decl) => decl.kind != VarKind::Var,
+        Statement::ClassDeclaration(_) | Statement::FunctionDeclaration(_) => true,
+        Statement::Labeled(_, inner) => declares_lexical_binding(inner),
+        _ => false,
+    }
+}
+
+/// A statement list the transform flattens into the enclosing state graph. Its
+/// declarations lose their block scope once flattened, so a list that holds an
+/// isolatable block next to a lexical declaration cannot be lowered.
+fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
+    let combined = stmts.clone().fold(AwaitUsingScan::None, |acc, s| {
+        acc.combine(scan_await_using(s))
+    });
+    if combined == AwaitUsingScan::Isolatable && stmts.into_iter().any(declares_lexical_binding) {
+        AwaitUsingScan::Blocked
+    } else {
+        combined
+    }
+}
+
+fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
+    match stmt {
+        Statement::Block(stmts) if block_has_await_using(stmts) => AwaitUsingScan::Isolatable,
+        Statement::Block(stmts) => scan_flattened_list(stmts.iter()),
+        Statement::If(i) => scan_await_using(&i.consequent).combine(
+            i.alternate
+                .as_ref()
+                .map_or(AwaitUsingScan::None, |a| scan_await_using(a)),
+        ),
+        Statement::Labeled(_, inner) => scan_await_using(inner),
+        Statement::While(w) => scan_await_using(&w.body),
+        Statement::DoWhile(d) => scan_await_using(&d.body),
+        Statement::For(f) => {
+            let body = scan_await_using(&f.body);
+            match &f.init {
+                Some(ForInit::Variable(decl)) if decl.kind != VarKind::Var => {
+                    body.blocked_unless_none()
+                }
+                _ => body,
+            }
+        }
+        Statement::ForIn(f) => scan_await_using(&f.body).blocked_unless_none(),
+        Statement::ForOf(f) => {
+            let body = scan_await_using(&f.body);
+            match &f.left {
+                ForInOfLeft::Variable(decl)
+                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) =>
+                {
+                    body.blocked_unless_none()
+                }
+                _ => body,
+            }
+        }
+        Statement::Try(t) => {
+            let mut result = scan_flattened_list(t.block.iter());
+            if let Some(handler) = &t.handler {
+                result = result.combine(scan_flattened_list(handler.body.iter()));
+            }
+            if let Some(finalizer) = &t.finalizer {
+                result = result.combine(scan_flattened_list(finalizer.iter()));
+            }
+            result
+        }
+        Statement::Switch(s) => {
+            scan_flattened_list(s.cases.iter().flat_map(|c| c.consequent.iter()))
+        }
+        Statement::With(_, body) => scan_await_using(body).blocked_unless_none(),
+        _ => AwaitUsingScan::None,
+    }
+}
+
+/// Checks if a statement reaches an `await using` block that an async function
+/// can isolate into its own state, through the containers the state-machine
+/// transform can lower: `if`, labeled statements, plain blocks, loop bodies,
+/// `try`/`catch`/`finally` bodies and `switch` cases. The block's disposal then
+/// suspends the function at its Awaits instead of draining the queue inline.
+///
+/// Containers whose lowering would flatten an observable lexical scope
+/// (`for (let ..)`, `for-in`, `with`, a list declaring a binding beside the
+/// block) are excluded and keep running in the tree-walker.
+pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
+    scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
 
 pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
@@ -982,6 +1100,86 @@ mod tests {
             is_static: false,
             computed: true,
         })
+    }
+
+    fn scan_first_statement(src: &str) -> bool {
+        let program = crate::parser::Parser::new(&format!("async function f() {{ {src} }}"))
+            .expect("parser init")
+            .parse_program()
+            .expect("parse program");
+        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
+            panic!("expected a function declaration");
+        };
+        has_suspendable_await_using_block(&f.body.as_slice()[0])
+    }
+
+    #[test]
+    fn suspendable_await_using_block_through_containers() {
+        let isolatable = [
+            "{ await using a = null; }",
+            "if (c) { await using a = null; } else { x(); }",
+            "if (c) x(); else { await using a = null; }",
+            "l: { await using a = null; }",
+            "{ { await using a = null; } }",
+            "try { { await using a = null; } } catch (e) {}",
+            "try {} catch (e) { { await using a = null; } }",
+            "try {} finally { { await using a = null; } }",
+            "while (c) { await using a = null; }",
+            "do { await using a = null; } while (c);",
+            "for (;;) { await using a = null; }",
+            "for (var i = 0; i < 2; i++) { await using a = null; }",
+            "for (x of y) { await using a = null; }",
+            "for (var x of y) { await using a = null; }",
+            "for (let x of y) { await using a = null; }",
+            "for (const x of y) { await using a = null; }",
+            "for await (const x of y) { await using a = null; }",
+            "for await (x of y) { { await using a = null; } }",
+            "outer: while (c) { { await using a = null; } }",
+            "switch (x) { case 1: { await using a = null; } break; }",
+            "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
+        ];
+        for src in isolatable {
+            assert!(scan_first_statement(src), "expected isolatable: {src}");
+        }
+    }
+
+    #[test]
+    fn no_await_using_block_is_not_suspendable() {
+        let none = [
+            "await 0;",
+            "await using a = null;",
+            "{ let a = null; }",
+            "try { x(); } catch (e) {}",
+            "while (c) { x(); }",
+            "for await (const x of y) { z(); }",
+            "for (let i = 0; i < 2; i++) { x(); }",
+            "switch (x) { case 1: y(); }",
+            "async function g() { { await using a = null; } }",
+        ];
+        for src in none {
+            assert!(!scan_first_statement(src), "expected no scan hit: {src}");
+        }
+    }
+
+    #[test]
+    fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
+        let blocked = [
+            "for (let i = 0; i < 3; i++) { { await using a = null; } }",
+            "for (const i = 0; ;) { { await using a = null; } }",
+            "while (c) { let j = i; { await using a = null; } }",
+            "for (k in o) { { await using a = null; } }",
+            "try { let x = 2; { await using a = null; } } finally {}",
+            "try {} catch (e) { const x = 1; { await using a = null; } }",
+            "try {} finally { class C {} { await using a = null; } }",
+            "{ let x = 1; { await using a = null; } }",
+            "with (o) { { await using a = null; } }",
+            "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
+            "for (await using r of y) { { await using a = null; } }",
+            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
+        ];
+        for src in blocked {
+            assert!(!scan_first_statement(src), "expected blocked: {src}");
+        }
     }
 
     #[test]

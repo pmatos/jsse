@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -21,6 +22,19 @@ pub(crate) struct GeneratorState {
     pub id: usize,
     pub body: Body,
     pub terminator: StateTerminator,
+    /// Break/continue targets for an `await using` block left intact as the
+    /// last statement of this state; see [`BlockExits`].
+    pub block_exits: Option<Rc<BlockExits>>,
+}
+
+/// Where a `break` or `continue` that escapes an isolated `await using` block
+/// resumes. The block runs verbatim, so its jumps surface as raw completions
+/// once its DisposeResources finishes; the async-function driver resolves them
+/// through these tables, keyed by label (`None` for the unlabeled form).
+#[derive(Debug)]
+pub(crate) struct BlockExits {
+    pub breaks: HashMap<Option<String>, LoopControlTarget>,
+    pub continues: HashMap<Option<String>, LoopControlTarget>,
 }
 
 #[derive(Debug, Clone)]
@@ -276,6 +290,7 @@ impl TransformContext {
             id,
             body: Body::new(Vec::new()),
             terminator: StateTerminator::Completed,
+            block_exits: None,
         });
         id
     }
@@ -387,6 +402,7 @@ fn transform_generator_inner_opts(
         && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
+        && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
     {
         return create_simple_machine(body, params, &analysis);
     }
@@ -433,6 +449,7 @@ fn create_simple_machine(
             id: 0,
             body,
             terminator: StateTerminator::Completed,
+            block_exits: None,
         }],
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
@@ -519,7 +536,7 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
         return true;
     }
     if is_async {
-        contains_suspension(stmt)
+        contains_suspension(stmt) || (detect_for_await && has_suspendable_await_using_block(stmt))
     } else {
         contains_yield(stmt)
     }
@@ -651,6 +668,14 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 };
                 ctx.emit_statement(stmt.clone());
                 ctx.finalize_current_state(StateTerminator::Goto(resume_state));
+                if ctx.detect_for_await
+                    && !(ctx.break_targets.is_empty() && ctx.continue_targets.is_empty())
+                {
+                    ctx.states[ctx.current_state_id].block_exits = Some(Rc::new(BlockExits {
+                        breaks: ctx.break_targets.clone(),
+                        continues: ctx.continue_targets.clone(),
+                    }));
+                }
                 ctx.current_state_id = resume_state;
                 // If there were remaining statements after the block in the parent,
                 // they'll be emitted into resume_state by the caller.

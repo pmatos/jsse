@@ -8757,6 +8757,14 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Break(label, _) => {
+                    if let Some(target) = state_machine.states[current_id]
+                        .block_exits
+                        .as_ref()
+                        .and_then(|exits| exits.breaks.get(label).copied())
+                    {
+                        route_loop_control!(target);
+                        continue;
+                    }
                     // Close iterator for the innermost matching for-of loop
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
                         let after_state = for_of_stack[pos].after_state;
@@ -8766,6 +8774,14 @@ impl Interpreter {
                     }
                 }
                 Completion::Continue(label, _) => {
+                    if let Some(target) = state_machine.states[current_id]
+                        .block_exits
+                        .as_ref()
+                        .and_then(|exits| exits.continues.get(label).copied())
+                    {
+                        route_loop_control!(target);
+                        continue;
+                    }
                     // An inline statement can surface continue directly rather
                     // than through a LoopControl terminator. Route it through
                     // intervening finalizers before returning to the loop head.
