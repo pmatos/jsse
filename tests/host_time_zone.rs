@@ -71,3 +71,30 @@ fn posix_tz_environment_controls_the_system_time_zone_and_date_offsets() {
 fn iana_link_tz_environment_uses_the_primary_time_zone_identifier() {
     assert_tz_environment_controls_the_system_time_zone("US/Eastern");
 }
+
+#[test]
+fn casablanca_tz_beyond_the_transition_table_uses_the_permanent_footer_offset() {
+    // Africa/Casablanca's Ramadan-linked standard-time carve-out is not a
+    // repeating Gregorian-calendar rule, so past chrono-tz's tabulated
+    // transitions a POSIX footer collapses it to a fixed, non-oscillating
+    // offset (here: UTC, i.e. getTimezoneOffset() === 0) rather than the
+    // Ramadan-dependent offset a nearby historical year would show.
+    let output = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .env("TZ", "Africa/Casablanca")
+        .args([
+            "-e",
+            "console.log(new Date(2160, 0, 1).getTimezoneOffset());",
+        ])
+        .output()
+        .expect("failed to run jsse");
+
+    assert!(
+        output.status.success(),
+        "jsse failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("jsse stdout was not UTF-8"),
+        "0\n",
+    );
+}

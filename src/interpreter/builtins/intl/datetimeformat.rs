@@ -2,7 +2,8 @@ use super::super::super::*;
 use super::super::temporal::canonicalize_iana_tz;
 use crate::interpreter::helpers::{
     date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time,
-    named_time_zone_offset_ms, now_ms, sec_from_time, week_day, year_from_time,
+    named_time_zone_offset_secs, named_time_zone_timestamp, now_ms, resolve_named_time_zone,
+    sec_from_time, week_day, year_from_time,
 };
 
 fn extract_unicode_extension(locale: &str, key: &str) -> Option<String> {
@@ -196,7 +197,9 @@ fn normalize_offset_timezone(tz: &str) -> Option<String> {
 }
 
 /// Get the UTC offset in milliseconds for a timezone at a specific UTC epoch ms.
-/// Uses chrono_tz for DST-aware offset computation for IANA timezones.
+/// Uses jiff for DST-aware, POSIX-footer-evaluating offset computation for
+/// IANA timezones (chrono-tz's materialized transition tables freeze at a
+/// fixed cutoff and don't evaluate the footer past it — issue #631).
 fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
     if let Some((h, m)) = parse_offset_timezone(tz) {
         let total_min = h * 60 + if h < 0 { -m } else { m };
@@ -212,10 +215,11 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
         tz.to_string()
     };
 
-    if let Ok(tz_parsed) = tz_str.parse::<Tz>()
-        && let Some(offset_ms) = named_time_zone_offset_ms(tz_parsed, epoch_ms)
+    if tz_str.parse::<Tz>().is_ok()
+        && let Some(tz_parsed) = resolve_named_time_zone(&tz_str)
     {
-        return offset_ms;
+        let epoch_secs = (epoch_ms.floor() as i64).div_euclid(1000);
+        return named_time_zone_offset_secs(&tz_parsed, epoch_secs) as f64 * 1000.0;
     }
 
     // Fallback to static lookup
@@ -4229,9 +4233,10 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
         };
     }
 
-    // For named styles ("short", "long"), use chrono_tz for DST-aware names
+    // For named styles ("short", "long"), use jiff for DST-aware, POSIX-footer
+    // evaluating names (chrono-tz's tables freeze past a fixed cutoff — issue
+    // #631).
     {
-        use chrono::{Offset, TimeZone, Utc};
         use chrono_tz::Tz;
 
         let canonical = canonicalize_timezone(tz);
@@ -4241,14 +4246,14 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
             tz.to_string()
         };
 
-        if let Ok(tz_parsed) = tz_str.parse::<Tz>() {
+        if tz_str.parse::<Tz>().is_ok()
+            && let Some(tz_parsed) = resolve_named_time_zone(&tz_str)
+        {
             let epoch_secs = (epoch_ms / 1000.0).floor() as i64;
-            let nanos = ((epoch_ms % 1000.0) * 1_000_000.0).abs() as u32;
-            if let Some(dt) = Utc.timestamp_opt(epoch_secs, nanos).single() {
-                let local = dt.with_timezone(&tz_parsed);
-                let abbr = local.format("%Z").to_string();
-                let offset = local.offset().fix();
-                let offset_secs = offset.local_minus_utc();
+            if let Some(ts) = named_time_zone_timestamp(epoch_secs) {
+                let info = tz_parsed.to_offset_info(ts);
+                let abbr = info.abbreviation().to_string();
+                let offset_secs = info.offset().seconds();
 
                 match style {
                     "short" | "shortGeneric" => return abbr,
