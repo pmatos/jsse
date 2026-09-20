@@ -804,7 +804,8 @@ pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
             matches!(&p.key, PropertyKey::Computed(e) if expr_contains_suspension(e))
                 || expr_contains_suspension(&p.value)
         }),
-        Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => false,
+        Expression::Function(_) | Expression::ArrowFunction(_) => false,
+        Expression::Class(c) => class_contains_suspension(c.super_class.as_deref(), &c.body),
         Expression::Unary(_, e)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -922,8 +923,23 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         }
         Statement::Labeled(_, inner) => contains_suspension(inner),
         Statement::With(e, s) => expr_contains_suspension(e) || contains_suspension(s),
-        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        Statement::FunctionDeclaration(_) => false,
+        Statement::ClassDeclaration(c) => {
+            class_contains_suspension(c.super_class.as_deref(), &c.body)
+        }
     }
+}
+
+fn class_contains_suspension(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
+    super_class.is_some_and(expr_contains_suspension)
+        || elements.iter().any(|e| {
+            let key = match e {
+                ClassElement::Method(m) => &m.key,
+                ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
+                ClassElement::StaticBlock(_) => return false,
+            };
+            matches!(key, PropertyKey::Computed(e) if expr_contains_suspension(e))
+        })
 }
 
 #[cfg(test)]
@@ -1110,6 +1126,40 @@ mod tests {
 
         assert_eq!(analysis.yield_points.len(), 1);
         assert!(contains_yield(&body[0]));
+    }
+
+    #[test]
+    fn test_await_in_class_computed_method_key() {
+        let body = [Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: None,
+            body: vec![ClassElement::Method(ClassMethod {
+                key: PropertyKey::Computed(Box::new(Expression::Await(Box::new(
+                    Expression::Literal(Literal::Number(1.0)),
+                )))),
+                kind: ClassMethodKind::Method,
+                value: make_function_expr(),
+                is_static: false,
+                computed: true,
+            })],
+            source_text: None,
+        })];
+
+        assert!(contains_suspension(&body[0]));
+    }
+
+    #[test]
+    fn test_await_in_class_heritage() {
+        let body = [Statement::ClassDeclaration(ClassDecl {
+            name: "C".to_string(),
+            super_class: Some(Box::new(Expression::Await(Box::new(Expression::Literal(
+                Literal::Number(1.0),
+            ))))),
+            body: vec![],
+            source_text: None,
+        })];
+
+        assert!(contains_suspension(&body[0]));
     }
 
     #[test]
