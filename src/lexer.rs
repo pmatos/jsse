@@ -1726,6 +1726,29 @@ mod tests {
     }
 
     #[test]
+    fn wide_hex_literal_ties_round_half_to_even() {
+        // "2" + 12 zeros + "1" + 16 zeros = 2*16^29 + 16^16 = 2^117 + 2^64, the
+        // exact midpoint between representable doubles 2^117 and 2^117 + 2^65
+        // (spacing 2^65 in that binade) — 𝔽(MV) breaks the tie towards the
+        // even mantissa, 2^117.
+        let tie = format!("0x2{}1{}", "0".repeat(12), "0".repeat(16));
+        assert_eq!(
+            lex_no_lt(&tie),
+            vec![Token::NumericLiteral(2f64.powi(117)), Token::Eof]
+        );
+        // Same digits but the final zero becomes a 1: exact value 2^117 + 2^64 + 1,
+        // just past the tie, so it rounds up to 2^117 + 2^65 instead.
+        let past_tie = format!("0x2{}1{}1", "0".repeat(12), "0".repeat(15));
+        assert_eq!(
+            lex_no_lt(&past_tie),
+            vec![
+                Token::NumericLiteral(2f64.powi(117) + 2f64.powi(65)),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
     fn boolean_null() {
         assert_eq!(
             lex_no_lt("true false null"),
