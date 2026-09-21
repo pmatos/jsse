@@ -478,7 +478,10 @@ if (typeof print === "undefined") {
     var print = function(...args) { console.log(...args); };
 }
 if (typeof printErr === "undefined") {
-    var printErr = function(...args) { console.error(...args); };
+    var printErr = function(...args) {
+        (typeof console.error === "function" ? console.error : console.log)
+            .apply(console, args);
+    };
 }
 if (typeof performance === "undefined") {
     var performance = {};
