@@ -139,6 +139,21 @@ pub(crate) enum StateTerminator {
         resume_state: usize,
         sent_value_binding: Option<SentValueBinding>,
     },
+    /// Opens a block scope: creates the block's own `Environment` (a child of
+    /// whatever env is active), pushes it onto the driver's `scope_stack`, and
+    /// continues at `body_state` executing against it. Emitted only for a
+    /// block that directly declares `await using` in a plain async function
+    /// (never a generator or async generator) — see
+    /// `has_block_with_await_using`.
+    EnterScope {
+        body_state: usize,
+    },
+    /// Closes the block scope most recently opened by `EnterScope`: pops it
+    /// from `scope_stack` and disposes its resources (suspendably, at each
+    /// `Await` of `DisposeResources`) before continuing at `after_state`.
+    ExitScope {
+        after_state: usize,
+    },
     Completed,
 }
 
@@ -152,6 +167,10 @@ pub(crate) struct LoopControlTarget {
     pub target_state: usize,
     pub try_depth: usize,
     pub for_of_depth: usize,
+    /// Number of block scopes (`EnterScope`/`ExitScope`) open when this
+    /// target's loop/label was registered, so `route_loop_control!` never
+    /// disposes a scope that lexically encloses the target itself.
+    pub scope_depth: usize,
 }
 
 /// Clear IC sites in a sent-value binding pattern (the destructuring target of
@@ -228,6 +247,8 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         | StateTerminator::LoopControl(_)
         | StateTerminator::TryExit { .. }
         | StateTerminator::EnterFinally { .. }
+        | StateTerminator::EnterScope { .. }
+        | StateTerminator::ExitScope { .. }
         | StateTerminator::Completed => {}
     }
 }
@@ -274,6 +295,11 @@ struct TransformContext {
     continue_targets: HashMap<Option<String>, LoopControlTarget>,
     try_stack: Vec<TryInfo>,
     for_of_depth: usize,
+    /// Number of block scopes (`transform_scope_block`) currently open,
+    /// stamped onto each `LoopControlTarget` so `route_loop_control!` can
+    /// tell a target lexically inside the scope (no crossing) from one
+    /// outside it (the scope must dispose first).
+    scope_depth: usize,
     iteration_labels: Vec<String>,
     temp_vars: Vec<String>,
     generated_temps: HashSet<String>,
@@ -304,6 +330,7 @@ impl TransformContext {
             continue_targets: HashMap::new(),
             try_stack: Vec::new(),
             for_of_depth: 0,
+            scope_depth: 0,
             iteration_labels: Vec::new(),
             temp_vars: Vec::new(),
             generated_temps: HashSet::new(),
@@ -415,6 +442,7 @@ impl TransformContext {
             target_state,
             try_depth: self.try_stack.len(),
             for_of_depth,
+            scope_depth: self.scope_depth,
         }
     }
 
@@ -832,6 +860,29 @@ fn hoist_class_suspensions(
     }
 }
 
+/// Lowers a block scope (a block, or a try/catch/finally clause body, that
+/// directly declares `await using`) through `EnterScope`/`ExitScope`: the
+/// interior is lowered by the ordinary per-statement pipeline, split across
+/// as many states as it needs, executing against the scope's own
+/// `Environment` (created at `EnterScope`) rather than the enclosing one.
+/// `after_state` is where control goes once the scope's own disposal (at
+/// `ExitScope`) finishes on a normal (non-abrupt) exit.
+fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
+    let body_state = ctx.new_state();
+    let exit_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::EnterScope { body_state });
+    ctx.current_state_id = body_state;
+    ctx.scope_depth += 1;
+    transform_statements(stmts, ctx, exit_state);
+    ctx.scope_depth -= 1;
+    if ctx.current_state_id != exit_state {
+        ctx.finalize_current_state(StateTerminator::Goto(exit_state));
+    }
+    ctx.current_state_id = exit_state;
+    ctx.finalize_current_state(StateTerminator::ExitScope { after_state });
+    ctx.current_state_id = after_state;
+}
+
 fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, after_state: usize) {
     match stmt {
         Statement::Expression(expr) => {
@@ -845,12 +896,26 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Block(stmts) => {
-            if ctx.is_async && block_has_await_using(stmts) {
-                // Block with `await using` — keep the block intact so it creates
-                // a block_env with its own dispose_stack. It stays the last
-                // statement of its state: the async function executor parks the
-                // block's DisposeResources and suspends at its Awaits, then
-                // continues at the state boundary created after the block.
+            if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
+                // A block with `await using`, in a plain async function: give
+                // it a real scope (`EnterScope`/`ExitScope`) so its interior
+                // lowers through the ordinary per-statement pipeline instead
+                // of being tree-walked intact — see issue #683.
+                let resume_state = if after_state == usize::MAX {
+                    ctx.new_state()
+                } else {
+                    after_state
+                };
+                transform_scope_block(stmts, ctx, resume_state);
+            } else if ctx.is_async && block_has_await_using(stmts) {
+                // The same shape in an async generator: `EnterScope`/
+                // `ExitScope` are emitted only for plain async functions
+                // (`transform_async_function`, gated on `detect_for_await`),
+                // so keep the block intact here, tree-walked with its own
+                // block_env and dispose_stack. It stays the last statement of
+                // its state: the executor parks the block's DisposeResources
+                // and suspends at its Awaits, then continues at the state
+                // boundary created after the block.
                 let resume_state = if after_state == usize::MAX {
                     ctx.new_state()
                 } else {
@@ -858,14 +923,6 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 };
                 ctx.emit_statement(stmt.clone());
                 ctx.finalize_current_state(StateTerminator::Goto(resume_state));
-                if ctx.detect_for_await
-                    && !(ctx.break_targets.is_empty() && ctx.continue_targets.is_empty())
-                {
-                    ctx.states[ctx.current_state_id].block_exits = Some(Rc::new(BlockExits {
-                        breaks: ctx.break_targets.clone(),
-                        continues: ctx.continue_targets.clone(),
-                    }));
-                }
                 ctx.current_state_id = resume_state;
                 // If there were remaining statements after the block in the parent,
                 // they'll be emitted into resume_state by the caller.
