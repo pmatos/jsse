@@ -78,16 +78,16 @@ decision), and a hand-written `Debug` that delegates to the inner
 a bare `Box<Expression>` (`Box<T>`'s own `Debug` impl is already
 transparent).
 
-For uniformity — one link type and one extraction idiom (`.into_expression()`)
-in `ast.rs`, not two — the remaining `Box<Expression>` fields reachable from
-`Expression`/`Pattern`/`ExportDeclaration` were converted too:
-`MemberProperty::Computed`, `PropertyKey::Computed`, `Pattern::Assign`'s and
-`Pattern::MemberExpression`'s expression operands, `ClassDecl`/
-`ClassExpr::super_class`, and `ExportDeclaration::Default`. None of these are
-required for the stack-safety fix itself — they are all reached through
-genuine recursive-descent parsing, bounded by `MAX_PARSE_DEPTH` — but leaving
-them as raw `Box<Expression>` alongside `ExprBox` elsewhere in the same file
-would mean two incompatible link types with no safety benefit from the split.
+Beyond `Expression`'s own variants, the remaining boxed-expression links that
+sit inside the parsed tree were converted too: `MemberProperty::Computed`,
+`PropertyKey::Computed`, and `Pattern::Assign`'s and
+`Pattern::MemberExpression`'s expression operands. `ClassDecl`/
+`ClassExpr::super_class` and `ExportDeclaration::Default` deliberately stay a
+plain `Box<Expression>`: they are reached only through genuine
+recursive-descent parsing, bounded by `MAX_PARSE_DEPTH`, and never from the
+unbounded operator or member/call continuation loops. An `ExprBox` chain
+hanging below one of them still drops iteratively, since it goes through
+`ExprBox`'s own `Drop`.
 
 ## Alternatives considered
 
