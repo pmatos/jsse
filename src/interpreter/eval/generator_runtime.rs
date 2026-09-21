@@ -715,6 +715,15 @@ impl Interpreter {
         let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
+        // Lexical scope stack (see `AsyncFunctionState::scope_stack`); kept in
+        // the GC-visible `generator_scope_stacks` side table like
+        // `for_of_stack`, since a generator's driver state lives outside the
+        // object's `IteratorState` enum.
+        let mut scope_stack: Vec<ScopeFrame> = self
+            .generator_scope_stacks
+            .get(&o.id)
+            .cloned()
+            .unwrap_or_default();
         let mut for_of_stack = self
             .generator_for_of_stacks
             .get(&o.id)
@@ -768,10 +777,18 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let term_env = for_of_stack
+            let for_of_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
+            let term_env = self.reconcile_scope_stack(
+                &mut scope_stack,
+                &state_machine.states[current_id],
+                current_try_stack.len(),
+                for_of_stack.len(),
+                &for_of_env,
+            );
+            self.sync_generator_scope_stack(o.id, &scope_stack);
             let mut stmt_result = self.exec_state_machine_body(
                 &state_machine.states[current_id].body,
                 &term_env,
@@ -1418,10 +1435,19 @@ impl Interpreter {
                         ctx.entered_catch = true;
                     }
                     let exception_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
+                    // §14.15.2 CatchClauseEvaluation: see the matching comment
+                    // in `async_function_resume` (eval.rs).
+                    let catch_env = Environment::new(Some(term_env.clone()));
                     if let Some(pattern) = param {
                         let _ =
-                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &term_env);
+                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &catch_env);
                     }
+                    scope_stack.push(ScopeFrame {
+                        env: catch_env,
+                        try_depth: current_try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
+                    self.sync_generator_scope_stack(o.id, &scope_stack);
                     current_id = *body_state;
                 }
 
@@ -3980,6 +4006,11 @@ impl Interpreter {
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
         let mut check_abrupt_on_resume = check_abrupt_on_resume;
+        let mut scope_stack: Vec<ScopeFrame> = self
+            .generator_scope_stacks
+            .get(&o.id)
+            .cloned()
+            .unwrap_or_default();
         let mut for_of_stack = self
             .generator_for_of_stacks
             .get(&o.id)
@@ -4183,10 +4214,18 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let term_env = for_of_stack
+            let for_of_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
+            let term_env = self.reconcile_scope_stack(
+                &mut scope_stack,
+                &state_machine.states[current_id],
+                current_try_stack.len(),
+                for_of_stack.len(),
+                &for_of_env,
+            );
+            self.sync_generator_scope_stack(o.id, &scope_stack);
             let mut stmt_result = self.exec_state_machine_body(
                 &state_machine.states[current_id].body,
                 &term_env,
@@ -5270,10 +5309,19 @@ impl Interpreter {
                         ctx.entered_catch = true;
                     }
                     let exception_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
+                    // §14.15.2 CatchClauseEvaluation: see the matching comment
+                    // in `async_function_resume` (eval.rs).
+                    let catch_env = Environment::new(Some(term_env.clone()));
                     if let Some(pattern) = param {
                         let _ =
-                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &term_env);
+                            self.bind_pattern(pattern, exception_val, BindingKind::Let, &catch_env);
                     }
+                    scope_stack.push(ScopeFrame {
+                        env: catch_env,
+                        try_depth: current_try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
+                    self.sync_generator_scope_stack(o.id, &scope_stack);
                     current_id = *body_state;
                 }
 
@@ -6779,6 +6827,19 @@ impl Interpreter {
                 .or_default();
             slot.clear();
             slot.extend_from_slice(for_of_stack);
+        }
+    }
+
+    /// `sync_generator_for_of_stack`'s counterpart for `generator_scope_stacks`.
+    fn sync_generator_scope_stack(&mut self, generator_id: u64, scope_stack: &[ScopeFrame]) {
+        if scope_stack.is_empty() {
+            if !self.generator_scope_stacks.is_empty() {
+                self.generator_scope_stacks.remove(&generator_id);
+            }
+        } else {
+            let slot = self.generator_scope_stacks.entry(generator_id).or_default();
+            slot.clear();
+            slot.extend_from_slice(scope_stack);
         }
     }
 }

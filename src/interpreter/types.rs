@@ -391,16 +391,16 @@ pub(crate) struct AsyncFunctionState {
     /// Set while the function-level disposal is parked at an `Await`; the
     /// resumption feeds its outcome to this cursor instead of the body.
     pub pending_dispose: Option<super::PendingDispose>,
-    /// Currently open block scopes created by `EnterScope`, innermost last.
-    /// See [`ScopeFrame`].
+    /// Lexical scope stack for lowered blocks, loop bodies, clause bodies,
+    /// catch bindings, and `for`-head per-iteration frames. Frames created by
+    /// `EnterScope` additionally own `await using` resources and are disposed
+    /// when control crosses them.
     pub scope_stack: Vec<ScopeFrame>,
 }
 
-/// A block scope opened by `EnterScope` and closed by `ExitScope`
-/// (`generator_transform::StateTerminator`), for a block that directly
-/// declares `await using`. Mirrors [`ForOfLoopState`]'s role for iteration
-/// environments: state bodies inside the block execute against `env`, and an
-/// abrupt completion crossing the frame must dispose it first.
+/// One lowered lexical environment, innermost last. `EnterScope`/`ExitScope`
+/// use the same frame shape for `await using` blocks so abrupt completion can
+/// order scope disposal against `finally` handlers and nested for-of loops.
 #[derive(Clone)]
 pub(crate) struct ScopeFrame {
     pub(crate) env: EnvRef,

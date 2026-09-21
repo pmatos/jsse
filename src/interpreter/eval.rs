@@ -8305,7 +8305,7 @@ impl Interpreter {
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
-        // Currently open `await using` block scopes; see `ScopeFrame`.
+        // Lowered lexical scopes, including suspendable `await using` blocks.
         let mut scope_stack: Vec<ScopeFrame> = saved_scope_stack;
         // An abrupt completion may need to visit a catch/finally inside an
         // enclosing loop before that loop itself can be closed. Keep that
@@ -8898,18 +8898,17 @@ impl Interpreter {
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            // The innermost currently active lexical env is whichever of the
-            // top scope frame or the top for-of frame was opened more
-            // recently: a scope opened inside a loop body must win over that
-            // loop's iteration env, and a loop started inside an open scope
-            // must win over the scope's own env.
-            let term_env = match scope_stack.last() {
-                Some(frame) if frame.for_of_depth >= for_of_stack.len() => frame.env.clone(),
-                _ => for_of_stack
-                    .last()
-                    .map_or(&func_env, ForOfLoopState::effective_env)
-                    .clone(),
-            };
+            let for_of_env = for_of_stack
+                .last()
+                .map_or(&func_env, ForOfLoopState::effective_env)
+                .clone();
+            let term_env = self.reconcile_scope_stack(
+                &mut scope_stack,
+                &state_machine.states[current_id],
+                try_stack.len(),
+                for_of_stack.len(),
+                &for_of_env,
+            );
             let mut stmt_result = match preloaded_stmt_result.take() {
                 Some(finished) => finished,
                 None => {
@@ -9233,9 +9232,19 @@ impl Interpreter {
                         ctx.entered_catch = true;
                     }
                     let exc_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
+                    // §14.15.2 CatchClauseEvaluation: the catch parameter gets
+                    // its own environment, distinct from (and outside) the
+                    // catch block's own scope. Pushed here, not via the
+                    // generic reconciliation, since it needs the thrown value.
+                    let catch_env = Environment::new(Some(term_env.clone()));
                     if let Some(pattern) = param {
-                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &term_env);
+                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &catch_env);
                     }
+                    scope_stack.push(ScopeFrame {
+                        env: catch_env,
+                        try_depth: try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
                     current_id = body_state;
                 }
 
