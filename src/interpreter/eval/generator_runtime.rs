@@ -24,6 +24,15 @@ enum DelegateStep {
     Return,
 }
 
+/// Where AsyncGeneratorAwaitReturn left the request it started on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AwaitReturnStart {
+    /// Waiting on the operand; the reaction settles, pops and drains.
+    Parked,
+    /// Already settled (PromiseResolve threw); the caller pops and drains.
+    Settled,
+}
+
 impl Interpreter {
     pub(crate) fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
         let Some(o) = (this)
@@ -2966,12 +2975,12 @@ impl Interpreter {
                         is_strict,
                     ),
                 );
-                let promise_id = promise.as_object_id().unwrap_or(0);
-                let _ = self.async_generator_await_return(value, promise_id);
-                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                    queue.pop_front();
+                if self.async_gen_await_return(gen_id, value, resolve_fn, reject_fn)
+                    == AwaitReturnStart::Parked
+                {
+                    return;
                 }
-                self.async_gen_process_queue(gen_this);
+                self.async_gen_drain_queue(gen_id);
                 return;
             }
             // §15.5.5 step 8.a.v: return IteratorValue(innerResult)
@@ -3203,19 +3212,12 @@ impl Interpreter {
                         is_strict,
                     ),
                 );
-                let ret_promise_id = if let Some(po) = (ret_promise)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
+                if self.async_gen_await_return(gen_id, awaited_val, ret_resolve, ret_reject)
+                    == AwaitReturnStart::Parked
                 {
-                    po.id
-                } else {
-                    0
-                };
-                let _ = self.async_generator_await_return(awaited_val, ret_promise_id);
-                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                    queue.pop_front();
+                    return;
                 }
-                self.async_gen_process_queue(gen_this);
+                self.async_gen_drain_queue(gen_id);
             }
             Err(e) => {
                 self.generator_inline_iters.remove(&gen_id);
@@ -3331,15 +3333,13 @@ impl Interpreter {
                                 is_strict,
                             ),
                         );
-                        let promise_id = if let Some(po) = (promise)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            po.id
-                        } else {
-                            0
-                        };
-                        return self.async_generator_await_return(ret_val, promise_id);
+                        return self.async_gen_await_return_in_driver(
+                            o.id,
+                            ret_val,
+                            promise,
+                            &resolve_fn,
+                            &reject_fn,
+                        );
                     }
                     Err(e) => {
                         self.generator_inline_iters.remove(&o.id);
@@ -3351,7 +3351,6 @@ impl Interpreter {
                             ),
                         );
                         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                 }
@@ -3387,7 +3386,6 @@ impl Interpreter {
                             ),
                         );
                         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[type_err]);
-                        self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                     Err(e) => {
@@ -3400,7 +3398,6 @@ impl Interpreter {
                             ),
                         );
                         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                 }
@@ -3444,7 +3441,6 @@ impl Interpreter {
                         ),
                     );
                     let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                    self.drain_microtasks();
                     return Completion::Normal(promise);
                 }
             }
@@ -3454,13 +3450,11 @@ impl Interpreter {
             StateMachineExecutionState::Completed => {
                 let result = self.create_iter_result_object(JsValue::UNDEFINED, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[result]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::Executing => {
                 let err = self.create_type_error("AsyncGenerator is already executing");
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedStart => 0,
@@ -3648,7 +3642,6 @@ impl Interpreter {
                             ),
                         );
                         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                        self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                     Err(Completion::Exit(code)) => {
@@ -3689,7 +3682,6 @@ impl Interpreter {
                         ),
                     );
                     let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exc]);
-                    self.drain_microtasks();
                     return Completion::Normal(promise);
                 }
                 // Check pending_return before executing state (handles .return() with no try/catch)
@@ -3788,13 +3780,15 @@ impl Interpreter {
                         ),
                     );
                     return match completion {
-                        Completion::Return(value) => {
-                            let promise_id = promise.as_object_id().unwrap_or(0);
-                            self.async_generator_await_return(value, promise_id)
-                        }
+                        Completion::Return(value) => self.async_gen_await_return_in_driver(
+                            o.id,
+                            value,
+                            promise,
+                            &resolve_fn,
+                            &reject_fn,
+                        ),
                         Completion::Throw(error) => {
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                            self.drain_microtasks();
                             Completion::Normal(promise)
                         }
                         Completion::Exit(code) => Completion::Exit(code),
@@ -3964,7 +3958,6 @@ impl Interpreter {
                     ),
                 );
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             if let Completion::Return(v) = stmt_result {
@@ -4004,7 +3997,6 @@ impl Interpreter {
                             ),
                         );
                         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                     _ => yield_val,
@@ -4044,7 +4036,6 @@ impl Interpreter {
                 }
                 let iter_result = self.create_iter_result_object(awaited_val, false);
                 let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
 
@@ -4078,7 +4069,6 @@ impl Interpreter {
                                         ),
                                     );
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
                             Operand::Abort(exit) => abort_async_generator!(exit),
@@ -4107,7 +4097,6 @@ impl Interpreter {
                                         );
                                     let _ =
                                         self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                    self.drain_microtasks();
                                     return Completion::Normal(promise);
                                 }
                             },
@@ -4133,7 +4122,6 @@ impl Interpreter {
                                             &JsValue::UNDEFINED,
                                             &[e],
                                         );
-                                        self.drain_microtasks();
                                         return Completion::Normal(promise);
                                     }
                                     _ => JsValue::UNDEFINED,
@@ -4168,7 +4156,6 @@ impl Interpreter {
                                         ),
                                     );
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
                         };
@@ -4779,7 +4766,6 @@ impl Interpreter {
                             Completion::Throw(error) => {
                                 let _ =
                                     self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                                self.drain_microtasks();
                                 Completion::Normal(promise)
                             }
                             Completion::Exit(code) => Completion::Exit(code),
@@ -4815,7 +4801,6 @@ impl Interpreter {
                                     ),
                                 );
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
                         Operand::Abort(exit) => abort_async_generator!(exit),
@@ -4860,7 +4845,6 @@ impl Interpreter {
                             ),
                         );
                         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exc]);
-                        self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                     if let Some(ret_val) = pending_return.take() {
@@ -4955,7 +4939,6 @@ impl Interpreter {
                                     ),
                                 );
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
                         Err(exit) => {
@@ -5004,7 +4987,6 @@ impl Interpreter {
                                     ),
                                 );
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
                         Operand::Abort(exit) => abort_async_generator!(exit),
@@ -5026,7 +5008,6 @@ impl Interpreter {
                                         ),
                                     );
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
                         }
@@ -5045,7 +5026,6 @@ impl Interpreter {
                                         ),
                                     );
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
                         }
@@ -5129,7 +5109,6 @@ impl Interpreter {
                                         ),
                                     );
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
                             // Leave the result promise unsettled: a terminal
@@ -5175,7 +5154,6 @@ impl Interpreter {
                                     ),
                                 );
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
                     };
@@ -5200,7 +5178,6 @@ impl Interpreter {
                                         ),
                                     );
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
                             other => {
@@ -5243,7 +5220,6 @@ impl Interpreter {
                                         );
                                     let _ =
                                         self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                    self.drain_microtasks();
                                     return Completion::Normal(promise);
                                 }
                             };
@@ -5290,7 +5266,6 @@ impl Interpreter {
                                                 &JsValue::UNDEFINED,
                                                 &[e],
                                             );
-                                            self.drain_microtasks();
                                             return Completion::Normal(promise);
                                         }
                                     }
@@ -5316,7 +5291,6 @@ impl Interpreter {
                                             &JsValue::UNDEFINED,
                                             &[e],
                                         );
-                                        self.drain_microtasks();
                                         return Completion::Normal(promise);
                                     }
                                 }
@@ -5342,7 +5316,6 @@ impl Interpreter {
                                                 &JsValue::UNDEFINED,
                                                 &[e],
                                             );
-                                            self.drain_microtasks();
                                             return Completion::Normal(promise);
                                         }
                                         _other => {}
@@ -5371,7 +5344,6 @@ impl Interpreter {
                                     ),
                                 );
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
                     }
@@ -5722,8 +5694,11 @@ impl Interpreter {
                 let _ = self.call_function(&request.reject, &JsValue::UNDEFINED, &[error]);
             }
             Completion::Return(value) if matches!(then, GeneratorDisposeThen::ReturnAwait) => {
-                let promise_id = request.promise.as_object_id().unwrap_or(0);
-                let _ = self.async_generator_await_return(value, promise_id);
+                if self.async_gen_await_return(gen_id, value, &request.resolve, &request.reject)
+                    == AwaitReturnStart::Parked
+                {
+                    return Completion::Normal(JsValue::UNDEFINED);
+                }
             }
             Completion::Return(value) | Completion::Normal(value) => {
                 let iter_result = self.create_iter_result_object(value, true);
@@ -5892,65 +5867,97 @@ impl Interpreter {
         self.reject_with_type_error("not an async generator object")
     }
 
-    /// Per spec §27.6.3.9 step 10.a: AsyncGenerator awaiting-return
-    /// Wraps the return value in Promise.resolve(value).then(onFulfilled, onRejected)
-    /// where onFulfilled resolves the response promise with {value: v, done: true}
-    /// and onRejected rejects the response promise.
-    fn async_generator_await_return(
+    /// AsyncGeneratorAwaitReturn (§27.6.3.9) for the front request of `gen_id`'s queue.
+    ///
+    /// The request stays at the head of the queue while the operand settles,
+    /// which is the spec's `draining-queue` state: `async_gen_enqueue` starts a
+    /// request only when the queue holds one entry, so later requests wait.
+    /// `Parked` means the settle, pop and drain belong to the reaction;
+    /// `Settled` means the request was rejected here and the caller finishes
+    /// as for any synchronous settle.
+    ///
+    /// Never touches the yield-pending flag: which context the caller runs in
+    /// decides how `Parked` reaches the queue driver.
+    fn async_gen_await_return(
         &mut self,
+        gen_id: u64,
         value: JsValue,
-        response_promise_id: u64,
-    ) -> Completion {
-        let response_promise = JsValue::object(response_promise_id);
-
-        // Create Promise.resolve(value) — wraps value in a promise
-        let wrapper_promise = self.create_promise_object();
-        let wrapper_id = if let Some(o) = (wrapper_promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            o.id
-        } else {
-            0
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+    ) -> AwaitReturnStart {
+        let promise = self.with_gc_root_scope(|interp| {
+            // PromiseResolve reads `value.constructor`, which can run user
+            // code and collect.
+            interp.gc_root_value(&value);
+            let promise_ctor = interp
+                .get_global_var("Promise")
+                .unwrap_or(JsValue::UNDEFINED);
+            interp.promise_resolve_with_constructor(&promise_ctor, &value)
+        });
+        let promise = match promise {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = self.call_function(reject_fn, &JsValue::UNDEFINED, &[e]);
+                return AwaitReturnStart::Settled;
+            }
         };
-        let (wrapper_resolve, _wrapper_reject) = self.create_resolving_functions(wrapper_id);
-        let _ = self.call_function(&wrapper_resolve, &JsValue::UNDEFINED, &[value]);
-        self.drain_microtasks();
-
-        let (resp_resolve, resp_reject) = self.create_resolving_functions(response_promise_id);
 
         let on_fulfilled = self.create_function(JsFunction::native("".to_string(), 1, {
-            let resolve = resp_resolve;
+            let resolve = resolve_fn.clone();
             move |interp, _this, args| {
                 let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let iter_result = interp.create_iter_result_object(v, true);
                 let _ = interp.call_function(&resolve, &JsValue::UNDEFINED, &[iter_result]);
+                interp.async_gen_drain_queue(gen_id);
                 Completion::Normal(JsValue::UNDEFINED)
             }
         }));
-
         let on_rejected = self.create_function(JsFunction::native("".to_string(), 1, {
-            let reject = resp_reject;
+            let reject = reject_fn.clone();
             move |interp, _this, args| {
                 let e = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let _ = interp.call_function(&reject, &JsValue::UNDEFINED, &[e]);
+                interp.async_gen_drain_queue(gen_id);
                 Completion::Normal(JsValue::UNDEFINED)
             }
         }));
-
-        // Chain: PerformPromiseThen(wrapper_promise, onFulfilled, onRejected, responseCap)
-        let (rp_resolve, rp_reject) = self.create_resolving_functions(response_promise_id);
         let _ = self.perform_promise_then(
-            &wrapper_promise,
+            &promise,
             &on_fulfilled,
             &on_rejected,
-            response_promise.clone(),
-            rp_resolve,
-            rp_reject,
+            JsValue::UNDEFINED,
+            JsValue::UNDEFINED,
+            JsValue::UNDEFINED,
         );
-        self.drain_microtasks();
+        AwaitReturnStart::Parked
+    }
 
-        Completion::Normal(response_promise)
+    /// AsyncGeneratorAwaitReturn for a request served by the queue driver:
+    /// a parked request tells the driver, through the yield-pending flag, not
+    /// to pop it.
+    fn async_gen_await_return_in_driver(
+        &mut self,
+        gen_id: u64,
+        value: JsValue,
+        promise: JsValue,
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+    ) -> Completion {
+        if self.async_gen_await_return(gen_id, value, resolve_fn, reject_fn)
+            == AwaitReturnStart::Parked
+        {
+            self.scheduler.set_async_gen_yield_pending(true);
+        }
+        Completion::Normal(promise)
+    }
+
+    /// Retire the settled front request of `gen_id`'s queue and serve the rest
+    /// (AsyncGeneratorDrainQueue).
+    fn async_gen_drain_queue(&mut self, gen_id: u64) {
+        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
+            queue.pop_front();
+        }
+        self.async_gen_process_queue(&JsValue::object(gen_id));
     }
 
     pub(crate) fn async_generator_return(&mut self, this: &JsValue, value: JsValue) -> Completion {
@@ -6007,20 +6014,10 @@ impl Interpreter {
             return Completion::Normal(promise);
         };
 
-        let promise_id = if let Some(po) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            po.id
-        } else {
-            0
-        };
-
         match execution_state {
             StateMachineExecutionState::Executing => {
                 let err = self.create_type_error("AsyncGenerator is already executing");
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
@@ -6032,7 +6029,13 @@ impl Interpreter {
                         is_strict,
                     ),
                 );
-                return self.async_generator_await_return(value, promise_id);
+                return self.async_gen_await_return_in_driver(
+                    o.id,
+                    value,
+                    promise,
+                    &resolve_fn,
+                    &reject_fn,
+                );
             }
             StateMachineExecutionState::SuspendedAtState { .. } => {}
         }
@@ -6126,7 +6129,6 @@ impl Interpreter {
             StateMachineExecutionState::Executing => {
                 let err = self.create_type_error("AsyncGenerator is already executing");
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
@@ -6139,7 +6141,6 @@ impl Interpreter {
                     ),
                 );
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exception]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedAtState { .. } => {}
