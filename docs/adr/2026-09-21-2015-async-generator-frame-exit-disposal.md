@@ -43,3 +43,9 @@ blocking driver. A throwing disposer that replaces an in-flight `return`
 re-routes as a fresh exception and does not re-enter a `finally` already
 selected for that return. `for (await using x of …)` iteration-environment
 disposal in the async-generator driver is also still blocking.
+
+The lowering itself is gated on the container: an async generator lowers a
+block, `try` clause, loop body, or `switch` case only when it holds a
+suspension point (`stmt_has_suspension`). An `await using` in one with no
+`await`/`yield` inside is still tree-walked and disposes inline, settling the
+request before the microtask queue drains.

@@ -205,13 +205,10 @@ pub(crate) struct PendingDispose {
 /// disposal of its function-level resources finishes.
 #[derive(Clone, Copy)]
 pub(crate) enum GeneratorDisposeThen {
-    /// The body ran to its end: resolve `{ value: undefined, done: true }`.
-    Complete,
-    /// An uncaught throw left the body: reject with the (possibly chained) error.
-    Throw,
-    /// A `return expr;` whose operand was already awaited: resolve
-    /// `{ value, done: true }` directly.
-    ReturnSettle,
+    /// Settle the request with the disposal's completion: reject with the
+    /// (possibly chained) error on a throw, otherwise resolve
+    /// `{ value, done: true }` (`undefined` when the body ran to its end).
+    Settle,
     /// A `.return(v)` unwinding at a yield: `v` is awaited after disposal, as
     /// for a generator without resources.
     ReturnAwait,
@@ -242,6 +239,18 @@ pub(crate) struct GeneratorDisposal {
 }
 
 impl GeneratorDisposal {
+    pub(crate) fn new(
+        state: GeneratorDisposeState,
+        (promise, resolve, reject): (&JsValue, &JsValue, &JsValue),
+    ) -> Self {
+        Self {
+            state,
+            promise: promise.clone(),
+            resolve: resolve.clone(),
+            reject: reject.clone(),
+        }
+    }
+
     pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
         if let GeneratorDisposeState::Disposing { cursor, .. } = &self.state {
             cursor.for_each_value(&mut f);
@@ -305,44 +314,58 @@ impl Interpreter {
     /// Drive `cursor` to completion, draining the microtask queue inline at
     /// each `Await`. For callers that cannot suspend the running execution
     /// context.
-    pub(crate) fn run_dispose_cursor_blocking(&mut self, mut cursor: DisposeCursor) -> Completion {
+    pub(crate) fn run_dispose_cursor_blocking(&mut self, cursor: DisposeCursor) -> Completion {
+        self.run_dispose_cursor_holding(cursor, &[])
+    }
+
+    /// [`Self::run_dispose_cursor_blocking`] for a caller whose in-flight throw
+    /// or return value (`held`) lives only in a Rust local. The jobs the drain
+    /// runs may collect, so `held` and the cursor (between two `step`s) are
+    /// rooted across it.
+    pub(crate) fn run_dispose_cursor_holding(
+        &mut self,
+        mut cursor: DisposeCursor,
+        held: &[Option<&JsValue>],
+    ) -> Completion {
         let mut awaited = None;
         loop {
             match cursor.step(self, awaited.take()) {
                 DisposeStep::Done(completion) => return completion,
-                DisposeStep::Await(value) => match self.await_disposal_inline(&cursor, &[], &value)
-                {
-                    Completion::Normal(v) => awaited = Some(Ok(v)),
-                    Completion::Throw(e) => awaited = Some(Err(e)),
-                    // A job run by the drain called `__host_exit` (issue #242).
-                    other => return other,
-                },
+                DisposeStep::Await(value) => {
+                    let outcome = self.with_gc_root_scope(|interp| {
+                        cursor.for_each_value(|v| interp.gc_root_value(v));
+                        for v in held.iter().flatten() {
+                            interp.gc_root_value(v);
+                        }
+                        interp.await_value(&value)
+                    });
+                    match outcome {
+                        Completion::Normal(v) => awaited = Some(Ok(v)),
+                        Completion::Throw(e) => awaited = Some(Err(e)),
+                        // A job run by the drain called `__host_exit` (issue #242).
+                        other => return other,
+                    }
+                }
             }
         }
-    }
-
-    /// `Await(value)` for a disposal that drains the microtask queue inline.
-    /// The jobs it runs may collect, and `cursor` (between two `step`s) and
-    /// `held` (the caller's in-flight throw or return value) live only in
-    /// Rust locals, so they are rooted for the drain.
-    pub(crate) fn await_disposal_inline(
-        &mut self,
-        cursor: &DisposeCursor,
-        held: &[Option<&JsValue>],
-        value: &JsValue,
-    ) -> Completion {
-        self.with_gc_root_scope(|interp| {
-            cursor.for_each_value(|v| interp.gc_root_value(v));
-            for v in held.iter().flatten() {
-                interp.gc_root_value(v);
-            }
-            interp.await_value(value)
-        })
     }
 
     /// Spec `Await(value)` for native code: `resume` runs in a later job with
     /// the fulfilment value or rejection reason.
     pub(crate) fn await_then(
+        &mut self,
+        value: &JsValue,
+        resume: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
+    ) {
+        self.with_gc_root_scope(|interp| {
+            // `promise_resolve_value` reads `value.constructor`, which can run
+            // user code and collect.
+            interp.gc_root_value(value);
+            interp.schedule_await_resume(value, resume);
+        });
+    }
+
+    fn schedule_await_resume(
         &mut self,
         value: &JsValue,
         resume: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
@@ -419,13 +442,8 @@ impl Interpreter {
         match step {
             DisposeStep::Await(value) => {
                 self.scheduler.insert_async_disposal(id, disposal);
-                self.with_gc_root_scope(|interp| {
-                    // `await_then` reads `value.constructor`, which can run user
-                    // code and collect.
-                    interp.gc_root_value(&value);
-                    interp.await_then(&value, move |interp, outcome| {
-                        interp.async_disposal_step(id, Some(outcome))
-                    });
+                self.await_then(&value, move |interp, outcome| {
+                    interp.async_disposal_step(id, Some(outcome))
                 });
                 Completion::Normal(JsValue::UNDEFINED)
             }
