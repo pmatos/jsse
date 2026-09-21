@@ -1295,6 +1295,73 @@ fn promise_all_settled_settles_across_major_gc_between_element_settlements() {
 }
 
 #[test]
+fn promise_all_keyed_settles_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((resolve) => { globalThis.releaseFirst = resolve; });
+            const second = new Promise((resolve) => { globalThis.releaseSecond = resolve; });
+            Promise.allKeyed({ a: first, b: second }).then((values) => {
+                globalThis.outcome = "allKeyed:" + values.a.marker + "," + values.b.marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseFirst;
+            delete globalThis.releaseFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseSecond;
+            delete globalThis.releaseSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "allKeyed:first,second");
+}
+
+#[test]
+fn promise_all_settled_keyed_settles_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((resolve) => { globalThis.releaseFirst = resolve; });
+            const second = new Promise((_, reject) => { globalThis.rejectSecond = reject; });
+            Promise.allSettledKeyed({ a: first, b: second }).then((results) => {
+                globalThis.outcome = "settledKeyed:" + results.a.status + ":" +
+                    results.a.value.marker + "," + results.b.status + ":" +
+                    results.b.reason.marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseFirst;
+            delete globalThis.releaseFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectSecond;
+            delete globalThis.rejectSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(
+        global_string(&interp, "outcome"),
+        "settledKeyed:fulfilled:first,rejected:second"
+    );
+}
+
+#[test]
 fn promise_any_rejects_across_major_gc_between_element_settlements() {
     let interp = run_steps_with_major_gc_between(&[
         r#"
