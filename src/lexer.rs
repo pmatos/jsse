@@ -856,10 +856,20 @@ impl<'a> Lexer<'a> {
 
     // §12.9.3 NonDecimalIntegerLiteral / LegacyOctalIntegerLiteral value: MV is the
     // exact integer, rounded once to 𝔽(MV) (§6.1.6.1) — no `u64` upper bound.
-    // `digits` must be non-empty (checked here so the empty-literal cases like
-    // `0x`/`0o`/`0b` stay a SyntaxError) and already validated as radix digits.
-    fn radix_literal_value(&self, digits: &str, radix: u32, what: &str) -> Result<f64, LexError> {
+    // `digits` must already be validated as radix digits. The `0x`/`0o`/`0b`
+    // empty-digit-run cases are rejected earlier, at each call site (so the
+    // check also covers an empty digit run before a BigInt suffix, e.g.
+    // `0xn`); the `is_empty` check here is only a defense-in-depth backstop,
+    // structurally unreachable for legacy octal since that caller guarantees
+    // at least one digit before ever reaching this function.
+    fn radix_literal_value(&self, digits: &str, radix: u32) -> Result<f64, LexError> {
         if digits.is_empty() {
+            let what = match radix {
+                16 => "hex",
+                8 => "octal",
+                2 => "binary",
+                _ => "numeric",
+            };
             return Err(self.error(format!("Invalid {what} literal")));
         }
         Ok(crate::interpreter::prevalidated_radix_digits_to_f64(
@@ -873,13 +883,19 @@ impl<'a> Lexer<'a> {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
         self.read_digits_with_separators(&mut s, |ch| ch.is_ascii_hexdigit())?;
+        if s.len() == 2 {
+            // `0x`/`0X` with no HexDigits — an empty digit run is a SyntaxError
+            // even when followed by a BigInt suffix (`0xn`), since
+            // NonDecimalIntegerLiteral always requires at least one digit.
+            return Err(self.error("Invalid hex literal"));
+        }
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
         }
         let hex_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val = self.radix_literal_value(&hex_part, 16, "hex")?;
+        let val = self.radix_literal_value(&hex_part, 16)?;
         Ok(Token::NumericLiteral(val))
     }
 
@@ -889,13 +905,18 @@ impl<'a> Lexer<'a> {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
         self.read_digits_with_separators(&mut s, |ch| ('0'..='7').contains(&ch))?;
+        if s.len() == 2 {
+            // `0o`/`0O` with no digits — same empty-digit-run rule as hex/binary,
+            // including before a BigInt suffix (`0on`).
+            return Err(self.error("Invalid octal literal"));
+        }
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
         }
         let oct_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val = self.radix_literal_value(&oct_part, 8, "octal")?;
+        let val = self.radix_literal_value(&oct_part, 8)?;
         Ok(Token::NumericLiteral(val))
     }
 
@@ -918,7 +939,7 @@ impl<'a> Lexer<'a> {
             && self.peek() != Some('E')
         {
             let oct_part = &s[1..]; // skip leading 0
-            let val = self.radix_literal_value(oct_part, 8, "octal")?;
+            let val = self.radix_literal_value(oct_part, 8)?;
             Ok(Token::LegacyOctalLiteral(val))
         } else {
             // Non-octal decimal (e.g. 09, 0.5 after leading zero digits)
@@ -954,13 +975,18 @@ impl<'a> Lexer<'a> {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
         self.read_digits_with_separators(&mut s, |ch| ch == '0' || ch == '1')?;
+        if s.len() == 2 {
+            // `0b`/`0B` with no digits — same empty-digit-run rule as hex/octal,
+            // including before a BigInt suffix (`0bn`).
+            return Err(self.error("Invalid binary literal"));
+        }
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
         }
         let bin_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val = self.radix_literal_value(&bin_part, 2, "binary")?;
+        let val = self.radix_literal_value(&bin_part, 2)?;
         Ok(Token::NumericLiteral(val))
     }
 
@@ -1720,6 +1746,10 @@ mod tests {
         );
         assert!(Lexer::new("0x").next_token().is_err());
         assert!(Lexer::new("0xg").next_token().is_err());
+        // An empty digit run stays a SyntaxError even before a BigInt suffix:
+        // NonDecimalIntegerLiteral always requires at least one digit, `n` or
+        // not (jsse#677 follow-up: this used to silently lex as 0n).
+        assert!(Lexer::new("0xn").next_token().is_err());
     }
 
     #[test]
@@ -1758,6 +1788,7 @@ mod tests {
             vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
         );
         assert!(Lexer::new("0o").next_token().is_err());
+        assert!(Lexer::new("0on").next_token().is_err());
     }
 
     #[test]
@@ -1778,6 +1809,7 @@ mod tests {
             vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
         );
         assert!(Lexer::new("0b").next_token().is_err());
+        assert!(Lexer::new("0bn").next_token().is_err());
     }
 
     #[test]

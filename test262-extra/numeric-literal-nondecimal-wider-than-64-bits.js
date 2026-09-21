@@ -6,32 +6,28 @@ description: >
   𝔽(MV), the Number value nearest the exact mathematical value, rounding to
   +Infinity once MV is at or above 2^1024 - 2^970. An engine that lexes these
   literals with a fixed-width (e.g. u64) integer parse wrongly rejects any
-  literal whose value overflows that width.
+  literal whose value overflows that width. An empty digit run remains a
+  SyntaxError regardless, with or without a BigInt suffix (e.g. `0x`, `0xn`).
 esid: sec-literals-numeric-literals
 info: |
-  NumericLiteral :: NonDecimalIntegerLiteral
-    1. Return the NumericValue of NonDecimalIntegerLiteral.
-
-  NumericLiteral :: LegacyOctalIntegerLiteral
-    1. Return the NumericValue of LegacyOctalIntegerLiteral.
-
   Static Semantics: NumericValue
-    NonDecimalIntegerLiteral :: 0x HexDigits
-      1. Return the NumberValue of the source text matched.
+    NumericLiteral :: NonDecimalIntegerLiteral
+      1. Return 𝔽(MV of |NonDecimalIntegerLiteral|).
 
-    Static Semantics: MV
-      A conforming implementation must support the exact mathematical value
-      denoted; there is no digit-count limit in the grammar.
+    NumericLiteral :: LegacyOctalIntegerLiteral
+      1. Return 𝔽(MV of |LegacyOctalIntegerLiteral|).
 
-  The Number Type ( 𝔽(x) )
-    Rounds to the nearest representable Number, ties to even; values at or
-    above 2^1024 - 2^970 produce +∞.
+  The grammar for NonDecimalIntegerLiteral / LegacyOctalIntegerLiteral places
+  no limit on digit count, so MV is always the exact mathematical value of the
+  full digit sequence. 𝔽(x) (the Number value for x) rounds that value to the
+  nearest representable Number, ties to even, with values at or above
+  2^1024 - 2^970 producing +∞.
 
   Numeric Literals -- Static Semantics: Early Errors
-    LegacyOctalIntegerLiteral is still an early error in strict mode code,
-    independent of its value.
-esid: sec-numericvalue
-features: [BigInt]
+    A conforming implementation, when processing strict mode code, must
+    disallow instances of the production
+    NumericLiteral :: LegacyOctalIntegerLiteral, independent of its value.
+features: [BigInt, numeric-separator-literal]
 ---*/
 
 // Indirect eval: per sec-performeval, indirect eval always runs as global
@@ -126,6 +122,19 @@ assert.throws(SyntaxError, function () {
 assert.throws(SyntaxError, function () {
   eval("0b;");
 }, "empty binary digits");
+
+// (7b) An empty digit run is a SyntaxError even before a BigInt suffix: a
+// NonDecimalIntegerLiteral BigIntLiteralSuffix still requires the underlying
+// NonDecimalIntegerLiteral to have at least one digit.
+assert.throws(SyntaxError, function () {
+  eval("0xn;");
+}, "empty hex digits before BigInt suffix");
+assert.throws(SyntaxError, function () {
+  eval("0on;");
+}, "empty octal digits before BigInt suffix");
+assert.throws(SyntaxError, function () {
+  eval("0bn;");
+}, "empty binary digits before BigInt suffix");
 
 // (8) Numeric-separator misuse in a wide literal is still a SyntaxError.
 assert.throws(SyntaxError, function () {
