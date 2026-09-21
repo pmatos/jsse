@@ -3929,7 +3929,12 @@ mod node_host_tests {
         // observable there, as in the async-generator tests below.
         for (label, body, code, sync_exit) in [
             ("if condition", "if (__host_exit(3)) { await 1; }", 3, true),
-            ("while condition", "while (__host_exit(4)) { await 1; }", 4, true),
+            (
+                "while condition",
+                "while (__host_exit(4)) { await 1; }",
+                4,
+                true,
+            ),
             (
                 "switch discriminant",
                 "switch (__host_exit(5)) { case 1: await 1; }",
@@ -3949,7 +3954,12 @@ mod node_host_tests {
                 true,
             ),
             ("await operand", "await 0; await __host_exit(8);", 8, false),
-            ("return operand", "await 0; return __host_exit(9);", 9, false),
+            (
+                "return operand",
+                "await 0; return __host_exit(9);",
+                9,
+                false,
+            ),
         ] {
             let (interp, c) = run_node_script(&format!(
                 r#"
