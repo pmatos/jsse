@@ -80,3 +80,52 @@ impl Interpreter {
         classify_operand(result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rule that drifted, pinned directly.
+    ///
+    /// `Exit` classifying as [`Operand::Abort`] rather than falling into a
+    /// value-producing arm is the whole point of the seam: before it, three
+    /// drivers each answered this inline and eleven of the twenty-two operand
+    /// sites read a host exit as `undefined`.
+    #[test]
+    fn classify_operand_separates_values_from_completions_that_abort() {
+        assert!(matches!(
+            classify_operand(Completion::Exit(42)),
+            Operand::Abort(Completion::Exit(42))
+        ));
+        assert!(matches!(
+            classify_operand(Completion::Normal(JsValue::UNDEFINED)),
+            Operand::Value(_)
+        ));
+        assert!(matches!(
+            classify_operand(Completion::Throw(JsValue::UNDEFINED)),
+            Operand::Throw(_)
+        ));
+        assert!(matches!(
+            classify_operand(Completion::Yield(JsValue::UNDEFINED)),
+            Operand::Suspend(_)
+        ));
+        for other in [
+            Completion::Empty,
+            Completion::Return(JsValue::UNDEFINED),
+            Completion::Break(None, None),
+            Completion::Continue(None, None),
+        ] {
+            assert!(matches!(classify_operand(other), Operand::Other(_)));
+        }
+    }
+
+    /// `Exit` must never be reachable through the variant the drivers treat as
+    /// "no value, keep going" — that equivalence is what the bug was.
+    #[test]
+    fn classify_operand_never_files_an_exit_under_other() {
+        assert!(!matches!(
+            classify_operand(Completion::Exit(7)),
+            Operand::Other(_) | Operand::Value(_) | Operand::Suspend(_)
+        ));
+    }
+}
