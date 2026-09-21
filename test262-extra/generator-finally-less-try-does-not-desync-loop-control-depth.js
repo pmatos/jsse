@@ -93,3 +93,30 @@ assert.compareArray(
   'continue values with an interleaved finally-less try'
 );
 assert.compareArray(log, ['fin0', 'fin1'], 'each iteration finally runs exactly once');
+
+// A finally-less try's own catch clause must stay on the runtime stack while
+// its (suspending) body runs, not be discarded the instant the catch is
+// selected: a host-driven throw() delivered after that catch (and the rest
+// of the try) has already completed normally must still propagate past this
+// point rather than being misrouted into the now-stale context.
+function* finallyLessCatchClauseSuspendsThenLaterThrow() {
+  try {
+    yield 'a';
+    throw 'inner';
+  } catch (e) {
+    yield 'caught ' + e;
+  }
+  yield 'b';
+}
+var it = finallyLessCatchClauseSuspendsThenLaterThrow();
+it.next();
+it.next();
+it.next();
+var caught;
+try {
+  it.throw('outer');
+} catch (e) {
+  caught = e;
+}
+assert.sameValue(caught, 'outer', 'throw() after the finally-less try completed propagates normally');
+assert.sameValue(it.next().done, true, 'the generator is completed after the unhandled throw()');
