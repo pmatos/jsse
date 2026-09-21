@@ -9,7 +9,7 @@ description: >
   environment's resources and the accumulated disposal error all stay
   reachable across a garbage collection.
 info: |
-  ForIn/OfBodyEvaluation ( lhs, stmt, iterator, iteratorKind, lhsKind, labelSet [ , iteratorRecordLevel ] )
+  ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] )
 
   9.j-k. Set status to Completion(DisposeResources(iterationEnv.[[DisposeCapability]], result)).
 

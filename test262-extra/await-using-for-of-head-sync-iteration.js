@@ -8,7 +8,7 @@ description: >
   each element is bound as produced, not unwrapped through AsyncFromSyncIterator.
   Only `for await (await using x of iterable)` awaits each element.
 info: |
-  ForIn/OfBodyEvaluation ( lhs, stmt, iterator, iteratorKind, lhsKind, labelSet [ , iteratorRecordLevel ] )
+  ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] )
 
   1. If iteratorKind is not present, set iteratorKind to sync.
   ...

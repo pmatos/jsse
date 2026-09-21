@@ -9,7 +9,7 @@ description: >
   queued before the loop advances one step per disposal instead of draining
   inline.
 info: |
-  ForIn/OfBodyEvaluation ( lhs, stmt, iterator, iteratorKind, lhsKind, labelSet [ , iteratorRecordLevel ] )
+  ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] )
 
   [...]
   9.k. Else,
@@ -27,7 +27,7 @@ info: |
      a. Perform ! Await(undefined).
 flags: [module, async]
 includes: [compareArray.js]
-features: [dynamic-import, explicit-resource-management, async-iteration]
+features: [dynamic-import, explicit-resource-management]
 ---*/
 
 globalThis.moduleForOfHeadLog = [];

@@ -3886,6 +3886,36 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_async_function_terminator_expressions_is_not_swallowed() {
+        for (expression, code) in [
+            ("await __host_exit(3);", 3),
+            ("return __host_exit(4);", 4),
+            ("throw __host_exit(5);", 5),
+            ("if (__host_exit(6)) {}", 6),
+            ("switch (__host_exit(7)) { default: }", 7),
+            ("switch (0) { case __host_exit(8): }", 8),
+            ("for (const value of __host_exit(9)) {}", 9),
+        ] {
+            let (interp, c) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                async function f() {{
+                  {expression}
+                  globalThis.reached = "after";
+                }}
+                f();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{expression}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{expression}");
+            assert!(
+                matches!(c, Completion::Exit(x) if x == code),
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
     fn host_exit_in_async_generator_switch_dispatch_is_not_swallowed() {
         for (switch_head, code) in [
             ("switch (__host_exit(3)) { case 1: yield 1; }", 3),

@@ -8,7 +8,7 @@ description: >
   suspends the async function at its disposal Await instead of draining the
   job queue inline, so the rest of the synchronous caller runs first.
 info: |
-  ForIn/OfBodyEvaluation ( lhs, stmt, iterator, iteratorKind, lhsKind, labelSet [ , iteratorRecordLevel ] )
+  ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] )
 
   [...]
   9.j. If iterationKind is enumerate, then
@@ -35,7 +35,7 @@ info: |
   synchronous caller runs first.
 flags: [async]
 includes: [asyncHelpers.js, compareArray.js]
-features: [explicit-resource-management, async-iteration]
+features: [explicit-resource-management]
 ---*/
 
 function observe(shape) {

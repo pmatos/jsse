@@ -9356,32 +9356,50 @@ impl Interpreter {
                         }
                     };
 
-                    // Dispose resources from previous iteration (for using/await using).
-                    // Parked rather than run blocking: the head re-enters once the
-                    // cursor's `DisposeStep::Done` lands, finding `iteration_env` empty.
+                    // Dispose resources from the previous iteration. Synchronous
+                    // resources finish inline; async resources park the cursor so
+                    // the function suspends at each DisposeResources Await.
                     if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take()
                         && let Some(stack) = self.take_dispose_stack(&disp_env)
                     {
-                        pending_dispose = Some(PendingDispose {
-                            cursor: DisposeCursor::new(stack, Completion::Empty),
-                            then: DisposeThen::ForOfIteration,
-                        });
-                        continue;
+                        if stack
+                            .iter()
+                            .all(|resource| resource.hint == DisposeHint::Sync)
+                        {
+                            match self.run_dispose_cursor_blocking(DisposeCursor::new(
+                                stack,
+                                Completion::Empty,
+                            )) {
+                                Completion::Exit(code) => {
+                                    self.scheduler.remove_async_function_state(async_id);
+                                    return Completion::Exit(code);
+                                }
+                                Completion::Throw(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            pending_dispose = Some(PendingDispose {
+                                cursor: DisposeCursor::new(stack, Completion::Empty),
+                                then: DisposeThen::ForOfIteration,
+                            });
+                            continue;
+                        }
                     }
 
-                    // For `for await`, use a temp var to distinguish first
-                    // entry (call iterator_next + await) from resume (result ready)
-                    let await_tmp = format!("{}__await", iter_var);
+                    // For `for await`, use the presence of a private temp binding to
+                    // distinguish first entry from resume. The fulfilled value may
+                    // itself be `undefined`, so no JavaScript value can be a sentinel.
                     let step_result = if is_await {
-                        let cached = func_env.borrow().get(&await_tmp);
-                        if let Some(v) = cached
-                            && !(v).is_undefined()
-                        {
-                            // Resume after await — clear the temp and use the value
-                            func_env
-                                .borrow_mut()
-                                .set(&await_tmp, JsValue::UNDEFINED)
-                                .ok();
+                        let await_tmp = format!("{}__await", iter_var);
+                        let cached = func_env
+                            .borrow_mut()
+                            .bindings
+                            .remove(&await_tmp)
+                            .map(|binding| binding.value);
+                        if let Some(v) = cached {
                             v
                         } else {
                             // First entry — call iterator_next, then suspend for await
@@ -9397,8 +9415,7 @@ impl Interpreter {
                                     continue;
                                 }
                             };
-                            // Ensure the temp var exists
-                            if func_env.borrow().get(&await_tmp).is_none() {
+                            if !func_env.borrow().bindings.contains_key(&await_tmp) {
                                 func_env.borrow_mut().declare(&await_tmp, BindingKind::Var);
                             }
                             use crate::interpreter::generator_transform::{
@@ -9442,6 +9459,12 @@ impl Interpreter {
                             }
                         }
                     };
+                    if is_await && !step_result.is_object() {
+                        for_of_protocol_failure = Some(iter_var.clone());
+                        pending_exception =
+                            Some(self.create_type_error("Iterator result is not an object"));
+                        continue;
+                    }
                     let done = match self.iterator_complete(&step_result) {
                         Ok(d) => d,
                         Err(e) => {
