@@ -747,6 +747,7 @@ impl Interpreter {
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);
         self.generator_scope_stacks.remove(&id);
+        self.scheduler.remove_async_gen_queue(id);
     }
 
     fn gc_collect_major(&mut self) {
@@ -1581,6 +1582,54 @@ mod tests {
         interp.gc_safepoint();
 
         assert!(interp.objects.get_cell(dead).is_none());
+    }
+
+    fn enqueue_request(interp: &mut Interpreter, gen_id: u64, promise: u64) {
+        interp
+            .scheduler
+            .async_gen_queue_or_default(gen_id)
+            .push_back(crate::interpreter::AsyncGenRequest {
+                kind: crate::interpreter::AsyncGenRequestKind::Next,
+                value: JsValue::UNDEFINED,
+                promise: obj(promise),
+                resolve_fn: JsValue::UNDEFINED,
+                reject_fn: JsValue::UNDEFINED,
+            });
+    }
+
+    #[test]
+    fn queued_async_generator_request_keeps_its_promise_alive() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let generator = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(generator);
+        let promise = interp.alloc_object(JsObjectData::new());
+        enqueue_request(&mut interp, generator, promise);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(promise).is_some());
+    }
+
+    #[test]
+    fn freed_async_generator_drops_its_request_queue() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let generator = interp.alloc_object(JsObjectData::new());
+        let promise = interp.alloc_object(JsObjectData::new());
+        enqueue_request(&mut interp, generator, promise);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(generator).is_none());
+        assert!(interp.scheduler.async_gen_queue(generator).is_none());
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(promise).is_none());
     }
 
     #[test]
