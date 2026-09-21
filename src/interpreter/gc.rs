@@ -171,6 +171,75 @@ impl GcPacer {
     }
 }
 
+/// A growable, indexable run of GC-visible values that a native closure can
+/// replace in place — the engine's Rooted Slot (see `CONTEXT.md`).
+///
+/// Pin the container **once** on a long-lived anchor with [`Self::pin_on`] (or
+/// root it with `gc_root_value(&slots.root())`), then `push`/`set` freely: the
+/// tracer follows the anchor to the container and reads whatever it holds now,
+/// so a superseded value is collectable and nothing accumulates the way repeated
+/// `pin_native_root` calls do.
+///
+/// The backing store is a real arena object, not a Rust container: writes go
+/// through `ObjectHandle::borrow_mut`, which runs the generational write
+/// barrier, so an old anchor that takes on a young value is remembered for the
+/// next minor collection. A container the arena does not own would be both
+/// untraced and unbarriered.
+///
+/// Every write goes to the backing's `array_elements` and nowhere else.
+/// `trace_object_fields` also visits `properties`, so mirroring a write into an
+/// index property would retain every superseded value and silently degrade the
+/// slot to accumulate-only pinning. The `length` and index properties that
+/// `create_array` seeds go stale after the first `push`; that is harmless
+/// because the backing object is never reachable from JavaScript.
+///
+/// Reads and writes borrow the backing for the duration of one call and never
+/// hold it across an allocation; `snapshot` returns an owned `Vec` for that
+/// reason.
+#[derive(Clone)]
+#[allow(dead_code)] // TEMP: removed once the consumers land
+pub(crate) struct RootedSlots(JsValue);
+
+#[allow(dead_code)] // TEMP: removed once the consumers land
+impl RootedSlots {
+    pub(crate) fn new(interp: &mut Interpreter, len: usize) -> Self {
+        Self(interp.create_array(vec![JsValue::UNDEFINED; len]))
+    }
+
+    /// The value to hand to `gc_root_value` or `set_helper_gc_roots`; rooting it
+    /// roots every slot.
+    pub(crate) fn root(&self) -> JsValue {
+        self.0.clone()
+    }
+
+    /// Pin the container — not any one value — on `anchor`, so the slots live as
+    /// long as `anchor` does. Do this once per anchor.
+    pub(crate) fn pin_on(&self, interp: &Interpreter, anchor: &JsValue) {
+        interp.pin_native_root(anchor, &self.0);
+    }
+
+    pub(crate) fn len(&self, interp: &Interpreter) -> usize {
+        interp.with_array_elements(&self.0, |elements| elements.len())
+    }
+
+    pub(crate) fn push(&self, interp: &Interpreter, value: JsValue) {
+        interp.with_array_elements_mut(&self.0, |elements| elements.push(value));
+    }
+
+    /// The stored value, whatever it is: occupancy is the caller's business.
+    pub(crate) fn get(&self, interp: &Interpreter, index: usize) -> JsValue {
+        interp.with_array_elements(&self.0, |elements| elements[index].clone())
+    }
+
+    pub(crate) fn set(&self, interp: &Interpreter, index: usize, value: JsValue) {
+        interp.with_array_elements_mut(&self.0, |elements| elements[index] = value);
+    }
+
+    pub(crate) fn snapshot(&self, interp: &Interpreter) -> Vec<JsValue> {
+        interp.with_array_elements(&self.0, |elements| elements.clone())
+    }
+}
+
 impl Interpreter {
     /// Make an object reference that only exists as a native-closure capture
     /// visible to the tracer, by pinning it on `anchor`'s `gc_native_roots`.
@@ -195,8 +264,8 @@ impl Interpreter {
     /// That makes this the wrong tool for a capture that is *replaced* over the
     /// anchor's lifetime — pinning each replacement retains every superseded
     /// value. Pin one arena-backed container instead and mutate its slots in
-    /// place; `RootedPair` in `builtins/iterators.rs` is the two-slot case, and
-    /// `CONTEXT.md` calls the shape a Rooted Slot.
+    /// place; [`RootedSlots`] is that container, and `CONTEXT.md` calls the
+    /// shape a Rooted Slot.
     pub(crate) fn pin_native_root(&self, anchor: &JsValue, value: &JsValue) {
         if value.as_object_id().is_none() {
             return;
@@ -1643,5 +1712,153 @@ mod tests {
                 .unwrap()[0]
                 .is_none()
         );
+    }
+
+    fn major_gc(interp: &mut Interpreter) {
+        interp.gc.request();
+        interp.gc_safepoint();
+    }
+
+    fn rooted_anchor(interp: &mut Interpreter) -> JsValue {
+        let anchor = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(anchor);
+        obj(anchor)
+    }
+
+    fn fresh_object(interp: &mut Interpreter) -> u64 {
+        interp.alloc_object(JsObjectData::new())
+    }
+
+    fn slot_ids(slots: &RootedSlots, interp: &Interpreter) -> Vec<Option<u64>> {
+        slots
+            .snapshot(interp)
+            .iter()
+            .map(|v| v.as_object_id())
+            .collect()
+    }
+
+    #[test]
+    fn rooted_slots_values_survive_major_gc_when_only_the_container_is_pinned() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let anchor = rooted_anchor(&mut interp);
+        let slots = RootedSlots::new(&mut interp, 2);
+        slots.pin_on(&interp, &anchor);
+        let first = fresh_object(&mut interp);
+        let second = fresh_object(&mut interp);
+        slots.set(&interp, 0, obj(first));
+        slots.set(&interp, 1, obj(second));
+
+        major_gc(&mut interp);
+
+        assert!(interp.objects.get_cell(first).is_some());
+        assert!(interp.objects.get_cell(second).is_some());
+        assert_eq!(slots.get(&interp, 0).as_object_id(), Some(first));
+        assert_eq!(slots.get(&interp, 1).as_object_id(), Some(second));
+    }
+
+    #[test]
+    fn rooted_slots_set_releases_the_superseded_value() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let anchor = rooted_anchor(&mut interp);
+        let slots = RootedSlots::new(&mut interp, 1);
+        slots.pin_on(&interp, &anchor);
+        let superseded = fresh_object(&mut interp);
+        let current = fresh_object(&mut interp);
+        slots.set(&interp, 0, obj(superseded));
+        slots.set(&interp, 0, obj(current));
+
+        major_gc(&mut interp);
+
+        assert!(
+            interp.objects.get_cell(superseded).is_none(),
+            "a replaced slot value must not be retained"
+        );
+        assert!(interp.objects.get_cell(current).is_some());
+    }
+
+    #[test]
+    fn rooted_slots_push_len_and_snapshot_round_trip_across_gc() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let anchor = rooted_anchor(&mut interp);
+        let slots = RootedSlots::new(&mut interp, 0);
+        slots.pin_on(&interp, &anchor);
+        assert_eq!(slots.len(&interp), 0);
+
+        let first = fresh_object(&mut interp);
+        let second = fresh_object(&mut interp);
+        slots.push(&interp, obj(first));
+        slots.push(&interp, JsValue::UNDEFINED);
+        slots.set(&interp, 1, obj(second));
+
+        major_gc(&mut interp);
+
+        let third = fresh_object(&mut interp);
+        slots.push(&interp, obj(third));
+        major_gc(&mut interp);
+
+        assert_eq!(slots.len(&interp), 3);
+        assert_eq!(
+            slot_ids(&slots, &interp),
+            vec![Some(first), Some(second), Some(third)]
+        );
+        for id in [first, second, third] {
+            assert!(interp.objects.get_cell(id).is_some());
+        }
+    }
+
+    #[test]
+    fn rooted_slots_unpinned_container_is_collected_with_its_values() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let slots = RootedSlots::new(&mut interp, 1);
+        let value = fresh_object(&mut interp);
+        slots.set(&interp, 0, obj(value));
+        let container = slots.root().as_object_id().unwrap();
+
+        major_gc(&mut interp);
+
+        assert!(interp.objects.get_cell(container).is_none());
+        assert!(interp.objects.get_cell(value).is_none());
+    }
+
+    #[test]
+    fn rooted_slots_write_into_an_old_container_is_remembered() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let anchor = rooted_anchor(&mut interp);
+        let slots = RootedSlots::new(&mut interp, 1);
+        slots.pin_on(&interp, &anchor);
+        major_gc(&mut interp);
+        let container = slots.root().as_object_id().unwrap();
+        assert!(interp.objects.get_cell_expect(container).is_old());
+        interp.objects.take_remembered();
+
+        let young = fresh_object(&mut interp);
+        slots.set(&interp, 0, obj(young));
+
+        assert_eq!(interp.objects.take_remembered(), vec![container]);
+    }
+
+    #[test]
+    fn rooted_slots_old_container_keeps_a_young_value_across_minor_gc() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let anchor = rooted_anchor(&mut interp);
+        let slots = RootedSlots::new(&mut interp, 1);
+        slots.pin_on(&interp, &anchor);
+        major_gc(&mut interp);
+
+        let young = fresh_object(&mut interp);
+        slots.set(&interp, 0, obj(young));
+        let pushed = fresh_object(&mut interp);
+        slots.push(&interp, obj(pushed));
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(young).is_some());
+        assert!(interp.objects.get_cell(pushed).is_some());
     }
 }
