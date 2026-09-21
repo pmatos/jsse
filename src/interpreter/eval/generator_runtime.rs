@@ -3054,41 +3054,25 @@ impl Interpreter {
                     let gen_id_r = gen_id;
                     self.await_then(&ret_val, move |interp, outcome| {
                         match outcome {
-                            Ok(awaited_val) => interp.yield_star_return_after_unwrap(
-                                &gen_this_r,
-                                gen_id_r,
-                                awaited_val,
-                                &ret_promise,
-                                &ret_resolve,
-                                &ret_reject,
-                            ),
-                            Err(reason) => {
-                                if let Some(obj) = interp.get_object(gen_id_r)
-                                    && let Some(IteratorState::StateMachineAsyncGenerator {
-                                        execution_state,
-                                        delegated_iterator,
-                                        try_stack,
-                                        ..
-                                    }) = obj.borrow_mut().iterator_state_mut()
-                                {
-                                    interp.generator_inline_iters.remove(&gen_id_r);
-                                    *execution_state = StateMachineExecutionState::Completed;
-                                    *delegated_iterator = None;
-                                    try_stack.clear();
-                                }
-                                let _ = interp.call_function(
+                            Ok(awaited_val) => {
+                                interp.yield_star_return_after_unwrap(
+                                    &gen_this_r,
+                                    gen_id_r,
+                                    awaited_val,
+                                    &ret_promise,
+                                    &ret_resolve,
                                     &ret_reject,
-                                    &JsValue::UNDEFINED,
-                                    &[reason],
                                 );
-                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id_r)
-                                {
-                                    queue.pop_front();
-                                }
-                                interp.async_gen_process_queue(&gen_this_r);
+                                Completion::Normal(JsValue::UNDEFINED)
                             }
+                            // A rejected operand is a throw completion at the
+                            // yield: the delegate's `throw` receives it.
+                            Err(reason) => interp.async_gen_reenter(
+                                gen_id_r,
+                                Completion::Throw(reason),
+                                (&ret_promise, &ret_resolve, &ret_reject),
+                            ),
                         }
-                        Completion::Normal(JsValue::UNDEFINED)
                     });
                     self.scheduler.set_async_gen_yield_pending(true);
                 }
@@ -3799,10 +3783,8 @@ impl Interpreter {
                         continue;
                     }
 
-                    let completion = dispose_or_park!(
-                        Completion::Return(return_value),
-                        GeneratorDisposeThen::ReturnAwait
-                    );
+                    // The operand was Awaited when the return was injected.
+                    let completion = dispose_or_park!(Completion::Return(return_value));
                     self.generator_inline_iters.remove(&o.id);
                     self.generator_for_of_stacks.remove(&o.id);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
@@ -3814,8 +3796,13 @@ impl Interpreter {
                     );
                     return match completion {
                         Completion::Return(value) => {
-                            let promise_id = promise.as_object_id().unwrap_or(0);
-                            self.async_generator_await_return(value, promise_id)
+                            let iter_result = self.create_iter_result_object(value, true);
+                            let _ = self.call_function(
+                                &resolve_fn,
+                                &JsValue::UNDEFINED,
+                                &[iter_result],
+                            );
+                            Completion::Normal(promise)
                         }
                         Completion::Throw(error) => {
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
@@ -5719,7 +5706,7 @@ impl Interpreter {
     ) -> Completion {
         let (promise, resolve, reject) = request;
         if matches!(then, GeneratorDisposeThen::Reenter) {
-            return self.async_gen_reenter_after_disposal(gen_id, completion, request);
+            return self.async_gen_reenter(gen_id, completion, request);
         }
         self.generator_inline_iters.remove(&gen_id);
         self.generator_for_of_stacks.remove(&gen_id);
@@ -5767,10 +5754,11 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
-    /// A block scope's disposal, started by a state transition, finished:
-    /// re-enter the driver at the state it parked before running. A disposer
-    /// error is raised there as a fresh exception.
-    fn async_gen_reenter_after_disposal(
+    /// The Await or disposal a state transition parked at finished: re-enter
+    /// the driver at the state it parked, raising `completion` there. A throw
+    /// (a rejected operand, a disposer's error) is a fresh exception; a return
+    /// carries an already-awaited value.
+    fn async_gen_reenter(
         &mut self,
         gen_id: u64,
         completion: Completion,
@@ -5780,14 +5768,20 @@ impl Interpreter {
         if let Completion::Exit(code) = completion {
             return Completion::Exit(code);
         }
-        if let Completion::Throw(error) = completion
-            && let Some(obj) = self.get_object_cell(gen_id)
+        if let Some(obj) = self.get_object_cell(gen_id)
             && let Some(IteratorState::StateMachineAsyncGenerator {
-                pending_exception, ..
+                pending_exception,
+                pending_return,
+                ..
             }) = obj.borrow_mut().iterator_state_mut()
         {
-            *pending_exception = Some(error);
+            match completion {
+                Completion::Throw(error) => *pending_exception = Some(error),
+                Completion::Return(value) => *pending_return = Some(value),
+                _ => {}
+            }
         }
+        self.scheduler.set_async_gen_yield_pending(false);
         let result = self.async_generator_next_state_machine_with_promise(
             &this,
             JsValue::UNDEFINED,
@@ -6092,8 +6086,11 @@ impl Interpreter {
             }
         }
 
-        // Route through the existing next_state_machine with pending_return
-        // The Await (which calls PromiseResolve) happens inside the yield handler
+        // AsyncGeneratorUnwrapYieldResumption: Await the operand before the
+        // generator sees the return completion. The generator stays suspended
+        // at its yield and the request stays at the head of the queue; the
+        // continuation resumes it with the awaited value as a return, or with
+        // the rejection reason as a throw.
         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
             IteratorState::StateMachineAsyncGenerator {
                 state_machine,
@@ -6105,16 +6102,20 @@ impl Interpreter {
                 pending_binding: None,
                 delegated_iterator,
                 pending_exception: None,
-                pending_return: Some(value),
+                pending_return: None,
             },
         );
-        self.async_generator_next_state_machine_with_promise(
-            this,
-            JsValue::UNDEFINED,
-            promise,
-            resolve_fn,
-            reject_fn,
-        )
+        let gen_id = o.id;
+        let request_promise = promise.clone();
+        self.await_then(&value, move |interp, outcome| {
+            let completion = match outcome {
+                Ok(awaited) => Completion::Return(awaited),
+                Err(reason) => Completion::Throw(reason),
+            };
+            interp.async_gen_reenter(gen_id, completion, (&promise, &resolve_fn, &reject_fn))
+        });
+        self.scheduler.set_async_gen_yield_pending(true);
+        Completion::Normal(request_promise)
     }
 
     fn async_generator_throw_state_machine_with_promise(

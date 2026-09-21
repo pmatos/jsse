@@ -209,8 +209,10 @@ pub(crate) enum GeneratorDisposeThen {
     /// (possibly chained) error on a throw, otherwise resolve
     /// `{ value, done: true }` (`undefined` when the body ran to its end).
     Settle,
-    /// A `.return(v)` unwinding at a yield: `v` is awaited after disposal, as
-    /// for a generator without resources.
+    /// A `yield*` delegation that ended with a return completion whose value
+    /// has not been Awaited by the unwinding: it is awaited after disposal, as
+    /// for a generator without resources. (A `.return(v)` at a yield awaits `v`
+    /// before the generator sees the return, so it settles with `Settle`.)
     ReturnAwait,
     /// A block scope left by a state transition finished disposing: the
     /// driver re-enters at the state it was about to run (a disposer's throw
