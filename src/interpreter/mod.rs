@@ -3912,6 +3912,7 @@ impl Interpreter {
                 reject_fn,
                 for_of_stack: vec![],
                 module_path: Some(module_path.clone()),
+                scope_stack: vec![],
             },
         );
         let prev_path = self.current_module_path.take();

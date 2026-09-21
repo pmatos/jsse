@@ -915,6 +915,19 @@ fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -
     }
 }
 
+/// Scans a `try`/`catch`/`finally` clause's own statement list: if it
+/// directly declares `await using` (no extra `{ }`), the clause body itself
+/// is isolatable — its own scope is opened/closed around it, exactly like a
+/// nested block that directly declares `await using` — otherwise fall back to
+/// scanning it as a flattened list for a further nested isolatable block.
+fn scan_clause_body(stmts: &[Statement]) -> AwaitUsingScan {
+    if block_has_await_using(stmts) {
+        AwaitUsingScan::Isolatable
+    } else {
+        scan_flattened_list(stmts.iter())
+    }
+}
+
 fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
     match stmt {
         Statement::Block(stmts) if block_has_await_using(stmts) => AwaitUsingScan::Isolatable,
@@ -949,12 +962,12 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
             }
         }
         Statement::Try(t) => {
-            let mut result = scan_flattened_list(t.block.iter());
+            let mut result = scan_clause_body(&t.block);
             if let Some(handler) = &t.handler {
-                result = result.combine(scan_flattened_list(handler.body.iter()));
+                result = result.combine(scan_clause_body(&handler.body));
             }
             if let Some(finalizer) = &t.finalizer {
-                result = result.combine(scan_flattened_list(finalizer.iter()));
+                result = result.combine(scan_clause_body(finalizer));
             }
             result
         }

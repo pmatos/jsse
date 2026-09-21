@@ -391,6 +391,27 @@ pub(crate) struct AsyncFunctionState {
     /// Set while the function-level disposal is parked at an `Await`; the
     /// resumption feeds its outcome to this cursor instead of the body.
     pub pending_dispose: Option<super::PendingDispose>,
+    /// Currently open block scopes created by `EnterScope`, innermost last.
+    /// See [`ScopeFrame`].
+    pub scope_stack: Vec<ScopeFrame>,
+}
+
+/// A block scope opened by `EnterScope` and closed by `ExitScope`
+/// (`generator_transform::StateTerminator`), for a block that directly
+/// declares `await using`. Mirrors [`ForOfLoopState`]'s role for iteration
+/// environments: state bodies inside the block execute against `env`, and an
+/// abrupt completion crossing the frame must dispose it first.
+#[derive(Clone)]
+pub(crate) struct ScopeFrame {
+    pub(crate) env: EnvRef,
+    /// Depth of the driver's try stack when the scope was entered, so an
+    /// abrupt completion can tell a `finally` lexically inside the scope from
+    /// one outside it, exactly as `ForOfLoopState::try_depth` does.
+    pub(crate) try_depth: usize,
+    /// Depth of the driver's for-of stack when the scope was entered, used to
+    /// order this frame's disposal against a for-of loop nested more deeply
+    /// (which must close first) or more shallowly (which closes after).
+    pub(crate) for_of_depth: usize,
 }
 
 #[derive(Clone)]

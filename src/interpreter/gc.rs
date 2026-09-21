@@ -474,6 +474,9 @@ impl Interpreter {
                 Self::collect_value_roots(v, &mut roots);
             }
             Self::collect_for_of_stack_roots(&afs.for_of_stack, &mut roots, &mut seen_envs);
+            for frame in &afs.scope_stack {
+                Self::collect_env_roots(&frame.env, &mut roots, &mut seen_envs);
+            }
         }
 
         (roots, seen_envs)

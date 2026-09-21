@@ -1831,6 +1831,11 @@ impl Interpreter {
                 StateTerminator::Await { .. } => {
                     unreachable!("Await terminator in sync generator")
                 }
+                StateTerminator::EnterScope { .. } | StateTerminator::ExitScope { .. } => {
+                    unreachable!(
+                        "EnterScope/ExitScope are emitted only for plain async function bodies"
+                    )
+                }
             }
         }
     }
@@ -5909,6 +5914,11 @@ impl Interpreter {
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
+                }
+                StateTerminator::EnterScope { .. } | StateTerminator::ExitScope { .. } => {
+                    unreachable!(
+                        "EnterScope/ExitScope are emitted only for plain async function bodies"
+                    )
                 }
             }
         }
