@@ -716,7 +716,24 @@ pub(crate) struct ForOfStatement {
     pub left: ForInOfLeft,
     pub right: Expression,
     pub body: Box<Statement>,
+    /// `for await ( ... of ... )`: the loop uses the async iteration protocol
+    /// (`Await`s each `next()` result). Distinct from [`awaits_at_head`](Self::awaits_at_head),
+    /// which also covers `await using` ForDeclarations that suspend at iteration disposal
+    /// without awaiting the iteration protocol itself.
     pub is_await: bool,
+}
+
+impl ForOfStatement {
+    /// Whether this loop can suspend the enclosing async function/generator at its head,
+    /// either through the async iteration protocol (`is_await`) or through an `await using`
+    /// ForDeclaration's per-iteration DisposeResources `Await`.
+    pub(crate) fn awaits_at_head(&self) -> bool {
+        self.is_await
+            || matches!(
+                &self.left,
+                ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing
+            )
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -5049,3 +5049,25 @@ fn propagate_macro_covers_three_shapes_and_empty() {
     }
     assert!(matches!(s2_typed(Ok(7)), Completion::Normal(_)));
 }
+
+#[test]
+fn module_with_only_a_plain_await_using_for_of_head_is_top_level_await() {
+    // `for (await using x of y) {}` has no `for await` and no `await` in its
+    // body, but the ForDeclaration's per-iteration disposal still suspends —
+    // the module must still be detected as TLA (module_has_tla drives whether
+    // the module's evaluation goes through the async path at all).
+    let program = parse_module_program("for (await using x of []) {}");
+    assert!(Interpreter::module_has_tla(&program));
+}
+
+#[test]
+fn module_with_a_for_await_of_head_is_top_level_await() {
+    let program = parse_module_program("for await (x of []) {}");
+    assert!(Interpreter::module_has_tla(&program));
+}
+
+#[test]
+fn module_with_a_plain_for_of_head_and_no_await_is_not_top_level_await() {
+    let program = parse_module_program("for (x of []) {}");
+    assert!(!Interpreter::module_has_tla(&program));
+}

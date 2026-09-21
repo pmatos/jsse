@@ -575,7 +575,7 @@ fn create_simple_machine(
 
 fn stmt_contains_for_await(stmt: &Statement) -> bool {
     match stmt {
-        Statement::ForOf(f) => f.is_await,
+        Statement::ForOf(f) => f.awaits_at_head(),
         Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
         Statement::If(i) => {
             stmt_contains_for_await(&i.consequent)
@@ -644,7 +644,7 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
     if detect_for_await
         && let Statement::ForOf(f) = stmt
-        && f.is_await
+        && f.awaits_at_head()
     {
         return true;
     }
@@ -3356,5 +3356,25 @@ mod tests {
             with_jump[0].inline_jumps[0].terminator,
             StateTerminator::LoopControl(_)
         ));
+    }
+
+    #[test]
+    fn test_plain_await_using_for_of_head_is_lowered() {
+        // The only "suspension" here is the `await using` ForDeclaration's
+        // per-iteration disposal Await, not the (non-`for await`) iteration
+        // protocol or anything in the body. It must still take the state
+        // machine, not the `create_simple_machine` fast path.
+        let body = parse_fn_body("async function f(y) { for (await using x of y) {} }");
+        let sm = transform_async_function(&body, &[]);
+        assert!(
+            sm.states.len() > 1,
+            "expected a real state machine, got the simple-machine fast path"
+        );
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ForOfHead { .. })),
+            "expected a ForOfHead terminator"
+        );
     }
 }
