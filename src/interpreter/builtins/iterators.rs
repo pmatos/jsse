@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::interpreter::gc::RootedSlots;
 
 type ZipState = Rc<
     RefCell<(
@@ -342,44 +343,35 @@ fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result
 }
 
 /// The current iterator an iterator helper is drawing from, paired with that
-/// iterator's `next` method — the engine's Rooted Slot for this pair (see
-/// `CONTEXT.md`). Rooted once on the helper via
-/// `Interpreter::set_helper_gc_roots`, then replaced in place.
-///
-/// The backing store is a real arena object, not a Rust container: writes go
-/// through `ObjectHandle::borrow_mut`, which runs the generational write
-/// barrier, so an old helper that takes on a young iterator is remembered for
-/// the next minor collection. A container the arena does not own would be both
-/// untraced and unbarriered.
+/// iterator's `next` method — a two-slot [`RootedSlots`] (see `CONTEXT.md`).
+/// Rooted once on the helper via `Interpreter::set_helper_gc_roots`, then
+/// replaced in place.
 ///
 /// Slot 0 alone decides occupancy: the spec opens an iterator before reading
 /// its `next` method and does not check that the method is callable, so slot 1
 /// is stored and returned verbatim — `undefined` included — and the resulting
 /// *TypeError* is owed later, when the helper first calls it.
 #[derive(Clone)]
-struct RootedPair(JsValue);
+struct RootedPair(RootedSlots);
 
 impl RootedPair {
     fn new(interp: &mut Interpreter) -> Self {
-        Self(interp.create_array(vec![JsValue::UNDEFINED, JsValue::UNDEFINED]))
+        Self(RootedSlots::new(interp, 2))
     }
 
     /// The value to hand to `set_helper_gc_roots`; rooting it roots both slots.
     fn root(&self) -> JsValue {
-        self.0.clone()
+        self.0.root()
     }
 
     fn get(&self, interp: &Interpreter) -> Option<(JsValue, JsValue)> {
-        interp.with_array_elements(&self.0, |elements| {
-            (!elements[0].is_undefined()).then(|| (elements[0].clone(), elements[1].clone()))
-        })
+        let iterator = self.0.get(interp, 0);
+        (!iterator.is_undefined()).then(|| (iterator, self.0.get(interp, 1)))
     }
 
     fn set(&self, interp: &Interpreter, iterator: JsValue, next_method: JsValue) {
-        interp.with_array_elements_mut(&self.0, |elements| {
-            elements[0] = iterator;
-            elements[1] = next_method;
-        });
+        self.0.set(interp, 0, iterator);
+        self.0.set(interp, 1, next_method);
     }
 
     fn clear(&self, interp: &Interpreter) {
@@ -1595,7 +1587,7 @@ impl Interpreter {
     /// `pin_native_root` so `gc_native_roots` has a single mutator; each helper
     /// object is fresh here, so appending matches the previous assignment.
     /// Captures that are reassigned after construction must instead live in a
-    /// traced container rooted here and be mutated in place. Repeatedly pinning
+    /// [`RootedSlots`] rooted here and be mutated in place. Repeatedly pinning
     /// replacements would retain every superseded value until the helper dies.
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
         for root in &roots {
