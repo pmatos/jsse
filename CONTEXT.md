@@ -62,6 +62,22 @@ _Avoid_: dispose block, await-using state.
 The transform-time table (`GeneratorState.block_exits`, `BlockExits`) of `break`/`continue` targets, keyed by label, in scope where an **Isolated Block** was emitted (async generators only — a plain async function's **Scope Frame** routes crossed `break`/`continue` through `route_loop_control!` directly, using `LoopControlTarget.scope_depth`). The block runs verbatim, so a jump leaving it surfaces as a raw `Completion::Break`/`Continue` after its disposal; the driver resolves it through this table into `route_loop_control!`, which runs intervening `finally` blocks and closes crossed `for-of` iterators. A side table rather than a `StateTerminator` variant so the generator executors stay untouched.
 _Avoid_: jump table, loop targets.
 
+**Terminator Operand**:
+An expression a `StateTerminator` carries and the state-machine driver evaluates
+down to a single value — a `ConditionalGoto` condition, a `SwitchDispatch`
+discriminant or case test, a `ForOfInit` iterable, or a `Yield`/`Await`/`Return`/
+`Throw` operand. The three drivers (sync generator, async generator,
+`async_function_resume`) share one reading of what the evaluation produced, via
+`eval_operand` and the `Operand` enum (`interpreter/eval/operand.rs`):
+`Value` / `Throw` / `Suspend` / `Abort` / `Other`. `Abort` carries only
+`Completion::Exit`, which every driver must tear down on and propagate verbatim;
+`Other` carries `Return`/`Break`/`Continue`/`Empty`, where the drivers
+legitimately differ. Routing a throw and the per-driver teardown stay with each
+driver — they need its locals and resolve by `continue`/`return` out of its state
+loop — so what the seam owns is the classification, the part that had no business
+differing.
+_Avoid_: terminator expression, operand completion, state operand.
+
 ## Memory
 
 **Temp-Root Frame**:
