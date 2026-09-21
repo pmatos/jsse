@@ -918,9 +918,8 @@ impl<'a> Lexer<'a> {
             && self.peek() != Some('E')
         {
             let oct_part = &s[1..]; // skip leading 0
-            let val = u64::from_str_radix(oct_part, 8)
-                .map_err(|_| self.error("Invalid octal literal"))?;
-            Ok(Token::LegacyOctalLiteral(val as f64))
+            let val = self.radix_literal_value(oct_part, 8, "octal")?;
+            Ok(Token::LegacyOctalLiteral(val))
         } else {
             // Non-octal decimal (e.g. 09, 0.5 after leading zero digits)
             let mut has_dot_or_exp = false;
@@ -1779,6 +1778,32 @@ mod tests {
             vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
         );
         assert!(Lexer::new("0b").next_token().is_err());
+    }
+
+    #[test]
+    fn wide_legacy_octal_literals_round_to_nearest() {
+        // "0" + 24 sevens = 8^24 - 1 = 2^72 - 1, rounds up to 2^72; token kind
+        // must stay LegacyOctalLiteral so strict-mode early-error detection
+        // (keyed off the token, not the value) is unaffected.
+        assert_eq!(
+            lex_no_lt(&format!("0{}", "7".repeat(24))),
+            vec![Token::LegacyOctalLiteral(2f64.powi(72)), Token::Eof]
+        );
+        // 8^400 overflows the f64 range entirely.
+        assert_eq!(
+            lex_no_lt(&format!("0{}", "7".repeat(400))),
+            vec![Token::LegacyOctalLiteral(f64::INFINITY), Token::Eof]
+        );
+        // A digit >= 8 anywhere still routes to NonOctalDecimalLiteral (parsed as
+        // decimal, unaffected by this change) instead of being rounded as octal.
+        let non_octal = format!("0{}8", "7".repeat(24));
+        assert_eq!(
+            lex_no_lt(&non_octal),
+            vec![
+                Token::NonOctalDecimalLiteral(non_octal.parse::<f64>().unwrap()),
+                Token::Eof
+            ]
+        );
     }
 
     #[test]
