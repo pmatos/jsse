@@ -69,11 +69,11 @@ The lexical scoping of a Temp-Root Frame behind the `with_gc_root_scope(|interp|
 _Avoid_: root guard, unroot epilogue.
 
 **Pinned Native Root**:
-A `JsValue` attached to an anchor object's `gc_native_roots` list by `pin_native_root`, so it stays reachable for as long as the anchor is. Unlike a Temp-Root Frame it outlives the native call that created it, which is what a native closure's captures need. Pins only ever accumulate, so an anchor must be pinned to a *fixed* set of values, established once.
+A `JsValue` attached to an anchor object's `gc_native_roots` list by `pin_native_root`, so it stays reachable for as long as the anchor is. Unlike a Temp-Root Frame it outlives the native call that created it, which is what a native closure's captures need. Pins only ever accumulate, so an anchor must be pinned to a *fixed* set of values, established once; a value written *after* the pin belongs in a **Rooted Slot** instead.
 _Avoid_: permanent root, closure root.
 
 **Rooted Slot**:
-A GC-traced container an anchor pins once and the owner then mutates in place, for a capture whose value is *replaced* over the anchor's lifetime. A native closure's own `Rc<RefCell<…>>` state is invisible to the tracer, and re-pinning each replacement would retain every superseded value, so the slot — not the value — is what gets pinned. `RootedPair` in `builtins/iterators.rs` is the two-slot case: the iterator an iterator helper is currently drawing from, plus that iterator's `next` method.
+A GC-traced container an anchor pins once and the owner then mutates in place, for a capture whose value is *replaced* over the anchor's lifetime. A native closure's own `Rc<RefCell<…>>` state is invisible to the tracer, and re-pinning each replacement would retain every superseded value, so the slot — not the value — is what gets pinned. `RootedSlots` in `gc.rs` is the container: growable and indexable (`push`, `set`, `get`, `snapshot`), backed by an arena object so writes run the generational write barrier, and pinned with `pin_on`. Its consumers are `Iterator.concat` and `Iterator.prototype.flatMap` — through `RootedPair` in `builtins/iterators.rs`, the two-slot adapter holding the iterator currently being drawn from plus that iterator's `next` method — and the accumulators of the Promise combinators (`all`, `allSettled`, `any`, `allKeyed`, `allSettledKeyed`).
 _Avoid_: root cell, traced box, rooted buffer.
 
 ## Builtins
