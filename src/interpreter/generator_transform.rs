@@ -1644,11 +1644,8 @@ fn transform_yielding_expression(
         },
 
         Expression::Update(op, prefix, inner) => {
-            let tv = ctx.new_temp_var("upd");
-            let b = SentValueBindingKind::Variable(tv.clone());
-            transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined =
-                Expression::Update(*op, *prefix, ExprBox::new(Expression::Identifier(tv)));
+            let target = lower_reference_operand(inner, ctx);
+            let combined = Expression::Update(*op, *prefix, ExprBox::new(target));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
