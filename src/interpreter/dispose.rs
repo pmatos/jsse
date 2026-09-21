@@ -251,6 +251,10 @@ impl GeneratorDisposal {
         }
     }
 
+    pub(crate) fn request(&self) -> (&JsValue, &JsValue, &JsValue) {
+        (&self.promise, &self.resolve, &self.reject)
+    }
+
     pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
         if let GeneratorDisposeState::Disposing { cursor, .. } = &self.state {
             cursor.for_each_value(&mut f);
