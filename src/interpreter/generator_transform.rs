@@ -2383,6 +2383,20 @@ fn transform_for_in_of_loop(
     ctx.current_state_id = after_loop;
 }
 
+/// Lowers a `try`/`catch`/`finally` clause's own statement list. A clause
+/// body that directly declares `await using` (no extra `{ }`) gets its own
+/// scope, exactly like a nested block that does — its resource must dispose
+/// at the clause's own exit, before control reaches `Catch`/`Finally`, not at
+/// function exit (issue #683). Every other clause body lowers as it always
+/// has: flattened into the enclosing state graph.
+fn transform_clause_body(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
+    if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
+        transform_scope_block(stmts, ctx, after_state);
+    } else {
+        transform_statements(stmts, ctx, after_state);
+    }
+}
+
 fn transform_try_statement(
     try_stmt: &TryStatement,
     ctx: &mut TransformContext,
@@ -2425,7 +2439,7 @@ fn transform_try_statement(
     });
 
     ctx.current_state_id = try_body_state;
-    transform_statements(&try_stmt.block, ctx, clause_completion_state);
+    transform_clause_body(&try_stmt.block, ctx, clause_completion_state);
     if ctx.current_state_id != clause_completion_state {
         ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
     }
@@ -2440,7 +2454,7 @@ fn transform_try_statement(
 
         ctx.current_state_id = catch_body_state;
         if let Some(handler) = &try_stmt.handler {
-            transform_statements(&handler.body, ctx, clause_completion_state);
+            transform_clause_body(&handler.body, ctx, clause_completion_state);
         }
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
@@ -2457,7 +2471,7 @@ fn transform_try_statement(
 
         ctx.current_state_id = finally_body_state;
         if let Some(finalizer) = &try_stmt.finalizer {
-            transform_statements(finalizer, ctx, finally_exit_state);
+            transform_clause_body(finalizer, ctx, finally_exit_state);
         }
         if ctx.current_state_id != finally_exit_state {
             ctx.finalize_current_state(StateTerminator::Goto(finally_exit_state));

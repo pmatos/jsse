@@ -98,4 +98,35 @@ asyncTest(async function () {
     ['body', 'disposer', 'sync-end', 'w1', 'after-block', 'w2', 'settled', 'w3', 'w4'],
     'block with an async disposer'
   );
+
+  log = await observe(function (L) {
+    return (async function () {
+      {
+        await using a = { async [Symbol.asyncDispose]() { L('dispose-a'); } };
+        {
+          await using b = { async [Symbol.asyncDispose]() { L('dispose-b'); } };
+          L('body');
+        }
+        L('after-inner');
+      }
+      L('after-outer');
+    })();
+  });
+  assert.compareArray(
+    log,
+    [
+      'body',
+      'dispose-b',
+      'sync-end',
+      'w1',
+      'after-inner',
+      'dispose-a',
+      'w2',
+      'after-outer',
+      'w3',
+      'settled',
+      'w4',
+    ],
+    'a block nested inside another await-using block suspends at each disposal instead of draining inline'
+  );
 });
