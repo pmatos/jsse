@@ -1365,24 +1365,18 @@ fn transform_yielding_expression(
         }
 
         Expression::Assign(op, left, right) => {
-            if expr_has_suspension(right, ctx.is_async) {
+            // The target reference (base, then key) is evaluated before the
+            // right-hand side. Destructuring targets pass through untouched.
+            let new_left = lower_reference_operand(left, ctx);
+            let new_right = if expr_has_suspension(right, ctx.is_async) {
                 let temp_var = ctx.new_temp_var("assign");
-                let right_binding = SentValueBindingKind::Variable(temp_var.clone());
-                transform_yielding_expression(right, ctx, usize::MAX, Some(right_binding));
-
-                let combined = Expression::Assign(
-                    *op,
-                    left.clone(),
-                    ExprBox::new(Expression::Identifier(temp_var)),
-                );
-                emit_expression_with_binding(&combined, &binding, ctx);
-            } else if expr_has_suspension(left, ctx.is_async) {
-                // LHS has suspension (e.g. c[await 9] = 1, or destructuring [x = yield] = vals)
-                // Pre-evaluate suspension points in LHS member expressions
-                let new_left = extract_lhs_suspensions(left, ctx);
-                let combined = Expression::Assign(*op, ExprBox::new(new_left), right.clone());
-                emit_expression_with_binding(&combined, &binding, ctx);
-            }
+                bind_expression_to_temp(right, &temp_var, ctx);
+                Expression::Identifier(temp_var)
+            } else {
+                right.clone().into_expression()
+            };
+            let combined = Expression::Assign(*op, ExprBox::new(new_left), ExprBox::new(new_right));
+            emit_expression_with_binding(&combined, &binding, ctx);
         }
 
         Expression::Sequence(exprs) | Expression::Comma(exprs) => {
@@ -1952,43 +1946,6 @@ fn lower_reference_operand(expr: &Expression, ctx: &mut TransformContext) -> Exp
         other => other.clone(),
     };
     Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
-}
-
-/// Extract suspension points from assignment LHS expressions (e.g. `c[await 9]`).
-/// Transforms `await` sub-expressions into temp vars via state machine yields,
-/// returning a clean LHS expression without suspensions.
-fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Expression {
-    match expr {
-        Expression::Member(obj, prop, _) => {
-            let new_obj = if expr_has_suspension(obj, ctx.is_async) {
-                let temp = ctx.new_temp_var("lhs_obj");
-                transform_yielding_expression(
-                    obj,
-                    ctx,
-                    usize::MAX,
-                    Some(SentValueBindingKind::Variable(temp.clone())),
-                );
-                Expression::Identifier(temp)
-            } else {
-                obj.clone().into_expression()
-            };
-            let new_prop = match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let temp = ctx.new_temp_var("lhs_comp");
-                    transform_yielding_expression(
-                        e,
-                        ctx,
-                        usize::MAX,
-                        Some(SentValueBindingKind::Variable(temp.clone())),
-                    );
-                    MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
-                }
-                other => other.clone(),
-            };
-            Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
-        }
-        _ => expr.clone(),
-    }
 }
 
 fn transform_variable_declaration(
