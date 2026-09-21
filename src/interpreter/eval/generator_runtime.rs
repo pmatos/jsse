@@ -4025,6 +4025,19 @@ impl Interpreter {
         let mut initial_inline_yield_target: Option<usize> = None;
         let mut initial_inline_yield_sent: Option<JsValue> = None;
         let mut initial_inline_yield_prev_sent: Option<Vec<JsValue>> = None;
+        // A rejected `Await` leaves its binding in place (a fulfilled one is
+        // cleared by `async_gen_await_resume`), and the `<iter>__await` temp is
+        // only ever bound by a `for await` head, so its presence names the loop
+        // whose own `Await(nextResult)` rejected.
+        let rejected_head_iter_var = match &pending_binding {
+            Some(binding) if stored_pending_exception.is_some() => match &binding.kind {
+                SentValueBindingKind::Variable(name) => {
+                    name.strip_suffix("__await").map(str::to_string)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
@@ -4080,6 +4093,13 @@ impl Interpreter {
             .get(&o.id)
             .cloned()
             .unwrap_or_default();
+        // §14.7.5.6 step 6.b: `Await(nextResult)` rejecting returns without
+        // performing IteratorClose, unlike a rejection from the loop body.
+        let mut for_of_protocol_failure = rejected_head_iter_var.filter(|iter_var| {
+            for_of_stack
+                .iter()
+                .any(|loop_state| loop_state.iter_var == *iter_var)
+        });
 
         /// Tear this async generator down for an uncatchable host exit
         /// (`__host_exit`, issue #242) and propagate the completion verbatim.
@@ -4212,6 +4232,19 @@ impl Interpreter {
                 check_abrupt_on_resume = false;
                 // Check pending_exception before executing state (handles .throw() with no try/catch)
                 if let Some(exc) = pending_exception.take() {
+                    if let Some(failed_iter_var) = for_of_protocol_failure.take()
+                        && let Some(pos) = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == failed_iter_var)
+                    {
+                        let loop_state = for_of_stack.remove(pos);
+                        let iterator = func_env.borrow().get(&loop_state.iter_var);
+                        if let Some(iterator) = iterator {
+                            self.unroot_for_of_iterator(&iterator);
+                            self.remove_generator_inline_iterator(o.id, &iterator);
+                        }
+                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                    }
                     let exc = route_exception!(exc);
                     let disp = dispose_or_park!(Completion::Throw(exc));
                     let exc = match disp {
@@ -6216,7 +6249,7 @@ impl Interpreter {
             },
         ));
 
-        let _ = self.promise_then(&p, &fulfill_handler, &reject_handler);
+        self.perform_await_then(&p, fulfill_handler, reject_handler);
 
         self.scheduler.set_async_gen_yield_pending(true);
         Completion::Normal(promise.clone())

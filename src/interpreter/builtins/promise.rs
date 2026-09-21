@@ -1090,6 +1090,53 @@ impl Interpreter {
         Completion::Normal(result_promise)
     }
 
+    /// §6.2.3.1 Await steps 5-6: PerformPromiseThen with no result capability.
+    /// Unlike `promise_then` it never consults `promise.constructor`
+    /// (SpeciesConstructor) and allocates no derived promise.
+    pub(crate) fn perform_await_then(
+        &mut self,
+        promise_val: &JsValue,
+        on_fulfilled: JsValue,
+        on_rejected: JsValue,
+    ) {
+        let Some(promise_id) = promise_val.as_object_id() else {
+            return;
+        };
+        let fulfill_reaction = PromiseReaction {
+            handler: Some(on_fulfilled),
+            promise_id: None,
+            resolve: JsValue::UNDEFINED,
+            reject: JsValue::UNDEFINED,
+            reaction_type: PromiseReactionType::Fulfill,
+        };
+        let reject_reaction = PromiseReaction {
+            handler: Some(on_rejected),
+            promise_id: None,
+            resolve: JsValue::UNDEFINED,
+            reject: JsValue::UNDEFINED,
+            reaction_type: PromiseReactionType::Reject,
+        };
+        let settled = self.get_object_cell(promise_id).and_then(|obj| {
+            let mut o = obj.borrow_mut();
+            let pd = o.promise_data_mut()?;
+            pd.is_handled = true;
+            match &pd.state {
+                PromiseState::Pending => {
+                    pd.fulfill_reactions.push(fulfill_reaction.clone());
+                    pd.reject_reactions.push(reject_reaction.clone());
+                    None
+                }
+                PromiseState::Fulfilled(v) => Some((true, v.clone())),
+                PromiseState::Rejected(r) => Some((false, r.clone())),
+            }
+        });
+        match settled {
+            Some((true, value)) => self.trigger_promise_reactions(vec![fulfill_reaction], value),
+            Some((false, reason)) => self.trigger_promise_reactions(vec![reject_reaction], reason),
+            None => {}
+        }
+    }
+
     pub(crate) fn promise_then(
         &mut self,
         promise_val: &JsValue,
