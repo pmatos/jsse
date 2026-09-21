@@ -250,6 +250,13 @@ pub(crate) struct Interpreter {
     gc_marks: Vec<bool>,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
+    /// The running state-machine body belongs to an async generator; set for
+    /// the duration of `exec_state_machine_body` so a nested sync activation
+    /// resets it.
+    pub(crate) in_async_generator_body: bool,
+    /// An inline `yield*` handed its iterable to the async driver as the
+    /// `Completion::Yield` value; the driver clears it after every body run.
+    pub(crate) inline_yield_delegates: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
     /// Start of the running generator activation's window in
     /// `pending_iter_close`; slots below it belong to enclosing activations.
@@ -611,6 +618,8 @@ impl Interpreter {
             gc_marks: Vec::new(),
             generator_context: None,
             destructuring_yield: false,
+            in_async_generator_body: false,
+            inline_yield_delegates: false,
             pending_iter_close: Vec::new(),
             iter_close_base: 0,
             active_array_joins: Vec::new(),
