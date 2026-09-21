@@ -451,7 +451,7 @@ impl TransformContext {
     }
 
     fn jump_terminator(&self, target: LoopControlTarget) -> StateTerminator {
-        if self.is_async && self.detect_for_await {
+        if !self.is_async || self.detect_for_await {
             StateTerminator::LoopControl(target)
         } else {
             StateTerminator::Goto(target.target_state)
@@ -3428,8 +3428,43 @@ mod tests {
         assert_eq!(with_jump.len(), 1);
         let jump = &with_jump[0].inline_jumps[0];
         assert_eq!(jump.label, None);
-        assert!(matches!(jump.terminator, StateTerminator::Goto(t) if t == after_switch));
+        assert!(
+            matches!(&jump.terminator, StateTerminator::LoopControl(t) if t.target_state == after_switch)
+        );
         assert_eq!(with_jump[0].inline_jumps.len(), 1);
+    }
+
+    fn loop_control_targets(sm: &GeneratorStateMachine) -> Vec<LoopControlTarget> {
+        sm.states
+            .iter()
+            .filter_map(|s| match &s.terminator {
+                StateTerminator::LoopControl(target) => Some(*target),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_break_in_yielding_try_of_sync_generator_lowers_to_loop_control() {
+        let body = parse_fn_body(
+            "function* g() { for (;;) { try { yield 1; break; } finally { f(); } } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let targets = loop_control_targets(&sm);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].try_depth, 0);
+        assert_eq!(targets[0].for_of_depth, 0);
+    }
+
+    #[test]
+    fn test_loop_control_target_records_enclosing_try_depth() {
+        let body = parse_fn_body(
+            "function* g() { try { for (;;) { try { yield 1; continue; } finally { f(); } } } finally { h(); } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let targets = loop_control_targets(&sm);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].try_depth, 1);
     }
 
     #[test]

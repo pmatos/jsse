@@ -9180,6 +9180,7 @@ impl Interpreter {
                         _after_state: after_state,
                         entered_catch: false,
                         entered_finally: false,
+                        pending_loop_control: None,
                     });
                     current_id = try_state;
                 }
