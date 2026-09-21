@@ -854,21 +854,44 @@ impl<'a> Lexer<'a> {
         self.read_digits_with_separators(s, |ch| ch.is_ascii_digit())
     }
 
+    // §12.9.3 NonDecimalIntegerLiteral / LegacyOctalIntegerLiteral value: MV is the
+    // exact integer, rounded once to 𝔽(MV) (§6.1.6.1) — no `u64` upper bound.
+    // `digits` must be a non-empty run of already-validated radix digits: each
+    // call site rejects an empty digit run before reaching here — see
+    // `reject_empty_prefixed_digits` (also covers an empty digit run before a
+    // BigInt suffix, e.g. `0xn`) for hex/octal/binary, and the loop in
+    // `read_legacy_octal_or_decimal` for legacy octal.
+    fn radix_literal_value(digits: &str, radix: u32) -> f64 {
+        debug_assert!(!digits.is_empty());
+        crate::interpreter::prevalidated_radix_digits_to_f64(digits, radix)
+    }
+
+    // `0x`/`0o`/`0b` with no digits after the prefix is a SyntaxError even when
+    // followed by a BigInt suffix (`0xn`/`0on`/`0bn`), since NonDecimalIntegerLiteral
+    // always requires at least one digit. `s` is the prefix plus digits read so
+    // far, so an empty digit run leaves `s` at exactly the 2-char prefix.
+    fn reject_empty_prefixed_digits(&self, s: &str, what: &str) -> Result<(), LexError> {
+        if s.len() == 2 {
+            return Err(self.error(format!("Invalid {what} literal")));
+        }
+        Ok(())
+    }
+
     fn read_hex_literal(&mut self, mut s: String) -> Result<Token, LexError> {
         s.push(self.advance().unwrap()); // x/X
         if self.peek() == Some('_') {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
         self.read_digits_with_separators(&mut s, |ch| ch.is_ascii_hexdigit())?;
+        self.reject_empty_prefixed_digits(&s, "hex")?;
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
         }
         let hex_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val =
-            u64::from_str_radix(&hex_part, 16).map_err(|_| self.error("Invalid hex literal"))?;
-        Ok(Token::NumericLiteral(val as f64))
+        let val = Self::radix_literal_value(&hex_part, 16);
+        Ok(Token::NumericLiteral(val))
     }
 
     fn read_octal_literal(&mut self, mut s: String) -> Result<Token, LexError> {
@@ -877,15 +900,15 @@ impl<'a> Lexer<'a> {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
         self.read_digits_with_separators(&mut s, |ch| ('0'..='7').contains(&ch))?;
+        self.reject_empty_prefixed_digits(&s, "octal")?;
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
         }
         let oct_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val =
-            u64::from_str_radix(&oct_part, 8).map_err(|_| self.error("Invalid octal literal"))?;
-        Ok(Token::NumericLiteral(val as f64))
+        let val = Self::radix_literal_value(&oct_part, 8);
+        Ok(Token::NumericLiteral(val))
     }
 
     fn read_legacy_octal_or_decimal(&mut self, mut s: String) -> Result<Token, LexError> {
@@ -907,9 +930,8 @@ impl<'a> Lexer<'a> {
             && self.peek() != Some('E')
         {
             let oct_part = &s[1..]; // skip leading 0
-            let val = u64::from_str_radix(oct_part, 8)
-                .map_err(|_| self.error("Invalid octal literal"))?;
-            Ok(Token::LegacyOctalLiteral(val as f64))
+            let val = Self::radix_literal_value(oct_part, 8);
+            Ok(Token::LegacyOctalLiteral(val))
         } else {
             // Non-octal decimal (e.g. 09, 0.5 after leading zero digits)
             let mut has_dot_or_exp = false;
@@ -944,15 +966,15 @@ impl<'a> Lexer<'a> {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
         self.read_digits_with_separators(&mut s, |ch| ch == '0' || ch == '1')?;
+        self.reject_empty_prefixed_digits(&s, "binary")?;
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
         }
         let bin_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val =
-            u64::from_str_radix(&bin_part, 2).map_err(|_| self.error("Invalid binary literal"))?;
-        Ok(Token::NumericLiteral(val as f64))
+        let val = Self::radix_literal_value(&bin_part, 2);
+        Ok(Token::NumericLiteral(val))
     }
 
     fn read_identifier_chars(&mut self, first: char) -> Result<(String, bool), LexError> {
@@ -1673,6 +1695,133 @@ mod tests {
         assert_eq!(
             lex_no_lt("1e3"),
             vec![Token::NumericLiteral(1000.0), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn wide_hex_literals_round_to_nearest() {
+        // sec-numericvalue / sec-static-semantics-mv: MV is the exact integer,
+        // rounded once to 𝔽(MV) (§6.1.6.1); no upper bound on digit count.
+        assert_eq!(
+            lex_no_lt("0xffffffffffffffffffff"),
+            vec![Token::NumericLiteral(2f64.powi(80)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt("0x10000000000000000"),
+            vec![Token::NumericLiteral(2f64.powi(64)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt("0x1_0000_0000_0000_0000"),
+            vec![Token::NumericLiteral(2f64.powi(64)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt(&format!("0x{}", "f".repeat(256))),
+            vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt(&format!("0x{}", "f".repeat(255))),
+            vec![Token::NumericLiteral(2f64.powi(1020)), Token::Eof]
+        );
+        // Regression guards: already-green ≤64-bit literals stay exact.
+        assert_eq!(
+            lex_no_lt("0xffffffffffffffff"),
+            vec![Token::NumericLiteral(2f64.powi(64)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt(&format!("0x{}ff", "0".repeat(64))),
+            vec![Token::NumericLiteral(255.0), Token::Eof]
+        );
+        assert!(Lexer::new("0x").next_token().is_err());
+        assert!(Lexer::new("0xg").next_token().is_err());
+        // An empty digit run stays a SyntaxError even before a BigInt suffix:
+        // NonDecimalIntegerLiteral always requires at least one digit, `n` or
+        // not (jsse#677 follow-up: this used to silently lex as 0n).
+        assert!(Lexer::new("0xn").next_token().is_err());
+    }
+
+    #[test]
+    fn wide_hex_literal_ties_round_half_to_even() {
+        // "2" + 12 zeros + "1" + 16 zeros = 2*16^29 + 16^16 = 2^117 + 2^64, the
+        // exact midpoint between representable doubles 2^117 and 2^117 + 2^65
+        // (spacing 2^65 in that binade) — 𝔽(MV) breaks the tie towards the
+        // even mantissa, 2^117.
+        let tie = format!("0x2{}1{}", "0".repeat(12), "0".repeat(16));
+        assert_eq!(
+            lex_no_lt(&tie),
+            vec![Token::NumericLiteral(2f64.powi(117)), Token::Eof]
+        );
+        // Same digits but the final zero becomes a 1: exact value 2^117 + 2^64 + 1,
+        // just past the tie, so it rounds up to 2^117 + 2^65 instead.
+        let past_tie = format!("0x2{}1{}1", "0".repeat(12), "0".repeat(15));
+        assert_eq!(
+            lex_no_lt(&past_tie),
+            vec![
+                Token::NumericLiteral(2f64.powi(117) + 2f64.powi(65)),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn wide_octal_literals_round_to_nearest() {
+        // 24 sevens = 8^24 - 1 = 2^72 - 1, rounds up to 2^72 (§6.1.6.1 𝔽(MV)).
+        assert_eq!(
+            lex_no_lt(&format!("0o{}", "7".repeat(24))),
+            vec![Token::NumericLiteral(2f64.powi(72)), Token::Eof]
+        );
+        // 8^342 ~ 2^1026 overflows the f64 range entirely.
+        assert_eq!(
+            lex_no_lt(&format!("0o{}", "7".repeat(342))),
+            vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
+        );
+        assert!(Lexer::new("0o").next_token().is_err());
+        assert!(Lexer::new("0on").next_token().is_err());
+    }
+
+    #[test]
+    fn wide_binary_literals_round_to_nearest() {
+        // 70 ones = 2^70 - 1, rounds up to 2^70.
+        assert_eq!(
+            lex_no_lt(&format!("0b{}", "1".repeat(70))),
+            vec![Token::NumericLiteral(2f64.powi(70)), Token::Eof]
+        );
+        // 1023 ones = 2^1023 - 1, rounds up to 2^1023 (still finite).
+        assert_eq!(
+            lex_no_lt(&format!("0b{}", "1".repeat(1023))),
+            vec![Token::NumericLiteral(2f64.powi(1023)), Token::Eof]
+        );
+        // 1024 ones = 2^1024 - 1 overflows the f64 range.
+        assert_eq!(
+            lex_no_lt(&format!("0b{}", "1".repeat(1024))),
+            vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
+        );
+        assert!(Lexer::new("0b").next_token().is_err());
+        assert!(Lexer::new("0bn").next_token().is_err());
+    }
+
+    #[test]
+    fn wide_legacy_octal_literals_round_to_nearest() {
+        // "0" + 24 sevens = 8^24 - 1 = 2^72 - 1, rounds up to 2^72; token kind
+        // must stay LegacyOctalLiteral so strict-mode early-error detection
+        // (keyed off the token, not the value) is unaffected.
+        assert_eq!(
+            lex_no_lt(&format!("0{}", "7".repeat(24))),
+            vec![Token::LegacyOctalLiteral(2f64.powi(72)), Token::Eof]
+        );
+        // 8^400 overflows the f64 range entirely.
+        assert_eq!(
+            lex_no_lt(&format!("0{}", "7".repeat(400))),
+            vec![Token::LegacyOctalLiteral(f64::INFINITY), Token::Eof]
+        );
+        // A digit >= 8 anywhere still routes to NonOctalDecimalLiteral (parsed as
+        // decimal, unaffected by this change) instead of being rounded as octal.
+        let non_octal = format!("0{}8", "7".repeat(24));
+        assert_eq!(
+            lex_no_lt(&non_octal),
+            vec![
+                Token::NonOctalDecimalLiteral(non_octal.parse::<f64>().unwrap()),
+                Token::Eof
+            ]
         );
     }
 
