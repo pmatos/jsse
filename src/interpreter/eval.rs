@@ -8575,9 +8575,13 @@ impl Interpreter {
                     DisposeThen::ScopeCrossLoopControl(target)
                 );
 
-                if let Some((_, finally_state)) = routed_to {
+                if let Some((depth, finally_state)) = routed_to {
+                    // Contexts nested inside the selected finally are left, so
+                    // EnterFinally must mark this one.
+                    try_stack.truncate(depth + 1);
                     current_id = finally_state;
                 } else {
+                    try_stack.truncate(target.try_depth);
                     pending_loop_control = None;
                     current_id = target.target_state;
                 }
