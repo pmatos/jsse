@@ -109,7 +109,7 @@ impl<'a> Parser<'a> {
             let pat = if self.current == Token::Assign {
                 self.advance()?;
                 let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), Box::new(default))
+                Pattern::Assign(Box::new(pat), ExprBox::new(default))
             } else {
                 pat
             };
@@ -139,7 +139,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Assign {
                     self.advance()?;
                     let default = self.parse_assignment_expression()?;
-                    pat = Pattern::Assign(Box::new(pat), Box::new(default));
+                    pat = Pattern::Assign(Box::new(pat), ExprBox::new(default));
                 }
                 props.push(ObjectPatternProperty::KeyValue(key, pat));
             } else {
@@ -174,7 +174,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let default = self.parse_assignment_expression()?;
                     let pat =
-                        Pattern::Assign(Box::new(Pattern::Identifier(name)), Box::new(default));
+                        Pattern::Assign(Box::new(Pattern::Identifier(name)), ExprBox::new(default));
                     props.push(ObjectPatternProperty::KeyValue(key, pat));
                 } else {
                     props.push(ObjectPatternProperty::Shorthand(name));
@@ -218,7 +218,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let expr = self.parse_assignment_expression()?;
                 self.eat(&Token::RightBracket)?;
-                Ok(PropertyKey::Computed(Box::new(expr)))
+                Ok(PropertyKey::Computed(ExprBox::new(expr)))
             }
             Token::Keyword(kw) => {
                 let name = kw.to_string();
@@ -1068,7 +1068,7 @@ impl<'a> Parser<'a> {
             let expr = self.parse_assignment_expression()?;
             self.no_in = saved_no_in;
             self.eat(&Token::RightBracket)?;
-            Ok((PropertyKey::Computed(Box::new(expr)), true))
+            Ok((PropertyKey::Computed(ExprBox::new(expr)), true))
         } else if let Token::PrivateName(name) = &self.current {
             let name = name.clone();
             self.advance()?;
@@ -1186,7 +1186,7 @@ impl<'a> Parser<'a> {
             let pat = if self.current == Token::Assign {
                 self.advance()?;
                 let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), Box::new(default))
+                Pattern::Assign(Box::new(pat), ExprBox::new(default))
             } else {
                 pat
             };

@@ -3941,9 +3941,9 @@ impl Interpreter {
                     .map(|elem| {
                         elem.as_ref().map(|e| match e {
                             ArrayPatternElement::Pattern(p) => Self::pattern_to_assignment_expr(p),
-                            ArrayPatternElement::Rest(p) => {
-                                Expression::Spread(Box::new(Self::pattern_to_assignment_expr(p)))
-                            }
+                            ArrayPatternElement::Rest(p) => Expression::Spread(ExprBox::new(
+                                Self::pattern_to_assignment_expr(p),
+                            )),
                         })
                     })
                     .collect();
@@ -3971,9 +3971,9 @@ impl Interpreter {
                         },
                         ObjectPatternProperty::Rest(p) => Property {
                             key: PropertyKey::Identifier("__rest__".to_string()),
-                            value: Expression::Spread(Box::new(Self::pattern_to_assignment_expr(
-                                p,
-                            ))),
+                            value: Expression::Spread(ExprBox::new(
+                                Self::pattern_to_assignment_expr(p),
+                            )),
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: false,
@@ -3985,13 +3985,13 @@ impl Interpreter {
             }
             Pattern::Assign(inner, default) => Expression::Assign(
                 AssignOp::Assign,
-                Box::new(Self::pattern_to_assignment_expr(inner)),
+                ExprBox::new(Self::pattern_to_assignment_expr(inner)),
                 default.clone(),
             ),
             Pattern::Rest(inner) => {
-                Expression::Spread(Box::new(Self::pattern_to_assignment_expr(inner)))
+                Expression::Spread(ExprBox::new(Self::pattern_to_assignment_expr(inner)))
             }
-            Pattern::MemberExpression(expr) => *expr.clone(),
+            Pattern::MemberExpression(expr) => expr.clone().into_expression(),
         }
     }
 

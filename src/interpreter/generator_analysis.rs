@@ -1066,7 +1066,7 @@ mod tests {
     }
 
     fn make_await() -> Expression {
-        Expression::Await(Box::new(Expression::Literal(Literal::Number(1.0))))
+        Expression::Await(ExprBox::new(Expression::Literal(Literal::Number(1.0))))
     }
 
     fn make_function_expr() -> FunctionExpr {
@@ -1107,7 +1107,7 @@ mod tests {
 
     fn computed_method(key: Expression) -> ClassElement {
         ClassElement::Method(ClassMethod {
-            key: PropertyKey::Computed(Box::new(key)),
+            key: PropertyKey::Computed(ExprBox::new(key)),
             kind: ClassMethodKind::Method,
             value: make_function_expr(),
             is_static: false,

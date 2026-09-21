@@ -354,8 +354,8 @@ impl Interpreter {
             }
         } else if super_val.is_some() {
             let default_body = vec![Statement::Expression(Expression::Call(
-                Box::new(Expression::Super),
-                vec![Expression::Spread(Box::new(Expression::Identifier(
+                ExprBox::new(Expression::Super),
+                vec![Expression::Spread(ExprBox::new(Expression::Identifier(
                     "args".into(),
                 )))],
                 CallSiteId::UNASSIGNED,
