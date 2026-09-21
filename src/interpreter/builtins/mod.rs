@@ -41,6 +41,26 @@ fn format_host_args(args: &[JsValue]) -> String {
     parts.join(" ")
 }
 
+fn console_stdout_write(
+    _interp: &mut Interpreter,
+    _this: &JsValue,
+    args: &[JsValue],
+) -> Completion {
+    println!("{}", format_host_args(args));
+    Completion::Normal(JsValue::UNDEFINED)
+}
+
+fn console_stderr_write(
+    _interp: &mut Interpreter,
+    _this: &JsValue,
+    args: &[JsValue],
+) -> Completion {
+    use std::io::Write as _;
+    let line = format!("{}\n", format_host_args(args));
+    let _ = std::io::stderr().write_all(line.as_bytes());
+    Completion::Normal(JsValue::UNDEFINED)
+}
+
 fn sanitize_native_fn_name(name: &str) -> String {
     if name.is_empty() {
         return String::new();
@@ -481,10 +501,7 @@ impl Interpreter {
             let log_fn = self.create_function(JsFunction::native(
                 "log".to_string(),
                 0,
-                |_interp, _this, args| {
-                    println!("{}", format_host_args(args));
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
+                console_stdout_write,
             ));
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
@@ -513,12 +530,7 @@ impl Interpreter {
             let error_fn = self.create_function(JsFunction::native(
                 "error".to_string(),
                 0,
-                |_interp, _this, args| {
-                    use std::io::Write as _;
-                    let line = format!("{}\n", format_host_args(args));
-                    let _ = std::io::stderr().write_all(line.as_bytes());
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
+                console_stderr_write,
             ));
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
@@ -527,12 +539,7 @@ impl Interpreter {
             let warn_fn = self.create_function(JsFunction::native(
                 "warn".to_string(),
                 0,
-                |_interp, _this, args| {
-                    use std::io::Write as _;
-                    let line = format!("{}\n", format_host_args(args));
-                    let _ = std::io::stderr().write_all(line.as_bytes());
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
+                console_stderr_write,
             ));
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
@@ -541,10 +548,7 @@ impl Interpreter {
             let info_fn = self.create_function(JsFunction::native(
                 "info".to_string(),
                 0,
-                |_interp, _this, args| {
-                    println!("{}", format_host_args(args));
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
+                console_stdout_write,
             ));
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
@@ -553,10 +557,7 @@ impl Interpreter {
             let debug_fn = self.create_function(JsFunction::native(
                 "debug".to_string(),
                 0,
-                |_interp, _this, args| {
-                    println!("{}", format_host_args(args));
-                    Completion::Normal(JsValue::UNDEFINED)
-                },
+                console_stdout_write,
             ));
             self.get_object_cell_expect(console_id)
                 .borrow_mut()

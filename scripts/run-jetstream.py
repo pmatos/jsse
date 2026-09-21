@@ -478,11 +478,7 @@ if (typeof print === "undefined") {
     var print = function(...args) { console.log(...args); };
 }
 if (typeof printErr === "undefined") {
-    // jsse's console has no `error`; fall back to stdout rather than throw.
-    var printErr = function(...args) {
-        (typeof console.error === "function" ? console.error : console.log)
-            .apply(console, args);
-    };
+    var printErr = function(...args) { console.error(...args); };
 }
 if (typeof performance === "undefined") {
     var performance = {};
