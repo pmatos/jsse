@@ -227,10 +227,19 @@ impl<'a> Parser<'a> {
 
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
-        let prev = self.in_block_or_function;
-        let prev_sc = self.in_switch_case;
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
+        let stmts =
+            self.with_block_scope(Self::enter_block_scope, |p| p.parse_block_statement_body())?;
+        self.eat(&Token::RightBrace)?;
+        Ok(Statement::Block(stmts))
+    }
+
+    /// The `Block` statement list plus its §14.2.1 early-error check, run
+    /// under the re-scoped `in_block_or_function`/`in_switch_case` flags.
+    /// Kept separate from the plain brace-delimited loop the `try` bodies
+    /// share, since lexical-name bookkeeping is interleaved per statement
+    /// here and must stay that way to report redeclaration errors before a
+    /// later syntax error in the same block.
+    fn parse_block_statement_body(&mut self) -> Result<Vec<Statement>, ParseError> {
         let mut stmts = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
         let mut func_decl_names: Vec<String> = Vec::new();
@@ -258,10 +267,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        self.in_block_or_function = prev;
-        self.in_switch_case = prev_sc;
-        self.eat(&Token::RightBrace)?;
-        Ok(Statement::Block(stmts))
+        Ok(stmts)
     }
 
     pub(super) fn collect_lexical_names(
@@ -1308,19 +1314,26 @@ impl<'a> Parser<'a> {
         Ok(Statement::Throw(expr))
     }
 
+    /// The plain brace-delimited statement list shared by the `try`, `catch`,
+    /// and `finally` bodies: no interleaved lexical-name bookkeeping, and
+    /// deliberately no `Eof` check (unlike `parse_block_statement_body`'s
+    /// loop) — an unterminated body must fail inside
+    /// `parse_statement_or_declaration` with its own error, not silently stop
+    /// at `Eof` here.
+    fn parse_statement_list_until_brace(&mut self) -> Result<Vec<Statement>, ParseError> {
+        let mut stmts = Vec::new();
+        while self.current != Token::RightBrace {
+            stmts.push(self.parse_statement_or_declaration()?);
+        }
+        Ok(stmts)
+    }
+
     fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // try
         self.eat(&Token::LeftBrace)?;
-        let prev_block = self.in_block_or_function;
-        let prev_sc = self.in_switch_case;
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
-        let mut block = Vec::new();
-        while self.current != Token::RightBrace {
-            block.push(self.parse_statement_or_declaration()?);
-        }
-        self.in_block_or_function = prev_block;
-        self.in_switch_case = prev_sc;
+        let block = self.with_block_scope(Self::enter_block_scope, |p| {
+            p.parse_statement_list_until_brace()
+        })?;
         self.eat(&Token::RightBrace)?;
 
         let handler = if self.current == Token::Keyword(Keyword::Catch) {
@@ -1347,16 +1360,9 @@ impl<'a> Parser<'a> {
                 }
             }
             self.eat(&Token::LeftBrace)?;
-            let prev_block = self.in_block_or_function;
-            let prev_sc = self.in_switch_case;
-            self.in_block_or_function = true;
-            self.in_switch_case = false;
-            let mut body = Vec::new();
-            while self.current != Token::RightBrace {
-                body.push(self.parse_statement_or_declaration()?);
-            }
-            self.in_block_or_function = prev_block;
-            self.in_switch_case = prev_sc;
+            let body = self.with_block_scope(Self::enter_block_scope, |p| {
+                p.parse_statement_list_until_brace()
+            })?;
             self.eat(&Token::RightBrace)?;
             // §13.15.1: BoundNames of CatchParameter must not overlap
             // LexicallyDeclaredNames of Block
@@ -1384,16 +1390,9 @@ impl<'a> Parser<'a> {
         let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
             self.advance()?;
             self.eat(&Token::LeftBrace)?;
-            let prev_block = self.in_block_or_function;
-            let prev_sc = self.in_switch_case;
-            self.in_block_or_function = true;
-            self.in_switch_case = false;
-            let mut body = Vec::new();
-            while self.current != Token::RightBrace {
-                body.push(self.parse_statement_or_declaration()?);
-            }
-            self.in_block_or_function = prev_block;
-            self.in_switch_case = prev_sc;
+            let body = self.with_block_scope(Self::enter_block_scope, |p| {
+                p.parse_statement_list_until_brace()
+            })?;
             self.eat(&Token::RightBrace)?;
             Some(body)
         } else {
@@ -1451,12 +1450,16 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Colon)?;
                 None
             };
-            let prev_sc = self.in_switch_case;
-            self.in_switch_case = true;
-            let result =
-                self.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names);
-            self.in_switch_case = prev_sc;
-            let consequent = result?;
+            // Unlike the other four `with_block_scope` sites, this one must
+            // not touch `in_block_or_function` — it stays at its ambient
+            // value here, only `in_switch_case` re-scopes (statements.rs:8/17
+            // reads `(!in_block_or_function && !is_module) || in_switch_case`,
+            // so forcing `in_block_or_function` true would wrongly allow a
+            // `using`/`await using` declaration directly in a case body).
+            let consequent = self.with_block_scope(
+                |p| p.in_switch_case = true,
+                |p| p.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names),
+            )?;
             cases.push(SwitchCase { test, consequent });
         }
         // §14.12.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames in CaseBlock

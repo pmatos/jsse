@@ -33,6 +33,52 @@ impl From<LexError> for ParseError {
     }
 }
 
+/// Snapshot of the two Annex B.3.3 block-scoping flags
+/// (`in_block_or_function`/`in_switch_case`), re-scoped at every site that
+/// parses a brace-delimited statement list: `Block`, the three `try` bodies,
+/// and the `switch` `CaseBlock` consequent. `Copy` and restored
+/// unconditionally so a failed nested parse can't leak the re-scoped values
+/// into the enclosing construct (issue #608, following #597/#602).
+///
+/// `save_block_scope` only snapshots — it does not itself set either flag.
+/// The four brace-body sites (`Block`, the three `try` bodies) need
+/// `in_block_or_function = true; in_switch_case = false`, but the `switch`
+/// `CaseBlock` consequent needs only `in_switch_case = true`, leaving
+/// `in_block_or_function` at its ambient value. Baking a fixed pair of
+/// values into the snapshot step silently overwrote that fifth site's
+/// ambient `in_block_or_function` and dropped `in_switch_case` to `false`
+/// instead of `true` — accepting `using`/`await using` declarations
+/// directly in a case body that must reject them. Each call site's `enter`
+/// closure sets exactly the fields it needs instead.
+#[derive(Clone, Copy)]
+struct SavedBlockScope {
+    in_block_or_function: bool,
+    in_switch_case: bool,
+}
+
+/// Snapshot of the function-context flags re-scoped by class static blocks
+/// and function bodies. Deliberately excludes `strict` (restored via
+/// `set_strict`, which also updates the lexer) and `function_param_names`
+/// (its callers reset it to `None` rather than restoring a prior value) —
+/// both stay hand-managed locals at the one site that touches each. Each
+/// call site mutates only the subset of these fields it needs; an unmutated
+/// field round-trips as a same-value no-op (issue #608).
+struct SavedFunctionContext {
+    in_function: u32,
+    in_non_arrow_function: u32,
+    in_iteration: u32,
+    in_switch: u32,
+    in_generator: bool,
+    in_async: bool,
+    in_static_block: bool,
+    in_block_or_function: bool,
+    in_switch_case: bool,
+    in_formal_parameters: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    labels: Vec<(String, bool)>,
+}
+
 pub(crate) struct Parser<'a> {
     source: &'a str,
     source_text_source: Rc<str>,
@@ -48,8 +94,14 @@ pub(crate) struct Parser<'a> {
     /// Context depth counters. A construct that re-scopes one of these must
     /// restore it on its **error** path too: any counter whose decrement runs
     /// unconditionally somewhere turns a leaked zero into an underflow, which
-    /// is what issue #597 was. Adding a counter here means auditing its
-    /// decrements for that shape.
+    /// is what issue #597 was. The seven re-scoping sites that touch a batch
+    /// of these fields together go through `with_block_scope`/
+    /// `with_function_context`, the combinators that own the save → enter →
+    /// body → unconditional-restore sequence, rather than hand-written
+    /// save/mutate/restore blocks (issue #608); a handful of single- or
+    /// dual-field sites elsewhere (e.g. `in_non_arrow_function` bumps in
+    /// `expressions.rs`) still restore by hand and are unaffected. Adding a
+    /// counter here means auditing its decrements for that shape.
     in_function: u32,
     in_non_arrow_function: u32,
     in_generator: bool,
@@ -270,6 +322,99 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn set_eval_new_target_allowed(&mut self) {
         self.eval_new_target_allowed = true;
+    }
+
+    fn save_block_scope(&self) -> SavedBlockScope {
+        SavedBlockScope {
+            in_block_or_function: self.in_block_or_function,
+            in_switch_case: self.in_switch_case,
+        }
+    }
+
+    fn restore_block_scope(&mut self, saved: SavedBlockScope) {
+        self.in_block_or_function = saved.in_block_or_function;
+        self.in_switch_case = saved.in_switch_case;
+    }
+
+    /// `enter` closure shared by the four sites (`Block`, the three `try`
+    /// bodies) that re-scope a plain brace-delimited statement list. The
+    /// `switch` `CaseBlock` consequent is deliberately not one of them — see
+    /// the note on `SavedBlockScope`.
+    fn enter_block_scope(&mut self) {
+        self.in_block_or_function = true;
+        self.in_switch_case = false;
+    }
+
+    /// Snapshot the function-context fields before a call site re-scopes
+    /// whichever subset it needs. `std::mem::take`s `labels` rather than
+    /// cloning it — both call sites already want `labels` reset to empty for
+    /// the nested body, so this both captures the outer value and performs
+    /// that reset in one step.
+    fn save_function_context(&mut self) -> SavedFunctionContext {
+        SavedFunctionContext {
+            in_function: self.in_function,
+            in_non_arrow_function: self.in_non_arrow_function,
+            in_iteration: self.in_iteration,
+            in_switch: self.in_switch,
+            in_generator: self.in_generator,
+            in_async: self.in_async,
+            in_static_block: self.in_static_block,
+            in_block_or_function: self.in_block_or_function,
+            in_switch_case: self.in_switch_case,
+            in_formal_parameters: self.in_formal_parameters,
+            allow_super_property: self.allow_super_property,
+            allow_super_call: self.allow_super_call,
+            labels: std::mem::take(&mut self.labels),
+        }
+    }
+
+    fn restore_function_context(&mut self, saved: SavedFunctionContext) {
+        self.in_function = saved.in_function;
+        self.in_non_arrow_function = saved.in_non_arrow_function;
+        self.in_iteration = saved.in_iteration;
+        self.in_switch = saved.in_switch;
+        self.in_generator = saved.in_generator;
+        self.in_async = saved.in_async;
+        self.in_static_block = saved.in_static_block;
+        self.in_block_or_function = saved.in_block_or_function;
+        self.in_switch_case = saved.in_switch_case;
+        self.in_formal_parameters = saved.in_formal_parameters;
+        self.allow_super_property = saved.allow_super_property;
+        self.allow_super_call = saved.allow_super_call;
+        self.labels = saved.labels;
+    }
+
+    /// Owns both ends of a block-scope re-scoping: snapshot, `enter`
+    /// mutation, `body` parse, unconditional restore, then the result is
+    /// handed back for the caller's own `?`. Restoring here — rather than at
+    /// each call site — means there is no separate restore call for a future
+    /// author to omit, reorder, or gate on `Ok` (issue #608, following
+    /// #597/#602's restore-on-error fix).
+    fn with_block_scope<T>(
+        &mut self,
+        enter: impl FnOnce(&mut Self),
+        body: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let saved = self.save_block_scope();
+        enter(self);
+        let result = body(self);
+        self.restore_block_scope(saved);
+        result
+    }
+
+    /// Function-context counterpart of `with_block_scope`, for the two sites
+    /// that re-scope the full function-context field set (class static
+    /// blocks, function bodies).
+    fn with_function_context<T>(
+        &mut self,
+        enter: impl FnOnce(&mut Self),
+        body: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let saved = self.save_function_context();
+        enter(self);
+        let result = body(self);
+        self.restore_function_context(saved);
+        result
     }
 
     pub(crate) fn set_eval_allow_super_property(&mut self) {
@@ -1601,12 +1746,27 @@ mod tests {
             "switch (x) { case 1:",
             "switch (x) { case 1: for (;;) { function f() {",
             "class C { static { for (;;) { function f() {",
+            "try {",
+            "try { } catch (e) {",
+            "try { } catch {",
+            "try { } finally {",
+            "for (;;) { try {",
+            "for (;;) { try { } catch (e) {",
+            "for (;;) { try { } finally {",
         ];
 
         fn assert_counters_clean(parser: &Parser<'_>, source: &str) {
             assert_eq!(parser.in_iteration, 0, "in_iteration leaked for {source:?}");
             assert_eq!(parser.in_switch, 0, "in_switch leaked for {source:?}");
             assert_eq!(parser.in_function, 0, "in_function leaked for {source:?}");
+            assert!(
+                !parser.in_block_or_function,
+                "in_block_or_function leaked for {source:?}"
+            );
+            assert!(
+                !parser.in_switch_case,
+                "in_switch_case leaked for {source:?}"
+            );
         }
 
         for source in SOURCES {
@@ -1641,6 +1801,117 @@ mod tests {
             assert_eq!(
                 parser.in_non_arrow_function, 0,
                 "in_non_arrow_function leaked for {source:?}"
+            );
+        }
+    }
+
+    /// The combinator itself, independent of any parser construct: `enter`
+    /// mutates a couple of block-scope fields, `body` returns `Err`
+    /// unconditionally, and the fields must be back to their pre-call values
+    /// once `with_block_scope` returns — this is the structural guarantee
+    /// issue #608's retarget asked for (a restore a future call site cannot
+    /// forget, since there is no separate restore call to omit).
+    #[test]
+    fn with_block_scope_restores_on_err() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_block_or_function = false;
+        parser.in_switch_case = true;
+        let result = parser.with_block_scope(
+            |p| {
+                p.in_block_or_function = true;
+                p.in_switch_case = false;
+            },
+            |_p| {
+                Err::<(), ParseError>(ParseError {
+                    message: "boom".into(),
+                })
+            },
+        );
+        assert!(result.is_err());
+        assert!(!parser.in_block_or_function);
+        assert!(parser.in_switch_case);
+    }
+
+    #[test]
+    fn with_block_scope_restores_on_ok() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_block_or_function = false;
+        parser.in_switch_case = true;
+        let result = parser.with_block_scope(
+            |p| {
+                p.in_block_or_function = true;
+                p.in_switch_case = false;
+            },
+            |p| {
+                assert!(p.in_block_or_function);
+                assert!(!p.in_switch_case);
+                Ok(42)
+            },
+        );
+        assert_eq!(result.unwrap(), 42);
+        assert!(!parser.in_block_or_function);
+        assert!(parser.in_switch_case);
+    }
+
+    #[test]
+    fn with_function_context_restores_on_err() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_generator = false;
+        parser.in_block_or_function = false;
+        let result = parser.with_function_context(
+            |p| {
+                p.in_generator = true;
+                p.in_block_or_function = true;
+            },
+            |_p| {
+                Err::<(), ParseError>(ParseError {
+                    message: "boom".into(),
+                })
+            },
+        );
+        assert!(result.is_err());
+        assert!(!parser.in_generator);
+        assert!(!parser.in_block_or_function);
+    }
+
+    #[test]
+    fn with_function_context_restores_on_ok() {
+        let mut parser = Parser::new("").unwrap();
+        parser.in_generator = false;
+        parser.in_block_or_function = false;
+        let result = parser.with_function_context(
+            |p| {
+                p.in_generator = true;
+                p.in_block_or_function = true;
+            },
+            |p| {
+                assert!(p.in_generator);
+                assert!(p.in_block_or_function);
+                Ok(7)
+            },
+        );
+        assert_eq!(result.unwrap(), 7);
+        assert!(!parser.in_generator);
+        assert!(!parser.in_block_or_function);
+    }
+
+    /// A `using`/`await using` declaration must be rejected directly in a
+    /// `switch` case body (test262
+    /// `language/statements/using/syntax/using-invalid-switchstatement-*`):
+    /// the `switch` `CaseBlock` consequent's `with_block_scope` call is the
+    /// one site whose `enter` closure must not force `in_block_or_function`
+    /// true, or this parses successfully instead — the regression a
+    /// same-value-no-op assumption in an earlier draft of this combinator
+    /// carried forward silently until the full test262 run caught it.
+    #[test]
+    fn using_declaration_rejected_directly_in_switch_case() {
+        for src in [
+            "switch (x) { case 1: using y = z; }",
+            "switch (x) { default: using y = z; }",
+        ] {
+            assert!(
+                Parser::new(src).unwrap().parse_program().is_err(),
+                "expected a parse error for {src:?}"
             );
         }
     }
