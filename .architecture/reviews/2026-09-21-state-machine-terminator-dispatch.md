@@ -533,14 +533,25 @@ seam is where something actually varies rather than where a design wanted it to 
 
 **The census was corrected twice during design, upward both times.** The candidate card
 above says 15 operand sites and 8 defects; the designs found **22 operand sites** (the
-`Yield`, `Return` and `Throw` terminator operands were missed) and **11 sites that swallow
-`Completion::Exit`**. The corrected census is the one implemented against:
+`Yield`, `Return` and `Throw` terminator operands were missed) and **11 sites that looked like they swallow
+`Completion::Exit`** — of which **10 were confirmed by measurement** at implementation
+time; see the correction below. The corrected census is the one implemented against:
 
 | Driver | Operand sites | Sites swallowing `Exit` |
 |---|---|---|
 | sync generator | 7 — `:885, :1196, :1248, :1339, :1449, :1455, :1502` | 0 (the catch-all `other => return other` propagates) |
-| async generator | 8 — `:4315, :4778, :5118, :5198, :5316, :5325, :5395, :5820` | 4 — `:4315, :5118, :5395, :5820` |
+| async generator | 8 — `:4315, :4778, :5118, :5198, :5316, :5325, :5395, :5820` | 3 measured — `:4315, :5395, :5820` (`:5118` inspected as a defect but **measured correct**) |
 | async function | 7 — `:8845, :8896, :8917, :8945, :9033, :9043, :9081` | **7 — all of them** |
+
+**Correction made at implementation time.** The design pass's defect count of 11 was
+inspection-based for two of its rows. Both were then measured against `origin/main`:
+`generator_runtime.rs:4315` (async-generator `yield` operand) exited 0 where it should
+exit 6 — a real defect, fixed. `generator_runtime.rs:5118` (async-generator `throw`
+operand) **already exited correctly at baseline** and is struck from the count: a
+top-level `throw` is not lowered to a `Throw` *terminator*, so that operand site is not
+reached by the probe, which is the same reason its async-function twin `eval.rs:8917` had
+already been excluded. **The delivered figure is 10 defects, every one reproduced before
+and after.** `:5118`'s `Exit` arm still changed and is pinned as hardening.
 
 A second finding the candidate card did not carry: the `Completion::TailCall` drain
 (`while let Completion::TailCall { .. } = result`) is present at only **6 of 22** sites.

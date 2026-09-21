@@ -3992,6 +3992,12 @@ mod node_host_tests {
                 4,
             ),
             ("await operand", "yield 1; await __host_exit(5);", 5),
+            ("yield operand", "yield __host_exit(6);", 6),
+            // Not a defect at baseline — a top-level `throw` is not lowered to
+            // a `Throw` terminator, so the operand site this exercises is the
+            // statement path, which already propagated. Pinned because the
+            // seam changed the terminator site's `Exit` arm regardless.
+            ("throw operand", "throw __host_exit(7);", 7),
         ] {
             let (interp, _) = run_node_script(&format!(
                 r#"
