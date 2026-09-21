@@ -1217,44 +1217,27 @@ fn transform_yielding_expression(
             bind_expression_to_temp(left, &left_var, ctx);
 
             if expr_has_suspension(right, ctx.is_async) {
-                let result_var = ctx.new_temp_var("logical_res");
                 let after_logical = ctx.new_state();
                 let eval_right_state = ctx.new_state();
-                let short_circuit_state = ctx.new_state();
 
-                let condition = match op {
-                    LogicalOp::And => Expression::Identifier(left_var.clone()),
-                    LogicalOp::Or => Expression::Unary(
-                        UnaryOp::Not,
-                        ExprBox::new(Expression::Identifier(left_var.clone())),
-                    ),
-                    LogicalOp::NullishCoalescing => nullish_test(&left_var),
-                };
+                let condition = short_circuit_continue_test(*op, &left_var);
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
                     condition,
                     true_state: eval_right_state,
-                    false_state: short_circuit_state,
+                    false_state: after_logical,
                 });
-
-                ctx.current_state_id = short_circuit_state;
-                emit_expression_with_binding(
-                    &Expression::Identifier(left_var),
-                    &Some(SentValueBindingKind::Variable(result_var.clone())),
-                    ctx,
-                );
-                ctx.finalize_current_state(StateTerminator::Goto(after_logical));
 
                 ctx.current_state_id = eval_right_state;
                 transform_yielding_expression(
                     right,
                     ctx,
-                    after_logical,
-                    Some(SentValueBindingKind::Variable(result_var.clone())),
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(left_var.clone())),
                 );
                 ctx.finalize_current_state(StateTerminator::Goto(after_logical));
 
                 ctx.current_state_id = after_logical;
-                emit_expression_with_binding(&Expression::Identifier(result_var), &binding, ctx);
+                emit_expression_with_binding(&Expression::Identifier(left_var), &binding, ctx);
             } else {
                 let combined = Expression::Logical(
                     *op,
@@ -1346,18 +1329,62 @@ fn transform_yielding_expression(
         }
 
         Expression::Assign(op, left, right) => {
-            // The target reference (base, then key) is evaluated before the
-            // right-hand side. Destructuring targets pass through untouched.
-            let new_left = lower_reference_operand(left, ctx);
-            let new_right = if expr_has_suspension(right, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("assign");
-                bind_expression_to_temp(right, &temp_var, ctx);
-                Expression::Identifier(temp_var)
+            let right_suspends = expr_has_suspension(right, ctx.is_async);
+            let target = lower_reference_operand(left, right_suspends, ctx);
+            if !right_suspends {
+                let combined = Expression::Assign(*op, ExprBox::new(target), right.clone());
+                emit_expression_with_binding(&combined, &binding, ctx);
+            } else if let Some(logical_op) = logical_assign_op(*op) {
+                let old_var = ctx.new_temp_var("assign_old");
+                bind_expression_to_temp(&target, &old_var, ctx);
+                let after_assign = ctx.new_state();
+                let eval_right_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+                    condition: short_circuit_continue_test(logical_op, &old_var),
+                    true_state: eval_right_state,
+                    false_state: after_assign,
+                });
+
+                ctx.current_state_id = eval_right_state;
+                let value = hoist_suspending_expr(right, "assign", ctx)
+                    .unwrap_or_else(|| right.clone().into_expression());
+                let store =
+                    Expression::Assign(AssignOp::Assign, ExprBox::new(target), ExprBox::new(value));
+                emit_expression_with_binding(
+                    &store,
+                    &Some(SentValueBindingKind::Variable(old_var.clone())),
+                    ctx,
+                );
+                ctx.finalize_current_state(StateTerminator::Goto(after_assign));
+
+                ctx.current_state_id = after_assign;
+                emit_expression_with_binding(&Expression::Identifier(old_var), &binding, ctx);
             } else {
-                right.clone().into_expression()
-            };
-            let combined = Expression::Assign(*op, ExprBox::new(new_left), ExprBox::new(new_right));
-            emit_expression_with_binding(&combined, &binding, ctx);
+                let readable_target =
+                    matches!(target, Expression::Identifier(_) | Expression::Member(..));
+                let old_value = compound_assign_binary_op(*op)
+                    .filter(|_| readable_target)
+                    .map(|binary_op| {
+                        let old_var = ctx.new_temp_var("assign_old");
+                        bind_expression_to_temp(&target, &old_var, ctx);
+                        (binary_op, old_var)
+                    });
+                let value = hoist_suspending_expr(right, "assign", ctx)
+                    .unwrap_or_else(|| right.clone().into_expression());
+                let combined = match old_value {
+                    Some((binary_op, old_var)) => Expression::Assign(
+                        AssignOp::Assign,
+                        ExprBox::new(target),
+                        ExprBox::new(Expression::Binary(
+                            binary_op,
+                            ExprBox::new(Expression::Identifier(old_var)),
+                            ExprBox::new(value),
+                        )),
+                    ),
+                    None => Expression::Assign(*op, ExprBox::new(target), ExprBox::new(value)),
+                };
+                emit_expression_with_binding(&combined, &binding, ctx);
+            }
         }
 
         Expression::Sequence(exprs) | Expression::Comma(exprs) => {
@@ -1459,35 +1486,9 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&Expression::Class(class_expr), &binding, ctx);
         }
 
-        Expression::Member(obj, prop, _) => {
-            let mut temp_obj = obj.clone().into_expression();
-            if expr_has_suspension(obj, ctx.is_async) {
-                let tv = ctx.new_temp_var("mem_obj");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
-                temp_obj = Expression::Identifier(tv);
-            }
-            match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let tv = ctx.new_temp_var("mem_prop");
-                    let b = SentValueBindingKind::Variable(tv.clone());
-                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
-                    let combined = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
-                        PropSiteId::UNASSIGNED,
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-                _ => {
-                    let combined = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        prop.clone(),
-                        PropSiteId::UNASSIGNED,
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-            }
+        Expression::Member(..) => {
+            let combined = lower_reference_operand(expr, false, ctx);
+            emit_expression_with_binding(&combined, &binding, ctx);
         }
 
         Expression::OptionalChain(base, chain) => {
@@ -1510,16 +1511,10 @@ fn transform_yielding_expression(
                 let after_oc = ctx.new_state();
                 let eval_chain_state = ctx.new_state();
                 let skip_state = ctx.new_state();
-                // temp != null catches both null and undefined via loose equality
-                let condition = Expression::Binary(
-                    BinaryOp::NotEq,
-                    ExprBox::new(Expression::Identifier(base_var.clone())),
-                    ExprBox::new(Expression::Literal(Literal::Null)),
-                );
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                    condition,
-                    true_state: eval_chain_state,
-                    false_state: skip_state,
+                    condition: nullish_test(&base_var),
+                    true_state: skip_state,
+                    false_state: eval_chain_state,
                 });
                 // Skip: result is undefined
                 ctx.current_state_id = skip_state;
@@ -1571,7 +1566,7 @@ fn transform_yielding_expression(
 
         Expression::Delete(inner) => match &**inner {
             Expression::Member(..) => {
-                let target = lower_reference_operand(inner, ctx);
+                let target = lower_reference_operand(inner, false, ctx);
                 let combined = Expression::Delete(ExprBox::new(target));
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
@@ -1618,7 +1613,7 @@ fn transform_yielding_expression(
         },
 
         Expression::Update(op, prefix, inner) => {
-            let target = lower_reference_operand(inner, ctx);
+            let target = lower_reference_operand(inner, false, ctx);
             let combined = Expression::Update(*op, *prefix, ExprBox::new(target));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
@@ -1762,33 +1757,8 @@ fn transform_call_expression(
 ) {
     let mut temp_callee = callee.clone();
     if expr_has_suspension(callee, ctx.is_async) {
-        if let Expression::Member(obj, prop, _) = callee {
-            let mut temp_obj = obj.clone().into_expression();
-            if expr_has_suspension(obj, ctx.is_async) {
-                let tv = ctx.new_temp_var("call_obj");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
-                temp_obj = Expression::Identifier(tv);
-            }
-            match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let tv = ctx.new_temp_var("call_prop");
-                    let b = SentValueBindingKind::Variable(tv.clone());
-                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
-                    temp_callee = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-                _ => {
-                    temp_callee = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        prop.clone(),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-            }
+        if matches!(callee, Expression::Member(..)) {
+            temp_callee = lower_reference_operand(callee, false, ctx);
         } else {
             let temp_var = ctx.new_temp_var("call_callee");
             let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
@@ -1897,17 +1867,68 @@ fn nullish_test(var: &str) -> Expression {
     )
 }
 
-/// Lower the suspension points out of a Reference operand (the target of
-/// `delete`, `++`/`--` or assignment) while keeping it a Reference: the base
-/// value and then the raw computed key are captured in temps, in source order,
-/// and the returned member expression is suspension-free.
-fn lower_reference_operand(expr: &Expression, ctx: &mut TransformContext) -> Expression {
+/// The condition under which `var <op> rhs` goes on to evaluate `rhs`.
+fn short_circuit_continue_test(op: LogicalOp, var: &str) -> Expression {
+    match op {
+        LogicalOp::And => Expression::Identifier(var.to_string()),
+        LogicalOp::Or => Expression::Unary(
+            UnaryOp::Not,
+            ExprBox::new(Expression::Identifier(var.to_string())),
+        ),
+        LogicalOp::NullishCoalescing => nullish_test(var),
+    }
+}
+
+fn logical_assign_op(op: AssignOp) -> Option<LogicalOp> {
+    match op {
+        AssignOp::LogicalAndAssign => Some(LogicalOp::And),
+        AssignOp::LogicalOrAssign => Some(LogicalOp::Or),
+        AssignOp::NullishAssign => Some(LogicalOp::NullishCoalescing),
+        _ => None,
+    }
+}
+
+fn compound_assign_binary_op(op: AssignOp) -> Option<BinaryOp> {
+    match op {
+        AssignOp::AddAssign => Some(BinaryOp::Add),
+        AssignOp::SubAssign => Some(BinaryOp::Sub),
+        AssignOp::MulAssign => Some(BinaryOp::Mul),
+        AssignOp::DivAssign => Some(BinaryOp::Div),
+        AssignOp::ModAssign => Some(BinaryOp::Mod),
+        AssignOp::ExpAssign => Some(BinaryOp::Exp),
+        AssignOp::LShiftAssign => Some(BinaryOp::LShift),
+        AssignOp::RShiftAssign => Some(BinaryOp::RShift),
+        AssignOp::URShiftAssign => Some(BinaryOp::URShift),
+        AssignOp::BitAndAssign => Some(BinaryOp::BitAnd),
+        AssignOp::BitOrAssign => Some(BinaryOp::BitOr),
+        AssignOp::BitXorAssign => Some(BinaryOp::BitXor),
+        AssignOp::Assign
+        | AssignOp::LogicalAndAssign
+        | AssignOp::LogicalOrAssign
+        | AssignOp::NullishAssign => None,
+    }
+}
+
+/// Lower the suspension points out of a member Reference (the operand of
+/// `delete`, `++`/`--`, a call callee, or an assignment target) while keeping it
+/// a Reference: the base value and then the raw computed key are captured in
+/// temps, in source order, and the returned member expression is suspension-free.
+///
+/// The base and key are captured only when the key or base suspends, or when
+/// `capture_all` is set (the caller is about to suspend on something else, e.g.
+/// an assignment's right-hand side, so both must be evaluated first). Other
+/// expressions are returned unchanged.
+fn lower_reference_operand(
+    expr: &Expression,
+    capture_all: bool,
+    ctx: &mut TransformContext,
+) -> Expression {
     let Expression::Member(obj, prop, _) = expr else {
         return expr.clone();
     };
     let key_suspends =
         matches!(prop, MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async));
-    if !key_suspends && !expr_has_suspension(obj, ctx.is_async) {
+    if !capture_all && !key_suspends && !expr_has_suspension(obj, ctx.is_async) {
         return expr.clone();
     }
     let new_obj = if matches!(&**obj, Expression::Super) {
@@ -1918,7 +1939,9 @@ fn lower_reference_operand(expr: &Expression, ctx: &mut TransformContext) -> Exp
         Expression::Identifier(temp)
     };
     let new_prop = match prop {
-        MemberProperty::Computed(e) if key_suspends => {
+        MemberProperty::Computed(e)
+            if key_suspends || (capture_all && !matches!(&**e, Expression::Literal(_))) =>
+        {
             let temp = ctx.new_temp_var("ref_key");
             bind_expression_to_temp(e, &temp, ctx);
             MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
