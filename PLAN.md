@@ -226,11 +226,16 @@ Non-engine:
 ## 4. TDD slices
 
 1. **Dynamically confirm the cross-generator read, with a named failing
-   test.** Add `tests/async-generator-concurrent-yield-pending-flag.js` (a
-   plain script, run via `uv run python scripts/run-custom-tests.py
-   tests/async-generator-concurrent-yield-pending-flag.js` — pass = exit 0,
-   fail = a thrown/uncaught error per that runner's convention; see other
+   test.** Add `tests/async-generator-yielded-value-delivery.js` (named for
+   the observed behavior, not the hypothesis — if slice 1 goes green for a
+   different reason than expected, this name still describes what it
+   checks; a plain script, run via `uv run python scripts/run-custom-tests.py
+   tests/async-generator-yielded-value-delivery.js` — pass = exit 0, fail =
+   a thrown/uncaught error per that runner's convention; see other
    `tests/*.js` files for the header/assertion style already used there).
+   `run-custom-tests.py` defaults to a 10s per-test timeout — if driving
+   "many iterations" needs longer, pass `--timeout` explicitly rather than
+   trimming the iteration count below what reliably reproduces.
    Drive **two** async generators concurrently, engineered to make one's
    suspend/resume cycle land while the other's `async_gen_process_queue`
    step is still executing — e.g. two `for await` loops over two separate
@@ -246,6 +251,32 @@ Non-engine:
    `instrumented()`-wrapper probe already built in this plan's diagnosis,
    identify what *does* re-enter while a step is on the stack, and update
    this slice before writing any fix.
+
+   **Confirmation already gathered for which failure mode to expect:**
+   re-running the wrapper probe with the async-function `await` removed from
+   `instrumented()` (a plain, non-`async` `next()` returning
+   `it.next().then(r => { if (r === undefined) print("R-UNDEF..."); else if
+   (r.value === undefined) print("VAL-UNDEF..."); ... })`, so the probe
+   itself no longer goes through `async_fn_suspend_at_await`) confirms the
+   wrapper mechanism correctly distinguishes the two cases in isolation (a
+   sync-only source consumed this way prints nothing until legitimate
+   exhaustion). Independently: in the original (unwrapped) repro, the
+   `for await` loop keeps running for hundreds more iterations after each
+   corrupted turn (`fileCounter` 96 then continuing past 578) rather than
+   terminating — but `iterator_next` only requires `v.is_object()`
+   (`iterators.rs:4919`) and `iterator_complete` returns `Ok(true)` (loop
+   ends) for any non-object result (`iterators.rs:4954-4963`). If the
+   *entire* result had been `undefined` (`R-UNDEF`), the loop would have
+   ended at the first corrupted turn instead of continuing — it did not.
+   Both point at `VAL-UNDEF` (a real `IteratorResult` object with a bad
+   `.value`), corroborating generator_runtime.rs over eval.rs as the fix
+   site in §3. Re-embedding the split-print wrapper directly in
+   `async-file-system.js` to log which case actually fires there hit an
+   unrelated crash (`undefined is not a function`, likely from the
+   `for-await-of` `break`'s `IteratorClose` calling a `return` method the
+   wrapper never defines) before producing a verdict — worth fixing in
+   slice 1's own test (give the wrapper a `return` method) rather than
+   re-diagnosing further at planning time.
 2. **Fix the scoping.** Once slice 1 is red for a known reason, re-scope
    `async_gen_yield_pending` (and any other bookkeeping the same call path
    uses this way) so a step for generator A cannot be answered by a signal
