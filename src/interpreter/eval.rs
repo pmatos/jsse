@@ -7,6 +7,9 @@ mod access;
 mod generator_runtime;
 mod literals;
 mod modules;
+mod operand;
+
+pub(crate) use operand::Operand;
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth
 /// counter on every exit path of `eval_expr` — the tail return, each of its
@@ -8485,6 +8488,43 @@ impl Interpreter {
             }};
         }
 
+        /// Evaluate a state-terminator operand, or abandon this terminator.
+        ///
+        /// Expands to the driver's answer to "which completion kinds carry a
+        /// value here": a throw is parked for the loop head to route, a host
+        /// exit tears the suspended function down and propagates verbatim.
+        /// Before this macro each operand site spelled that out inline and all
+        /// seven got the exit case wrong.
+        ///
+        /// The default throw tail `continue`s the *innermost* enclosing loop,
+        /// so it is only correct directly inside the state loop. A site nested
+        /// in another loop must pass its own `throw(e) => …` tail; the switch
+        /// case test below is the one such site.
+        macro_rules! operand {
+            ($expr:expr, $env:expr) => {
+                operand!($expr, $env, throw(e) => {
+                    pending_exception = Some(e);
+                    continue;
+                })
+            };
+            ($expr:expr, $env:expr, throw($e:ident) => $on_throw:expr) => {
+                match self.eval_operand($expr, $env) {
+                    Operand::Value(v) => v,
+                    Operand::Throw($e) => $on_throw,
+                    // Issue #242: uncatchable. Mirrors the statement-result
+                    // path's own exit handling further down this loop.
+                    Operand::Abort(exit) => {
+                        self.scheduler.remove_async_function_state(async_id);
+                        return exit;
+                    }
+                    // Preserves today's reading at the six non-`Await` operand
+                    // sites; the `Await` site handles `Suspend` itself and so
+                    // does not use this macro.
+                    Operand::Suspend(_) | Operand::Other(_) => JsValue::UNDEFINED,
+                }
+            };
+        }
+
         loop {
             if let Some(mut disposal) = pending_dispose.take() {
                 match disposal.cursor.step(self, dispose_awaited.take()) {
@@ -8842,13 +8882,18 @@ impl Interpreter {
                     resume_state,
                     sent_value_binding,
                 } => {
-                    let await_val = match self.eval_expr(&value, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    // The only operand site with bespoke `Suspend` handling
+                    // — an inline yield here parks the function at *this*
+                    // state, not at `resume_state` — so it spells the match out
+                    // rather than using `operand!`. The `Abort` arm is the
+                    // macro's, verbatim.
+                    let await_val = match self.eval_operand(&value, &term_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             pending_exception = Some(e);
                             continue;
                         }
-                        Completion::Yield(v) => {
+                        Operand::Suspend(v) => {
                             self.async_fn_suspend_at_await(
                                 async_id,
                                 &state_machine,
@@ -8868,7 +8913,12 @@ impl Interpreter {
                             );
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
-                        _ => JsValue::UNDEFINED,
+                        // Issue #242: uncatchable.
+                        Operand::Abort(exit) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return exit;
+                        }
+                        Operand::Other(_) => JsValue::UNDEFINED,
                     };
 
                     self.async_fn_suspend_at_await(
@@ -8893,18 +8943,7 @@ impl Interpreter {
 
                 StateTerminator::Return(ref expr) => {
                     let ret_val = if let Some(e) = expr {
-                        let mut result = self.eval_expr(e, &term_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                pending_exception = Some(e);
-                                continue;
-                            }
-                            _ => JsValue::UNDEFINED,
-                        }
+                        operand!(e, &term_env)
                     } else {
                         JsValue::UNDEFINED
                     };
@@ -8914,11 +8953,10 @@ impl Interpreter {
                 }
 
                 StateTerminator::Throw(ref expr) => {
-                    let throw_val = match self.eval_expr(expr, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => e,
-                        _ => JsValue::UNDEFINED,
-                    };
+                    // A throw *evaluating* the operand and the operand's own
+                    // value are both "the value to throw", so this site keeps
+                    // its own throw tail rather than parking the exception.
+                    let throw_val = operand!(expr, &term_env, throw(e) => e);
                     pending_exception = Some(throw_val);
                     continue;
                 }
@@ -8942,14 +8980,7 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
+                    let cond_val = operand!(condition, &term_env);
                     current_id = if self.to_boolean_val(&cond_val) {
                         true_state
                     } else {
@@ -9030,25 +9061,17 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
+                    let disc_val = operand!(discriminant, &term_env);
                     let mut matched = false;
                     for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &term_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                pending_exception = Some(e);
-                                matched = true;
-                                break;
-                            }
-                            _ => JsValue::UNDEFINED,
-                        };
+                        // Inside `for case in cases`: park the exception and
+                        // leave the case loop, not the state loop — the
+                        // `pending_exception.is_some()` check below routes it.
+                        let case_val = operand!(&case.test, &term_env, throw(e) => {
+                            pending_exception = Some(e);
+                            matched = true;
+                            break;
+                        });
                         if strict_equality(&disc_val, &case_val) {
                             current_id = case.state;
                             matched = true;
@@ -9078,16 +9101,7 @@ impl Interpreter {
                     // before evaluating the iterable expression
                     let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
-                    let iterable_result = self.eval_expr(iterable, &iterable_env);
-
-                    let iterable_val = match iterable_result {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
+                    let iterable_val = operand!(iterable, &iterable_env);
                     let iterator = if is_await {
                         match self.get_async_iterator(&iterable_val) {
                             Ok(it) => it,
