@@ -3850,13 +3850,13 @@ impl Interpreter {
                 let Some(stack) = self.take_dispose_stack(&frame.env) else {
                     continue;
                 };
-                let seed = match &pending_exception {
-                    Some(error) => Completion::Throw(error.clone()),
-                    None => Completion::Normal(JsValue::UNDEFINED),
+                let seed = match (&pending_exception, &pending_return) {
+                    (Some(error), _) => Completion::Throw(error.clone()),
+                    (None, Some(value)) => Completion::Return(value.clone()),
+                    (None, None) => Completion::Normal(JsValue::UNDEFINED),
                 };
                 let mut cursor = DisposeCursor::new(stack, seed);
-                let can_park =
-                    pending_exception.is_none() && pending_return.is_none() && !is_inline_replay;
+                let can_park = !is_inline_replay;
                 let completion = if can_park {
                     match cursor.step(self, None) {
                         DisposeStep::Done(completion) => completion,
