@@ -532,9 +532,11 @@ fn transform_generator_inner_opts(
             || !body
                 .iter()
                 .any(|s| stmt_contains_for_await(s, ForOfStatement::awaits_at_head)))
-        && !body
-            .iter()
-            .any(|s| stmt_contains_for_await(s, |f| f.is_await))
+        && !body.iter().any(|s| {
+            stmt_contains_for_await(s, |f| {
+                f.is_await && !for_in_of_left_contains_suspension(&f.left)
+            })
+        })
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
         && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
@@ -668,10 +670,13 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
     // A `for await` head performs `Await(nextResult)` on every step
     // (ForIn/OfBodyEvaluation) whether or not its body suspends, so it is a
-    // suspension point in any async context, generators included.
+    // suspension point in any async context, generators included. A `yield`
+    // or `await` inside the head's own binding target still needs the
+    // tree-walker's inline replay, so such a loop is left native.
     if is_async
         && let Statement::ForOf(f) = stmt
         && f.is_await
+        && !for_in_of_left_contains_suspension(&f.left)
     {
         return true;
     }

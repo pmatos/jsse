@@ -781,6 +781,41 @@ pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
     }
 }
 
+pub(crate) fn pattern_contains_suspension(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Identifier(_) => false,
+        Pattern::Array(elems) => elems.iter().flatten().any(|elem| match elem {
+            ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                pattern_contains_suspension(p)
+            }
+        }),
+        Pattern::Object(props) => props.iter().any(|prop| match prop {
+            ObjectPatternProperty::KeyValue(key, p) => {
+                matches!(key, PropertyKey::Computed(e) if expr_contains_suspension(e))
+                    || pattern_contains_suspension(p)
+            }
+            ObjectPatternProperty::Shorthand(_) => false,
+            ObjectPatternProperty::Rest(p) => pattern_contains_suspension(p),
+        }),
+        Pattern::Assign(p, default) => {
+            pattern_contains_suspension(p) || expr_contains_suspension(default)
+        }
+        Pattern::Rest(p) => pattern_contains_suspension(p),
+        Pattern::MemberExpression(e) => expr_contains_suspension(e),
+    }
+}
+
+pub(crate) fn for_in_of_left_contains_suspension(left: &ForInOfLeft) -> bool {
+    match left {
+        ForInOfLeft::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| pattern_contains_suspension(&d.pattern)),
+        ForInOfLeft::Pattern(p) => pattern_contains_suspension(p),
+        ForInOfLeft::Expression(e) => expr_contains_suspension(e),
+    }
+}
+
 pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
     match expr {
         Expression::Yield(_, _) | Expression::Await(_) => true,
