@@ -16,6 +16,14 @@ fn stays_inside_running_finally(try_stack: &[TryContextInfo], target: &LoopContr
         .is_some_and(|running| target.try_depth > running)
 }
 
+/// Which `yield*` protocol step produced the inner result being awaited.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DelegateStep {
+    Next,
+    Throw,
+    Return,
+}
+
 impl Interpreter {
     pub(crate) fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
         let Some(o) = (this)
@@ -2713,17 +2721,96 @@ impl Interpreter {
         let _ = result;
     }
 
-    /// Called when Await(innerResult) resolves during yield* delegation in an async generator.
-    /// Implements yield* step 8.a.iii-vi + AsyncGeneratorYield inline.
+    /// Bind the value of a completed `yield*` to its result binding.
+    fn bind_yield_star_result(
+        &mut self,
+        func_env: &EnvRef,
+        binding: &Option<crate::interpreter::generator_transform::SentValueBinding>,
+        value: &JsValue,
+    ) {
+        use crate::interpreter::generator_transform::SentValueBindingKind;
+        let Some(binding) = binding else {
+            return;
+        };
+        match &binding.kind {
+            SentValueBindingKind::Variable(name) => {
+                let needs_init = func_env
+                    .borrow()
+                    .bindings
+                    .get(name.as_str())
+                    .is_some_and(|b| !b.initialized);
+                if needs_init {
+                    func_env
+                        .borrow_mut()
+                        .initialize_binding(name, value.clone());
+                } else {
+                    self.env_set(func_env, name, value.clone()).ok();
+                }
+            }
+            SentValueBindingKind::Pattern(pattern) => {
+                let _ = self.bind_pattern(pattern, value.clone(), BindingKind::Var, func_env);
+            }
+            SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
+        }
+    }
+
+    /// Suspend an async generator parked at a `yield*` on `Await(innerResult)`
+    /// for `step`. The generator must already be stored as
+    /// `SuspendedAtState { resume_state }` with `delegated_iterator: Some(..)`
+    /// and the front request in the queue: the continuation owns that request
+    /// and settles and pops it exactly once. A driver-context caller must
+    /// then set the yield-pending flag so `async_gen_process_queue` leaves the
+    /// queue alone.
+    fn yield_star_suspend_on_inner_result(
+        &mut self,
+        gen_this: &JsValue,
+        gen_id: u64,
+        inner_result: &JsValue,
+        step: DelegateStep,
+        promise: &JsValue,
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+    ) {
+        if let Some(obj) = self.get_object_cell(gen_id)
+            && let Some(IteratorState::StateMachineAsyncGenerator {
+                pending_exception,
+                pending_return,
+                ..
+            }) = obj.borrow_mut().iterator_state_mut()
+        {
+            *pending_exception = None;
+            *pending_return = None;
+        }
+        let gen_this = gen_this.clone();
+        let promise = promise.clone();
+        let resolve_fn = resolve_fn.clone();
+        let reject_fn = reject_fn.clone();
+        self.await_then(inner_result, move |interp, outcome| {
+            interp.yield_star_await_inner_result_resume(
+                &gen_this,
+                gen_id,
+                step,
+                outcome,
+                &promise,
+                &resolve_fn,
+                &reject_fn,
+            );
+            Completion::Normal(JsValue::UNDEFINED)
+        });
+    }
+
+    /// Called when Await(innerResult) settles during yield* delegation in an async generator.
+    /// Implements yield* step 8.a.iii-vi (and the throw/return equivalents) +
+    /// AsyncGeneratorYield inline.
     fn yield_star_await_inner_result_resume(
         &mut self,
         gen_this: &JsValue,
         gen_id: u64,
-        awaited_result: JsValue,
+        step: DelegateStep,
+        outcome: Result<JsValue, JsValue>,
         promise: &JsValue,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
-        is_rejection: bool,
     ) {
         let obj_rc = match self.get_object(gen_id) {
             Some(o) => o,
@@ -2737,7 +2824,6 @@ impl Interpreter {
             is_strict,
             try_stack,
             delegated_iterator,
-            pending_binding,
             ..
         }) = state
         else {
@@ -2749,22 +2835,25 @@ impl Interpreter {
             None => return,
         };
 
-        if is_rejection {
-            self.generator_inline_iters.remove(&gen_id);
-            obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                IteratorState::completed_state_machine_async_generator(
-                    state_machine,
-                    func_env,
-                    is_strict,
-                ),
-            );
-            let _ = self.call_function(reject_fn, &JsValue::UNDEFINED, &[awaited_result]);
-            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                queue.pop_front();
+        let awaited_result = match outcome {
+            Ok(v) => v,
+            Err(reason) => {
+                self.generator_inline_iters.remove(&gen_id);
+                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                    IteratorState::completed_state_machine_async_generator(
+                        state_machine,
+                        func_env,
+                        is_strict,
+                    ),
+                );
+                let _ = self.call_function(reject_fn, &JsValue::UNDEFINED, &[reason]);
+                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
+                    queue.pop_front();
+                }
+                self.async_gen_process_queue(gen_this);
+                return;
             }
-            self.async_gen_process_queue(gen_this);
-            return;
-        }
+        };
 
         // §15.5.5 step 8.a.iii: If innerResult is not an Object, throw TypeError
         if !(awaited_result).is_object() {
@@ -2867,21 +2956,27 @@ impl Interpreter {
         };
 
         if done {
+            if step == DelegateStep::Return {
+                // yield* return step: ReturnCompletion(? IteratorValue(innerReturnResult))
+                self.generator_inline_iters.remove(&gen_id);
+                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                    IteratorState::completed_state_machine_async_generator(
+                        state_machine,
+                        func_env,
+                        is_strict,
+                    ),
+                );
+                let promise_id = promise.as_object_id().unwrap_or(0);
+                let _ = self.async_generator_await_return(value, promise_id);
+                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
+                    queue.pop_front();
+                }
+                self.async_gen_process_queue(gen_this);
+                return;
+            }
             // §15.5.5 step 8.a.v: return IteratorValue(innerResult)
             // Bind the yield* result and resume the state machine
-            use crate::interpreter::generator_transform::SentValueBindingKind;
-            if let Some(ref binding) = pending_binding {
-                match &binding.kind {
-                    SentValueBindingKind::Variable(name) => {
-                        self.env_set(&func_env, name, value.clone()).ok();
-                    }
-                    SentValueBindingKind::Pattern(pattern) => {
-                        let _ =
-                            self.bind_pattern(pattern, value.clone(), BindingKind::Var, &func_env);
-                    }
-                    SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
-                }
-            }
+            self.bind_yield_star_result(&func_env, &deleg_info.sent_value_binding, &value);
             obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                 IteratorState::StateMachineAsyncGenerator {
                     state_machine,
@@ -2963,139 +3058,46 @@ impl Interpreter {
                     );
 
                     // §27.6.3.7 step 2: Await(resumptionValue.[[Value]])
-                    let unwrap_promise = self.promise_resolve_value(&ret_val);
-                    let unwrap_id = if let Some(uo) = (unwrap_promise)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        uo.id
-                    } else {
-                        0
-                    };
-
                     let gen_this_r = gen_this.clone();
                     let gen_id_r = gen_id;
-                    let ret_promise_c = ret_promise.clone();
-                    let ret_resolve_c = ret_resolve.clone();
-                    let ret_reject_c = ret_reject.clone();
-
-                    let on_fulfilled = self.create_function(JsFunction::native(
-                        "yieldStarUnwrapReturnFulfill".to_string(),
-                        1,
-                        move |interp, _this, args| {
-                            let awaited_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                            interp.yield_star_return_after_unwrap(
+                    self.await_then(&ret_val, move |interp, outcome| {
+                        match outcome {
+                            Ok(awaited_val) => interp.yield_star_return_after_unwrap(
                                 &gen_this_r,
                                 gen_id_r,
                                 awaited_val,
-                                &ret_promise_c,
-                                &ret_resolve_c,
-                                &ret_reject_c,
-                            );
-                            Completion::Normal(JsValue::UNDEFINED)
-                        },
-                    ));
-
-                    let gen_this_r2 = gen_this.clone();
-                    let gen_id_r2 = gen_id;
-                    let ret_reject_c2 = ret_reject.clone();
-                    let on_rejected = self.create_function(JsFunction::native(
-                        "yieldStarUnwrapReturnReject".to_string(),
-                        1,
-                        move |interp, _this, args| {
-                            let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                            if let Some(obj) = interp.get_object(gen_id_r2) {
-                                let mut b = obj.borrow_mut();
-                                if let Some(IteratorState::StateMachineAsyncGenerator {
-                                    execution_state,
-                                    delegated_iterator,
-                                    try_stack,
-                                    ..
-                                }) = b.iterator_state_mut()
+                                &ret_promise,
+                                &ret_resolve,
+                                &ret_reject,
+                            ),
+                            Err(reason) => {
+                                if let Some(obj) = interp.get_object(gen_id_r)
+                                    && let Some(IteratorState::StateMachineAsyncGenerator {
+                                        execution_state,
+                                        delegated_iterator,
+                                        try_stack,
+                                        ..
+                                    }) = obj.borrow_mut().iterator_state_mut()
                                 {
-                                    interp.generator_inline_iters.remove(&gen_id_r2);
+                                    interp.generator_inline_iters.remove(&gen_id_r);
                                     *execution_state = StateMachineExecutionState::Completed;
                                     *delegated_iterator = None;
                                     try_stack.clear();
                                 }
-                            }
-                            let _ = interp.call_function(
-                                &ret_reject_c2,
-                                &JsValue::UNDEFINED,
-                                &[reason],
-                            );
-                            if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id_r2) {
-                                queue.pop_front();
-                            }
-                            interp.async_gen_process_queue(&gen_this_r2);
-                            Completion::Normal(JsValue::UNDEFINED)
-                        },
-                    ));
-
-                    let unwrap_state = self.get_promise_state(unwrap_id);
-                    match unwrap_state {
-                        Some(PromiseState::Fulfilled(v)) => {
-                            let handler = on_fulfilled;
-                            let val = v.clone();
-                            self.scheduler.enqueue_microtask((
-                                vec![val.clone(), handler.clone()],
-                                Box::new(move |interp| {
-                                    let _ =
-                                        interp.call_function(&handler, &JsValue::UNDEFINED, &[val]);
-                                    Completion::Normal(JsValue::UNDEFINED)
-                                }),
-                            ));
-                        }
-                        Some(PromiseState::Rejected(r)) => {
-                            let handler = on_rejected;
-                            let reason = r.clone();
-                            self.scheduler.enqueue_microtask((
-                                vec![reason.clone(), handler.clone()],
-                                Box::new(move |interp| {
-                                    let _ = interp.call_function(
-                                        &handler,
-                                        &JsValue::UNDEFINED,
-                                        &[reason],
-                                    );
-                                    Completion::Normal(JsValue::UNDEFINED)
-                                }),
-                            ));
-                        }
-                        Some(PromiseState::Pending) => {
-                            if let Some(obj) = self.get_object_cell(unwrap_id) {
-                                let mut ob = obj.borrow_mut();
-                                if let Some(pd) = ob.promise_data_mut() {
-                                    pd.is_handled = true;
-                                    pd.fulfill_reactions.push(PromiseReaction {
-                                        handler: Some(on_fulfilled),
-                                        promise_id: None,
-                                        resolve: JsValue::UNDEFINED,
-                                        reject: JsValue::UNDEFINED,
-                                        reaction_type: PromiseReactionType::Fulfill,
-                                    });
-                                    pd.reject_reactions.push(PromiseReaction {
-                                        handler: Some(on_rejected),
-                                        promise_id: None,
-                                        resolve: JsValue::UNDEFINED,
-                                        reject: JsValue::UNDEFINED,
-                                        reaction_type: PromiseReactionType::Reject,
-                                    });
+                                let _ = interp.call_function(
+                                    &ret_reject,
+                                    &JsValue::UNDEFINED,
+                                    &[reason],
+                                );
+                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id_r)
+                                {
+                                    queue.pop_front();
                                 }
+                                interp.async_gen_process_queue(&gen_this_r);
                             }
                         }
-                        None => {
-                            let handler = on_fulfilled;
-                            let val = ret_val.clone();
-                            self.scheduler.enqueue_microtask((
-                                vec![val.clone(), handler.clone()],
-                                Box::new(move |interp| {
-                                    let _ =
-                                        interp.call_function(&handler, &JsValue::UNDEFINED, &[val]);
-                                    Completion::Normal(JsValue::UNDEFINED)
-                                }),
-                            ));
-                        }
-                    }
+                        Completion::Normal(JsValue::UNDEFINED)
+                    });
                     self.scheduler.set_async_gen_yield_pending(true);
                 }
                 _ => {
@@ -3161,7 +3163,6 @@ impl Interpreter {
             state_machine,
             func_env,
             is_strict,
-            try_stack,
             delegated_iterator,
             ..
         }) = state
@@ -3180,112 +3181,17 @@ impl Interpreter {
         // Step 8.c.ii: GetMethod(iterator, "return")
         match self.iterator_return(&iterator, &awaited_val) {
             Ok(Some(inner_return_result)) => {
-                // Step 8.c.v: Await(innerReturnResult)
-                let iawait_result = match self.await_value(&inner_return_result) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&gen_id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::completed_state_machine_async_generator(
-                                state_machine,
-                                func_env,
-                                is_strict,
-                            ),
-                        );
-                        let _ = self.call_function(ret_reject, &JsValue::UNDEFINED, &[e]);
-                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                            queue.pop_front();
-                        }
-                        self.async_gen_process_queue(gen_this);
-                        return;
-                    }
-                    _ => inner_return_result,
-                };
-                let done = match self.iterator_complete(&iawait_result) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        self.generator_inline_iters.remove(&gen_id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::completed_state_machine_async_generator(
-                                state_machine,
-                                func_env,
-                                is_strict,
-                            ),
-                        );
-                        let _ = self.call_function(ret_reject, &JsValue::UNDEFINED, &[e]);
-                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                            queue.pop_front();
-                        }
-                        self.async_gen_process_queue(gen_this);
-                        return;
-                    }
-                };
-                let value = match self.iterator_value(&iawait_result) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.generator_inline_iters.remove(&gen_id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::completed_state_machine_async_generator(
-                                state_machine,
-                                func_env,
-                                is_strict,
-                            ),
-                        );
-                        let _ = self.call_function(ret_reject, &JsValue::UNDEFINED, &[e]);
-                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                            queue.pop_front();
-                        }
-                        self.async_gen_process_queue(gen_this);
-                        return;
-                    }
-                };
-                if done {
-                    self.generator_inline_iters.remove(&gen_id);
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::completed_state_machine_async_generator(
-                            state_machine,
-                            func_env,
-                            is_strict,
-                        ),
-                    );
-                    let ret_promise_id = if let Some(po) = (ret_promise)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        po.id
-                    } else {
-                        0
-                    };
-                    let _ = self.async_generator_await_return(value, ret_promise_id);
-                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                        queue.pop_front();
-                    }
-                    self.async_gen_process_queue(gen_this);
-                } else {
-                    // Not done — yield the value and continue delegation
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: deleg_info.resume_state,
-                            },
-                            _sent_value: JsValue::UNDEFINED,
-                            try_stack,
-                            pending_binding: None,
-                            delegated_iterator: Some(deleg_info),
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
-                    let iter_result = self.create_iter_result_object(value, false);
-                    let _ = self.call_function(ret_resolve, &JsValue::UNDEFINED, &[iter_result]);
-                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-                        queue.pop_front();
-                    }
-                    self.async_gen_process_queue(gen_this);
-                }
+                // Step 8.c.v: Await(innerReturnResult); the continuation
+                // settles and pops the Return request.
+                self.yield_star_suspend_on_inner_result(
+                    gen_this,
+                    gen_id,
+                    &inner_return_result,
+                    DelegateStep::Return,
+                    ret_promise,
+                    ret_resolve,
+                    ret_reject,
+                );
             }
             Ok(None) => {
                 // No .return() method — §15.5.5 step 8.c.iii: Await(received.[[Value]])
@@ -3397,154 +3303,22 @@ impl Interpreter {
         if let Some(ref deleg_info) = delegated_iterator {
             let iterator = deleg_info.iterator.clone();
             let next_method = deleg_info.next_method.clone();
-            let resume_state = deleg_info.resume_state;
-            let binding = deleg_info.sent_value_binding.clone();
 
             // Handle .return() during yield* delegation
             if let Some(ret_val) = stored_pending_return {
                 match self.iterator_return(&iterator, &ret_val) {
                     Ok(Some(iter_result)) => {
-                        let awaited_result = match self.await_value(&iter_result) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            _ => iter_result,
-                        };
-                        let done = match self.iterator_complete(&awaited_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        let value = match self.iterator_value(&awaited_result) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                // IteratorValue threw — route through try/catch stack
-                                // per spec §15.5.5 step 7.c.ix: ? IteratorValue(innerReturnResult)
-                                // Route through the state machine's try/catch handling
-                                let has_catch = try_stack.iter().rev().any(|tc| {
-                                    !tc.entered_catch
-                                        && !tc.entered_finally
-                                        && tc.catch_state.is_some()
-                                });
-                                if has_catch {
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: resume_state,
-                                                    },
-                                                _sent_value: JsValue::UNDEFINED,
-                                                try_stack: try_stack.clone(),
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.async_generator_next_state_machine_with_promise(
-                                        this,
-                                        JsValue::UNDEFINED,
-                                        promise,
-                                        resolve_fn,
-                                        reject_fn,
-                                    );
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        if done {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            let promise_id = if let Some(po) = (promise)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                po.id
-                            } else {
-                                0
-                            };
-                            return self.async_generator_await_return(value, promise_id);
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack,
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state,
-                                                sent_value_binding: binding,
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let iter_result = self.create_iter_result_object(value, false);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::UNDEFINED,
-                                &[iter_result],
-                            );
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
+                        self.yield_star_suspend_on_inner_result(
+                            this,
+                            o.id,
+                            &iter_result,
+                            DelegateStep::Return,
+                            &promise,
+                            &resolve_fn,
+                            &reject_fn,
+                        );
+                        self.scheduler.set_async_gen_yield_pending(true);
+                        return Completion::Normal(promise);
                     }
                     Ok(None) => {
                         // No .return() method — complete the generator
@@ -3587,171 +3361,17 @@ impl Interpreter {
             if let Some(exc) = stored_pending_exception {
                 match self.iterator_throw(&iterator, &exc) {
                     Ok(Some(iter_result)) => {
-                        let awaited_result = match self.await_value(&iter_result) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            _ => iter_result,
-                        };
-                        let done = match self.iterator_complete(&awaited_result) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        let value = match self.iterator_value(&awaited_result) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                // IteratorValue threw — route through try/catch stack
-                                // per spec §15.5.5 step 7.b.ii.7: ? IteratorValue(innerResult)
-                                let has_catch = try_stack.iter().rev().any(|tc| {
-                                    !tc.entered_catch
-                                        && !tc.entered_finally
-                                        && tc.catch_state.is_some()
-                                });
-                                if has_catch {
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: resume_state,
-                                                    },
-                                                _sent_value: JsValue::UNDEFINED,
-                                                try_stack: try_stack.clone(),
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.async_generator_next_state_machine_with_promise(
-                                        this,
-                                        JsValue::UNDEFINED,
-                                        promise,
-                                        resolve_fn,
-                                        reject_fn,
-                                    );
-                                }
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                        };
-                        if done {
-                            if let Some(ref bind) = binding {
-                                use crate::interpreter::generator_transform::SentValueBindingKind;
-                                match &bind.kind {
-                                    SentValueBindingKind::Variable(name) => {
-                                        self.env_set(&func_env, name, value.clone()).ok();
-                                    }
-                                    SentValueBindingKind::Pattern(pattern) => {
-                                        let _ = self.bind_pattern(
-                                            pattern,
-                                            value.clone(),
-                                            BindingKind::Var,
-                                            &func_env,
-                                        );
-                                    }
-                                    SentValueBindingKind::Discard
-                                    | SentValueBindingKind::InlineYield { .. } => {}
-                                }
-                            }
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine: state_machine.clone(),
-                                        func_env: func_env.clone(),
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack: try_stack.clone(),
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            return self.async_generator_next_state_machine_with_promise(
-                                this,
-                                JsValue::UNDEFINED,
-                                promise,
-                                resolve_fn,
-                                reject_fn,
-                            );
-                        } else {
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: resume_state,
-                                            },
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack,
-                                        pending_binding: None,
-                                        delegated_iterator: Some(
-                                            crate::interpreter::types::DelegatedIteratorInfo {
-                                                iterator,
-                                                next_method: next_method.clone(),
-                                                resume_state,
-                                                sent_value_binding: binding,
-                                            },
-                                        ),
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    },
-                                );
-                            let iter_result = self.create_iter_result_object(value, false);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::UNDEFINED,
-                                &[iter_result],
-                            );
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
+                        self.yield_star_suspend_on_inner_result(
+                            this,
+                            o.id,
+                            &iter_result,
+                            DelegateStep::Throw,
+                            &promise,
+                            &resolve_fn,
+                            &reject_fn,
+                        );
+                        self.scheduler.set_async_gen_yield_pending(true);
+                        return Completion::Normal(promise);
                     }
                     Ok(None) => {
                         // No .throw() method — close iterator and throw TypeError
@@ -3800,178 +3420,19 @@ impl Interpreter {
             };
             match result {
                 Ok(iter_result) => {
-                    // Await the iterator result (inner async iterators return promises)
-                    let awaited_result = match self.await_value(&iter_result) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        _ => iter_result,
-                    };
-                    let done = match self.iterator_complete(&awaited_result) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    };
-                    let value = match self.iterator_value(&awaited_result) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            // Propagate through generator's try/catch stack
-                            let mut ts = try_stack.clone();
-                            for i in (0..ts.len()).rev() {
-                                if !ts[i].entered_catch
-                                    && !ts[i].entered_finally
-                                    && let Some(catch_state) = ts[i].catch_state
-                                {
-                                    ts.truncate(i);
-                                    obj_rc.borrow_mut().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::StateMachineAsyncGenerator {
-                                                state_machine: state_machine.clone(),
-                                                func_env: func_env.clone(),
-                                                is_strict,
-                                                execution_state:
-                                                    StateMachineExecutionState::SuspendedAtState {
-                                                        state_id: catch_state,
-                                                    },
-                                                _sent_value: JsValue::UNDEFINED,
-                                                try_stack: ts,
-                                                pending_binding: None,
-                                                delegated_iterator: None,
-                                                pending_exception: Some(e),
-                                                pending_return: None,
-                                            },
-                                        );
-                                    return self.async_generator_next_state_machine_with_promise(
-                                        this,
-                                        JsValue::UNDEFINED,
-                                        promise,
-                                        resolve_fn,
-                                        reject_fn,
-                                    );
-                                }
-                            }
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                    };
-                    if done {
-                        if let Some(ref bind) = binding {
-                            use crate::interpreter::generator_transform::SentValueBindingKind;
-                            match &bind.kind {
-                                SentValueBindingKind::Variable(name) => {
-                                    let mut env = func_env.borrow_mut();
-                                    let needs_init = env
-                                        .bindings
-                                        .get(name.as_str())
-                                        .is_some_and(|b| !b.initialized);
-                                    if needs_init {
-                                        env.initialize_binding(name, value.clone());
-                                    } else {
-                                        env.set(name, value.clone()).ok();
-                                    }
-                                }
-                                SentValueBindingKind::Pattern(pattern) => {
-                                    let _ = self.bind_pattern(
-                                        pattern,
-                                        value.clone(),
-                                        BindingKind::Var,
-                                        &func_env,
-                                    );
-                                }
-                                SentValueBindingKind::Discard
-                                | SentValueBindingKind::InlineYield { .. } => {}
-                            }
-                        }
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: try_stack.clone(),
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        // Reuse the same promise — don't create a new one
-                        return self.async_generator_next_state_machine_with_promise(
-                            this,
-                            JsValue::UNDEFINED,
-                            promise,
-                            resolve_fn,
-                            reject_fn,
-                        );
-                    } else {
-                        // Per spec §14.4.13 step 7.a.vi: for async generators,
-                        // yield the value directly without awaiting (AsyncGeneratorYield)
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: resume_state,
-                                },
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack,
-                                pending_binding: None,
-                                delegated_iterator: Some(
-                                    crate::interpreter::types::DelegatedIteratorInfo {
-                                        iterator,
-                                        next_method: next_method.clone(),
-                                        resume_state,
-                                        sent_value_binding: binding,
-                                    },
-                                ),
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        let iter_result = self.create_iter_result_object(value, false);
-                        let _ =
-                            self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
+                    // §15.5.5 step 8.a.ii: Await(innerResult) suspends the
+                    // generator; the continuation settles the request.
+                    self.yield_star_suspend_on_inner_result(
+                        this,
+                        o.id,
+                        &iter_result,
+                        DelegateStep::Next,
+                        &promise,
+                        &resolve_fn,
+                        &reject_fn,
+                    );
+                    self.scheduler.set_async_gen_yield_pending(true);
+                    return Completion::Normal(promise);
                 }
                 Err(e) => {
                     self.generator_inline_iters.remove(&o.id);
@@ -4716,15 +4177,6 @@ impl Interpreter {
                         // Must suspend the generator properly (not drain microtasks)
                         // so that microtasks enqueued before it.next() get a chance
                         // to fire before the generator resumes.
-                        let wrapped = self.promise_resolve_value(&iter_result);
-                        let wrapped_id = if let Some(wo) = (wrapped)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            wo.id
-                        } else {
-                            0
-                        };
 
                         // Save state with delegated_iterator for resumption
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
@@ -4751,126 +4203,15 @@ impl Interpreter {
                             },
                         );
 
-                        let promise_c = promise.clone();
-                        let resolve_fn_c = resolve_fn.clone();
-                        let reject_fn_c = reject_fn.clone();
-                        let gen_this = this.clone();
-                        let gen_id = o.id;
-
-                        // Fulfillment handler: called when Await(innerResult) resolves.
-                        // Implements yield* step 8.a.iii-vi + AsyncGeneratorYield.
-                        let fulfill_handler = self.create_function(JsFunction::native(
-                            "yieldStarAwaitFulfill".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let awaited_result =
-                                    args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                                interp.yield_star_await_inner_result_resume(
-                                    &gen_this,
-                                    gen_id,
-                                    awaited_result,
-                                    &promise_c,
-                                    &resolve_fn_c,
-                                    &reject_fn_c,
-                                    false,
-                                );
-                                Completion::Normal(JsValue::UNDEFINED)
-                            },
-                        ));
-
-                        let promise_c2 = promise.clone();
-                        let reject_fn_c2 = reject_fn.clone();
-                        let gen_this2 = this.clone();
-                        let gen_id2 = o.id;
-                        let reject_handler = self.create_function(JsFunction::native(
-                            "yieldStarAwaitReject".to_string(),
-                            1,
-                            move |interp, _this, args| {
-                                let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                                interp.yield_star_await_inner_result_resume(
-                                    &gen_this2,
-                                    gen_id2,
-                                    reason,
-                                    &promise_c2,
-                                    &JsValue::UNDEFINED,
-                                    &reject_fn_c2,
-                                    true,
-                                );
-                                Completion::Normal(JsValue::UNDEFINED)
-                            },
-                        ));
-
-                        let wrapped_state = self.get_promise_state(wrapped_id);
-                        match wrapped_state {
-                            Some(PromiseState::Fulfilled(v)) => {
-                                let handler = fulfill_handler;
-                                let val = v.clone();
-                                self.scheduler.enqueue_microtask((
-                                    vec![val.clone(), handler.clone()],
-                                    Box::new(move |interp| {
-                                        let _ = interp.call_function(
-                                            &handler,
-                                            &JsValue::UNDEFINED,
-                                            &[val],
-                                        );
-                                        Completion::Normal(JsValue::UNDEFINED)
-                                    }),
-                                ));
-                            }
-                            Some(PromiseState::Rejected(r)) => {
-                                let handler = reject_handler;
-                                let reason = r.clone();
-                                self.scheduler.enqueue_microtask((
-                                    vec![reason.clone(), handler.clone()],
-                                    Box::new(move |interp| {
-                                        let _ = interp.call_function(
-                                            &handler,
-                                            &JsValue::UNDEFINED,
-                                            &[reason],
-                                        );
-                                        Completion::Normal(JsValue::UNDEFINED)
-                                    }),
-                                ));
-                            }
-                            Some(PromiseState::Pending) => {
-                                if let Some(obj) = self.get_object_cell(wrapped_id) {
-                                    let mut ob = obj.borrow_mut();
-                                    if let Some(pd) = ob.promise_data_mut() {
-                                        pd.is_handled = true;
-                                        pd.fulfill_reactions.push(PromiseReaction {
-                                            handler: Some(fulfill_handler),
-                                            promise_id: None,
-                                            resolve: JsValue::UNDEFINED,
-                                            reject: JsValue::UNDEFINED,
-                                            reaction_type: PromiseReactionType::Fulfill,
-                                        });
-                                        pd.reject_reactions.push(PromiseReaction {
-                                            handler: Some(reject_handler),
-                                            promise_id: None,
-                                            resolve: JsValue::UNDEFINED,
-                                            reject: JsValue::UNDEFINED,
-                                            reaction_type: PromiseReactionType::Reject,
-                                        });
-                                    }
-                                }
-                            }
-                            None => {
-                                // Not a promise — treat as immediately fulfilled
-                                let handler = fulfill_handler;
-                                let val = iter_result.clone();
-                                self.scheduler.enqueue_microtask((
-                                    vec![val.clone(), handler.clone()],
-                                    Box::new(move |interp| {
-                                        let _ = interp.call_function(
-                                            &handler,
-                                            &JsValue::UNDEFINED,
-                                            &[val],
-                                        );
-                                        Completion::Normal(JsValue::UNDEFINED)
-                                    }),
-                                ));
-                            }
-                        }
+                        self.yield_star_suspend_on_inner_result(
+                            this,
+                            o.id,
+                            &iter_result,
+                            DelegateStep::Next,
+                            &promise,
+                            &resolve_fn,
+                            &reject_fn,
+                        );
 
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
