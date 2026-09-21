@@ -961,9 +961,8 @@ impl<'a> Lexer<'a> {
             return Ok(Token::BigIntLiteral(clean));
         }
         let bin_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val =
-            u64::from_str_radix(&bin_part, 2).map_err(|_| self.error("Invalid binary literal"))?;
-        Ok(Token::NumericLiteral(val as f64))
+        let val = self.radix_literal_value(&bin_part, 2, "binary")?;
+        Ok(Token::NumericLiteral(val))
     }
 
     fn read_identifier_chars(&mut self, first: char) -> Result<(String, bool), LexError> {
@@ -1760,6 +1759,26 @@ mod tests {
             vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
         );
         assert!(Lexer::new("0o").next_token().is_err());
+    }
+
+    #[test]
+    fn wide_binary_literals_round_to_nearest() {
+        // 70 ones = 2^70 - 1, rounds up to 2^70.
+        assert_eq!(
+            lex_no_lt(&format!("0b{}", "1".repeat(70))),
+            vec![Token::NumericLiteral(2f64.powi(70)), Token::Eof]
+        );
+        // 1023 ones = 2^1023 - 1, rounds up to 2^1023 (still finite).
+        assert_eq!(
+            lex_no_lt(&format!("0b{}", "1".repeat(1023))),
+            vec![Token::NumericLiteral(2f64.powi(1023)), Token::Eof]
+        );
+        // 1024 ones = 2^1024 - 1 overflows the f64 range.
+        assert_eq!(
+            lex_no_lt(&format!("0b{}", "1".repeat(1024))),
+            vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
+        );
+        assert!(Lexer::new("0b").next_token().is_err());
     }
 
     #[test]
