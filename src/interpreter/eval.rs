@@ -8715,6 +8715,13 @@ impl Interpreter {
                         (DisposeThen::ScopeCrossThrow, _) => unreachable!(
                             "a scope-cross throw cursor is seeded with Completion::Throw and always finishes as Throw"
                         ),
+                        // The head's own error routing (`for_of_protocol_failure`,
+                        // pending_exception) mirrors what the blocking call used to
+                        // do inline; a non-throw completion just re-enters the head.
+                        (DisposeThen::ForOfIteration, Completion::Throw(e)) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ForOfIteration, _) => {}
                         (_, Completion::Throw(e)) => {
                             self.scheduler.remove_async_function_state(async_id);
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
@@ -9349,19 +9356,17 @@ impl Interpreter {
                         }
                     };
 
-                    // Dispose resources from previous iteration (for using/await using)
-                    if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take() {
-                        let disp = self.dispose_resources(&disp_env, Completion::Empty);
-                        if let Completion::Exit(code) = disp {
-                            // A disposer that called `__host_exit` (issue #242)
-                            // propagates out uncatchably.
-                            self.scheduler.remove_async_function_state(async_id);
-                            return Completion::Exit(code);
-                        }
-                        if let Completion::Throw(e) = disp {
-                            pending_exception = Some(e);
-                            continue;
-                        }
+                    // Dispose resources from previous iteration (for using/await using).
+                    // Parked rather than run blocking: the head re-enters once the
+                    // cursor's `DisposeStep::Done` lands, finding `iteration_env` empty.
+                    if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Some(stack) = self.take_dispose_stack(&disp_env)
+                    {
+                        pending_dispose = Some(PendingDispose {
+                            cursor: DisposeCursor::new(stack, Completion::Empty),
+                            then: DisposeThen::ForOfIteration,
+                        });
+                        continue;
                     }
 
                     // For `for await`, use a temp var to distinguish first
