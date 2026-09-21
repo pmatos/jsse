@@ -509,6 +509,58 @@ impl Interpreter {
             self.get_object_cell_expect(console_id)
                 .borrow_mut()
                 .insert_builtin("assert".to_string(), assert_fn);
+
+            let error_fn = self.create_function(JsFunction::native(
+                "error".to_string(),
+                0,
+                |_interp, _this, args| {
+                    use std::io::Write as _;
+                    let line = format!("{}\n", format_host_args(args));
+                    let _ = std::io::stderr().write_all(line.as_bytes());
+                    Completion::Normal(JsValue::UNDEFINED)
+                },
+            ));
+            self.get_object_cell_expect(console_id)
+                .borrow_mut()
+                .insert_builtin("error".to_string(), error_fn);
+
+            let warn_fn = self.create_function(JsFunction::native(
+                "warn".to_string(),
+                0,
+                |_interp, _this, args| {
+                    use std::io::Write as _;
+                    let line = format!("{}\n", format_host_args(args));
+                    let _ = std::io::stderr().write_all(line.as_bytes());
+                    Completion::Normal(JsValue::UNDEFINED)
+                },
+            ));
+            self.get_object_cell_expect(console_id)
+                .borrow_mut()
+                .insert_builtin("warn".to_string(), warn_fn);
+
+            let info_fn = self.create_function(JsFunction::native(
+                "info".to_string(),
+                0,
+                |_interp, _this, args| {
+                    println!("{}", format_host_args(args));
+                    Completion::Normal(JsValue::UNDEFINED)
+                },
+            ));
+            self.get_object_cell_expect(console_id)
+                .borrow_mut()
+                .insert_builtin("info".to_string(), info_fn);
+
+            let debug_fn = self.create_function(JsFunction::native(
+                "debug".to_string(),
+                0,
+                |_interp, _this, args| {
+                    println!("{}", format_host_args(args));
+                    Completion::Normal(JsValue::UNDEFINED)
+                },
+            ));
+            self.get_object_cell_expect(console_id)
+                .borrow_mut()
+                .insert_builtin("debug".to_string(), debug_fn);
         }
         let console_val = JsValue::object(console_id);
         self.realm()
