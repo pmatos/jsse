@@ -529,6 +529,7 @@ fn transform_generator_inner_opts(
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
         && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
+        && !body.iter().any(stmt_contains_await_using_head)
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
         && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
@@ -592,34 +593,38 @@ fn create_simple_machine(
 }
 
 fn stmt_contains_for_await(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::awaits_at_head)
+}
+
+fn stmt_contains_await_using_head(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::disposes_at_head)
+}
+
+fn stmt_contains_for_of_head(stmt: &Statement, head: fn(&ForOfStatement) -> bool) -> bool {
+    let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
-        Statement::ForOf(f) => f.awaits_at_head(),
-        Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
+        Statement::ForOf(f) => head(f),
+        Statement::Block(stmts) => stmts.iter().any(contains),
         Statement::If(i) => {
-            stmt_contains_for_await(&i.consequent)
-                || i.alternate
-                    .as_ref()
-                    .is_some_and(|s| stmt_contains_for_await(s))
+            contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
         }
-        Statement::While(w) => stmt_contains_for_await(&w.body),
-        Statement::DoWhile(d) => stmt_contains_for_await(&d.body),
-        Statement::For(f) => stmt_contains_for_await(&f.body),
-        Statement::ForIn(f) => stmt_contains_for_await(&f.body),
+        Statement::While(w) => contains(&w.body),
+        Statement::DoWhile(d) => contains(&d.body),
+        Statement::For(f) => contains(&f.body),
+        Statement::ForIn(f) => contains(&f.body),
         Statement::Try(t) => {
-            t.block.iter().any(stmt_contains_for_await)
+            t.block.iter().any(contains)
                 || t.handler
                     .as_ref()
-                    .is_some_and(|h| h.body.iter().any(stmt_contains_for_await))
-                || t.finalizer
-                    .as_ref()
-                    .is_some_and(|f| f.iter().any(stmt_contains_for_await))
+                    .is_some_and(|h| h.body.iter().any(contains))
+                || t.finalizer.as_ref().is_some_and(|f| f.iter().any(contains))
         }
         Statement::Switch(s) => s
             .cases
             .iter()
-            .any(|c| c.consequent.iter().any(stmt_contains_for_await)),
-        Statement::Labeled(_, inner) => stmt_contains_for_await(inner),
-        Statement::With(_, s) => stmt_contains_for_await(s),
+            .any(|c| c.consequent.iter().any(contains)),
+        Statement::Labeled(_, inner) => contains(inner),
+        Statement::With(_, s) => contains(s),
         _ => false,
     }
 }
@@ -660,9 +665,8 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 }
 
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
-    if detect_for_await
-        && let Statement::ForOf(f) = stmt
-        && f.awaits_at_head()
+    if let Statement::ForOf(f) = stmt
+        && ((is_async && f.disposes_at_head()) || (detect_for_await && f.awaits_at_head()))
     {
         return true;
     }

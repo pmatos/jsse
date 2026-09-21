@@ -5120,34 +5120,58 @@ impl Interpreter {
                         .map(|b| b.value.clone())
                         .unwrap_or(JsValue::UNDEFINED);
 
-                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take() {
-                        match self.dispose_resources(&iteration_env, Completion::Empty) {
-                            // §14.7.5.6 step 7.h: a throwing disposer ends the
-                            // loop with a throw completion, so the iterator
-                            // still closes and the generator's handlers see it.
-                            Completion::Throw(e) => {
-                                self.iterator_close(&iterator, e.clone());
-                                self.gc_unroot_value(&iterator);
-                                for_of_stack.remove(loop_pos);
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Some(stack) = self.take_dispose_stack(&iteration_env)
+                    {
+                        let mut cursor = DisposeCursor::new(stack, Completion::Empty);
+                        match cursor.step(self, None) {
+                            // The disposal's Await suspends the generator; the
+                            // head runs again once it finishes, with the
+                            // iteration environment already disposed.
+                            DisposeStep::Await(value) => {
                                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                                let e = route_exception!(e);
-                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
+                                        IteratorState::StateMachineAsyncGenerator {
                                             state_machine,
                                             func_env,
                                             is_strict,
-                                        ),
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: current_id,
+                                                },
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: current_try_stack,
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
                                     );
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                self.drain_microtasks();
+                                let disposal = GeneratorDisposal::new(
+                                    GeneratorDisposeState::Disposing {
+                                        cursor,
+                                        then: GeneratorDisposeThen::Reenter,
+                                    },
+                                    (&promise, &resolve_fn, &reject_fn),
+                                );
+                                self.park_async_gen_disposal(o.id, disposal, &value);
+                                self.scheduler.set_async_gen_yield_pending(true);
                                 return Completion::Normal(promise);
+                            }
+                            // §14.7.5.6 step 7.h: a throwing disposer ends the
+                            // loop with a throw completion, so the iterator
+                            // still closes (routing unwinds this loop) and the
+                            // generator's handlers see it.
+                            DisposeStep::Done(Completion::Throw(e)) => {
+                                pending_exception = Some(e);
+                                check_abrupt_on_resume = true;
+                                continue;
                             }
                             // Leave the result promise unsettled: a terminal
                             // host exit propagates through the queue boundary,
                             // never through normal promise settlement.
-                            Completion::Exit(code) => {
+                            DisposeStep::Done(Completion::Exit(code)) => {
                                 self.discard_generator_for_of_loops_on_exit(
                                     o.id,
                                     &mut for_of_stack,
@@ -5163,7 +5187,7 @@ impl Interpreter {
                                     );
                                 return Completion::Exit(code);
                             }
-                            _ => {}
+                            DisposeStep::Done(_) => {}
                         }
                     }
 
