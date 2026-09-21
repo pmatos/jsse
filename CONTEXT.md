@@ -82,6 +82,10 @@ _Avoid_: jump table, loop targets.
 A `break`/`continue` the transform lowers to `StateTerminator::LoopControl(LoopControlTarget)` instead of a bare `Goto`. The target records where the jump lands (`target_state`) and how many `try` contexts (`try_depth`), `for-of` loops (`for_of_depth`) and block scopes (`scope_depth`) remain active there, so routing never depends on state-id equality. The driver routes it through the innermost un-entered `finally` between the jump and its target, closing the `for-of` iterators it crosses first, and resumes the jump when that finalizer's `TryExit` runs (`route_loop_control!` for async functions, `route_generator_loop_control` for sync and async generators). The generator drivers park the jump on the finalizer's `TryContextInfo.pending_loop_control`, so a jump or throw that leaves the finalizer discards it along with the context, and a nested finalizer cannot overwrite it.
 _Avoid_: goto, jump state.
 
+**Try Context Pairing**:
+The invariant that every `TryEnter` push of a runtime `TryContextInfo` gets exactly one matching `TryExit` pop, on every completion path out of the `try`/`catch` — including a finally-less try/catch's normal completion, which the transform routes through a synthetic `no_finally_exit_state` (`transform_try_statement`) rather than jumping straight to `after_try`. Every depth later computed from the runtime `try_stack` — `LoopControlTarget.try_depth`/`for_of_depth`, and exception-handler search — assumes this pairing; skipping a pop for any path desyncs those depths from the transform's own `try_stack` bookkeeping.
+_Avoid_: leaked try context, unpaired pop.
+
 ## Memory
 
 **Temp-Root Frame**:
