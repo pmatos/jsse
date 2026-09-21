@@ -227,21 +227,9 @@ impl Compiler {
     }
 
     fn compound_binary_op(op: AssignOp) -> Result<Op, CompileError> {
-        let binary = match op {
-            AssignOp::AddAssign => BinaryOp::Add,
-            AssignOp::SubAssign => BinaryOp::Sub,
-            AssignOp::MulAssign => BinaryOp::Mul,
-            AssignOp::DivAssign => BinaryOp::Div,
-            AssignOp::ModAssign => BinaryOp::Mod,
-            AssignOp::ExpAssign => BinaryOp::Exp,
-            AssignOp::LShiftAssign => BinaryOp::LShift,
-            AssignOp::RShiftAssign => BinaryOp::RShift,
-            AssignOp::URShiftAssign => BinaryOp::URShift,
-            AssignOp::BitAndAssign => BinaryOp::BitAnd,
-            AssignOp::BitOrAssign => BinaryOp::BitOr,
-            AssignOp::BitXorAssign => BinaryOp::BitXor,
-            _ => return Err(CompileError::Unsupported("assignment op")),
-        };
+        let binary = op
+            .binary_op()
+            .ok_or(CompileError::Unsupported("assignment op"))?;
         Self::binary_op(binary)
     }
 
