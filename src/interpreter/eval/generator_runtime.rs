@@ -7379,16 +7379,16 @@ impl Interpreter {
         });
         debug_assert!(keep_len <= for_of_stack.len());
 
-        match self.unwind_generator_for_of_loops(
+        let closed = self.unwind_generator_for_of_loops(
             generator_id,
             for_of_stack,
             try_stack,
             func_env,
             keep_len.min(for_of_stack.len()),
             Completion::Empty,
-        ) {
-            completion @ (Completion::Throw(_) | Completion::Exit(_)) => return Err(completion),
-            _ => {}
+        );
+        if matches!(closed, Completion::Throw(_) | Completion::Exit(_)) {
+            return Err(closed);
         }
 
         match routed_to {

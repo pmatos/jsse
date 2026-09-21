@@ -74,6 +74,14 @@ loop — so what the seam owns is the classification, the part that had no busin
 differing.
 _Avoid_: terminator expression, operand completion, state operand.
 
+**Block Exits**:
+The transform-time table (`GeneratorState.block_exits`, `BlockExits`) of `break`/`continue` targets, keyed by label, in scope where an **Isolated Block** was emitted (async generators only — a plain async function's **Scope Frame** routes crossed `break`/`continue` through `route_loop_control!` directly, using `LoopControlTarget.scope_depth`). The block runs verbatim, so a jump leaving it surfaces as a raw `Completion::Break`/`Continue` after its disposal; the driver resolves it through this table into `route_loop_control!`, which runs intervening `finally` blocks and closes crossed `for-of` iterators.
+_Avoid_: jump table, loop targets.
+
+**Loop Control**:
+A `break`/`continue` the transform lowers to `StateTerminator::LoopControl(LoopControlTarget)` instead of a bare `Goto`. The target records where the jump lands (`target_state`) and how many `try` contexts (`try_depth`), `for-of` loops (`for_of_depth`) and block scopes (`scope_depth`) remain active there, so routing never depends on state-id equality. The driver routes it through the innermost un-entered `finally` between the jump and its target, closing the `for-of` iterators it crosses first, and resumes the jump when that finalizer's `TryExit` runs (`route_loop_control!` for async functions, `route_generator_loop_control` for sync and async generators). The generator drivers park the jump on the finalizer's `TryContextInfo.pending_loop_control`, so a jump or throw that leaves the finalizer discards it along with the context, and a nested finalizer cannot overwrite it.
+_Avoid_: goto, jump state.
+
 ## Memory
 
 **Temp-Root Frame**:
