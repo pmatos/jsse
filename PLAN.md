@@ -2,411 +2,293 @@
 
 ## 1. Problem restated
 
-In JetStream's `generators/async-file-system.js`, `setupDirectory()` (a plain
-`async function`) runs `for await (const fileContents of randomFileContents())`
-where `randomFileContents` is an `async function*` yielding a fresh `DataView`
-each turn, and the loop body itself contains a second, unrelated `await`
-(`await dir.addFile(...)`) before looping back to fetch the next value. Under
-sufficient allocation volume, `fileContents` intermittently binds to
-`undefined` instead of the yielded `DataView`, even though nothing in the
-JetStream source ever assigns `undefined` to it. The `File` built from that
-turn stores `this._data = undefined` (a perfectly ordinary property write),
-and the failure only becomes visible later, when `byteLength`/`swapByteOrder`
-dereferences `this._data` and throws `TypeError: Cannot read properties of
-undefined (reading 'byteLength')`. Because nothing awaits the outer IIFE's
-promise in the original JetStream driver, that `TypeError` becomes an
-unhandled rejection that jsse drops silently, exiting 0 with no output — which
-is how `run-jetstream.py` reported this as "no JSON output" (#655) before it
-was split out as this bug.
+`generators/async-file-system.js` consumes an `async function*` with `for await`.
+Under allocation pressure the loop variable (and, in a manual-`next()` probe, the
+whole iterator-result object) arrives as `undefined` / a hollow object, so
+`new File(fileContents)` stores `undefined` and a later `this._data.byteLength`
+throws `TypeError`, which nothing observes.
 
-### Diagnosis performed in this planning stage (evidence, not yet a fix)
+**Root cause (confirmed by experiment, not suspected):** the scheduler's
+`async_gen_queues` — each entry an `AsyncGenRequest { kind, value, promise,
+resolve_fn, reject_fn }` — is **not a GC root**. `JobScheduler::for_each_root`
+(`src/interpreter/scheduler.rs:223`) visits `microtask_queue` and `timers` only;
+`collect_gc_roots` (`src/interpreter/gc.rs:443`) delegates to it, and
+`gc.rs` never mentions `async_gen_queue*`. `AsyncGeneratorEnqueue` appends the
+request to the queue and `async_gen_process_queue` (`eval/generator_runtime.rs`
+~2552) runs the generator body while the request is still parked there (it is
+popped only after the step settles). The request's `promise` and its resolving
+functions are, at that moment, held only by Rust locals and the queue — neither
+traced. A major collection at any safepoint inside the generator body (here the
+`for (let i…) view[i] = …` back-edge in `randomFileContents`) frees the promise
+`P` that `next()` is about to return, plus its `resolve_fn`/`reject_fn`. The
+arena recycles those ids; `next()` then hands the consumer an id that now names an
+unrelated object (empty own keys, `value`/`done` absent → `undefined`), and the
+`for await` head silently binds `undefined` (`iterator_complete` on a non-`done`
+object is `false`, `iterator_value` defaults to `undefined`). No exception is
+raised at the corruption site, which is why it surfaced only as a late
+`TypeError`.
 
-Built `target/release/jsse` at HEAD and confirmed:
+### Evidence (all reproduced in this planning stage, release build of HEAD `1b4c3fa8`, scratch binary under `$TMPDIR`)
 
-- The issue's exact repro (`/tmp/afs_catch.js`, tree-walker, 1 call to
-  `runIteration`) **no longer fails at HEAD** — 5/5 clean runs (`C`, `D`).
-  Numerous generator/GC-rooting fixes have landed since jsse 0.8.2
-  (`#690`–`#692`, `#688`, `#672`, `#666`, `#658`, `#604`, `#499`, `#473`,
-  among others). This bug is **not fixed**, but the *specific* repro command
-  in the issue body needs updating for whoever verifies the fix.
-- `target/release/jsse --bytecode /tmp/afs_catch.js` (1 iteration) reproduces
-  the exact reported error **3/3**, deterministically. `--bytecode` does not
-  compile `await`/`yield`-bearing bodies (only `compiler.rs` even mentions
-  `await`; `vm.rs` has no suspend/resume path), so this is not a bytecode-VM
-  defect — bytecode just raises allocation pressure per wall-clock iteration
-  enough to expose a shared-machinery bug faster.
-- The default (tree-walker) engine reproduces the **same bug family**
-  reliably (3/3) once given more allocation volume: driving
-  `b.runIteration(i)` for `i` in `0..6` fails at `i == 2` every time, with a
-  related but different downstream symptom (`Cannot convert undefined or
-  null to object`, from `Directory` code that assumes a defined value).
-  This confirms the defect is allocation/GC-timing dependent and lives in
-  code shared by both dispatch paths, not in `bytecode/`.
-- Patched a scratch copy of `async-file-system.js`'s `File.prototype.data`
-  getter to probe a File whose `.data` reads back `undefined`:
-  `Object.keys(this)` includes `"_data"`, `Object.prototype.hasOwnProperty
-  .call(this, "_data")` is `true`, and `Reflect.get(this, "_data")` — which
-  bypasses any inline cache — **also** returns `undefined`. The property is
-  present with a stored value of `undefined`; this is not a case of a
-  GC-recycled object id resolving `_data` to an unrelated live object (that
-  would read back as some *other* object, not `undefined`), and not a stale
-  inline-cache slot pointing at the wrong index (`Reflect.get` doesn't
-  consult the IC and agrees).
-- Patched the `for await` loop body directly to print `typeof fileContents`
-  and `File._data` immediately after `new File(fileContents)`. Confirmed
-  **`fileContents` itself is already `undefined`** at construction time, at
-  `fileCounter == 96` and `fileCounter == 578` in one 800-file run. The fault
-  is upstream of `File`/`DataView` entirely: it is in the `for await`
-  loop's iteration-result delivery.
-- `iterator_next` (`src/interpreter/builtins/iterators.rs:4919`) only checks
-  `v.is_object()`; `iterator_complete`/`iterator_value`
-  (`iterators.rs:4954`/`4966`) read `.done`/`.value` off whatever object they
-  are given and silently default to `false`/`undefined` if those properties
-  are absent — they do not validate that the object is actually the
-  `IteratorResult` produced by this turn's `next()` call. So if the value
-  the state-machine driver treats as "the settled await result" for the
-  `for-await-of` head is ever *not* that `IteratorResult` (stale, wrong, or a
-  still-pending promise), the loop silently manufactures `{done: false,
-  value: undefined}` with no thrown exception — exactly the observed
-  behavior.
-- **Ruled out the outer loop's own machinery.** Wrapped
-  `randomFileContents()` in a pass-through async iterable
-  (`instrumented(inner)`) whose own `next()` does `const r = await
-  it.next(); if (r === undefined || r.value === undefined) print("SOURCE
-  undefined at n=" + n);` before returning `r`, and consumed it via `for
-  await (const fileContents of instrumented(randomFileContents()))`. Under
-  `--bytecode`, `SOURCE undefined at n=448` and `n=758` printed — i.e. the
-  corruption is already present in `r` **before** it is even handed back to
-  the outer `for await`'s own head logic. This rules out
-  `StateTerminator::ForOfHead`'s await/resume branch in `eval.rs`
-  (~9166-9224) and `async_fn_suspend_at_await`/`AsyncFunctionState`
-  (`eval.rs:9466`, `scheduler.rs:269-283`) as the fault: those only see
-  `randomFileContents()`'s `.next()` result *after* it is already wrong.
-  The fault is inside the async generator's *own* yield/await delivery.
-- **Localized to a structural hazard in that delivery path.** The async
-  generator's own state-machine driver lives in
-  `src/interpreter/eval/generator_runtime.rs` (`generator_next_state_machine`
-  and friends handle sync generators; `async_generator_next_state_machine_impl`
-  (~3267), its `StateTerminator::Await` branch (~5815-5910),
-  `apply_sent_value_binding` (~5917), and `async_gen_await_resume` (~5935)
-  handle async generators — a separate driver from `eval.rs`'s
-  `async_function_resume`, confirmed by `eval.rs:9326`'s
-  `StateTerminator::Yield => unreachable!("Yield terminator in async
-  function")`, which only holds for plain async functions). Per
-  `AsyncGeneratorYield` (`spec/spec.html#sec-asyncgeneratoryield`), every
-  `yield` in an async generator involves its
-  *own* internal `Await`, so `randomFileContents`'s single `yield new
-  DataView(result)` per turn is itself one full suspend/resume cycle through
-  this driver.
+- The issue's exact single-iteration repro **passes** on default HEAD (unrelated
+  fixes since 0.8.2), but still fails on `--bytecode`
+  (`REJ Cannot read properties of undefined (reading 'byteLength')`, 3/3), and on
+  the default engine when `runIteration(i)` is driven for `i` in `0..6` (fails at
+  `i == 2`). `--bytecode` does not host the bug (no `await`/`yield` compilation);
+  it only raises allocation rate per iteration.
+- `fileContents === undefined` is `true` and `typeof` is `"undefined"` — a genuine
+  `undefined`, not a dangling object id. Replacing the `for await` head with a
+  manual `const r = await gen.next()` shows `r` is an object with **empty
+  `Object.keys(r)`** (`BADR n=96 r=object keys= valtype=undefined done=undefined`)
+  — the fault is in the async generator's `next()` delivery, upstream of `File`
+  and of the `for await` head.
+- Scratch env-gated switch in `GcPacer::begin_collection` (not kept):
+  `JSSE_NOGC=1` → passes; **`JSSE_NOGC=major` → passes; `JSSE_NOGC=minor` → still
+  fails.** A *major* collection is the trigger. (Why the minor collection does not
+  reclaim it — plausibly `object_requires_persistent_minor_scan` keeping
+  `ObjectKind::Iterator` objects scanned — is **unverified**.)
+- Scratch `WATCH-FREED` instrumentation (not kept) on the iterator-result objects
+  created by the async-generator yield microtask, with
+  `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, captured this chain at the free:
+  `gc_collect_major ← gc_safepoint ← exec_prepared_statements ←
+  exec_statements_cached ← exec_body_inner ← exec_state_machine_body ←
+  async_generator_next_state_machine_impl ← async_generator_next_state_machine_with_promise
+  ← async_gen_process_queue ← async_gen_enqueue ← async_generator_next ←
+  call_function ← eval_call ← async_function_resume ← drain_microtasks`. I.e. the
+  collection fires while the generator body runs under the queue driver, invoked
+  from the consumer's `next()` call — exactly when the request sits in the
+  untraced queue. (The watched object itself freed at age 1 may be ordinary
+  garbage; the chain, not that id, is the evidence.)
+- **Fix confirmed:** adding the four request fields to `for_each_root` (patch
+  below) → `--bytecode` manual-`next()` probe: 0 `BADR`/`REJ`; `--bytecode` issue
+  repro prints `C`,`D`; default-engine 6-iteration driver prints `D5`.
+- Ruled out (earlier draft of this plan): `async_gen_yield_pending` being an
+  unkeyed `bool` (single live async generator during `setupDirectory`, so no
+  cross-generator clobbering); `eval.rs` `ForOfHead`/`async_fn_suspend_at_await`;
+  an inline-cache or bytecode-VM defect; a write-barrier gap on promise state
+  (`fulfill_promise` goes through `borrow_mut`, which runs the barrier).
+- Separately observed at HEAD: minimal deterministic cases (§4) also fail:
+  `g().next()` with `$262.gc()` in `g`'s body before the first `yield` throws
+  `TypeError: undefined is not a function` synchronously (`p.then` is looked up
+  on a recycled id); and a generator with three queued requests carrying object
+  send-values, with `$262.gc()` between two resumptions, never settles the final
+  promise (silent, exit 0) — the `AsyncGenRequest.value` is unrooted too.
 
-  `async_gen_process_queue` (`generator_runtime.rs:2552`) implements
-  `AsyncGeneratorDrainQueue`: it resets a flag
-  (`self.scheduler.set_async_gen_yield_pending(false)`, line 2569), steps the
-  generator's state machine once, then — the comment at line 2606-2607 is
-  explicit — reads that *same* flag to decide whether the step actually
-  suspended on a pending promise (leave the request queued; a fulfill/reject
-  handler will resume it later) or ran to completion synchronously (pop the
-  request and immediately drain the next one, recursively). That flag,
-  `async_gen_yield_pending` (`scheduler.rs:192`), is declared as a single
-  **`bool` on the whole `JobScheduler`** — not keyed by generator id, unlike
-  the adjacent, correctly-`u64`-keyed `async_gen_queues:
-  FxHashMap<u64, VecDeque<AsyncGenRequest>>` one field above it. It is
-  written to `true` from at least seven sites in `generator_runtime.rs`
-  (`3008`, `4591`, `4689`, `4722`, `4771`, `4999`, `5909`) across the
-  `Yield`/`Await`/`yield*`-delegation terminators, and read back only twice
-  (`2608`, `5992`), always as "did *the* generator I just stepped suspend."
-  If any nested/re-entrant activity for a *different* async-generator
-  instance (or a different suspension path of the same one) touches this
-  flag while a `async_gen_process_queue`/`async_generator_next_state_machine
-  _*` call for the *current* generator is still on the Rust call stack, the
-  read at line 2608 answers the wrong question: a generator that actually
-  finished this step synchronously with a valid `result` gets treated as "it
-  suspended, a callback will finish it" (`result` discarded, line 2610) —
-  or a generator that genuinely suspended gets treated as "already
-  finished" and its request popped/drained before the real value arrives.
-  Either misreading is silent (no exception at the corruption site) and
-  would surface exactly as observed: intermittent, allocation/concurrency-
-  volume correlated (more concurrently in-flight async-generator activity →
-  more chances for the flag to be touched by the wrong generator's step
-  before the outer read), with no fixed, deterministic trigger count. This
-  matches every symptom collected in this plan's diagnosis better than any
-  GC-rooting theory: it needs no object to be collected, no id to be
-  recycled, and no value to be literally lost — only one bit of *shared*
-  bookkeeping to be read for the wrong generator.
+### The scratch fix (validated; the implementation stage re-applies it)
 
-  **This is a structural hazard found by static reading of
-  `async_gen_yield_pending`'s single-`bool`, unkeyed shape next to a
-  correctly-keyed sibling field — it has not yet been dynamically proven to
-  be the trigger inside `async-file-system.js` specifically.** Confirming
-  that (and finding what, concretely, re-enters while a step is in flight —
-  candidates: `yield*`-delegation resuming a *different* generator inline,
-  a `.then()` reaction for one generator's earlier await firing during
-  another's synchronous step, or microtask draining triggered from inside
-  `call_function`) is TDD slice 1's job, not this plan's.
+```diff
+--- a/src/interpreter/scheduler.rs
++++ b/src/interpreter/scheduler.rs
+@@ pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
+         for (roots, _) in &self.microtask_queue {
+             for value in roots {
+                 visit(value);
+             }
+         }
++        for queue in self.async_gen_queues.values() {
++            for request in queue {
++                visit(&request.value);
++                visit(&request.promise);
++                visit(&request.resolve_fn);
++                visit(&request.reject_fn);
++            }
++        }
+         for (callback, args) in self.timers.iter_roots() {
+```
 
-This is as far as a planning stage should go without writing code.
+`collect_gc_roots` already funnels both `gc_collect_minor` (gc.rs:585) and
+`gc_collect_major` (gc.rs:756) through `for_each_root`, so one edit covers both.
 
 ## 2. Spec basis
 
-This is a JS-behavior-affecting engine-internal bug (an observably wrong
-property/iteration-variable value), not a change to JavaScript syntax or
-semantics — jsse must continue to behave exactly as required by the following
-clauses; the fix makes it do so:
+Reclaiming a reachable object is unobservable in the spec — there is no clause
+under which GC timing may change what a program reads. The engine bug violates
+the following clauses by making their observable results depend on GC. Anchors
+are `spec/spec.html` ids (all under ECMA-262 §27.6 AsyncGenerator Objects;
+`AsyncGeneratorYield` is §27.6.3.8 as the engine's own comments cite it):
 
-- **OrdinaryGet ( O, P, Receiver )**, ECMA-262 §10.1.8.1
-  (`spec/spec.html#sec-ordinaryget`) and **OrdinarySet** / **OrdinarySetWith
-  OwnDescriptor**, §10.1.9.1/§10.1.9.2
-  (`spec/spec.html#sec-ordinaryset`, `#sec-ordinarysetwithowndescriptor`): a
-  stored own data property must read back the value most recently written to
-  it. No clause permits an engine implementation detail (GC timing,
-  allocation volume, inline caching) to change what `[[Get]]` returns for an
-  unmodified own property. `file._data` reading back `undefined` after the
-  constructor wrote a `DataView` to it, without any intervening
-  `_data = undefined`, violates this regardless of which layer is at fault.
-- **ForIn/OfBodyEvaluation** (`spec/spec.html
-  #sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset`):
-  for `iteratorKind` = ~async~, each iteration must bind the loop variable to
-  `IteratorValue(?Await(IteratorNext(iteratorRecord)))` — the `[[value]]` of
-  *that* turn's own iterator-result, never a stale or unrelated value.
-- **AsyncGeneratorYield ( value )** (`spec/spec.html
-  #sec-asyncgeneratoryield`): each `yield` in an async generator body awaits
-  its value, then resumes the *specific* suspended generator that issued it
-  with the *specific* completion produced for it — never a different
-  generator's completion, and never an already-consumed one. This is the
-  clause the diagnosis in §1 points at: the engine's own bookkeeping for
-  "did the generator I just stepped suspend or finish" must be scoped per
-  generator, or two async generators' suspend/resume cycles can answer each
-  other's question.
-- **Await ( value )** (`spec/spec.html#await`, under Async Function Abstract
-  Operations): the execution context must be suspended and later resumed
-  with exactly the value the awaited promise settled with — never another
-  execution context's settled value.
+- **AsyncGeneratorRequest Records** (`#sec-asyncgeneratorrequest-records`) and
+  **AsyncGeneratorEnqueue** (`#sec-asyncgeneratorenqueue`): the request — its
+  `[[Completion]]` (the sent value) and `[[Capability]]` (promise + resolving
+  functions) — lives in `[[AsyncGeneratorQueue]]` until the generator settles it.
+  The queue owns the capability; the engine's queue must therefore keep it alive.
+- **%AsyncGeneratorPrototype%.next** (`#sec-asyncgenerator-prototype-next`):
+  returns `promiseCapability.[[Promise]]` — the very promise the request settles.
+- **AsyncGeneratorCompleteStep** (`#sec-asyncgeneratorcompletestep`),
+  **AsyncGeneratorYield** (`#sec-asyncgeneratoryield`) and
+  **AsyncGeneratorDrainQueue** (`#sec-asyncgeneratordrainqueue`): each yield
+  resolves *that request's* capability with an iterator result carrying the
+  yielded value.
+- **ForIn/OfBodyEvaluation**
+  (`#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset`):
+  for async iteration each turn binds `IteratorValue(? Await(IteratorNext(...)))` —
+  that turn's own result, never an unrelated object.
+- **OrdinaryGet** (`#sec-ordinaryget`): an unmodified own data property reads back
+  the last stored value (the reason `file._data` must not change).
 
 ## 3. Files to touch
 
-Engine (all under `src/interpreter/`):
+Engine:
 
-- `scheduler.rs` — `async_gen_yield_pending: bool` field (~192) and its
-  accessors `set_async_gen_yield_pending`/`is_async_gen_yield_pending`
-  (~255-260). Primary fix site: re-scope this to per-generator state (e.g.
-  fold it into the existing per-id `async_gen_queues: FxHashMap<u64, ...>`
-  entry, or thread it as a return value / explicit parameter instead of
-  shared mutable scheduler state) once slice 1 confirms the cross-generator
-  read is real.
-- `eval/generator_runtime.rs` — every write site of the flag
-  (`async_gen_process_queue` ~2552-2623, and the `Yield`/`Await`/`yield*`
-  terminator arms that set it to `true`: ~3008, ~4591, ~4689, ~4722, ~4771,
-  ~4999, ~5909) and its other read site (~5992, inside
-  `async_generator_return_state_machine_with_promise` or a neighboring
-  function — confirm exact owner when editing). Every call site that
-  currently threads state through this flag needs to thread it through
-  whatever per-generator replacement slice 1's fix uses instead.
-- `builtins/iterators.rs` — `iterator_complete`/`iterator_value`
-  (~4954-4973) are candidates for tightening (rejecting a non-`IteratorResult`
-  rather than silently defaulting to `false`/`undefined`) as a defense in
-  depth once the upstream defect is fixed, but this alone only turns the
-  symptom into a `TypeError` at the right place — not this issue's fix by
-  itself (see Out of scope).
-- `eval.rs` — `StateTerminator::ForOfHead` (~9122-9224) and
-  `async_fn_suspend_at_await` (~9466) were the *original* suspects in this
-  plan's diagnosis and were ruled out by the `instrumented()`-wrapper probe
-  in §1 (the corruption is already present in the async generator's own
-  `.next()` result, before this code ever sees it). Do not touch these
-  unless slice 1's dynamic confirmation contradicts the static finding and
-  points back here.
+- `src/interpreter/scheduler.rs` — `JobScheduler::for_each_root` (~223): visit
+  every `AsyncGenRequest` field (patch above). Add a unit test in its existing
+  `#[cfg(test)]` module next to `async_gen_queues_are_isolated_per_generator`
+  (~431).
+- `src/interpreter/gc.rs` — `free_gc_object` (~725), which already drops the
+  id-keyed side tables (`iterator_next_cache`, `generator_inline_iters`,
+  `generator_for_of_stacks`) *because the arena recycles ids*: drop
+  `async_gen_queues[id]` there too (slice 3). Needs a small `pub(crate)
+  remove_async_gen_queue(gen_id)` accessor on `JobScheduler` (no accessor removes
+  a queue today; `scheduler.rs` only has `entry`/`get`/`get_mut`).
 
-Non-engine:
+Tests (new files):
 
-- None required. This is not a `scripts/`/CI/benchmark-harness gap; #681
-  already closed the runner-side "no JSON output" misclassification for this
-  family. No `docs/adr/` entry unless implementation lands on a real
-  architectural redesign of the async-generator drain-queue protocol (see
-  Out of scope) rather than re-scoping one field.
+- `test262-extra/AsyncGenerator-next-request-promise-gc-rooting.js` (slice 1).
+- `test262-extra/AsyncGenerator-queued-request-value-gc-rooting.js` (slice 2).
+
+`test262-extra/` is flat (no `language/` subtree); the precedent names to follow
+are `Array-length-set-gc-rooting.js`, `Promise-allKeyed-combinator-gc-rooting.js`
+and `agent-get-report-async-promise-gc-rooting.js` (same header shape:
+`esid`, `description`, `info` naming the clause and the issue, `flags: [async]`,
+`features: [host-gc-required]`, `$262.gc()`).
+
+Non-engine: none. No `docs/adr/` (no new architecture). If the tree's `CONTEXT.md`
+has a "Rooted Slot"/GC-root vocabulary section, one sentence noting that
+"scheduler-owned request queues are roots" is optional, not required.
 
 ## 4. TDD slices
 
-1. **Dynamically confirm the cross-generator read, with a named failing
-   test.** Add `tests/async-generator-yielded-value-delivery.js` (named for
-   the observed behavior, not the hypothesis — if slice 1 goes green for a
-   different reason than expected, this name still describes what it
-   checks; a plain script, run via `uv run python scripts/run-custom-tests.py
-   tests/async-generator-yielded-value-delivery.js` — pass = exit 0, fail =
-   a thrown/uncaught error per that runner's convention; see other
-   `tests/*.js` files for the header/assertion style already used there).
-   `run-custom-tests.py` defaults to a 10s per-test timeout — if driving
-   "many iterations" needs longer, pass `--timeout` explicitly rather than
-   trimming the iteration count below what reliably reproduces.
-   Drive **two** async generators concurrently, engineered to make one's
-   suspend/resume cycle land while the other's `async_gen_process_queue`
-   step is still executing — e.g. two `for await` loops over two separate
-   `async function*` sources, advanced by interleaving `.next()` calls
-   inside a shared `Promise.all`/microtask-interleaved driver (mirroring
-   how `randomFileContents()`'s consumption in `setupDirectory()` overlaps
-   with the rest of `Benchmark`'s concurrent async bookkeeping), asserting
-   neither generator's yielded value is ever lost across many iterations.
-   This is expected to be **red** at HEAD. If it does *not* go red, the
-   `async_gen_yield_pending` cross-talk in §1 is not the (or not the only)
-   trigger — fall back to reproducing directly against a scratch copy of
-   `/tmp/JetStream/generators/async-file-system.js` using the same
-   `instrumented()`-wrapper probe already built in this plan's diagnosis,
-   identify what *does* re-enter while a step is on the stack, and update
-   this slice before writing any fix.
+Build with a capped parallelism and a scratch target dir, e.g.
+`CARGO_TARGET_DIR=$TMPDIR/target cargo build --release -j8`. Fresh workspaces
+have empty `test262/` and `spec/` submodules — `git submodule update --init
+--depth 1 test262` before running the suite.
 
-   **Confirmation already gathered for which failure mode to expect:**
-   re-running the wrapper probe with the async-function `await` removed from
-   `instrumented()` (a plain, non-`async` `next()` returning
-   `it.next().then(r => { if (r === undefined) print("R-UNDEF..."); else if
-   (r.value === undefined) print("VAL-UNDEF..."); ... })`, so the probe
-   itself no longer goes through `async_fn_suspend_at_await`) confirms the
-   wrapper mechanism correctly distinguishes the two cases in isolation (a
-   sync-only source consumed this way prints nothing until legitimate
-   exhaustion). Independently: in the original (unwrapped) repro, the
-   `for await` loop keeps running for hundreds more iterations after each
-   corrupted turn (`fileCounter` 96 then continuing past 578) rather than
-   terminating — but `iterator_next` only requires `v.is_object()`
-   (`iterators.rs:4919`) and `iterator_complete` returns `Ok(true)` (loop
-   ends) for any non-object result (`iterators.rs:4954-4963`). If the
-   *entire* result had been `undefined` (`R-UNDEF`), the loop would have
-   ended at the first corrupted turn instead of continuing — it did not.
-   Both point at `VAL-UNDEF` (a real `IteratorResult` object with a bad
-   `.value`), corroborating generator_runtime.rs over eval.rs as the fix
-   site in §3. Re-embedding the split-print wrapper directly in
-   `async-file-system.js` to log which case actually fires there hit an
-   unrelated crash (`undefined is not a function`, likely from the
-   `for-await-of` `break`'s `IteratorClose` calling a `return` method the
-   wrapper never defines) before producing a verdict — worth fixing in
-   slice 1's own test (give the wrapper a `return` method) rather than
-   re-diagnosing further at planning time.
-2. **Fix the scoping.** Once slice 1 is red for a known reason, re-scope
-   `async_gen_yield_pending` (and any other bookkeeping the same call path
-   uses this way) so a step for generator A cannot be answered by a signal
-   generator B produced, and make slice 1 green. Do not weaken
-   `iterator_complete`/`iterator_value` as the fix — they may still be
-   tightened separately (see Out of scope) but that must not be how slice 1
-   passes.
-3. **Distilled deterministic regression.** Once the mechanism is confirmed
-   and fixed, reduce slice 1's two-generator interleaving to the smallest
-   deterministic case that still exercises the same code path (no reliance
-   on allocation volume — this is a scheduling/re-entrancy bug, not a GC
-   one, so it should not need thousands of iterations to force). Because it
-   changes an observable ECMAScript value (which generator's yielded value
-   a `for await` loop variable binds to) rather than being an allocation- or
-   resource-limit stress check, this belongs in `test262-extra/` per this
-   project's rule (`CLAUDE.md`), not `tests/`:
-   `test262-extra/language/statements/for-await-of/concurrent-async-generators-do-not-cross-deliver-yielded-values.js`,
-   following existing test262 file header conventions (`esid`, `description`,
-   `info` citing `AsyncGeneratorYield` and `ForIn/OfBodyEvaluation`,
-   `flags: [async]`, and the `$262`/`print`/`doneprintHandle.js` patterns
-   already used elsewhere in this repo's `test262-extra/`). Keep slice 1's
-   `tests/` file too — it is the closer analogue of the actual JetStream
-   trigger and a cheap regression net even after the distilled case exists.
-4. **Regression sweep.** Re-run the original issue repro at both
-   configurations recorded in this plan's diagnosis (default engine,
-   `runIteration` × 6; `--bytecode`, `runIteration` × 1) and confirm both
-   now complete with `D`/`D5` printed and no rejection — these, not the
-   issue's original single-iteration repro (already passing at HEAD for
-   unrelated reasons), are the acceptance criteria.
+1. **Red, then green: request promise survives a collection inside the body.**
+   Add `test262-extra/AsyncGenerator-next-request-promise-gc-rooting.js`
+   (`flags: [async]`, `features: [host-gc-required]`, `esid:
+   sec-asyncgeneratorenqueue`). Body:
+   ```js
+   async function* g() {
+     $262.gc();
+     var junk = [];
+     for (var i = 0; i < 64; i++) junk.push({ i: i, s: "x" + i });
+     yield 42;
+   }
+   g().next().then(function (r) {
+     assert.sameValue(r.value, 42);
+     assert.sameValue(r.done, false);
+   }).then($DONE, $DONE);
+   ```
+   The `$262.gc()` runs while the request is at the front of the queue and the
+   promise has not yet been returned; the churn forces id reuse. **Verified red at
+   HEAD** (`TypeError: undefined is not a function`, thrown synchronously from
+   `.then`), identically with `--bytecode`. Green with the `for_each_root` patch.
+   Lead with this slice: it is the clean deterministic red.
+2. **Queued request values and capabilities.** Add
+   `test262-extra/AsyncGenerator-queued-request-value-gc-rooting.js`. A generator
+   `h` does `var a = yield 1; $262.gc(); churn; var b = yield 2;` and records
+   `a.tag`, `b.tag`; the driver issues `it.next()`, `it.next({tag:"A"})`,
+   `it.next({tag:"B"})` (object send-values held *only* by the queue) and a final
+   `it.next().then(...)`. Assert `log` equals `["A","B"]` **via `$DONE`** — on
+   HEAD the final promise never settles (verified: no output, exit 0), so a test
+   that merely "does not throw" would pass on broken HEAD; `flags: [async]` makes a
+   never-settling promise a timeout failure. Because red is a timeout, run it with
+   the runner's `--timeout` lowered (e.g. `uv run python scripts/run-test262.py
+   --timeout 15 test262-extra/AsyncGenerator-queued-request-value-gc-rooting.js`)
+   rather than waiting the 120 s default. Green with the same patch.
+3. **Unit test + queue cleanup on free.** In `scheduler.rs` tests add
+   `for_each_root_visits_every_async_gen_request_field` (four distinct object
+   values in one `AsyncGenRequest`; assert all four are visited; assert an empty
+   queue visits nothing). Then, red→green, cover the leak the fix introduces:
+   `async_gen_queues` entries are **never removed today** (only `entry`/`get`/
+   `get_mut` exist), so rooting them would make an abandoned generator's last
+   queued request — a promise plus two closures — immortal, *and* make each
+   collection walk every generator the program ever enqueued on (JetStream's
+   async-fs creates thousands of short-lived `ls()`/`forEach*` generators). A stale
+   entry is also a correctness hazard independent of rooting: the arena recycles
+   ids, so a new async generator allocated in a freed generator's slot inherits its
+   leftover requests. Fix: `self.scheduler.remove_async_gen_queue(id)` in
+   `free_gc_object`, with a `gc.rs` unit test (pattern: the tests around
+   `gc.rs:1568`/`1826` — build an interpreter, enqueue a request for a generator
+   object, drop the last reference, `gc_collect_major`, assert the queue and its
+   promise are gone). If this slice turns out to exceed ~30 lines or perturbs
+   `test262-pass.txt`, drop it from the PR and file it as a follow-up issue — the
+   rooting fix in slice 1–2 stands alone.
+4. **End-to-end acceptance (manual, not committed).** Regenerate the issue's
+   driver (`scripts/run-jetstream.py`'s `build_polyfill_preamble` +
+   `/tmp/JetStream/generators/async-file-system.js` at JetStream `c603c04`; clone
+   it under `$TMPDIR` if absent) and confirm `C`,`D` for: default engine ×6
+   `runIteration` (must print `D5`), and `--bytecode` ×1. These two — not the
+   issue's single-iteration default-engine command, which already passes at HEAD —
+   are the acceptance criteria. Report them in the PR body.
 
 ## 5. Test surface
 
-- `test262/test/language/statements/for-await-of/`,
+- Targeted test262 directories (async-generator queue machinery):
+  `test262/test/language/statements/for-await-of/`,
   `test262/test/language/statements/async-generator/`,
   `test262/test/language/expressions/async-generator/`,
   `test262/test/built-ins/AsyncGeneratorFunction/`,
   `test262/test/built-ins/AsyncGeneratorPrototype/`,
   `test262/test/built-ins/AsyncFromSyncIteratorPrototype/`,
-  `test262/test/built-ins/AsyncIteratorPrototype/` — targeted run; these
-  exercise `AsyncGeneratorEnqueue`/`AsyncGeneratorDrainQueue` and the
-  `async_gen_process_queue`/`async_gen_yield_pending` machinery directly.
-  None of these are individually likely to catch *this* bug today (they
-  each drive a single generator, not concurrent ones), which is exactly why
-  a new test262-extra case is needed — but they are the direct regression
-  surface for any change to `async_gen_process_queue`'s control flow.
-- The allocation/interleaving-dependent reproduction (TDD slice 1) is not
-  test262-conformance material — it belongs in `tests/`, run via
-  `uv run python scripts/run-custom-tests.py`, per this project's rule that
-  "exact host-compatibility diagnostics and engine resource-limit or stress
-  checks remain in `tests/`." (Re-check this categorization if slice 1 turns
-  out to still need real allocation volume rather than pure interleaving —
-  see the note in §4 slice 1.)
-- The distilled deterministic case (slice 3) belongs in `test262-extra/`
-  (run via `uv run python scripts/run-test262.py test262-extra/`) per this
-  project's rule that "engine-internal heuristics [...] when the failure
-  changes an observable ECMAScript value" get a test262-extra regression.
-- Full `uv run python scripts/run-test262.py` (baseline comparison against
-  `origin/main:test262-pass.txt`, not rewritten) before opening the PR.
+  `test262/test/built-ins/AsyncIteratorPrototype/`. None single-handedly catches
+  this bug (each drives one generator and never forces a collection mid-step);
+  they are the regression net for the queue driver.
+- GC-sensitive suites, since roots changed: `test262/test/built-ins/WeakRef/`,
+  `test262/test/built-ins/FinalizationRegistry/`, `test262/test/built-ins/Promise/`.
+- New `test262-extra/` files (slices 1–2), run with
+  `uv run python scripts/run-test262.py test262-extra/` (no dedicated runner).
+  These belong in `test262-extra/`, not `tests/`, because the failure changes an
+  observable ECMAScript value (which object `next()` returns / what a
+  `for await` variable binds), per this repo's rule; they cite
+  `AsyncGeneratorEnqueue` and `AsyncGeneratorYield`.
+- `cargo test --release` (slice 3 unit tests; also the existing scheduler test
+  `async_gen_yield_pending_round_trip` must stay green — the flag is untouched).
 - `uv run python scripts/run-custom-tests.py` for `tests/`.
-- The manual repro built in this plan's diagnosis (§1) as an end-to-end
-  sanity check against the real JetStream benchmark, not a substitute for
-  the targeted tests above.
+- Full `uv run python scripts/run-test262.py` before opening the PR, compared
+  against `origin/main:test262-pass.txt`. Do **not** pass `--update-baseline`.
 
 ## 6. Regression risk
 
-- **Primary risk area: `async_gen_process_queue` and
-  `AsyncGeneratorDrainQueue`'s recursive drain
-  (`eval/generator_runtime.rs:2552-2623`).** This function already
-  recurses into itself (line 2620) to drain queued requests once a step
-  settles synchronously; re-scoping the suspend/finish signal touches every
-  call site that currently relies on the flag's *global* value implicitly
-  agreeing across nested calls. Re-run every async-generator test262
-  directory listed in §5, plus anything in this repo that exercises
-  multiple concurrently-live async generators (`for await` inside `Promise
-  .all`, `yield*` delegating into another async generator) — those are
-  exactly the shapes that would have been silently relying on (or silently
-  broken by) the current unscoped flag.
-- **`gc.rs` is very unlikely to need changes.** The diagnosis in §1 found no
-  evidence of a rooting/write-barrier gap (the `Reflect.get`/`hasOwnProperty`
-  probe ruled out object-arena id recycling, and the localization points at
-  scheduler bookkeeping, not memory management) — do not touch
-  `remember_if_old`/`gc_write_barrier_value`/`collect_gc_roots` speculatively
-  under this issue. If slice 1's dynamic confirmation contradicts this and
-  a real rooting gap turns up instead, that changes the write-barrier
-  regression profile: *under*-rooting is silent data loss (failure mode
-  matching this bug), *over*-rooting is correctness-safe but slows minor GC
-  toward major-GC-like behavior, and the canaries for the latter are the
-  long-running Node-compat library harnesses (`big.js` ~7 min, `uglify-js`
-  ~15 min, `highlight.js` ~30 min — a regression would show as a timeout,
-  not a wrong answer) plus `test262/test/built-ins/FinalizationRegistry/`
-  and `test262/test/built-ins/WeakRef/` (most likely to break if routine
-  collection stops running).
-- **Bytecode fast path:** not touched by this fix (no suspend/resume
-  support exists in `bytecode/vm.rs` today; `--bytecode` only reproduces
-  this bug faster by raising allocation/scheduling pressure per
-  wall-clock iteration, it does not host the defect). Re-run
-  `cargo test --release` (covers `src/interpreter/bytecode/tests.rs`) to
-  confirm the bail-to-tree-walker boundary for `await`/`yield`-bearing
-  bodies is unaffected regardless.
-- **Baseline:** do not update `test262-pass.txt`; compare against
-  `origin/main:test262-pass.txt` as usual. A fix in this area is expected to
-  be neutral-to-positive on the baseline (it corrects a silent-corruption
-  bug, not a spec-interpretation change), but any newly-passing test should
-  still be cross-checked against spec/test262 rather than assumed.
+- **Only ever retains more, never less.** Adding roots is correctness-safe; the
+  risks are memory/time. Rooted values are bounded by *live queued requests*, but
+  the map itself is never pruned (see slice 3): without the `free_gc_object`
+  cleanup, `for_each_root` is O(number of async generators ever enqueued on) per
+  collection and abandoned-generator requests are immortal. That is why slice 3 is
+  recommended in the same PR; canaries are the long Node-compat harnesses
+  (`big.js`, `uglify-js`, `highlight.js`) and the JetStream async-fs driver, where
+  a regression shows as slowdown/timeout rather than a wrong answer.
+- **Cleanup-on-free hazard (slice 3):** dropping a queue is only sound if the
+  generator is truly unreachable — it is, because `free_gc_object` runs only on
+  unmarked objects, and the request roots do not mark the generator. Verify the
+  generator being *stepped* (`this` in `async_gen_enqueue`, a Rust local) survives
+  the same collection; slice 1 already exercises that (the body calls
+  `$262.gc()` mid-step) and passes with the scratch fix.
+- **Not addressed, same family (follow-ups, do not bundle):** the native
+  closures `asyncGenYieldFulfill`/`asyncGenYieldReject` and the microtask closures
+  in `generator_runtime.rs` capture `gen_this`, `resolve_fn_c`, `reject_fn_c` as
+  Rust captures invisible to the tracer (`gc.rs`'s `pin_native_root` doc describes
+  exactly this hazard). The queue roots make `resolve_fn`/`reject_fn` safe *while
+  the request is queued*, which is the whole window today, but `gen_this` is only
+  as safe as the caller's reference. Audit them in a separate issue.
+- **Baseline:** expected neutral (no spec-behavior change). A newly passing
+  test262 test would be surprising; cross-check against spec before accepting it.
+- **Bytecode fast path:** untouched (`bytecode/vm.rs` has no suspend/resume);
+  `--bytecode` merely surfaces the bug sooner.
 
 ## 7. Out of scope
 
-- **The dropped-unhandled-rejection / exit-0/no-stderr usability gap** named
-  in the issue body is explicitly a separate concern (the
-  `HostPromiseRejectionTracker` host hook, ECMA-262 Promise Abstract
-  Operations) and is not part of this fix. Do not implement a
-  rejection-reporting/exit-code change under this issue.
-- **Hardening `iterator_complete`/`iterator_value` to reject a
-  non-`IteratorResult` object** (making a future instance of this class of
-  bug throw immediately instead of silently propagating `undefined`) is a
-  reasonable defensive follow-up but is not this issue's fix — it treats the
-  symptom (silent propagation), not the cause (a scheduler-scoping bug), and
-  bundling it risks masking whether the real fix actually resolved the
-  cross-generator delivery bug. Track separately if implementation still
-  wants it after slice 2 lands.
-- **Any broader redesign of the `AsyncGeneratorRequest` queue/drain
-  protocol** beyond re-scoping the one flag slice 1/2 identifies — do not
-  preemptively rewrite `async_gen_process_queue`'s recursion or the queue's
-  data structures in this PR.
-- **`eval.rs`'s `ForOfHead`/`async_fn_suspend_at_await`** — investigated and
-  ruled out in this plan's diagnosis (§1); do not refactor this code under
-  #679 absent new evidence.
-- **Updating the issue's own repro script** to the two configurations this
-  plan identified as still-reproducing (see §1) belongs in a `gh issue
-  comment`, not in this PR's diff.
-- **`run-jetstream.py`/JetStream harness changes** — #681 already closed the
-  runner-side gap for this benchmark family; no further `scripts/` changes
-  are anticipated here.
+- The dropped-unhandled-rejection / exit-0-with-no-stderr behavior named in the
+  issue: a host decision (HostPromiseRejectionTracker), separate from this bug.
+  #681 already closed the runner-side "no JSON output" misclassification.
+- Hardening `iterator_complete`/`iterator_value` to reject a non-`IteratorResult`
+  (would have turned this silent corruption into an immediate `TypeError`, but
+  treats the symptom).
+- `async_gen_yield_pending` (single `bool` on `JobScheduler`) — ruled out here; do
+  not re-scope it under #679.
+- `eval.rs` `ForOfHead` / `async_fn_suspend_at_await`, and any redesign of the
+  AsyncGenerator queue/drain protocol.
+- The `gen_this`/native-closure capture audit noted in §6.
+- Updating the issue's stale repro command belongs in an issue comment, not the
+  PR diff.
+- Any `scripts/` or JetStream-harness change.
