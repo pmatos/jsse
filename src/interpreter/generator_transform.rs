@@ -1594,13 +1594,54 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Delete(inner) => {
-            let tv = ctx.new_temp_var("del");
-            let b = SentValueBindingKind::Variable(tv.clone());
-            transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Delete(ExprBox::new(Expression::Identifier(tv)));
-            emit_expression_with_binding(&combined, &binding, ctx);
-        }
+        Expression::Delete(inner) => match &**inner {
+            Expression::Member(..) => {
+                let target = lower_reference_operand(inner, ctx);
+                let combined = Expression::Delete(ExprBox::new(target));
+                emit_expression_with_binding(&combined, &binding, ctx);
+            }
+            Expression::OptionalChain(base, chain) => {
+                let base_var = ctx.new_temp_var("oc_bv");
+                bind_expression_to_temp(base, &base_var, ctx);
+                let result_var = ctx.new_temp_var("del_res");
+                let after_delete = ctx.new_state();
+                let eval_state = ctx.new_state();
+                let skip_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+                    condition: nullish_test(&base_var),
+                    true_state: skip_state,
+                    false_state: eval_state,
+                });
+                ctx.current_state_id = skip_state;
+                emit_expression_with_binding(
+                    &Expression::Literal(Literal::Boolean(true)),
+                    &Some(SentValueBindingKind::Variable(result_var.clone())),
+                    ctx,
+                );
+                ctx.finalize_current_state(StateTerminator::Goto(after_delete));
+                ctx.current_state_id = eval_state;
+                let regular = Expression::Delete(ExprBox::new(oc_chain_to_regular_expr(
+                    chain, &base_var,
+                )));
+                transform_yielding_expression(
+                    &regular,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(result_var.clone())),
+                );
+                ctx.finalize_current_state(StateTerminator::Goto(after_delete));
+                ctx.current_state_id = after_delete;
+                emit_expression_with_binding(&Expression::Identifier(result_var), &binding, ctx);
+            }
+            other => {
+                transform_yielding_expression(other, ctx, usize::MAX, None);
+                emit_expression_with_binding(
+                    &Expression::Literal(Literal::Boolean(true)),
+                    &binding,
+                    ctx,
+                );
+            }
+        },
 
         Expression::Update(op, prefix, inner) => {
             let tv = ctx.new_temp_var("upd");
@@ -1853,6 +1894,67 @@ fn emit_expression_with_binding(
             ctx.emit_statement(Statement::Expression(expr.clone()));
         }
     }
+}
+
+/// Evaluate `expr` into the temp `var`, suspending first if it contains a
+/// suspension point.
+fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformContext) {
+    let binding = Some(SentValueBindingKind::Variable(var.to_string()));
+    if expr_has_suspension(expr, ctx.is_async) {
+        transform_yielding_expression(expr, ctx, usize::MAX, binding);
+    } else {
+        emit_expression_with_binding(expr, &binding, ctx);
+    }
+}
+
+/// `var === null || var === void 0` — true exactly when `var` is undefined or
+/// null (unlike `== null`, false for `document.all`-style objects).
+fn nullish_test(var: &str) -> Expression {
+    let is = |rhs: Expression| {
+        Expression::Binary(
+            BinaryOp::StrictEq,
+            ExprBox::new(Expression::Identifier(var.to_string())),
+            ExprBox::new(rhs),
+        )
+    };
+    Expression::Logical(
+        LogicalOp::Or,
+        ExprBox::new(is(Expression::Literal(Literal::Null))),
+        ExprBox::new(is(Expression::Void(ExprBox::new(Expression::Literal(
+            Literal::Number(0.0),
+        ))))),
+    )
+}
+
+/// Lower the suspension points out of a Reference operand (the target of
+/// `delete`, `++`/`--` or assignment) while keeping it a Reference: the base
+/// value and then the raw computed key are captured in temps, in source order,
+/// and the returned member expression is suspension-free.
+fn lower_reference_operand(expr: &Expression, ctx: &mut TransformContext) -> Expression {
+    let Expression::Member(obj, prop, _) = expr else {
+        return expr.clone();
+    };
+    let key_suspends =
+        matches!(prop, MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async));
+    if !key_suspends && !expr_has_suspension(obj, ctx.is_async) {
+        return expr.clone();
+    }
+    let new_obj = if matches!(&**obj, Expression::Super) {
+        obj.clone().into_expression()
+    } else {
+        let temp = ctx.new_temp_var("ref_obj");
+        bind_expression_to_temp(obj, &temp, ctx);
+        Expression::Identifier(temp)
+    };
+    let new_prop = match prop {
+        MemberProperty::Computed(e) if key_suspends => {
+            let temp = ctx.new_temp_var("ref_key");
+            bind_expression_to_temp(e, &temp, ctx);
+            MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
+        }
+        other => other.clone(),
+    };
+    Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
 }
 
 /// Extract suspension points from assignment LHS expressions (e.g. `c[await 9]`).
