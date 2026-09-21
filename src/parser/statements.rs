@@ -594,8 +594,10 @@ impl<'a> Parser<'a> {
     fn parse_for_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // for
         let is_await = if self.current == Token::Keyword(Keyword::Await) {
-            if !self.in_async && !self.is_module {
-                return Err(self.error("for await...of is only valid in async functions"));
+            if !self.in_async && !(self.is_module && self.in_function == 0) {
+                return Err(self.error(
+                    "for await...of is only valid in async functions or at module top level",
+                ));
             }
             self.advance()?;
             true
@@ -792,7 +794,7 @@ impl<'a> Parser<'a> {
                     }),
                     right,
                     body,
-                    is_await: true,
+                    is_await,
                 }));
             }
             // for (await using x = init; test; update)

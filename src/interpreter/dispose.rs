@@ -190,6 +190,9 @@ pub(crate) enum DisposeThen {
     /// exception, or a disposer's own error chained onto it), which becomes
     /// `pending_exception` and re-enters the driver's throw routing.
     ScopeCrossThrow,
+    /// A `for-of` iteration's environment finished disposing; the `ForOfHead`
+    /// state re-enters and finds `iteration_env` already cleared.
+    ForOfIteration,
 }
 
 /// A function-level DisposeResources parked at one of its `Await`s.

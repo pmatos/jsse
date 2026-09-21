@@ -4271,7 +4271,9 @@ impl Interpreter {
             }
             Statement::ForIn(fi) => Self::expr_has_await(&fi.right) || Self::stmt_has_tla(&fi.body),
             Statement::ForOf(fo) => {
-                fo.is_await || Self::expr_has_await(&fo.right) || Self::stmt_has_tla(&fo.body)
+                fo.awaits_at_head()
+                    || Self::expr_has_await(&fo.right)
+                    || Self::stmt_has_tla(&fo.body)
             }
             Statement::While(w) => Self::expr_has_await(&w.test) || Self::stmt_has_tla(&w.body),
             Statement::DoWhile(dw) => {
