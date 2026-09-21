@@ -1468,12 +1468,6 @@ pub(crate) enum IteratorState {
         pending_exception: Option<JsValue>,
         pending_return: Option<JsValue>,
     },
-    AsyncGenerator {
-        body: Body,
-        func_env: EnvRef,
-        is_strict: bool,
-        execution_state: GeneratorExecutionState,
-    },
     StateMachineAsyncGenerator {
         state_machine: Rc<GeneratorStateMachine>,
         func_env: EnvRef,
