@@ -220,13 +220,21 @@ impl JobScheduler {
     /// Every value the scheduler keeps alive: roots held by queued microtasks,
     /// pending async-generator requests, and armed timers. Centralised here so
     /// a queue added later cannot be forgotten by the collector.
+    ///
+    /// A generator with a pending request is rooted too: its await/yield
+    /// continuations capture it only inside native closures the tracer cannot
+    /// walk, so nothing else keeps it alive while the request is outstanding.
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
         for (roots, _) in &self.microtask_queue {
             for value in roots {
                 visit(value);
             }
         }
-        for queue in self.async_gen_queues.values() {
+        for (gen_id, queue) in &self.async_gen_queues {
+            if queue.is_empty() {
+                continue;
+            }
+            visit(&JsValue::object(*gen_id));
             for request in queue {
                 visit(&request.value);
                 visit(&request.promise);
@@ -458,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn for_each_root_visits_every_async_gen_request_field() {
+    fn for_each_root_visits_the_generator_and_every_request_field() {
         let mut sched = JobScheduler::default();
         assert!(collect_roots(&sched).is_empty());
 
@@ -477,7 +485,7 @@ mod tests {
             .filter_map(|v| v.as_object_id())
             .collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec![10, 11, 12, 13]);
+        assert_eq!(ids, vec![7, 10, 11, 12, 13]);
     }
 
     #[test]
@@ -486,7 +494,11 @@ mod tests {
         let mut request = next_request(1.0);
         request.promise = JsValue::object(5);
         sched.async_gen_queue_or_default(3).push_back(request);
-        assert_eq!(collect_roots(&sched).len(), 4);
+        assert!(
+            collect_roots(&sched)
+                .iter()
+                .any(|v| v.as_object_id() == Some(5))
+        );
 
         sched.remove_async_gen_queue(3);
 

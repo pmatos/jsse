@@ -438,7 +438,8 @@ impl Interpreter {
         roots.extend_from_slice(&self.gc_temp_roots);
         // Values held by active bytecode operand stacks
         roots.extend_from_slice(&self.gc_bytecode_roots);
-        // Queued microtasks and armed timers both keep their values alive.
+        // Queued microtasks, pending async-generator requests and armed timers
+        // all keep their values alive.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
         for val in &self.pending_iter_close {
@@ -1598,17 +1599,17 @@ mod tests {
     }
 
     #[test]
-    fn queued_async_generator_request_keeps_its_promise_alive() {
+    fn pending_async_generator_request_keeps_generator_and_promise_alive() {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let generator = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(generator);
         let promise = interp.alloc_object(JsObjectData::new());
         enqueue_request(&mut interp, generator, promise);
 
         interp.gc.request();
         interp.gc_safepoint();
 
+        assert!(interp.objects.get_cell(generator).is_some());
         assert!(interp.objects.get_cell(promise).is_some());
     }
 
@@ -1619,16 +1620,17 @@ mod tests {
         let generator = interp.alloc_object(JsObjectData::new());
         let promise = interp.alloc_object(JsObjectData::new());
         enqueue_request(&mut interp, generator, promise);
+        interp
+            .scheduler
+            .async_gen_queue_mut(generator)
+            .expect("request was just enqueued")
+            .pop_front();
 
         interp.gc.request();
         interp.gc_safepoint();
 
         assert!(interp.objects.get_cell(generator).is_none());
         assert!(interp.scheduler.async_gen_queue(generator).is_none());
-
-        interp.gc.request();
-        interp.gc_safepoint();
-
         assert!(interp.objects.get_cell(promise).is_none());
     }
 
