@@ -3344,7 +3344,8 @@ impl Interpreter {
                                 self.async_generator_await_return(value, promise_id)
                             }
                             Completion::Throw(error) => {
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                                let _ =
+                                    self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
                                 Completion::Normal(promise)
                             }
                             other => other,
@@ -5694,7 +5695,12 @@ impl Interpreter {
             let then = GeneratorDisposeThen::Settle;
             let stack = func_env.and_then(|env| self.take_generator_dispose_stack(gen_id, &env));
             let Some(stack) = stack else {
-                return self.async_gen_finish_disposal(gen_id, then, completion, disposal.request());
+                return self.async_gen_finish_disposal(
+                    gen_id,
+                    then,
+                    completion,
+                    disposal.request(),
+                );
             };
             disposal.state = GeneratorDisposeState::Disposing {
                 cursor: DisposeCursor::new(stack, completion),

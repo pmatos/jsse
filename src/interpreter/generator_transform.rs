@@ -619,10 +619,7 @@ fn stmt_contains_for_of_head(stmt: &Statement, head: fn(&ForOfStatement) -> bool
                     .is_some_and(|h| h.body.iter().any(contains))
                 || t.finalizer.as_ref().is_some_and(|f| f.iter().any(contains))
         }
-        Statement::Switch(s) => s
-            .cases
-            .iter()
-            .any(|c| c.consequent.iter().any(contains)),
+        Statement::Switch(s) => s.cases.iter().any(|c| c.consequent.iter().any(contains)),
         Statement::Labeled(_, inner) => contains(inner),
         Statement::With(_, s) => contains(s),
         _ => false,
