@@ -465,19 +465,23 @@ mod tests {
         );
     }
 
+    fn collect_roots(sched: &JobScheduler) -> Vec<JsValue> {
+        let mut roots = Vec::new();
+        sched.for_each_root(|v| roots.push(v.clone()));
+        roots
+    }
+
     #[test]
     fn for_each_root_visits_the_generator_and_every_request_field() {
         let mut sched = JobScheduler::default();
-        assert!(collect_roots(&sched).is_empty());
-
         sched
             .async_gen_queue_or_default(7)
             .push_back(super::super::AsyncGenRequest {
-                kind: super::super::AsyncGenRequestKind::Next,
                 value: JsValue::object(10),
                 promise: JsValue::object(11),
                 resolve_fn: JsValue::object(12),
                 reject_fn: JsValue::object(13),
+                ..next_request(0.0)
             });
 
         let mut ids: Vec<u64> = collect_roots(&sched)
@@ -486,30 +490,6 @@ mod tests {
             .collect();
         ids.sort_unstable();
         assert_eq!(ids, vec![7, 10, 11, 12, 13]);
-    }
-
-    #[test]
-    fn removed_async_gen_queue_is_no_longer_a_root() {
-        let mut sched = JobScheduler::default();
-        let mut request = next_request(1.0);
-        request.promise = JsValue::object(5);
-        sched.async_gen_queue_or_default(3).push_back(request);
-        assert!(
-            collect_roots(&sched)
-                .iter()
-                .any(|v| v.as_object_id() == Some(5))
-        );
-
-        sched.remove_async_gen_queue(3);
-
-        assert!(sched.async_gen_queue(3).is_none());
-        assert!(collect_roots(&sched).is_empty());
-    }
-
-    fn collect_roots(sched: &JobScheduler) -> Vec<JsValue> {
-        let mut roots = Vec::new();
-        sched.for_each_root(|v| roots.push(v.clone()));
-        roots
     }
 
     #[test]

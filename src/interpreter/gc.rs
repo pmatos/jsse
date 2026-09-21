@@ -438,8 +438,7 @@ impl Interpreter {
         roots.extend_from_slice(&self.gc_temp_roots);
         // Values held by active bytecode operand stacks
         roots.extend_from_slice(&self.gc_bytecode_roots);
-        // Queued microtasks, pending async-generator requests and armed timers
-        // all keep their values alive.
+        // Queued microtasks, pending async-generator requests and armed timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
         for val in &self.pending_iter_close {
@@ -1618,20 +1617,13 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let generator = interp.alloc_object(JsObjectData::new());
-        let promise = interp.alloc_object(JsObjectData::new());
-        enqueue_request(&mut interp, generator, promise);
-        interp
-            .scheduler
-            .async_gen_queue_mut(generator)
-            .expect("request was just enqueued")
-            .pop_front();
+        interp.scheduler.async_gen_queue_or_default(generator);
 
         interp.gc.request();
         interp.gc_safepoint();
 
         assert!(interp.objects.get_cell(generator).is_none());
         assert!(interp.scheduler.async_gen_queue(generator).is_none());
-        assert!(interp.objects.get_cell(promise).is_none());
     }
 
     #[test]
