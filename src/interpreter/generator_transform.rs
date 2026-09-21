@@ -1213,74 +1213,55 @@ fn transform_yielding_expression(
         }
 
         Expression::Logical(op, left, right) => {
-            if expr_has_suspension(left, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("logical");
-                let left_binding = SentValueBindingKind::Variable(temp_var.clone());
-                transform_yielding_expression(left, ctx, usize::MAX, Some(left_binding));
+            let left_var = ctx.new_temp_var("logical");
+            bind_expression_to_temp(left, &left_var, ctx);
 
-                if expr_has_suspension(right, ctx.is_async) {
-                    let after_logical = ctx.new_state();
-                    let eval_right_state = ctx.new_state();
-
-                    let condition = match op {
-                        LogicalOp::And => Expression::Identifier(temp_var.clone()),
-                        LogicalOp::Or => Expression::Unary(
-                            UnaryOp::Not,
-                            ExprBox::new(Expression::Identifier(temp_var.clone())),
-                        ),
-                        LogicalOp::NullishCoalescing => Expression::Binary(
-                            BinaryOp::StrictNotEq,
-                            ExprBox::new(Expression::Identifier(temp_var.clone())),
-                            ExprBox::new(Expression::Literal(Literal::Null)),
-                        ),
-                    };
-
-                    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                        condition,
-                        true_state: eval_right_state,
-                        false_state: after_logical,
-                    });
-
-                    ctx.current_state_id = eval_right_state;
-                    transform_yielding_expression(right, ctx, after_logical, binding);
-                    ctx.finalize_current_state(StateTerminator::Goto(after_logical));
-
-                    ctx.current_state_id = after_logical;
-                } else {
-                    let combined = Expression::Logical(
-                        *op,
-                        ExprBox::new(Expression::Identifier(temp_var)),
-                        right.clone(),
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-            } else if expr_has_suspension(right, ctx.is_async) {
+            if expr_has_suspension(right, ctx.is_async) {
+                let result_var = ctx.new_temp_var("logical_res");
                 let after_logical = ctx.new_state();
                 let eval_right_state = ctx.new_state();
+                let short_circuit_state = ctx.new_state();
 
                 let condition = match op {
-                    LogicalOp::And => left.clone().into_expression(),
-                    LogicalOp::Or => Expression::Unary(UnaryOp::Not, left.clone()),
-                    LogicalOp::NullishCoalescing => Expression::Binary(
-                        BinaryOp::StrictNotEq,
-                        left.clone(),
-                        ExprBox::new(Expression::Literal(Literal::Null)),
+                    LogicalOp::And => Expression::Identifier(left_var.clone()),
+                    LogicalOp::Or => Expression::Unary(
+                        UnaryOp::Not,
+                        ExprBox::new(Expression::Identifier(left_var.clone())),
                     ),
+                    LogicalOp::NullishCoalescing => nullish_test(&left_var),
                 };
-
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
                     condition,
                     true_state: eval_right_state,
-                    false_state: after_logical,
+                    false_state: short_circuit_state,
                 });
 
-                emit_expression_with_binding(left, &binding, ctx);
+                ctx.current_state_id = short_circuit_state;
+                emit_expression_with_binding(
+                    &Expression::Identifier(left_var),
+                    &Some(SentValueBindingKind::Variable(result_var.clone())),
+                    ctx,
+                );
+                ctx.finalize_current_state(StateTerminator::Goto(after_logical));
 
                 ctx.current_state_id = eval_right_state;
-                transform_yielding_expression(right, ctx, after_logical, binding);
+                transform_yielding_expression(
+                    right,
+                    ctx,
+                    after_logical,
+                    Some(SentValueBindingKind::Variable(result_var.clone())),
+                );
                 ctx.finalize_current_state(StateTerminator::Goto(after_logical));
 
                 ctx.current_state_id = after_logical;
+                emit_expression_with_binding(&Expression::Identifier(result_var), &binding, ctx);
+            } else {
+                let combined = Expression::Logical(
+                    *op,
+                    ExprBox::new(Expression::Identifier(left_var)),
+                    right.clone(),
+                );
+                emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
 
