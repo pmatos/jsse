@@ -1595,9 +1595,8 @@ fn transform_yielding_expression(
                 );
                 ctx.finalize_current_state(StateTerminator::Goto(after_delete));
                 ctx.current_state_id = eval_state;
-                let regular = Expression::Delete(ExprBox::new(oc_chain_to_regular_expr(
-                    chain, &base_var,
-                )));
+                let regular =
+                    Expression::Delete(ExprBox::new(oc_chain_to_regular_expr(chain, &base_var)));
                 transform_yielding_expression(
                     &regular,
                     ctx,
