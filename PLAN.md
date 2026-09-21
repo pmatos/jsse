@@ -1,32 +1,53 @@
 # Plan: #614 — Expression drop glue still recurses per AST nesting level
 
-## Status at re-plan (2026-09-10)
+## Status at re-plan #2 (2026-09-21)
 
-This planning stage re-ran on a workspace already containing a completed
-implementation from an earlier attempt. Do not re-plan or re-implement from
-scratch — carry this forward instead:
+The implementation already exists on this branch; this stage re-ran a second
+time and re-verified the state instead of re-planning. Carry this forward:
 
-- **Implementation already landed** at commit `90e7062` ("fix(ast): make
-  Expression's boxed links drop iteratively via ExprBox", `Closes #614`),
-  on top of this plan commit (`045774b`). It matches Option 1 below exactly:
-  `ExprBox` wrapper, the ADR at `docs/adr/2026-09-10-0836-expr-box-iterative-drop.md`,
-  and the file list in section 3. `cargo check -j4` on this commit is clean.
-- **Do not redo the fix.** The implementation stage should detect the
-  existing fix commit via `git log`/`git status` and proceed directly to
-  verification and PR creation, not re-implement `ExprBox`.
-- **Quality gates not yet re-run this session**: `cargo test` /
-  `cargo test --release`, `./scripts/lint.sh`, and the full `test262`
-  baseline check (section 4 slice 7 / section 6) still need to be run fresh
-  before pushing — they were presumably run by the attempt that produced
-  `90e7062`, but that isn't verified from this workspace state alone.
-- **Remaining steps for the implementation stage**: `git rm PLAN.md` and
-  commit, push the branch (never pushed to `origin` — confirmed via
-  `git branch -r` and no upstream configured), and `gh pr create --base main
-  --head <branch> --title "fix(ast): ..." --body ...` including `Closes #614`.
-- **`EVIDENCE.md`** (untracked in this workspace) is a stale artifact from a
-  later `simplify`-stage run that found no PR to review (since the branch was
-  never pushed) and correctly exited without committing. It documents the
-  same push/PR gap noted above. Leave it untracked; do not commit it here.
+- **Fix landed** at `90e7062a` ("fix(ast): make Expression's boxed links drop
+  iteratively via ExprBox", `Closes #614`): `ExprBox` newtype with worklist
+  `Drop` in `src/ast.rs`, exhaustive `push_children`, `into_expression()`,
+  `expr_to_pattern` and generator-transform rename fallout, `leak_deep`
+  removed, drop regressions `deep_{add,member,call}_chain_drops_without_native_recursion`
+  added, ADR at `docs/adr/2026-09-10-0836-expr-box-iterative-drop.md`.
+  **Do not re-implement.**
+- **Branch never pushed, no PR exists** (no upstream configured; `gh pr list`
+  shows none for this head). `EVIDENCE.md` from the earlier run is gone.
+- **Plan/reality discrepancies the implementation stage must reconcile
+  (docs only, no behavior):**
+  - Section 3 below says `ClassDecl`/`ClassExpr::super_class` and
+    `ExportDeclaration::Default` were to be converted to `ExprBox`. In the
+    landed code they are **still `Box<Expression>`** (`src/ast.rs:226,812,820`;
+    `src/interpreter/eval/literals.rs:231,282`). This is safe (all bounded by
+    `MAX_PARSE_DEPTH`, none reachable from the unbounded continuation loops),
+    but the commit body and the ADR paragraph ("For uniformity ... were
+    converted too") claim otherwise. Fix by **either** narrowing the ADR
+    sentence and the PR body to the sites actually converted
+    (`MemberProperty::Computed`, `PropertyKey::Computed`,
+    `Pattern::Assign`/`MemberExpression`) **or** converting those three
+    remaining sites. Prefer the docs fix (smaller, avoids touching
+    `literals.rs`). Because the commit message is squashed away, the PR
+    title/body are what count — write them from the code, not from the commit.
+  - The ADR is named per the current date-based scheme
+    (`docs/adr/README.md`); the `0005-...` name in section 3 is superseded.
+- **Remaining steps for the implementation stage:**
+  1. `git rm PLAN.md`, commit.
+  2. Run the gates fresh, as separate commands (`cargo test` debug,
+     `cargo test --release`, `./scripts/lint.sh`,
+     `uv run python scripts/run-test262.py` vs `origin/main:test262-pass.txt`),
+     cap builds with `-j4`, scratch under `$TMPDIR`. Not verified from this
+     workspace state.
+  3. Reconcile the ADR/commit wording per above (amend or follow-up commit;
+     squash-merge makes either fine).
+  4. Push and `gh pr create --base main --head <branch> --title
+     "fix(ast): make Expression's boxed links drop iteratively via ExprBox"
+     --body ...` including `Closes #614`; note the release-ceiling
+     motivation (~2–2.5M abort on release before/after #613) and the
+     `Clone` limitation below.
+- **Known residual to state in the PR:** `ExprBox::clone` still recurses per
+  level (`Box::clone`), so cloning a multi-million-deep chain remains
+  unsafe; the issue scopes only `Drop`. Follow-up candidate, not this PR.
 
 ## 1. Problem restated
 
@@ -122,7 +143,7 @@ Engine, under `src/`:
   mechanical rename wherever they build or destructure a boxed `Expression`
   (~90 more `Box::new(` sites combined; the compiler enumerates all of them once
   the field types change, so this is a fix-until-it-builds pass, not a hunt).
-- **`docs/adr/0005-expr-box-iterative-drop.md`** (new) — records the wrapper-type
+- **`docs/adr/2026-09-10-0836-expr-box-iterative-drop.md`** (new; date-based name per `docs/adr/README.md`) — records the wrapper-type
   decision, the invariant it protects (`Expression` must never itself implement
   `Drop`), and explicitly defers the arena/`ExprId` option (#614's Option 2) as
   the durable answer if the AST keeps accumulating mandatory passes. Precedent:
