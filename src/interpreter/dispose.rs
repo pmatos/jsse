@@ -201,6 +201,74 @@ pub(crate) struct PendingDispose {
     pub(crate) then: DisposeThen,
 }
 
+/// What an async generator does with the request at its front once the
+/// disposal of its function-level resources finishes.
+#[derive(Clone, Copy)]
+pub(crate) enum GeneratorDisposeThen {
+    /// Settle the request with the disposal's completion: reject with the
+    /// (possibly chained) error on a throw, otherwise resolve
+    /// `{ value, done: true }` (`undefined` when the body ran to its end).
+    Settle,
+    /// A `.return(v)` unwinding at a yield: `v` is awaited after disposal, as
+    /// for a generator without resources.
+    ReturnAwait,
+    /// A block scope left by a state transition finished disposing: the
+    /// driver re-enters at the state it was about to run (a disposer's throw
+    /// becomes an exception raised there).
+    Reenter,
+}
+
+pub(crate) enum GeneratorDisposeState {
+    /// Suspended at the `Await` of a `return` operand; the resources are still
+    /// on the generator's function environment.
+    ReturnOperand,
+    Disposing {
+        cursor: DisposeCursor,
+        then: GeneratorDisposeThen,
+    },
+}
+
+/// An async generator request parked at one of the `Await`s of its body's
+/// DisposeResources. The request stays at the front of the generator's queue,
+/// so a later request cannot start the generator early.
+pub(crate) struct GeneratorDisposal {
+    pub(crate) state: GeneratorDisposeState,
+    pub(crate) promise: JsValue,
+    pub(crate) resolve: JsValue,
+    pub(crate) reject: JsValue,
+}
+
+impl GeneratorDisposal {
+    pub(crate) fn new(
+        state: GeneratorDisposeState,
+        (promise, resolve, reject): (&JsValue, &JsValue, &JsValue),
+    ) -> Self {
+        Self {
+            state,
+            promise: promise.clone(),
+            resolve: resolve.clone(),
+            reject: reject.clone(),
+        }
+    }
+
+    pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
+        if let GeneratorDisposeState::Disposing { cursor, .. } = &self.state {
+            cursor.for_each_value(&mut f);
+        }
+        f(&self.promise);
+        f(&self.resolve);
+        f(&self.reject);
+    }
+}
+
+/// Outcome of starting a disposal that may suspend the async generator.
+pub(crate) enum GeneratorDisposeStart {
+    /// Disposal finished without an `Await` (or had nothing to dispose).
+    Done(Completion),
+    /// The request is parked; the driver must return without settling it.
+    Parked,
+}
+
 /// A `disposeAsync()` call suspended at one of DisposeResources' `Await`s.
 pub(crate) struct AsyncDisposal {
     pub(crate) cursor: DisposeCursor,
@@ -246,17 +314,38 @@ impl Interpreter {
     /// Drive `cursor` to completion, draining the microtask queue inline at
     /// each `Await`. For callers that cannot suspend the running execution
     /// context.
-    pub(crate) fn run_dispose_cursor_blocking(&mut self, mut cursor: DisposeCursor) -> Completion {
+    pub(crate) fn run_dispose_cursor_blocking(&mut self, cursor: DisposeCursor) -> Completion {
+        self.run_dispose_cursor_holding(cursor, &[])
+    }
+
+    /// [`Self::run_dispose_cursor_blocking`] for a caller whose in-flight throw
+    /// or return value (`held`) lives only in a Rust local. The jobs the drain
+    /// runs may collect, so `held` and the cursor (between two `step`s) are
+    /// rooted across it.
+    pub(crate) fn run_dispose_cursor_holding(
+        &mut self,
+        mut cursor: DisposeCursor,
+        held: &[Option<&JsValue>],
+    ) -> Completion {
         let mut awaited = None;
         loop {
             match cursor.step(self, awaited.take()) {
                 DisposeStep::Done(completion) => return completion,
-                DisposeStep::Await(value) => match self.await_value(&value) {
-                    Completion::Normal(v) => awaited = Some(Ok(v)),
-                    Completion::Throw(e) => awaited = Some(Err(e)),
-                    // A job run by the drain called `__host_exit` (issue #242).
-                    other => return other,
-                },
+                DisposeStep::Await(value) => {
+                    let outcome = self.with_gc_root_scope(|interp| {
+                        cursor.for_each_value(|v| interp.gc_root_value(v));
+                        for v in held.iter().flatten() {
+                            interp.gc_root_value(v);
+                        }
+                        interp.await_value(&value)
+                    });
+                    match outcome {
+                        Completion::Normal(v) => awaited = Some(Ok(v)),
+                        Completion::Throw(e) => awaited = Some(Err(e)),
+                        // A job run by the drain called `__host_exit` (issue #242).
+                        other => return other,
+                    }
+                }
             }
         }
     }
@@ -264,6 +353,19 @@ impl Interpreter {
     /// Spec `Await(value)` for native code: `resume` runs in a later job with
     /// the fulfilment value or rejection reason.
     pub(crate) fn await_then(
+        &mut self,
+        value: &JsValue,
+        resume: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
+    ) {
+        self.with_gc_root_scope(|interp| {
+            // `promise_resolve_value` reads `value.constructor`, which can run
+            // user code and collect.
+            interp.gc_root_value(value);
+            interp.schedule_await_resume(value, resume);
+        });
+    }
+
+    fn schedule_await_resume(
         &mut self,
         value: &JsValue,
         resume: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
@@ -340,13 +442,8 @@ impl Interpreter {
         match step {
             DisposeStep::Await(value) => {
                 self.scheduler.insert_async_disposal(id, disposal);
-                self.with_gc_root_scope(|interp| {
-                    // `await_then` reads `value.constructor`, which can run user
-                    // code and collect.
-                    interp.gc_root_value(&value);
-                    interp.await_then(&value, move |interp, outcome| {
-                        interp.async_disposal_step(id, Some(outcome))
-                    });
+                self.await_then(&value, move |interp, outcome| {
+                    interp.async_disposal_step(id, Some(outcome))
                 });
                 Completion::Normal(JsValue::UNDEFINED)
             }

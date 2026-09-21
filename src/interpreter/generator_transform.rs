@@ -2,7 +2,6 @@ use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -22,9 +21,6 @@ pub(crate) struct GeneratorState {
     pub id: usize,
     pub body: Body,
     pub terminator: StateTerminator,
-    /// Break/continue targets for an `await using` block left intact as the
-    /// last statement of this state; see [`BlockExits`].
-    pub block_exits: Option<Rc<BlockExits>>,
     /// Jumps that a yield-free statement in `body` can surface as a raw
     /// `break`/`continue` completion, with the terminator that stands in for
     /// the state's own when one does.
@@ -62,16 +58,6 @@ pub(crate) enum ScopeAction {
     /// binding is `const` (spec still runs this for `const` heads; see
     /// `exec_for`, which this generalizes).
     CopyForward(Vec<(String, bool)>),
-}
-
-/// Where a `break` or `continue` that escapes an isolated `await using` block
-/// resumes. The block runs verbatim, so its jumps surface as raw completions
-/// once its DisposeResources finishes; the async-function driver resolves them
-/// through these tables, keyed by label (`None` for the unlabeled form).
-#[derive(Debug)]
-pub(crate) struct BlockExits {
-    pub breaks: HashMap<Option<String>, LoopControlTarget>,
-    pub continues: HashMap<Option<String>, LoopControlTarget>,
 }
 
 #[derive(Debug, Clone)]
@@ -388,7 +374,6 @@ impl TransformContext {
             id,
             body: Body::new(Vec::new()),
             terminator: StateTerminator::Completed,
-            block_exits: None,
             inline_jumps: Vec::new(),
             scope_depth: 0,
             scope_action: None,
@@ -597,7 +582,6 @@ fn create_simple_machine(
             id: 0,
             body,
             terminator: StateTerminator::Completed,
-            block_exits: None,
             inline_jumps: Vec::new(),
             scope_depth: 0,
             scope_action: None,
@@ -947,25 +931,6 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     after_state
                 };
                 transform_scope_block(stmts, ctx, resume_state);
-            } else if ctx.is_async && block_has_await_using(stmts) {
-                // The same shape in an async generator: `EnterScope`/
-                // `ExitScope` are emitted only for plain async functions
-                // (`transform_async_function`, gated on `detect_for_await`),
-                // so keep the block intact here, tree-walked with its own
-                // block_env and dispose_stack. It stays the last statement of
-                // its state: the executor parks the block's DisposeResources
-                // and suspends at its Awaits, then continues at the state
-                // boundary created after the block.
-                let resume_state = if after_state == usize::MAX {
-                    ctx.new_state()
-                } else {
-                    after_state
-                };
-                ctx.emit_statement(stmt.clone());
-                ctx.finalize_current_state(StateTerminator::Goto(resume_state));
-                ctx.current_state_id = resume_state;
-                // If there were remaining statements after the block in the parent,
-                // they'll be emitted into resume_state by the caller.
             } else {
                 // §14.2.2 Block Evaluation: a fresh declarative environment per
                 // entry, discarded on the way out. Force a state boundary

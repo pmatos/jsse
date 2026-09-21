@@ -455,6 +455,10 @@ impl Interpreter {
         for scope_stack in self.generator_scope_stacks.values() {
             Self::collect_scope_stack_roots(scope_stack, &mut roots, &mut seen_envs);
         }
+        for (generator_id, disposal) in &self.generator_pending_dispose {
+            roots.push(*generator_id);
+            disposal.for_each_value(|v| Self::collect_value_roots(v, &mut roots));
+        }
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
@@ -748,6 +752,7 @@ impl Interpreter {
         self.generator_for_of_stacks.remove(&id);
         self.generator_scope_stacks.remove(&id);
         self.scheduler.remove_async_gen_queue(id);
+        self.generator_pending_dispose.remove(&id);
     }
 
     fn gc_collect_major(&mut self) {

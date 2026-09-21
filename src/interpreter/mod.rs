@@ -23,7 +23,10 @@ mod builtins;
 pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
 mod dispose;
-pub(crate) use dispose::{AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, PendingDispose};
+pub(crate) use dispose::{
+    AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
+    GeneratorDisposeStart, GeneratorDisposeState, GeneratorDisposeThen, PendingDispose,
+};
 mod env_helpers;
 mod eval;
 mod exec;
@@ -263,6 +266,9 @@ pub(crate) struct Interpreter {
     /// since a generator's driver state lives outside the object's
     /// `IteratorState` enum.
     pub(crate) generator_scope_stacks: FxHashMap<u64, Vec<ScopeFrame>>,
+    /// Async generator requests parked at a DisposeResources `Await`, keyed
+    /// by generator object id (see [`GeneratorDisposal`]).
+    pub(crate) generator_pending_dispose: FxHashMap<u64, GeneratorDisposal>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
@@ -611,6 +617,7 @@ impl Interpreter {
             generator_inline_iters: FxHashMap::default(),
             generator_for_of_stacks: FxHashMap::default(),
             generator_scope_stacks: FxHashMap::default(),
+            generator_pending_dispose: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
