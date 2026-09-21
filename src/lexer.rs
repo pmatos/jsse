@@ -895,9 +895,8 @@ impl<'a> Lexer<'a> {
             return Ok(Token::BigIntLiteral(clean));
         }
         let oct_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val =
-            u64::from_str_radix(&oct_part, 8).map_err(|_| self.error("Invalid octal literal"))?;
-        Ok(Token::NumericLiteral(val as f64))
+        let val = self.radix_literal_value(&oct_part, 8, "octal")?;
+        Ok(Token::NumericLiteral(val))
     }
 
     fn read_legacy_octal_or_decimal(&mut self, mut s: String) -> Result<Token, LexError> {
@@ -1746,6 +1745,21 @@ mod tests {
                 Token::Eof
             ]
         );
+    }
+
+    #[test]
+    fn wide_octal_literals_round_to_nearest() {
+        // 24 sevens = 8^24 - 1 = 2^72 - 1, rounds up to 2^72 (§6.1.6.1 𝔽(MV)).
+        assert_eq!(
+            lex_no_lt(&format!("0o{}", "7".repeat(24))),
+            vec![Token::NumericLiteral(2f64.powi(72)), Token::Eof]
+        );
+        // 8^342 ~ 2^1026 overflows the f64 range entirely.
+        assert_eq!(
+            lex_no_lt(&format!("0o{}", "7".repeat(342))),
+            vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
+        );
+        assert!(Lexer::new("0o").next_token().is_err());
     }
 
     #[test]
