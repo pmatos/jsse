@@ -215,6 +215,10 @@ pub(crate) enum GeneratorDisposeThen {
     /// A `.return(v)` unwinding at a yield: `v` is awaited after disposal, as
     /// for a generator without resources.
     ReturnAwait,
+    /// A block scope left by a state transition finished disposing: the
+    /// driver re-enters at the state it was about to run (a disposer's throw
+    /// becomes an exception raised there).
+    Reenter,
 }
 
 pub(crate) enum GeneratorDisposeState {

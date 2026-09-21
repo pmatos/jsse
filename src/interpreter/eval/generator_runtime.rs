@@ -4247,6 +4247,97 @@ impl Interpreter {
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
+            // Block scopes the transition leaves are disposed at their exit
+            // (their own DisposeResources), innermost first, before the
+            // reconciliation below discards their frames.
+            let keep_scopes = state_machine.states[current_id].scope_depth;
+            while scope_stack.len() > keep_scopes {
+                let frame = scope_stack.pop().expect("scope stack is non-empty");
+                self.sync_generator_scope_stack(o.id, &scope_stack);
+                let Some(stack) = self.take_dispose_stack(&frame.env) else {
+                    continue;
+                };
+                let seed = match &pending_exception {
+                    Some(error) => Completion::Throw(error.clone()),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                };
+                let mut cursor = DisposeCursor::new(stack, seed);
+                let mut awaited = None;
+                loop {
+                    let value = match cursor.step(self, awaited.take()) {
+                        DisposeStep::Await(value) => value,
+                        DisposeStep::Done(Completion::Exit(code)) => {
+                            self.in_state_machine = saved_in_state_machine;
+                            abort_async_generator!(Completion::Exit(code));
+                        }
+                        DisposeStep::Done(Completion::Throw(error)) => {
+                            if pending_exception.is_none() {
+                                pending_return = None;
+                                check_abrupt_on_resume = true;
+                            }
+                            pending_exception = Some(error);
+                            break;
+                        }
+                        DisposeStep::Done(_) => break,
+                    };
+                    let can_park = pending_exception.is_none()
+                        && pending_return.is_none()
+                        && !is_inline_replay;
+                    if can_park {
+                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineAsyncGenerator {
+                                state_machine: state_machine.clone(),
+                                func_env: func_env.clone(),
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: current_id,
+                                },
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: current_try_stack.clone(),
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
+                        );
+                        self.in_state_machine = saved_in_state_machine;
+                        self.generator_pending_dispose.insert(
+                            o.id,
+                            GeneratorDisposal {
+                                state: GeneratorDisposeState::Disposing {
+                                    cursor,
+                                    then: GeneratorDisposeThen::Reenter,
+                                },
+                                promise: promise.clone(),
+                                resolve: resolve_fn.clone(),
+                                reject: reject_fn.clone(),
+                            },
+                        );
+                        let gen_id = o.id;
+                        self.with_gc_root_scope(|interp| {
+                            interp.gc_root_value(&value);
+                            interp.await_then(&value, move |interp, outcome| {
+                                interp.async_gen_dispose_resume(gen_id, outcome)
+                            });
+                        });
+                        self.scheduler.set_async_gen_yield_pending(true);
+                        return Completion::Normal(promise);
+                    }
+                    awaited = Some(match self.await_value(&value) {
+                        Completion::Normal(v) => Ok(v),
+                        Completion::Throw(e) => Err(e),
+                        Completion::Exit(code) => {
+                            self.in_state_machine = saved_in_state_machine;
+                            abort_async_generator!(Completion::Exit(code));
+                        }
+                        _ => Ok(JsValue::UNDEFINED),
+                    });
+                }
+            }
+            if check_abrupt_on_resume {
+                continue;
+            }
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
                 &state_machine.states[current_id],
@@ -4973,12 +5064,7 @@ impl Interpreter {
                         // Await(exprValue) precedes DisposeResources; a
                         // generator with pending resources parks at it and
                         // disposes once it settles.
-                        if func_env
-                            .borrow()
-                            .dispose_stack
-                            .as_ref()
-                            .is_some_and(|stack| !stack.is_empty())
-                        {
+                        if self.generator_has_pending_dispose(o.id, &func_env) {
                             self.generator_pending_dispose.insert(
                                 o.id,
                                 GeneratorDisposal {
@@ -6045,6 +6131,42 @@ impl Interpreter {
         }
     }
 
+    /// Every resource still pending disposal for async generator `gen_id`: the
+    /// function-level ones and those of each open block scope, ordered so that
+    /// popping from the back disposes the innermost scope first.
+    fn take_generator_dispose_stack(
+        &mut self,
+        gen_id: u64,
+        func_env: &EnvRef,
+    ) -> Option<Vec<DisposableResource>> {
+        let mut combined = self.take_dispose_stack(func_env).unwrap_or_default();
+        let frame_envs: Vec<EnvRef> = self
+            .generator_scope_stacks
+            .get(&gen_id)
+            .map(|frames| frames.iter().map(|frame| frame.env.clone()).collect())
+            .unwrap_or_default();
+        for env in frame_envs {
+            if let Some(stack) = self.take_dispose_stack(&env) {
+                combined.extend(stack);
+            }
+        }
+        (!combined.is_empty()).then_some(combined)
+    }
+
+    fn generator_has_pending_dispose(&self, gen_id: u64, func_env: &EnvRef) -> bool {
+        let pending = |env: &EnvRef| {
+            env.borrow()
+                .dispose_stack
+                .as_ref()
+                .is_some_and(|stack| !stack.is_empty())
+        };
+        pending(func_env)
+            || self
+                .generator_scope_stacks
+                .get(&gen_id)
+                .is_some_and(|frames| frames.iter().any(|frame| pending(&frame.env)))
+    }
+
     /// Start DisposeResources for `env` on behalf of the request at the front
     /// of async generator `gen_id`'s queue. Finishes inline when no `Await`
     /// is owed; otherwise parks the request (the generator stays `Executing`)
@@ -6057,7 +6179,7 @@ impl Interpreter {
         then: GeneratorDisposeThen,
         request: (&JsValue, &JsValue, &JsValue),
     ) -> GeneratorDisposeStart {
-        let Some(stack) = self.take_dispose_stack(env) else {
+        let Some(stack) = self.take_generator_dispose_stack(gen_id, env) else {
             return GeneratorDisposeStart::Done(completion);
         };
         let disposal = GeneratorDisposal {
@@ -6131,7 +6253,7 @@ impl Interpreter {
                 ),
                 Err(error) => (Completion::Throw(error), GeneratorDisposeThen::Throw),
             };
-            let stack = func_env.and_then(|env| self.take_dispose_stack(&env));
+            let stack = func_env.and_then(|env| self.take_generator_dispose_stack(gen_id, &env));
             let Some(stack) = stack else {
                 return self.async_gen_finish_disposal(gen_id, then, completion, &disposal);
             };
@@ -6167,8 +6289,12 @@ impl Interpreter {
         completion: Completion,
         request: &GeneratorDisposal,
     ) -> Completion {
+        if matches!(then, GeneratorDisposeThen::Reenter) {
+            return self.async_gen_reenter_after_disposal(gen_id, completion, request);
+        }
         self.generator_inline_iters.remove(&gen_id);
         self.generator_for_of_stacks.remove(&gen_id);
+        self.generator_scope_stacks.remove(&gen_id);
         if let Some(obj) = self.get_object_cell(gen_id) {
             let state = obj.borrow().iterator_state().cloned();
             if let Some(IteratorState::StateMachineAsyncGenerator {
@@ -6209,6 +6335,48 @@ impl Interpreter {
             queue.pop_front();
         }
         self.async_gen_process_queue(&JsValue::object(gen_id));
+        Completion::Normal(JsValue::UNDEFINED)
+    }
+
+    /// A block scope's disposal, started by a state transition, finished:
+    /// re-enter the driver at the state it parked before running. A disposer
+    /// error is raised there as a fresh exception.
+    fn async_gen_reenter_after_disposal(
+        &mut self,
+        gen_id: u64,
+        completion: Completion,
+        request: &GeneratorDisposal,
+    ) -> Completion {
+        let this = JsValue::object(gen_id);
+        if let Completion::Exit(code) = completion {
+            return Completion::Exit(code);
+        }
+        if let Completion::Throw(error) = completion
+            && let Some(obj) = self.get_object_cell(gen_id)
+            && let Some(IteratorState::StateMachineAsyncGenerator {
+                pending_exception, ..
+            }) = obj.borrow_mut().iterator_state_mut()
+        {
+            *pending_exception = Some(error);
+        }
+        let result = self.async_generator_next_state_machine_with_promise(
+            &this,
+            JsValue::UNDEFINED,
+            request.promise.clone(),
+            request.resolve.clone(),
+            request.reject.clone(),
+        );
+        if let Completion::Exit(code) = result {
+            return Completion::Exit(code);
+        }
+        if self.scheduler.is_async_gen_yield_pending() {
+            self.scheduler.set_async_gen_yield_pending(false);
+            return Completion::Normal(JsValue::UNDEFINED);
+        }
+        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
+            queue.pop_front();
+        }
+        self.async_gen_process_queue(&this);
         Completion::Normal(JsValue::UNDEFINED)
     }
 
@@ -7055,12 +7223,56 @@ impl Interpreter {
             let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
             try_stack.truncate(loop_state.try_depth);
             completion =
+                self.dispose_scopes_inside_for_of(generator_id, for_of_stack.len(), completion);
+            if matches!(completion, Completion::Exit(_)) {
+                break;
+            }
+            completion =
                 self.close_for_of_loop(loop_state, func_env, completion, Some(generator_id));
             if matches!(completion, Completion::Exit(_)) {
                 break;
             }
         }
         self.sync_generator_for_of_stack(generator_id, for_of_stack);
+        completion
+    }
+
+    /// An `await using` block scope nested inside the async generator for-of
+    /// loop at `loop_pos` disposes before that loop's iterator closes.
+    fn dispose_scopes_inside_for_of(
+        &mut self,
+        generator_id: u64,
+        loop_pos: usize,
+        completion: Completion,
+    ) -> Completion {
+        let envs: Vec<EnvRef> = match self.generator_scope_stacks.get(&generator_id) {
+            Some(frames) => frames
+                .iter()
+                .rev()
+                .filter(|frame| frame.for_of_depth > loop_pos)
+                .map(|frame| frame.env.clone())
+                .collect(),
+            None => return completion,
+        };
+        let is_async_generator = self.get_object_cell(generator_id).is_some_and(|obj| {
+            matches!(
+                obj.borrow().iterator_state(),
+                Some(IteratorState::StateMachineAsyncGenerator { .. })
+            )
+        });
+        if !is_async_generator {
+            return completion;
+        }
+        let mut completion = completion;
+        for env in envs {
+            if let Some(stack) = self.take_dispose_stack(&env) {
+                completion =
+                    self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion));
+                if matches!(completion, Completion::Exit(_)) {
+                    break;
+                }
+            }
+        }
         completion
     }
 

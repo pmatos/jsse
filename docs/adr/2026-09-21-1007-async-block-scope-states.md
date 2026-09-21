@@ -71,6 +71,9 @@ iteration environments.
 
 ## Scoped to plain async functions
 
+> Superseded in part by ADR-2026-09-21-2015: async generators no longer keep the
+> intact-block path described below.
+
 `StateTerminator` is shared by the one lowering pass across sync generators,
 async generators, and async functions (`transform_async_function` rewrites
 `await`→`yield` before the pass and `Yield`→`Await` after). `EnterScope`/

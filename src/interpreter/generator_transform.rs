@@ -947,25 +947,6 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     after_state
                 };
                 transform_scope_block(stmts, ctx, resume_state);
-            } else if ctx.is_async && block_has_await_using(stmts) {
-                // The same shape in an async generator: `EnterScope`/
-                // `ExitScope` are emitted only for plain async functions
-                // (`transform_async_function`, gated on `detect_for_await`),
-                // so keep the block intact here, tree-walked with its own
-                // block_env and dispose_stack. It stays the last statement of
-                // its state: the executor parks the block's DisposeResources
-                // and suspends at its Awaits, then continues at the state
-                // boundary created after the block.
-                let resume_state = if after_state == usize::MAX {
-                    ctx.new_state()
-                } else {
-                    after_state
-                };
-                ctx.emit_statement(stmt.clone());
-                ctx.finalize_current_state(StateTerminator::Goto(resume_state));
-                ctx.current_state_id = resume_state;
-                // If there were remaining statements after the block in the parent,
-                // they'll be emitted into resume_state by the caller.
             } else {
                 // §14.2.2 Block Evaluation: a fresh declarative environment per
                 // entry, discarded on the way out. Force a state boundary
