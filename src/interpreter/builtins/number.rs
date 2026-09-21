@@ -1,12 +1,17 @@
 use super::super::*;
+use super::bigint::{bigint_to_string_radix, f64_to_bigint};
 
 fn format_number_radix(n: f64, radix: u32) -> String {
     let negative = n < 0.0;
     let x = n.abs();
-    let int_part = x.trunc() as i64;
-    let frac_part = x - (int_part as f64);
+    let int_f = x.trunc();
+    let frac_part = x - int_f;
 
-    let mut result = format_radix(int_part, radix);
+    let mut result = if int_f < 9_223_372_036_854_775_808.0 {
+        format_radix(int_f as i64, radix)
+    } else {
+        bigint_to_string_radix(&f64_to_bigint(int_f), radix)
+    };
 
     if frac_part != 0.0 {
         result.push('.');
@@ -738,5 +743,32 @@ impl Interpreter {
         }
 
         self.realm_mut().boolean_prototype = Some(proto_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_number_radix;
+
+    #[test]
+    fn radix_16_exact_for_values_above_2_63() {
+        assert_eq!(
+            format_number_radix(0xffff000000000000u64 as f64, 16),
+            "ffff000000000000"
+        );
+        assert_eq!(format_number_radix(2f64.powi(63), 16), "8000000000000000");
+        assert_eq!(format_number_radix(2f64.powi(64), 16), "10000000000000000");
+    }
+
+    #[test]
+    fn radix_2_exact_for_values_above_2_63() {
+        assert_eq!(
+            format_number_radix(2f64.powi(63), 2),
+            format!("1{}", "0".repeat(63))
+        );
+        assert_eq!(
+            format_number_radix(2f64.powi(64), 2),
+            format!("1{}", "0".repeat(64))
+        );
     }
 }

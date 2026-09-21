@@ -312,7 +312,7 @@ impl Interpreter {
     }
 }
 
-fn bigint_to_string_radix(n: &num_bigint::BigInt, radix: u32) -> String {
+pub(crate) fn bigint_to_string_radix(n: &num_bigint::BigInt, radix: u32) -> String {
     use num_bigint::Sign;
     let (sign, digits) = n.to_radix_be(radix);
     if digits.is_empty() || (digits.len() == 1 && digits[0] == 0) {
