@@ -310,7 +310,8 @@ impl Interpreter {
         loop {
             match cursor.step(self, awaited.take()) {
                 DisposeStep::Done(completion) => return completion,
-                DisposeStep::Await(value) => match self.await_value(&value) {
+                DisposeStep::Await(value) => match self.await_disposal_inline(&cursor, &[], &value)
+                {
                     Completion::Normal(v) => awaited = Some(Ok(v)),
                     Completion::Throw(e) => awaited = Some(Err(e)),
                     // A job run by the drain called `__host_exit` (issue #242).
@@ -318,6 +319,25 @@ impl Interpreter {
                 },
             }
         }
+    }
+
+    /// `Await(value)` for a disposal that drains the microtask queue inline.
+    /// The jobs it runs may collect, and `cursor` (between two `step`s) and
+    /// `held` (the caller's in-flight throw or return value) live only in
+    /// Rust locals, so they are rooted for the drain.
+    pub(crate) fn await_disposal_inline(
+        &mut self,
+        cursor: &DisposeCursor,
+        held: &[Option<&JsValue>],
+        value: &JsValue,
+    ) -> Completion {
+        self.with_gc_root_scope(|interp| {
+            cursor.for_each_value(|v| interp.gc_root_value(v));
+            for v in held.iter().flatten() {
+                interp.gc_root_value(v);
+            }
+            interp.await_value(value)
+        })
     }
 
     /// Spec `Await(value)` for native code: `resume` runs in a later job with

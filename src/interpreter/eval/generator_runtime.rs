@@ -4079,7 +4079,12 @@ impl Interpreter {
                     $then,
                     (&promise, &resolve_fn, &reject_fn),
                 ) {
-                    GeneratorDisposeStart::Done(completion) => completion,
+                    GeneratorDisposeStart::Done(completion) => {
+                        // Every site settles the request and completes the
+                        // generator, so its open block frames are done too.
+                        self.generator_scope_stacks.remove(&o.id);
+                        completion
+                    }
                     GeneratorDisposeStart::Parked => {
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
@@ -4324,7 +4329,12 @@ impl Interpreter {
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
-                    awaited = Some(match self.await_value(&value) {
+                    let outcome = self.await_disposal_inline(
+                        &cursor,
+                        &[pending_exception.as_ref(), pending_return.as_ref()],
+                        &value,
+                    );
+                    awaited = Some(match outcome {
                         Completion::Normal(v) => Ok(v),
                         Completion::Throw(e) => Err(e),
                         Completion::Exit(code) => {
@@ -7245,15 +7255,6 @@ impl Interpreter {
         loop_pos: usize,
         completion: Completion,
     ) -> Completion {
-        let envs: Vec<EnvRef> = match self.generator_scope_stacks.get(&generator_id) {
-            Some(frames) => frames
-                .iter()
-                .rev()
-                .filter(|frame| frame.for_of_depth > loop_pos)
-                .map(|frame| frame.env.clone())
-                .collect(),
-            None => return completion,
-        };
         let is_async_generator = self.get_object_cell(generator_id).is_some_and(|obj| {
             matches!(
                 obj.borrow().iterator_state(),
@@ -7263,6 +7264,15 @@ impl Interpreter {
         if !is_async_generator {
             return completion;
         }
+        let envs: Vec<EnvRef> = match self.generator_scope_stacks.get(&generator_id) {
+            Some(frames) => frames
+                .iter()
+                .rev()
+                .filter(|frame| frame.for_of_depth > loop_pos)
+                .map(|frame| frame.env.clone())
+                .collect(),
+            None => return completion,
+        };
         let mut completion = completion;
         for env in envs {
             if let Some(stack) = self.take_dispose_stack(&env) {
