@@ -59,6 +59,42 @@ asyncTest(async function () {
   assert.sameValue(log.join(), 'tail-start,tail-marker-tail', 'await using: resource survives gc');
 
   log = [];
+  var outerLog = [];
+
+  async function viaScopeStack() {
+    await using outer = {
+      marker: 'outer',
+      async [Symbol.asyncDispose]() {
+        outerLog.push('outer-dispose-' + this.marker);
+      }
+    };
+    {
+      await using tail = makeTail(log);
+      await using failing = {
+        async [Symbol.asyncDispose]() { throw new RangeError('failing'); }
+      };
+    }
+  }
+
+  try {
+    await viaScopeStack();
+    assert(false, 'expected the nested await using disposal error to propagate');
+  } catch (e) {
+    assert.sameValue(e instanceof RangeError, true, 'nested scope: error identity survives gc');
+    assert.sameValue(e.message, 'failing', 'nested scope: error message survives gc');
+  }
+  assert.sameValue(
+    log.join(),
+    'tail-start,tail-marker-tail',
+    'nested scope: inner resource survives gc while an outer scope frame is still open'
+  );
+  assert.sameValue(
+    outerLog.join(),
+    'outer-dispose-outer',
+    'nested scope: the outer scope frame itself still disposes once the inner one is done'
+  );
+
+  log = [];
   var stack = new AsyncDisposableStack();
   stack.use(makeTail(log));
   stack.defer(async function () { throw new RangeError('failing'); });
