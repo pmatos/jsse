@@ -2057,7 +2057,26 @@ pub(crate) fn parse_date_string(s: &str) -> f64 {
         return t;
     }
 
+    // A bare month number: "5"
+    if let Some(t) = parse_bare_month_string(s) {
+        return t;
+    }
+
     f64::NAN
+}
+
+const BARE_MONTH_REFERENCE_YEAR: f64 = 2001.0;
+
+fn parse_bare_month_string(s: &str) -> Option<f64> {
+    if s.len() > 2 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let month: u32 = s.parse().ok()?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let d = make_day(BARE_MONTH_REFERENCE_YEAR, (month - 1) as f64, 1.0);
+    Some(make_date_clipped(d, 0.0, true))
 }
 
 type LegacyNumber<'a> = (&'a str, u32);
