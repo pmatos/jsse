@@ -6488,7 +6488,6 @@ impl Interpreter {
                     ),
                 );
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exception]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedAtState { .. } => {}
