@@ -197,10 +197,8 @@ impl GcPacer {
 /// hold it across an allocation; `snapshot` returns an owned `Vec` for that
 /// reason.
 #[derive(Clone)]
-#[allow(dead_code)] // TEMP: removed once the consumers land
 pub(crate) struct RootedSlots(JsValue);
 
-#[allow(dead_code)] // TEMP: removed once the consumers land
 impl RootedSlots {
     pub(crate) fn new(interp: &mut Interpreter, len: usize) -> Self {
         Self(interp.create_array(vec![JsValue::UNDEFINED; len]))
