@@ -3398,7 +3398,7 @@ impl Interpreter {
         resolve_fn: JsValue,
         reject_fn: JsValue,
     ) -> Completion {
-        use crate::interpreter::generator_transform::{LoopControlTarget, StateTerminator};
+        use crate::interpreter::generator_transform::StateTerminator;
 
         let Some(o) = (this)
             .as_object_id()
@@ -5391,14 +5391,63 @@ impl Interpreter {
                     return Completion::Normal(promise);
                 }
 
-                // Async-function transforms are currently the only machines
-                // that emit LoopControl. If a shared transform emits one for
-                // an async generator, cleanup is identical to Goto.
-                StateTerminator::Goto(next_state)
-                | StateTerminator::LoopControl(LoopControlTarget {
-                    target_state: next_state,
-                    ..
-                }) => {
+                // A break/continue that leaves try statements must run each
+                // finally it crosses, so it is routed rather than jumped.
+                StateTerminator::LoopControl(target) => {
+                    let target = *target;
+                    // A jump that leaves the running finally body replaces the
+                    // throw or return that entered it.
+                    if !stays_inside_running_finally(&current_try_stack, &target) {
+                        pending_exception = None;
+                        pending_return = None;
+                    }
+                    match self.route_generator_loop_control(
+                        o.id,
+                        &mut for_of_stack,
+                        &mut current_try_stack,
+                        &func_env,
+                        target,
+                    ) {
+                        Ok(next_state) => current_id = next_state,
+                        Err(Completion::Throw(error)) => {
+                            let error = route_exception!(error);
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                            let error = match disp {
+                                Completion::Throw(error) => error,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
+                            self.generator_inline_iters.remove(&o.id);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::completed_state_machine_async_generator(
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                    ),
+                                );
+                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                        Err(Completion::Exit(code)) => {
+                            self.generator_inline_iters.remove(&o.id);
+                            self.generator_for_of_stacks.remove(&o.id);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::completed_state_machine_async_generator(
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                    ),
+                                );
+                            return Completion::Exit(code);
+                        }
+                        Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
+                    }
+                }
+
+                StateTerminator::Goto(next_state) => {
                     if let Err(completion) = self.align_generator_for_of_stack(
                         o.id,
                         &mut for_of_stack,
@@ -5487,7 +5536,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::TryExit { after_state } => {
-                    current_try_stack.pop();
+                    let finished = current_try_stack.pop();
                     if let Some(exc) = pending_exception.take() {
                         // Re-throw pending exception after finally completes
                         let exc = route_exception!(exc);
@@ -5507,6 +5556,59 @@ impl Interpreter {
                         pending_return = Some(ret_val);
                         check_abrupt_on_resume = true;
                         current_id = *after_state;
+                        continue;
+                    }
+                    if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
+                        // The finalizer ran on behalf of a break/continue:
+                        // resume it, through any finalizer still in the way.
+                        match self.route_generator_loop_control(
+                            o.id,
+                            &mut for_of_stack,
+                            &mut current_try_stack,
+                            &func_env,
+                            target,
+                        ) {
+                            Ok(next_state) => current_id = next_state,
+                            Err(Completion::Throw(error)) => {
+                                let error = route_exception!(error);
+                                let disp =
+                                    self.dispose_resources(&func_env, Completion::Throw(error));
+                                let error = match disp {
+                                    Completion::Throw(error) => error,
+                                    Completion::Exit(code) => return Completion::Exit(code),
+                                    _ => unreachable!("disposing a throw must stay abrupt"),
+                                };
+                                self.generator_inline_iters.remove(&o.id);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::completed_state_machine_async_generator(
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                        ),
+                                    );
+                                let _ =
+                                    self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            Err(Completion::Exit(code)) => {
+                                self.generator_inline_iters.remove(&o.id);
+                                self.generator_for_of_stacks.remove(&o.id);
+                                obj_rc.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::completed_state_machine_async_generator(
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                        ),
+                                    );
+                                return Completion::Exit(code);
+                            }
+                            Err(_) => {
+                                unreachable!("loop-control routing returned a non-abrupt error")
+                            }
+                        }
                         continue;
                     }
                     current_id = *after_state;

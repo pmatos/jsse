@@ -432,7 +432,7 @@ impl TransformContext {
                 continue;
             }
             if let Some(target) = self.jump_target(kind, &label) {
-                let terminator = self.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 self.pending_inline_jumps.push(InlineJump {
                     kind,
                     label,
@@ -448,14 +448,6 @@ impl TransformContext {
             JumpKind::Continue => &self.continue_targets,
         };
         targets.get(label).copied()
-    }
-
-    fn jump_terminator(&self, target: LoopControlTarget) -> StateTerminator {
-        if !self.is_async || self.detect_for_await {
-            StateTerminator::LoopControl(target)
-        } else {
-            StateTerminator::Goto(target.target_state)
-        }
     }
 
     fn loop_control_target(&self, target_state: usize, for_of_depth: usize) -> LoopControlTarget {
@@ -1067,7 +1059,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Break(label) => {
             if let Some(target) = ctx.jump_target(JumpKind::Break, label) {
-                let terminator = ctx.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -1077,7 +1069,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Continue(label) => {
             if let Some(target) = ctx.jump_target(JumpKind::Continue, label) {
-                let terminator = ctx.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
