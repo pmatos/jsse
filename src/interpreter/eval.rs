@@ -8154,6 +8154,7 @@ impl Interpreter {
                 reject_fn,
                 for_of_stack: vec![],
                 module_path: None,
+                scope_stack: vec![],
             },
         );
 
@@ -8205,6 +8206,7 @@ impl Interpreter {
             for_of_stack: saved_for_of_stack,
             module_path: async_module_path,
             pending_dispose: restored_pending_dispose,
+            scope_stack: saved_scope_stack,
         } = state;
 
         if let Some(ref mp) = async_module_path {
@@ -8287,6 +8289,7 @@ impl Interpreter {
                 reject_fn: reject_fn.clone(),
                 for_of_stack: saved_for_of_stack.clone(),
                 module_path: async_module_path.clone(),
+                scope_stack: saved_scope_stack.clone(),
             },
         );
 
@@ -8299,6 +8302,9 @@ impl Interpreter {
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
+        // Lexical scope stack (blocks, loop bodies, try/catch/finally blocks,
+        // for-head per-iteration frames) — see `AsyncFunctionState::scope_stack`.
+        let mut scope_stack: Vec<(EnvRef, usize)> = saved_scope_stack;
         // An abrupt completion may need to visit a catch/finally inside an
         // enclosing loop before that loop itself can be closed. Keep that
         // obligation across suspension until the handler completes normally.
@@ -8511,6 +8517,7 @@ impl Interpreter {
                             &reject_fn,
                             &value,
                             &for_of_stack,
+                            &scope_stack,
                         );
                         self.gc_unroot_frame(gc_frame);
                         self.scheduler
@@ -8681,10 +8688,16 @@ impl Interpreter {
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            let term_env = for_of_stack
+            let for_of_env = for_of_stack
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
+            let term_env = self.reconcile_scope_stack(
+                &mut scope_stack,
+                &state_machine.states[current_id],
+                for_of_stack.len(),
+                &for_of_env,
+            );
             let mut stmt_result = match preloaded_stmt_result.take() {
                 Some(finished) => finished,
                 None => {
@@ -8832,6 +8845,7 @@ impl Interpreter {
                     &reject_fn,
                     &yield_val,
                     &for_of_stack,
+                    &scope_stack,
                 );
                 return Completion::Normal(JsValue::UNDEFINED);
             }
@@ -8865,6 +8879,7 @@ impl Interpreter {
                                 &reject_fn,
                                 &v,
                                 &for_of_stack,
+                                &scope_stack,
                             );
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
@@ -8887,6 +8902,7 @@ impl Interpreter {
                         &reject_fn,
                         &await_val,
                         &for_of_stack,
+                        &scope_stack,
                     );
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
@@ -9009,9 +9025,15 @@ impl Interpreter {
                         ctx.entered_catch = true;
                     }
                     let exc_val = pending_exception.take().unwrap_or(JsValue::UNDEFINED);
+                    // §14.15.2 CatchClauseEvaluation: the catch parameter gets
+                    // its own environment, distinct from (and outside) the
+                    // catch block's own scope. Pushed here, not via the
+                    // generic reconciliation, since it needs the thrown value.
+                    let catch_env = Environment::new(Some(term_env.clone()));
                     if let Some(pattern) = param {
-                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &term_env);
+                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &catch_env);
                     }
+                    scope_stack.push((catch_env, for_of_stack.len()));
                     current_id = body_state;
                 }
 
@@ -9218,6 +9240,7 @@ impl Interpreter {
                                 &reject_fn,
                                 &raw_result,
                                 &for_of_stack,
+                                &scope_stack,
                             );
                             self.in_state_machine = saved_in_state_machine;
                             return Completion::Normal(JsValue::UNDEFINED);
@@ -9480,6 +9503,7 @@ impl Interpreter {
         reject_fn: &JsValue,
         await_val: &JsValue,
         for_of_stack: &[ForOfLoopState],
+        scope_stack: &[(EnvRef, usize)],
     ) {
         let promise = self.promise_resolve_value(await_val);
         let promise_id = if let Some(o) = (promise)
@@ -9510,6 +9534,7 @@ impl Interpreter {
                 reject_fn: reject_fn.clone(),
                 for_of_stack: for_of_stack.to_vec(),
                 module_path: self.module_async_info.get(&async_id).cloned(),
+                scope_stack: scope_stack.to_vec(),
             },
         );
 

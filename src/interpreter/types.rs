@@ -391,6 +391,14 @@ pub(crate) struct AsyncFunctionState {
     /// Set while the function-level disposal is parked at an `Await`; the
     /// resumption feeds its outcome to this cursor instead of the body.
     pub pending_dispose: Option<super::PendingDispose>,
+    /// Lexical scope stack for plain blocks, loop bodies, `try`/`catch`/
+    /// `finally` blocks, and `for`-head per-iteration frames — reconciled
+    /// toward each state's static depth by `Interpreter::reconcile_scope_stack`.
+    /// Independent of `for_of_stack`/`try_stack`, which keep their own depth
+    /// bookkeeping; the `usize` on each frame is the `for_of_stack` depth at
+    /// push time, letting the two stacks compose correctly even when they
+    /// interleave (see `reconcile_scope_stack`'s doc comment).
+    pub scope_stack: Vec<(EnvRef, usize)>,
 }
 
 #[derive(Clone)]

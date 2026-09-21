@@ -1936,6 +1936,90 @@ impl Interpreter {
         }
     }
 
+    /// Reconciles a generator/async-function driver's lexical scope stack
+    /// toward the frame count `state` statically requires
+    /// (`GeneratorState::scope_depth`), then returns the environment its
+    /// statements and terminator should run against. Called once per
+    /// dispatch-loop step, right where `term_env` used to be computed from
+    /// `for_of_stack` alone — this generalizes that same per-iteration-
+    /// environment idiom (`ForOfLoopState`) to plain blocks, loop bodies,
+    /// `try`/`catch`/`finally` blocks, and `for`-head per-iteration bindings.
+    ///
+    /// Because every state carries its own static depth, this single
+    /// reconciliation point pops the stack back down on its own whenever a
+    /// jump — a loop back-edge, a `break`/`continue`/`return`/`throw`
+    /// dispatch, a `catch`/`finally` entry — lands on a shallower state. No
+    /// jump site needs its own truncation logic (mirrors how `try_stack`
+    /// unwinds via `try_depth`, but keyed by depth number rather than a
+    /// per-jump target).
+    ///
+    /// `scope_stack` and `for_of_stack` are independent stacks that can
+    /// interleave arbitrarily (a block can contain a `for-of` that contains
+    /// another block), so neither can simply take priority whenever it's
+    /// non-empty: each `scope_stack` frame records the `for_of_stack` depth
+    /// at the moment it was pushed, and whichever stack was pushed to more
+    /// recently — the current `for_of_depth` exceeding a frame's recorded
+    /// depth means a `for-of` loop was entered after it — holds the actual
+    /// innermost environment.
+    pub(crate) fn reconcile_scope_stack(
+        &mut self,
+        scope_stack: &mut Vec<(EnvRef, usize)>,
+        state: &crate::interpreter::generator_transform::GeneratorState,
+        for_of_depth: usize,
+        for_of_env: &EnvRef,
+    ) -> EnvRef {
+        use crate::interpreter::generator_transform::ScopeAction;
+
+        let innermost = |scope_stack: &[(EnvRef, usize)], for_of_env: &EnvRef| -> EnvRef {
+            match scope_stack.last() {
+                Some((env, pushed_at)) if for_of_depth <= *pushed_at => env.clone(),
+                _ => for_of_env.clone(),
+            }
+        };
+
+        let target_depth = state.scope_depth;
+        if scope_stack.len() > target_depth {
+            scope_stack.truncate(target_depth);
+        }
+        match &state.scope_action {
+            Some(ScopeAction::OpenBlock) if scope_stack.len() < target_depth => {
+                let parent = innermost(scope_stack, for_of_env);
+                scope_stack.push((Environment::new(Some(parent)), for_of_depth));
+            }
+            Some(ScopeAction::CopyForward(bindings)) => {
+                // `CreatePerIterationEnvironment` (§14.7.4.3): copy each
+                // binding's current value forward into a fresh frame at the
+                // same depth, replacing whatever was already there (a
+                // `for`-head frame lives at a constant depth across
+                // test/body/update, unlike a plain block's depth-triggered
+                // push).
+                let replacing = scope_stack.len() == target_depth;
+                let source = innermost(scope_stack, for_of_env);
+                let values: Vec<JsValue> = bindings
+                    .iter()
+                    .map(|(name, _)| self.env_get(&source, name).unwrap_or(JsValue::UNDEFINED))
+                    .collect();
+                if replacing {
+                    scope_stack.pop();
+                }
+                let parent = innermost(scope_stack, for_of_env);
+                let fresh = Environment::new(Some(parent));
+                for ((name, is_const), value) in bindings.iter().zip(values) {
+                    let kind = if *is_const {
+                        BindingKind::Const
+                    } else {
+                        BindingKind::Let
+                    };
+                    fresh.borrow_mut().declare(name, kind);
+                    fresh.borrow_mut().initialize_binding(name, value);
+                }
+                scope_stack.push((fresh, for_of_depth));
+            }
+            _ => {}
+        }
+        innermost(scope_stack, for_of_env)
+    }
+
     fn exec_for_in(
         &mut self,
         fi: &ForInStatement,

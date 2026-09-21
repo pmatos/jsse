@@ -258,6 +258,11 @@ pub(crate) struct Interpreter {
     pub(crate) active_array_joins: Vec<u64>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
     pub(crate) generator_for_of_stacks: FxHashMap<u64, Vec<ForOfLoopState>>,
+    /// Generator-side counterpart to `AsyncFunctionState::scope_stack`, keyed
+    /// by generator object id — mirrors `generator_for_of_stacks`' own shape
+    /// since a generator's driver state lives outside the object's
+    /// `IteratorState` enum.
+    pub(crate) generator_scope_stacks: FxHashMap<u64, Vec<(EnvRef, usize)>>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
@@ -605,6 +610,7 @@ impl Interpreter {
             active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
             generator_for_of_stacks: FxHashMap::default(),
+            generator_scope_stacks: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
@@ -3912,6 +3918,7 @@ impl Interpreter {
                 reject_fn,
                 for_of_stack: vec![],
                 module_path: Some(module_path.clone()),
+                scope_stack: vec![],
             },
         );
         let prev_path = self.current_module_path.take();

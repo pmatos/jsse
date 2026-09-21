@@ -29,6 +29,39 @@ pub(crate) struct GeneratorState {
     /// `break`/`continue` completion, with the terminator that stands in for
     /// the state's own when one does.
     pub inline_jumps: Vec<InlineJump>,
+    /// Number of frames the driver's lexical scope stack must hold while this
+    /// state executes (`sec-block-runtime-semantics-evaluation`). Stamped from
+    /// `TransformContext::scope_depth` at the moment this state is sealed, so
+    /// every state, however it's reached, carries its own static depth — the
+    /// driver reconciles toward it on every dispatch, which is what makes
+    /// break/continue/return/throw unwind the scope stack for free.
+    pub scope_depth: usize,
+    /// What the driver must do to the top of the scope stack before this
+    /// state can run, when `scope_depth` alone doesn't say (a plain entry
+    /// just needs a push; a `for`-head per-iteration frame needs a fresh
+    /// copy even when the depth hasn't changed).
+    pub scope_action: Option<ScopeAction>,
+}
+
+/// See [`GeneratorState::scope_action`].
+#[derive(Debug, Clone)]
+pub(crate) enum ScopeAction {
+    /// Push a fresh empty declarative environment (`NewDeclarativeEnvironment`)
+    /// when this state's `scope_depth` is deeper than the stack's current
+    /// size. Used for plain blocks, `try`/`finally` blocks, and loop bodies —
+    /// every one of them is a `Block` per grammar, and a block always starts
+    /// empty; its own `let`/`const`/`class` names are hoisted into it the
+    /// ordinary way once the state's statements run.
+    OpenBlock,
+    /// `CreatePerIterationEnvironment` (`sec-createperiterationenvironment`):
+    /// push a fresh frame copying the named bindings' current values forward,
+    /// replacing the frame already at this depth if one is there (the `for`
+    /// loop's per-iteration frame lives at a *constant* depth across
+    /// test/body/update, so a `for`-head refresh, unlike `OpenBlock`, cannot
+    /// rely on a depth change to know when to fire). `bool` is whether the
+    /// binding is `const` (spec still runs this for `const` heads; see
+    /// `exec_for`, which this generalizes).
+    CopyForward(Vec<(String, bool)>),
 }
 
 /// Where a `break` or `continue` that escapes an isolated `await using` block
@@ -280,6 +313,11 @@ struct TransformContext {
     is_async: bool,
     detect_for_await: bool,
     with_scopes: Vec<String>,
+    /// Number of lexical-scope-stack frames (blocks, `for`-head per-iteration
+    /// frames, catch-param frames) active at the point currently being
+    /// transformed. Stamped onto each state as it's sealed; see
+    /// `GeneratorState::scope_depth`.
+    scope_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -310,6 +348,7 @@ impl TransformContext {
             is_async,
             detect_for_await: false,
             with_scopes: Vec::new(),
+            scope_depth: 0,
         }
     }
 
@@ -330,6 +369,8 @@ impl TransformContext {
             terminator: StateTerminator::Completed,
             block_exits: None,
             inline_jumps: Vec::new(),
+            scope_depth: 0,
+            scope_action: None,
         });
         id
     }
@@ -360,6 +401,7 @@ impl TransformContext {
             self.states[self.current_state_id].terminator = terminator;
             self.states[self.current_state_id].inline_jumps =
                 std::mem::take(&mut self.pending_inline_jumps);
+            self.states[self.current_state_id].scope_depth = self.scope_depth;
         }
     }
 
@@ -535,6 +577,8 @@ fn create_simple_machine(
             terminator: StateTerminator::Completed,
             block_exits: None,
             inline_jumps: Vec::new(),
+            scope_depth: 0,
+            scope_action: None,
         }],
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
@@ -870,7 +914,35 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 // If there were remaining statements after the block in the parent,
                 // they'll be emitted into resume_state by the caller.
             } else {
-                transform_statements(stmts, ctx, after_state);
+                // §14.2.2 Block Evaluation: a fresh declarative environment per
+                // entry, discarded on the way out. Force a state boundary
+                // (`entry_state`) so the block's own content never shares a
+                // not-yet-sealed state with statements lexically outside it —
+                // those would otherwise get stamped with the block's (bumped)
+                // `scope_depth` instead of the outer one.
+                let entry_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::Goto(entry_state));
+                ctx.current_state_id = entry_state;
+                ctx.scope_depth += 1;
+                ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock);
+
+                let inner_after = ctx.new_state();
+                transform_statements(stmts, ctx, inner_after);
+                if ctx.current_state_id != inner_after {
+                    ctx.finalize_current_state(StateTerminator::Goto(inner_after));
+                }
+                ctx.current_state_id = inner_after;
+                ctx.scope_depth -= 1;
+
+                // `inner_after` must only be finalized once `scope_depth` is
+                // back to the outer value, whether that's done here (bridging
+                // to a real `after_state`) or later by our caller (the
+                // `after_state == MAX` case, where `inner_after` itself *is*
+                // the fresh join point the caller will seal).
+                if after_state != usize::MAX {
+                    ctx.finalize_current_state(StateTerminator::Goto(after_state));
+                    ctx.current_state_id = after_state;
+                }
             }
         }
 
@@ -2090,6 +2162,42 @@ fn transform_for_statement(
         after_state
     };
 
+    // §14.7.4.2/§14.7.4.3 CreatePerIterationEnvironment: a lexical head gets a
+    // fresh per-iteration frame, copying the bound names' current values
+    // forward, both before the first test and again after each body (before
+    // the update runs). `test_state`/`body_state`/`update_state` all share
+    // this *one* frame at a constant depth — mirrors `exec_for`'s
+    // `per_iteration_bindings` (`exec.rs`).
+    let per_iteration_bindings: Vec<(String, bool)> = if let Some(ForInit::Variable(decl)) =
+        &for_stmt.init
+        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+    {
+        let is_const = decl.kind == VarKind::Const;
+        let mut names = Vec::new();
+        for d in &decl.declarations {
+            d.pattern.bound_names(&mut names);
+        }
+        names.into_iter().map(|n| (n, is_const)).collect()
+    } else {
+        Vec::new()
+    };
+    let has_per_iteration_env = !per_iteration_bindings.is_empty();
+
+    if has_per_iteration_env {
+        // §14.7.4.2 step 2's `NewDeclarativeEnvironment` for the
+        // LexicalDeclaration itself: the head's own `let i = 0` must not run
+        // in whatever environment is currently active (it could collide with
+        // an unrelated outer `var i`), so give it a fresh state/frame before
+        // emitting it — mirrors the `Statement::Block` arm's `entry_state`
+        // bridge, for the same reason (this state may otherwise still be
+        // accumulating unrelated preceding content).
+        let init_state = ctx.new_state();
+        ctx.finalize_current_state(StateTerminator::Goto(init_state));
+        ctx.current_state_id = init_state;
+        ctx.scope_depth += 1;
+        ctx.states[init_state].scope_action = Some(ScopeAction::OpenBlock);
+    }
+
     if let Some(init) = &for_stmt.init {
         match init {
             ForInit::Variable(decl) => {
@@ -2126,6 +2234,13 @@ fn transform_for_statement(
     let prev_continue = ctx.continue_targets.insert(None, continue_target);
     let labeled_continues =
         ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
+
+    if has_per_iteration_env {
+        ctx.states[test_state].scope_action =
+            Some(ScopeAction::CopyForward(per_iteration_bindings.clone()));
+        ctx.states[update_state].scope_action =
+            Some(ScopeAction::CopyForward(per_iteration_bindings));
+    }
 
     ctx.current_state_id = test_state;
     if let Some(test) = &for_stmt.test {
@@ -2172,6 +2287,10 @@ fn transform_for_statement(
         }
     }
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
+
+    if has_per_iteration_env {
+        ctx.scope_depth -= 1;
+    }
 
     if let Some(prev) = prev_break {
         ctx.break_targets.insert(None, prev);
@@ -2367,11 +2486,20 @@ fn transform_try_statement(
         after_state: after_try,
     });
 
+    // try/catch/finally clauses are each a `Block` per grammar
+    // (`sec-try-statement-runtime-semantics-evaluation`), so each gets its
+    // own fresh scope exactly like a plain nested block. `try_body_state` and
+    // `finally_body_state` already are fresh, dedicated entry states (unlike
+    // the generic `Statement::Block` case), so no bridge state is needed
+    // here — just bump/restore `scope_depth` and mark the entry.
     ctx.current_state_id = try_body_state;
+    ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock);
+    ctx.scope_depth += 1;
     transform_statements(&try_stmt.block, ctx, clause_completion_state);
     if ctx.current_state_id != clause_completion_state {
         ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
     }
+    ctx.scope_depth -= 1;
 
     if let Some(ref info) = catch_info {
         let catch_body_state = ctx.new_state();
@@ -2381,13 +2509,21 @@ fn transform_try_statement(
             param: info.param.clone(),
         });
 
+        // The catch parameter gets its own environment
+        // (`sec-runtime-semantics-catchclauseevaluation`), pushed by the
+        // driver's `EnterCatch` handling (it needs the thrown value, not
+        // known until runtime) — so `catch_body_state` only needs the depth
+        // bump, no `OpenBlock` marker; the generic reconciliation sees the
+        // frame is already there.
         ctx.current_state_id = catch_body_state;
+        ctx.scope_depth += 1;
         if let Some(handler) = &try_stmt.handler {
             transform_statements(&handler.body, ctx, clause_completion_state);
         }
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
         }
+        ctx.scope_depth -= 1;
     }
 
     if let Some(fin_entry_state) = finally_entry_state {
@@ -2399,12 +2535,15 @@ fn transform_try_statement(
         });
 
         ctx.current_state_id = finally_body_state;
+        ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock);
+        ctx.scope_depth += 1;
         if let Some(finalizer) = &try_stmt.finalizer {
             transform_statements(finalizer, ctx, finally_exit_state);
         }
         if ctx.current_state_id != finally_exit_state {
             ctx.finalize_current_state(StateTerminator::Goto(finally_exit_state));
         }
+        ctx.scope_depth -= 1;
         ctx.current_state_id = finally_exit_state;
         ctx.finalize_current_state(StateTerminator::TryExit {
             after_state: after_try,

@@ -452,6 +452,9 @@ impl Interpreter {
         for for_of_stack in self.generator_for_of_stacks.values() {
             Self::collect_for_of_stack_roots(for_of_stack, &mut roots, &mut seen_envs);
         }
+        for scope_stack in self.generator_scope_stacks.values() {
+            Self::collect_scope_stack_roots(scope_stack, &mut roots, &mut seen_envs);
+        }
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
@@ -474,6 +477,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, &mut roots);
             }
             Self::collect_for_of_stack_roots(&afs.for_of_stack, &mut roots, &mut seen_envs);
+            Self::collect_scope_stack_roots(&afs.scope_stack, &mut roots, &mut seen_envs);
         }
 
         (roots, seen_envs)
@@ -742,6 +746,7 @@ impl Interpreter {
         self.iterator_next_cache.remove(&id);
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);
+        self.generator_scope_stacks.remove(&id);
     }
 
     fn gc_collect_major(&mut self) {
@@ -1142,6 +1147,20 @@ impl Interpreter {
             if let Some(ref env) = loop_state.iteration_env {
                 Self::collect_env_roots(env, worklist, seen_envs);
             }
+        }
+    }
+
+    /// Roots the environments a suspended driver's lexical scope stack still
+    /// holds (`AsyncFunctionState::scope_stack`, and the generator side
+    /// table's equivalent) — the same pattern as `collect_for_of_stack_roots`,
+    /// generalized alongside it.
+    fn collect_scope_stack_roots(
+        scope_stack: &[(EnvRef, usize)],
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+    ) {
+        for (env, _) in scope_stack {
+            Self::collect_env_roots(env, worklist, seen_envs);
         }
     }
 
