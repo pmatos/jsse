@@ -217,13 +217,29 @@ impl JobScheduler {
         }
     }
 
-    /// Every value the scheduler keeps alive: roots held by queued microtasks
-    /// and by armed timers. Centralised here so a queue added later cannot be
-    /// forgotten by the collector.
+    /// Every value the scheduler keeps alive: roots held by queued microtasks,
+    /// pending async-generator requests, and armed timers. Centralised here so
+    /// a queue added later cannot be forgotten by the collector.
+    ///
+    /// A generator with a pending request is rooted too: its await/yield
+    /// continuations capture it only inside native closures the tracer cannot
+    /// walk, so nothing else keeps it alive while the request is outstanding.
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
         for (roots, _) in &self.microtask_queue {
             for value in roots {
                 visit(value);
+            }
+        }
+        for (gen_id, queue) in &self.async_gen_queues {
+            if queue.is_empty() {
+                continue;
+            }
+            visit(&JsValue::object(*gen_id));
+            for request in queue {
+                visit(&request.value);
+                visit(&request.promise);
+                visit(&request.resolve_fn);
+                visit(&request.reject_fn);
             }
         }
         for (callback, args) in self.timers.iter_roots() {
@@ -250,6 +266,10 @@ impl JobScheduler {
         gen_id: u64,
     ) -> Option<&mut VecDeque<AsyncGenRequest>> {
         self.async_gen_queues.get_mut(&gen_id)
+    }
+
+    pub(crate) fn remove_async_gen_queue(&mut self, gen_id: u64) {
+        self.async_gen_queues.remove(&gen_id);
     }
 
     pub(crate) fn set_async_gen_yield_pending(&mut self, value: bool) {
@@ -443,6 +463,33 @@ mod tests {
             Some(1),
             "gen 1 must hold exactly one request"
         );
+    }
+
+    fn collect_roots(sched: &JobScheduler) -> Vec<JsValue> {
+        let mut roots = Vec::new();
+        sched.for_each_root(|v| roots.push(v.clone()));
+        roots
+    }
+
+    #[test]
+    fn for_each_root_visits_the_generator_and_every_request_field() {
+        let mut sched = JobScheduler::default();
+        sched
+            .async_gen_queue_or_default(7)
+            .push_back(super::super::AsyncGenRequest {
+                value: JsValue::object(10),
+                promise: JsValue::object(11),
+                resolve_fn: JsValue::object(12),
+                reject_fn: JsValue::object(13),
+                ..next_request(0.0)
+            });
+
+        let mut ids: Vec<u64> = collect_roots(&sched)
+            .iter()
+            .filter_map(|v| v.as_object_id())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![7, 10, 11, 12, 13]);
     }
 
     #[test]
