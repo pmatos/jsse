@@ -771,6 +771,46 @@ impl Interpreter {
             }};
         }
 
+        macro_rules! route_loop_control_result {
+            ($target:expr) => {{
+                match self.route_generator_loop_control(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    $target,
+                ) {
+                    Ok(next_state) => next_state,
+                    Err(Completion::Throw(error)) => {
+                        let error = route_exception!(error);
+                        let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        self.generator_inline_iters.remove(&o.id);
+                        return disp;
+                    }
+                    Err(Completion::Exit(code)) => {
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        return Completion::Exit(code);
+                    }
+                    Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
+                }
+            }};
+        }
+
         loop {
             let terminator = state_machine.states[current_id].terminator.clone();
 
@@ -1300,43 +1340,7 @@ impl Interpreter {
                         pending_exception = None;
                         pending_return = None;
                     }
-                    match self.route_generator_loop_control(
-                        o.id,
-                        &mut for_of_stack,
-                        &mut current_try_stack,
-                        &func_env,
-                        target,
-                    ) {
-                        Ok(next_state) => current_id = next_state,
-                        Err(Completion::Throw(error)) => {
-                            let error = route_exception!(error);
-                            let disp = self.dispose_resources(&func_env, Completion::Throw(error));
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            self.generator_inline_iters.remove(&o.id);
-                            return disp;
-                        }
-                        Err(Completion::Exit(code)) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            self.generator_for_of_stacks.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            return Completion::Exit(code);
-                        }
-                        Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
-                    }
+                    current_id = route_loop_control_result!(target);
                 }
 
                 StateTerminator::Goto(next_state) => {
@@ -1484,46 +1488,7 @@ impl Interpreter {
                     if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
                         // The finalizer ran on behalf of a break/continue:
                         // resume it, through any finalizer still in the way.
-                        match self.route_generator_loop_control(
-                            o.id,
-                            &mut for_of_stack,
-                            &mut current_try_stack,
-                            &func_env,
-                            target,
-                        ) {
-                            Ok(next_state) => current_id = next_state,
-                            Err(Completion::Throw(error)) => {
-                                let error = route_exception!(error);
-                                let disp =
-                                    self.dispose_resources(&func_env, Completion::Throw(error));
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                self.generator_inline_iters.remove(&o.id);
-                                return disp;
-                            }
-                            Err(Completion::Exit(code)) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                self.generator_for_of_stacks.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                return Completion::Exit(code);
-                            }
-                            Err(_) => {
-                                unreachable!("loop-control routing returned a non-abrupt error")
-                            }
-                        }
+                        current_id = route_loop_control_result!(target);
                         continue;
                     }
                     current_id = *after_state;
@@ -4194,6 +4159,54 @@ impl Interpreter {
                 }
             }};
         }
+
+        macro_rules! route_loop_control_result {
+            ($target:expr) => {{
+                match self.route_generator_loop_control(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    $target,
+                ) {
+                    Ok(next_state) => next_state,
+                    Err(Completion::Throw(error)) => {
+                        let error = route_exception!(error);
+                        let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                        let error = match disp {
+                            Completion::Throw(error) => error,
+                            Completion::Exit(code) => return Completion::Exit(code),
+                            _ => unreachable!("disposing a throw must stay abrupt"),
+                        };
+                        self.generator_inline_iters.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_async_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+                    Err(Completion::Exit(code)) => {
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_async_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        return Completion::Exit(code);
+                    }
+                    Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
+                }
+            }};
+        }
+
         loop {
             if check_abrupt_on_resume {
                 check_abrupt_on_resume = false;
@@ -5401,50 +5414,7 @@ impl Interpreter {
                         pending_exception = None;
                         pending_return = None;
                     }
-                    match self.route_generator_loop_control(
-                        o.id,
-                        &mut for_of_stack,
-                        &mut current_try_stack,
-                        &func_env,
-                        target,
-                    ) {
-                        Ok(next_state) => current_id = next_state,
-                        Err(Completion::Throw(error)) => {
-                            let error = route_exception!(error);
-                            let disp = self.dispose_resources(&func_env, Completion::Throw(error));
-                            let error = match disp {
-                                Completion::Throw(error) => error,
-                                Completion::Exit(code) => return Completion::Exit(code),
-                                _ => unreachable!("disposing a throw must stay abrupt"),
-                            };
-                            self.generator_inline_iters.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                            self.drain_microtasks();
-                            return Completion::Normal(promise);
-                        }
-                        Err(Completion::Exit(code)) => {
-                            self.generator_inline_iters.remove(&o.id);
-                            self.generator_for_of_stacks.remove(&o.id);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            return Completion::Exit(code);
-                        }
-                        Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
-                    }
+                    current_id = route_loop_control_result!(target);
                 }
 
                 StateTerminator::Goto(next_state) => {
@@ -5561,54 +5531,7 @@ impl Interpreter {
                     if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
                         // The finalizer ran on behalf of a break/continue:
                         // resume it, through any finalizer still in the way.
-                        match self.route_generator_loop_control(
-                            o.id,
-                            &mut for_of_stack,
-                            &mut current_try_stack,
-                            &func_env,
-                            target,
-                        ) {
-                            Ok(next_state) => current_id = next_state,
-                            Err(Completion::Throw(error)) => {
-                                let error = route_exception!(error);
-                                let disp =
-                                    self.dispose_resources(&func_env, Completion::Throw(error));
-                                let error = match disp {
-                                    Completion::Throw(error) => error,
-                                    Completion::Exit(code) => return Completion::Exit(code),
-                                    _ => unreachable!("disposing a throw must stay abrupt"),
-                                };
-                                self.generator_inline_iters.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                let _ =
-                                    self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                                self.drain_microtasks();
-                                return Completion::Normal(promise);
-                            }
-                            Err(Completion::Exit(code)) => {
-                                self.generator_inline_iters.remove(&o.id);
-                                self.generator_for_of_stacks.remove(&o.id);
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                return Completion::Exit(code);
-                            }
-                            Err(_) => {
-                                unreachable!("loop-control routing returned a non-abrupt error")
-                            }
-                        }
+                        current_id = route_loop_control_result!(target);
                         continue;
                     }
                     current_id = *after_state;
