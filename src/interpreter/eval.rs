@@ -8869,17 +8869,14 @@ impl Interpreter {
 
                 if let Some((depth, state, is_catch, _)) = handler {
                     if is_catch {
-                        // A catch-only context is finished once its handler is
-                        // selected, but try-catch-finally must retain this
-                        // context so abrupt control from the catch still routes
-                        // through its attached finalizer. EnterCatch marks it
-                        // entered, preventing the catch from handling itself.
-                        let retained_depth = if try_stack[depth].finally_state.is_some() {
-                            depth + 1
-                        } else {
-                            depth
-                        };
-                        try_stack.truncate(retained_depth);
+                        // Always retain this context, catch-only or not:
+                        // every try/catch now routes its normal-completion
+                        // path through a `TryExit` (see
+                        // `transform_try_statement`), which must still find
+                        // this context on the stack to pop once the catch
+                        // body finishes. EnterCatch marks it entered,
+                        // preventing the catch from handling itself.
+                        try_stack.truncate(depth + 1);
                     } else if pending_completion_was_replaced {
                         // Drop the completed inner finally contexts so
                         // EnterFinally marks the handler selected above.

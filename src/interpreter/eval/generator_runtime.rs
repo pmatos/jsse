@@ -7300,17 +7300,17 @@ impl Interpreter {
                 && !try_info.entered_finally
                 && let Some(catch_state) = try_info.catch_state
             {
-                return Some((depth, catch_state, true, try_info.finally_state.is_some()));
+                return Some((depth, catch_state));
             }
             if !try_info.entered_finally
                 && let Some(finally_state) = try_info.finally_state
             {
-                return Some((depth, finally_state, false, true));
+                return Some((depth, finally_state));
             }
             None
         });
 
-        let keep_len = handler.map_or(0, |(handler_depth, _, _, _)| {
+        let keep_len = handler.map_or(0, |(handler_depth, _)| {
             for_of_stack
                 .iter()
                 .position(|loop_state| loop_state.try_depth > handler_depth)
@@ -7330,13 +7330,13 @@ impl Interpreter {
             _ => unreachable!("unwinding a throw must preserve abrupt completion"),
         };
 
-        if let Some((depth, handler_state, is_catch, has_finally)) = handler {
-            let retained_depth = if is_catch && !has_finally {
-                depth
-            } else {
-                depth + 1
-            };
-            try_stack.truncate(retained_depth);
+        if let Some((depth, handler_state)) = handler {
+            // Retain this context (rather than discarding a catch-only entry
+            // early) even when it has no `finally`: with every try/catch now
+            // routed through a `TryExit` on its normal-completion path (see
+            // `transform_try_statement`), the context must still be here for
+            // that `TryExit` to pop once the catch body finishes.
+            try_stack.truncate(depth + 1);
             *pending_exception = Some(error);
             *current_id = handler_state;
             Completion::Empty

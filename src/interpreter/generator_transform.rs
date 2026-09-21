@@ -2508,7 +2508,17 @@ fn transform_try_statement(
     } else {
         None
     };
-    let clause_completion_state = finally_entry_state.unwrap_or(after_try);
+    // A finally-less try/catch still needs a `TryExit` on its normal-completion
+    // path: `TryEnter` unconditionally pushes a runtime `TryContextInfo`, and
+    // only `TryExit` pops it. Without this, a finally-less try/catch's context
+    // leaks on the runtime stack forever, desyncing every depth computed
+    // afterwards (`try_depth`/`for_of_depth` on later `LoopControlTarget`s,
+    // and exception-handler search) from this transform's own `try_stack`
+    // bookkeeping, which pops on every try regardless of `finally`.
+    let no_finally_exit_state = finally_entry_state.is_none().then(|| ctx.new_state());
+    let clause_completion_state = finally_entry_state
+        .or(no_finally_exit_state)
+        .expect("exactly one of finally_entry_state/no_finally_exit_state is set");
 
     ctx.finalize_current_state(StateTerminator::TryEnter {
         try_state: try_body_state,
@@ -2590,6 +2600,11 @@ fn transform_try_statement(
             }
         }
         ctx.current_state_id = finally_exit_state;
+        ctx.finalize_current_state(StateTerminator::TryExit {
+            after_state: after_try,
+        });
+    } else if let Some(exit_state) = no_finally_exit_state {
+        ctx.current_state_id = exit_state;
         ctx.finalize_current_state(StateTerminator::TryExit {
             after_state: after_try,
         });
