@@ -37,6 +37,9 @@ an `await using` declared there was never disposed at all.
 
 ## Known boundary
 
+_Superseded in part by ADR-2026-09-22-2326: frame disposal with an in-flight
+throw or return, and `for (await using x of …)` head disposal, now park._
+
 A frame disposal reached while a throw or return is already in flight (or while
 replaying an inline yield), and the `for-of` unwind above, still use the
 blocking driver. A throwing disposer that replaces an in-flight `return`
