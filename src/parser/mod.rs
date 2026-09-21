@@ -1646,6 +1646,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_await_using_for_of_head_is_sync_iteration() {
+        let prog = parse("async function f() { for (await using a of b) { c; } }");
+        let Statement::FunctionDeclaration(decl) = &prog.body.as_slice()[0] else {
+            panic!("expected function declaration");
+        };
+        let Statement::ForOf(for_of) = &decl.body.statements[0] else {
+            panic!("expected for-of statement");
+        };
+        assert!(
+            !for_of.is_await,
+            "plain `for (await using a of b)` must not use the async (`for await`) iteration protocol"
+        );
+    }
+
+    #[test]
+    fn parse_for_await_of_await_using_head_is_async_iteration() {
+        let prog = parse("async function f() { for await (await using a of b) { c; } }");
+        let Statement::FunctionDeclaration(decl) = &prog.body.as_slice()[0] else {
+            panic!("expected function declaration");
+        };
+        let Statement::ForOf(for_of) = &decl.body.statements[0] else {
+            panic!("expected for-of statement");
+        };
+        assert!(
+            for_of.is_await,
+            "`for await (await using a of b)` must use the async iteration protocol"
+        );
+    }
+
+    #[test]
     fn parse_arrow_function() {
         let prog = parse("var f = (a, b) => a + b;");
         assert!(matches!(&prog.body.as_slice()[0], Statement::Variable(_)));

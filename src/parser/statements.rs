@@ -792,7 +792,7 @@ impl<'a> Parser<'a> {
                     }),
                     right,
                     body,
-                    is_await: true,
+                    is_await,
                 }));
             }
             // for (await using x = init; test; update)
