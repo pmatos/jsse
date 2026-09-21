@@ -320,7 +320,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ast::{self, Body, BodyIcInfo, Statement};
+    use crate::ast::{self, Body, BodyIcInfo, ExprBox, Statement};
 
     fn body_with_calls_props(calls: u32, props: u32) -> Body {
         Body {
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn assign_ic_sites_sized_store() {
         let mut body = Body::new(vec![Statement::Expression(crate::ast::Expression::Call(
-            Box::new(crate::ast::Expression::Identifier("f".to_string())),
+            ExprBox::new(crate::ast::Expression::Identifier("f".to_string())),
             vec![],
             CallSiteId::UNASSIGNED,
         ))]);

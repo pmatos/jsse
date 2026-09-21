@@ -1963,16 +1963,17 @@ impl Interpreter {
     /// innermost environment.
     pub(crate) fn reconcile_scope_stack(
         &mut self,
-        scope_stack: &mut Vec<(EnvRef, usize)>,
+        scope_stack: &mut Vec<ScopeFrame>,
         state: &crate::interpreter::generator_transform::GeneratorState,
+        try_depth: usize,
         for_of_depth: usize,
         for_of_env: &EnvRef,
     ) -> EnvRef {
         use crate::interpreter::generator_transform::ScopeAction;
 
-        let innermost = |scope_stack: &[(EnvRef, usize)], for_of_env: &EnvRef| -> EnvRef {
+        let innermost = |scope_stack: &[ScopeFrame], for_of_env: &EnvRef| -> EnvRef {
             match scope_stack.last() {
-                Some((env, pushed_at)) if for_of_depth <= *pushed_at => env.clone(),
+                Some(frame) if for_of_depth <= frame.for_of_depth => frame.env.clone(),
                 _ => for_of_env.clone(),
             }
         };
@@ -1984,7 +1985,11 @@ impl Interpreter {
         match &state.scope_action {
             Some(ScopeAction::OpenBlock) if scope_stack.len() < target_depth => {
                 let parent = innermost(scope_stack, for_of_env);
-                scope_stack.push((Environment::new(Some(parent)), for_of_depth));
+                scope_stack.push(ScopeFrame {
+                    env: Environment::new(Some(parent)),
+                    try_depth,
+                    for_of_depth,
+                });
             }
             Some(ScopeAction::CopyForward(bindings)) => {
                 // `CreatePerIterationEnvironment` (§14.7.4.3): copy each
@@ -2013,7 +2018,11 @@ impl Interpreter {
                     fresh.borrow_mut().declare(name, kind);
                     fresh.borrow_mut().initialize_binding(name, value);
                 }
-                scope_stack.push((fresh, for_of_depth));
+                scope_stack.push(ScopeFrame {
+                    env: fresh,
+                    try_depth,
+                    for_of_depth,
+                });
             }
             _ => {}
         }

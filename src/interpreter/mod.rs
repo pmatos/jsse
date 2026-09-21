@@ -262,7 +262,7 @@ pub(crate) struct Interpreter {
     /// by generator object id — mirrors `generator_for_of_stacks`' own shape
     /// since a generator's driver state lives outside the object's
     /// `IteratorState` enum.
-    pub(crate) generator_scope_stacks: FxHashMap<u64, Vec<(EnvRef, usize)>>,
+    pub(crate) generator_scope_stacks: FxHashMap<u64, Vec<ScopeFrame>>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
@@ -4277,7 +4277,9 @@ impl Interpreter {
             }
             Statement::ForIn(fi) => Self::expr_has_await(&fi.right) || Self::stmt_has_tla(&fi.body),
             Statement::ForOf(fo) => {
-                fo.is_await || Self::expr_has_await(&fo.right) || Self::stmt_has_tla(&fo.body)
+                fo.awaits_at_head()
+                    || Self::expr_has_await(&fo.right)
+                    || Self::stmt_has_tla(&fo.body)
             }
             Statement::While(w) => Self::expr_has_await(&w.test) || Self::stmt_has_tla(&w.body),
             Statement::DoWhile(dw) => {

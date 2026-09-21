@@ -1155,12 +1155,12 @@ impl Interpreter {
     /// table's equivalent) — the same pattern as `collect_for_of_stack_roots`,
     /// generalized alongside it.
     fn collect_scope_stack_roots(
-        scope_stack: &[(EnvRef, usize)],
+        scope_stack: &[ScopeFrame],
         worklist: &mut Vec<u64>,
         seen_envs: &mut HashSet<usize>,
     ) {
-        for (env, _) in scope_stack {
-            Self::collect_env_roots(env, worklist, seen_envs);
+        for frame in scope_stack {
+            Self::collect_env_roots(&frame.env, worklist, seen_envs);
         }
     }
 

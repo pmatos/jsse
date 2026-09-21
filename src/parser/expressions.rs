@@ -66,7 +66,7 @@ impl<'a> Parser<'a> {
             false
         };
         let expr = self.parse_assignment_expression()?;
-        Ok(Expression::Yield(Some(Box::new(expr)), delegate))
+        Ok(Expression::Yield(Some(ExprBox::new(expr)), delegate))
     }
 
     fn is_simple_assignment_target(expr: &Expression) -> bool {
@@ -296,7 +296,11 @@ impl<'a> Parser<'a> {
             } else {
                 left
             };
-            Ok(Expression::Assign(op, Box::new(left), Box::new(right)))
+            Ok(Expression::Assign(
+                op,
+                ExprBox::new(left),
+                ExprBox::new(right),
+            ))
         } else {
             // Not a destructuring assignment — check for deferred __proto__ dup error
             if self.last_obj_had_proto_dup {
@@ -323,9 +327,9 @@ impl<'a> Parser<'a> {
             // alternate is AssignmentExpression[?In]
             let alternate = self.parse_assignment_expression()?;
             Ok(Expression::Conditional(
-                Box::new(expr),
-                Box::new(consequent),
-                Box::new(alternate),
+                ExprBox::new(expr),
+                ExprBox::new(consequent),
+                ExprBox::new(alternate),
             ))
         } else {
             Ok(expr)
@@ -341,8 +345,8 @@ impl<'a> Parser<'a> {
                     let right = self.parse_bitwise_or()?;
                     left = Expression::Logical(
                         LogicalOp::NullishCoalescing,
-                        Box::new(left),
-                        Box::new(right),
+                        ExprBox::new(left),
+                        ExprBox::new(right),
                     );
                 }
                 if matches!(self.current, Token::LogicalOr | Token::LogicalAnd) {
@@ -355,7 +359,11 @@ impl<'a> Parser<'a> {
                 while self.current == Token::LogicalAnd {
                     self.advance()?;
                     let right = self.parse_bitwise_or()?;
-                    left = Expression::Logical(LogicalOp::And, Box::new(left), Box::new(right));
+                    left = Expression::Logical(
+                        LogicalOp::And,
+                        ExprBox::new(left),
+                        ExprBox::new(right),
+                    );
                 }
                 while self.current == Token::LogicalOr {
                     self.advance()?;
@@ -365,11 +373,12 @@ impl<'a> Parser<'a> {
                         let and_right = self.parse_bitwise_or()?;
                         right = Expression::Logical(
                             LogicalOp::And,
-                            Box::new(right),
-                            Box::new(and_right),
+                            ExprBox::new(right),
+                            ExprBox::new(and_right),
                         );
                     }
-                    left = Expression::Logical(LogicalOp::Or, Box::new(left), Box::new(right));
+                    left =
+                        Expression::Logical(LogicalOp::Or, ExprBox::new(left), ExprBox::new(right));
                 }
                 if self.current == Token::NullishCoalescing {
                     return Err(self.error(
@@ -387,7 +396,7 @@ impl<'a> Parser<'a> {
         while self.current == Token::Pipe {
             self.advance()?;
             let right = self.parse_bitwise_xor()?;
-            left = Expression::Binary(BinaryOp::BitOr, Box::new(left), Box::new(right));
+            left = Expression::Binary(BinaryOp::BitOr, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -397,7 +406,7 @@ impl<'a> Parser<'a> {
         while self.current == Token::Caret {
             self.advance()?;
             let right = self.parse_bitwise_and()?;
-            left = Expression::Binary(BinaryOp::BitXor, Box::new(left), Box::new(right));
+            left = Expression::Binary(BinaryOp::BitXor, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -407,7 +416,7 @@ impl<'a> Parser<'a> {
         while self.current == Token::Ampersand {
             self.advance()?;
             let right = self.parse_equality()?;
-            left = Expression::Binary(BinaryOp::BitAnd, Box::new(left), Box::new(right));
+            left = Expression::Binary(BinaryOp::BitAnd, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -424,7 +433,7 @@ impl<'a> Parser<'a> {
             };
             self.advance()?;
             let right = self.parse_relational()?;
-            left = Expression::Binary(op, Box::new(left), Box::new(right));
+            left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -462,7 +471,7 @@ impl<'a> Parser<'a> {
             {
                 return Err(self.error("Invalid right-hand side in 'in' expression"));
             }
-            left = Expression::Binary(op, Box::new(left), Box::new(right));
+            left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -478,7 +487,7 @@ impl<'a> Parser<'a> {
             };
             self.advance()?;
             let right = self.parse_additive()?;
-            left = Expression::Binary(op, Box::new(left), Box::new(right));
+            left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -493,7 +502,7 @@ impl<'a> Parser<'a> {
             };
             self.advance()?;
             let right = self.parse_multiplicative()?;
-            left = Expression::Binary(op, Box::new(left), Box::new(right));
+            left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -509,7 +518,7 @@ impl<'a> Parser<'a> {
             };
             self.advance()?;
             let right = self.parse_exponentiation()?;
-            left = Expression::Binary(op, Box::new(left), Box::new(right));
+            left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right));
         }
         Ok(left)
     }
@@ -545,8 +554,8 @@ impl<'a> Parser<'a> {
             let exp = self.parse_exponentiation()?; // right-associative
             Ok(Expression::Binary(
                 BinaryOp::Exp,
-                Box::new(base),
-                Box::new(exp),
+                ExprBox::new(base),
+                ExprBox::new(exp),
             ))
         } else {
             Ok(base)
@@ -575,37 +584,37 @@ impl<'a> Parser<'a> {
                     return Err(self
                         .error("Applying the 'delete' operator to a private name is not allowed"));
                 }
-                Ok(Expression::Delete(Box::new(expr)))
+                Ok(Expression::Delete(ExprBox::new(expr)))
             }
             Token::Keyword(Keyword::Void) => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Void(Box::new(expr)))
+                Ok(Expression::Void(ExprBox::new(expr)))
             }
             Token::Keyword(Keyword::Typeof) => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Typeof(Box::new(expr)))
+                Ok(Expression::Typeof(ExprBox::new(expr)))
             }
             Token::Plus => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Unary(UnaryOp::Plus, Box::new(expr)))
+                Ok(Expression::Unary(UnaryOp::Plus, ExprBox::new(expr)))
             }
             Token::Minus => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Unary(UnaryOp::Minus, Box::new(expr)))
+                Ok(Expression::Unary(UnaryOp::Minus, ExprBox::new(expr)))
             }
             Token::Tilde => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Unary(UnaryOp::BitNot, Box::new(expr)))
+                Ok(Expression::Unary(UnaryOp::BitNot, ExprBox::new(expr)))
             }
             Token::Bang => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Unary(UnaryOp::Not, Box::new(expr)))
+                Ok(Expression::Unary(UnaryOp::Not, ExprBox::new(expr)))
             }
             Token::Increment | Token::Decrement => {
                 let op = if self.current == Token::Increment {
@@ -616,7 +625,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let expr = self.parse_unary()?;
                 self.validate_assignment_target(&expr, true, true)?;
-                Ok(Expression::Update(op, true, Box::new(expr)))
+                Ok(Expression::Update(op, true, ExprBox::new(expr)))
             }
             Token::Keyword(Keyword::Await)
                 if self.in_async || (self.is_module && self.in_function == 0) =>
@@ -628,7 +637,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Await(Box::new(expr)))
+                Ok(Expression::Await(ExprBox::new(expr)))
             }
             _ => self.parse_postfix(),
         }
@@ -645,7 +654,7 @@ impl<'a> Parser<'a> {
             if let Some(op) = op {
                 self.validate_assignment_target(&expr, true, true)?;
                 self.advance()?;
-                return Ok(Expression::Update(op, false, Box::new(expr)));
+                return Ok(Expression::Update(op, false, ExprBox::new(expr)));
             }
         }
         Ok(expr)
@@ -722,32 +731,32 @@ impl<'a> Parser<'a> {
                     {
                         return Err(self.error("Private fields are not accessible on 'super'"));
                     }
-                    expr = Expression::Member(Box::new(expr), prop, PropSiteId::UNASSIGNED);
+                    expr = Expression::Member(ExprBox::new(expr), prop, PropSiteId::UNASSIGNED);
                 }
                 Token::LeftBracket => {
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;
                     expr = Expression::Member(
-                        Box::new(expr),
-                        MemberProperty::Computed(Box::new(prop)),
+                        ExprBox::new(expr),
+                        MemberProperty::Computed(ExprBox::new(prop)),
                         PropSiteId::UNASSIGNED,
                     );
                 }
                 Token::LeftParen => {
                     let args = self.parse_arguments()?;
-                    expr = Expression::Call(Box::new(expr), args, CallSiteId::UNASSIGNED);
+                    expr = Expression::Call(ExprBox::new(expr), args, CallSiteId::UNASSIGNED);
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     let tmpl = self.parse_template_literal_expr(true)?;
-                    expr = Expression::TaggedTemplate(Box::new(expr), tmpl);
+                    expr = Expression::TaggedTemplate(ExprBox::new(expr), tmpl);
                 }
                 Token::OptionalChain => {
                     self.advance()?;
                     let mut prop = if self.current == Token::LeftParen {
                         let args = self.parse_arguments()?;
                         Expression::Call(
-                            Box::new(Expression::Identifier("".into())),
+                            ExprBox::new(Expression::Identifier("".into())),
                             args,
                             CallSiteId::UNASSIGNED,
                         )
@@ -756,8 +765,8 @@ impl<'a> Parser<'a> {
                         let p = self.parse_expression()?;
                         self.eat(&Token::RightBracket)?;
                         Expression::Member(
-                            Box::new(Expression::Identifier("".into())),
-                            MemberProperty::Computed(Box::new(p)),
+                            ExprBox::new(Expression::Identifier("".into())),
+                            MemberProperty::Computed(ExprBox::new(p)),
                             PropSiteId::UNASSIGNED,
                         )
                     } else if let Token::PrivateName(name) = &self.current {
@@ -765,7 +774,7 @@ impl<'a> Parser<'a> {
                         self.use_private_name(&name)?;
                         self.advance()?;
                         Expression::Member(
-                            Box::new(Expression::Identifier("".into())),
+                            ExprBox::new(Expression::Identifier("".into())),
                             MemberProperty::Private(name),
                             PropSiteId::UNASSIGNED,
                         )
@@ -788,23 +797,29 @@ impl<'a> Parser<'a> {
                             Token::Dot => {
                                 self.advance()?;
                                 let mp = self.parse_dot_member_property()?;
-                                prop =
-                                    Expression::Member(Box::new(prop), mp, PropSiteId::UNASSIGNED);
+                                prop = Expression::Member(
+                                    ExprBox::new(prop),
+                                    mp,
+                                    PropSiteId::UNASSIGNED,
+                                );
                             }
                             Token::LeftBracket => {
                                 self.advance()?;
                                 let p = self.parse_expression()?;
                                 self.eat(&Token::RightBracket)?;
                                 prop = Expression::Member(
-                                    Box::new(prop),
-                                    MemberProperty::Computed(Box::new(p)),
+                                    ExprBox::new(prop),
+                                    MemberProperty::Computed(ExprBox::new(p)),
                                     PropSiteId::UNASSIGNED,
                                 );
                             }
                             Token::LeftParen => {
                                 let args = self.parse_arguments()?;
-                                prop =
-                                    Expression::Call(Box::new(prop), args, CallSiteId::UNASSIGNED);
+                                prop = Expression::Call(
+                                    ExprBox::new(prop),
+                                    args,
+                                    CallSiteId::UNASSIGNED,
+                                );
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                                 return Err(self
@@ -813,7 +828,7 @@ impl<'a> Parser<'a> {
                             _ => break,
                         }
                     }
-                    expr = Expression::OptionalChain(Box::new(expr), Box::new(prop));
+                    expr = Expression::OptionalChain(ExprBox::new(expr), ExprBox::new(prop));
                 }
                 _ => break,
             }
@@ -856,7 +871,7 @@ impl<'a> Parser<'a> {
         if self.current == Token::Keyword(Keyword::New) {
             let inner = self.parse_new_expression()?;
             return Ok(Expression::New(
-                Box::new(inner),
+                ExprBox::new(inner),
                 Vec::new(),
                 CallSiteId::UNASSIGNED,
             ));
@@ -883,21 +898,21 @@ impl<'a> Parser<'a> {
                 Token::Dot => {
                     self.advance()?;
                     let prop = self.parse_dot_member_property()?;
-                    callee = Expression::Member(Box::new(callee), prop, PropSiteId::UNASSIGNED);
+                    callee = Expression::Member(ExprBox::new(callee), prop, PropSiteId::UNASSIGNED);
                 }
                 Token::LeftBracket => {
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;
                     callee = Expression::Member(
-                        Box::new(callee),
-                        MemberProperty::Computed(Box::new(prop)),
+                        ExprBox::new(callee),
+                        MemberProperty::Computed(ExprBox::new(prop)),
                         PropSiteId::UNASSIGNED,
                     );
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     let tmpl = self.parse_template_literal_expr(true)?;
-                    callee = Expression::TaggedTemplate(Box::new(callee), tmpl);
+                    callee = Expression::TaggedTemplate(ExprBox::new(callee), tmpl);
                 }
                 _ => break,
             }
@@ -908,7 +923,7 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
         Ok(Expression::New(
-            Box::new(callee),
+            ExprBox::new(callee),
             args,
             CallSiteId::UNASSIGNED,
         ))
@@ -921,7 +936,7 @@ impl<'a> Parser<'a> {
             if self.current == Token::Ellipsis {
                 self.advance()?;
                 let expr = self.parse_assignment_expression()?;
-                args.push(Expression::Spread(Box::new(expr)));
+                args.push(Expression::Spread(ExprBox::new(expr)));
             } else {
                 args.push(self.parse_assignment_expression()?);
             }
@@ -1089,7 +1104,7 @@ impl<'a> Parser<'a> {
                                     if self.current == Token::Comma {
                                         self.advance()?;
                                     }
-                                    Some(Box::new(opts))
+                                    Some(ExprBox::new(opts))
                                 }
                             } else {
                                 None
@@ -1097,9 +1112,9 @@ impl<'a> Parser<'a> {
                             self.no_in = old_no_in;
                             self.eat(&Token::RightParen)?;
                             if is_defer {
-                                Ok(Expression::ImportDefer(Box::new(source), options))
+                                Ok(Expression::ImportDefer(ExprBox::new(source), options))
                             } else {
-                                Ok(Expression::ImportSource(Box::new(source), options))
+                                Ok(Expression::ImportSource(ExprBox::new(source), options))
                             }
                         }
                         _ => {
@@ -1123,14 +1138,14 @@ impl<'a> Parser<'a> {
                             if self.current == Token::Comma {
                                 self.advance()?;
                             }
-                            Some(Box::new(opts))
+                            Some(ExprBox::new(opts))
                         }
                     } else {
                         None
                     };
                     self.no_in = old_no_in;
                     self.eat(&Token::RightParen)?;
-                    Ok(Expression::Import(Box::new(source), options))
+                    Ok(Expression::Import(ExprBox::new(source), options))
                 } else {
                     Err(self.error("Unexpected 'import'"))
                 }
@@ -1403,7 +1418,7 @@ impl<'a> Parser<'a> {
                         if self.current == Token::Ellipsis {
                             self.advance()?;
                             let pat = self.parse_binding_pattern()?;
-                            exprs.push(Expression::Spread(Box::new(pattern_to_expr(pat))));
+                            exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
                             break;
                         }
                         if self.current == Token::RightParen {
@@ -1539,7 +1554,7 @@ impl<'a> Parser<'a> {
             if is_spread {
                 self.advance()?;
                 let expr = self.parse_assignment_expression()?;
-                elements.push(Some(Expression::Spread(Box::new(expr))));
+                elements.push(Some(Expression::Spread(ExprBox::new(expr))));
             } else {
                 elements.push(Some(self.parse_assignment_expression()?));
             }
@@ -1584,7 +1599,7 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_assignment_expression()?;
                 props.push(Property {
                     key: PropertyKey::Identifier("".into()),
-                    value: Expression::Spread(Box::new(expr)),
+                    value: Expression::Spread(ExprBox::new(expr)),
                     kind: PropertyKind::Init,
                     computed: false,
                     shorthand: false,
@@ -1996,8 +2011,8 @@ impl<'a> Parser<'a> {
                 key,
                 value: Expression::Assign(
                     AssignOp::Assign,
-                    Box::new(Expression::Identifier(ident)),
-                    Box::new(default_value),
+                    ExprBox::new(Expression::Identifier(ident)),
+                    ExprBox::new(default_value),
                 ),
                 kind: PropertyKind::Init,
                 computed: false,
@@ -2198,7 +2213,7 @@ impl<'a> Parser<'a> {
             }
             // async() — function call on 'async' identifier
             return Ok(Expression::Call(
-                Box::new(Expression::Identifier("async".to_string())),
+                ExprBox::new(Expression::Identifier("async".to_string())),
                 Vec::new(),
                 CallSiteId::UNASSIGNED,
             ));
@@ -2244,7 +2259,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Ellipsis {
                     self.advance()?;
                     let pat = self.parse_binding_pattern()?;
-                    exprs.push(Expression::Spread(Box::new(pattern_to_expr(pat))));
+                    exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
                     break;
                 }
                 if self.current == Token::RightParen {
@@ -2297,7 +2312,7 @@ impl<'a> Parser<'a> {
             }
             // Not an arrow — it's async(args) function call
             return Ok(Expression::Call(
-                Box::new(Expression::Identifier("async".to_string())),
+                ExprBox::new(Expression::Identifier("async".to_string())),
                 exprs,
                 CallSiteId::UNASSIGNED,
             ));
@@ -2305,7 +2320,7 @@ impl<'a> Parser<'a> {
         self.eat(&Token::RightParen)?;
         // async(expr) — function call
         Ok(Expression::Call(
-            Box::new(Expression::Identifier("async".to_string())),
+            ExprBox::new(Expression::Identifier("async".to_string())),
             vec![expr],
             CallSiteId::UNASSIGNED,
         ))

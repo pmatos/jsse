@@ -3886,6 +3886,36 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_async_function_terminator_expressions_is_not_swallowed() {
+        for (expression, code) in [
+            ("await __host_exit(3);", 3),
+            ("return __host_exit(4);", 4),
+            ("throw __host_exit(5);", 5),
+            ("if (__host_exit(6)) {}", 6),
+            ("switch (__host_exit(7)) { default: }", 7),
+            ("switch (0) { case __host_exit(8): }", 8),
+            ("for (const value of __host_exit(9)) {}", 9),
+        ] {
+            let (interp, c) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                async function f() {{
+                  {expression}
+                  globalThis.reached = "after";
+                }}
+                f();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{expression}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{expression}");
+            assert!(
+                matches!(c, Completion::Exit(x) if x == code),
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
     fn host_exit_in_async_generator_switch_dispatch_is_not_swallowed() {
         for (switch_head, code) in [
             ("switch (__host_exit(3)) { case 1: yield 1; }", 3),
@@ -3975,6 +4005,114 @@ mod node_host_tests {
         );
         assert_eq!(interp.pending_exit, Some(6));
         assert_eq!(global_string(&interp, "reached"), "before");
+    }
+
+    /// A `__host_exit` inside a state-terminator *operand* must abort the
+    /// driver, not be coerced to `undefined`.
+    ///
+    /// `Completion::Exit` is documented as structurally uncatchable
+    /// (`builtins/node_host.rs`), but three state-machine drivers each
+    /// open-coded the "which completions carry a value?" decision at their own
+    /// operand sites, and the async-function driver had no `Exit` arm at all —
+    /// so the exit was swallowed and the function *kept running*. Each row's
+    /// expected code is what the sibling generator drivers already produce for
+    /// the same program shape.
+    #[test]
+    fn host_exit_in_async_function_terminator_operand_is_not_swallowed() {
+        // `sync_exit` marks the rows whose exit happens before the function
+        // first suspends, so the *script*'s own completion is the exit. The
+        // `await 0;` rows have already returned a promise by then, and the
+        // exit surfaces during the microtask drain — `pending_exit` is the
+        // observable there, as in the async-generator tests below.
+        for (label, body, code, sync_exit) in [
+            ("if condition", "if (__host_exit(3)) { await 1; }", 3, true),
+            (
+                "while condition",
+                "while (__host_exit(4)) { await 1; }",
+                4,
+                true,
+            ),
+            (
+                "switch discriminant",
+                "switch (__host_exit(5)) { case 1: await 1; }",
+                5,
+                true,
+            ),
+            (
+                "switch case test",
+                "switch (0) { case __host_exit(6): await 1; }",
+                6,
+                true,
+            ),
+            (
+                "for-of iterable",
+                "for (const x of __host_exit(7)) { await 1; }",
+                7,
+                true,
+            ),
+            ("await operand", "await 0; await __host_exit(8);", 8, false),
+            (
+                "return operand",
+                "await 0; return __host_exit(9);",
+                9,
+                false,
+            ),
+        ] {
+            let (interp, c) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                async function f() {{
+                  {body}
+                  globalThis.reached = "after";
+                }}
+                f();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{label}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{label}");
+            if sync_exit {
+                assert!(matches!(c, Completion::Exit(x) if x == code), "{label}");
+            }
+        }
+    }
+
+    /// The async-generator driver's remaining operand sites: `for-of` iterable
+    /// and `await`. Its `ConditionalGoto` and `SwitchDispatch` operands already
+    /// propagate `Exit` (pinned above), which is exactly the drift — the same
+    /// rule answered differently within one driver.
+    #[test]
+    fn host_exit_in_async_generator_terminator_operand_is_not_swallowed() {
+        for (label, body, code) in [
+            (
+                "for-of iterable",
+                "for (const x of __host_exit(4)) { yield 1; }",
+                4,
+            ),
+            ("await operand", "yield 1; await __host_exit(5);", 5),
+            ("yield operand", "yield __host_exit(6);", 6),
+            // Not a defect at baseline — a top-level `throw` is not lowered to
+            // a `Throw` terminator, so the operand site this exercises is the
+            // statement path, which already propagated. Pinned because the
+            // seam changed the terminator site's `Exit` arm regardless.
+            ("throw operand", "throw __host_exit(7);", 7),
+        ] {
+            let (interp, _) = run_node_script(&format!(
+                r#"
+                globalThis.reached = "before";
+                async function* g() {{
+                  {body}
+                  globalThis.reached = "after";
+                }}
+                (async () => {{
+                  const it = g();
+                  await it.next();
+                  await it.next();
+                }})();
+                "#
+            ));
+            assert_eq!(interp.pending_exit, Some(code), "{label}");
+            assert_eq!(global_string(&interp, "reached"), "before", "{label}");
+        }
     }
 
     #[test]
@@ -4940,4 +5078,26 @@ fn propagate_macro_covers_three_shapes_and_empty() {
         Completion::Normal(JsValue::number(n as f64))
     }
     assert!(matches!(s2_typed(Ok(7)), Completion::Normal(_)));
+}
+
+#[test]
+fn module_with_only_a_plain_await_using_for_of_head_is_top_level_await() {
+    // `for (await using x of y) {}` has no `for await` and no `await` in its
+    // body, but the ForDeclaration's per-iteration disposal still suspends —
+    // the module must still be detected as TLA (module_has_tla drives whether
+    // the module's evaluation goes through the async path at all).
+    let program = parse_module_program("for (await using x of []) {}");
+    assert!(Interpreter::module_has_tla(&program));
+}
+
+#[test]
+fn module_with_a_for_await_of_head_is_top_level_await() {
+    let program = parse_module_program("for await (x of []) {}");
+    assert!(Interpreter::module_has_tla(&program));
+}
+
+#[test]
+fn module_with_a_plain_for_of_head_and_no_await_is_not_top_level_await() {
+    let program = parse_module_program("for (x of []) {}");
+    assert!(!Interpreter::module_has_tla(&program));
 }

@@ -172,6 +172,27 @@ pub(crate) enum DisposeThen {
     /// A block ending its state finished; its completion (after disposal)
     /// resumes the state's normal post-body handling.
     Block,
+    /// `ExitScope`'s own (non-abrupt) disposal of a block scope; once done,
+    /// continue at the carried state.
+    ScopeExit(usize),
+    /// A `return` crossing one or more open block scopes is disposing the
+    /// innermost one; once done, `route_return!` is re-entered with the
+    /// value carried by the cursor's own completion so it can continue
+    /// unwinding whatever remains (further scopes, then for-of loops).
+    ScopeCrossReturn,
+    /// A `break`/`continue` crossing one or more open block scopes is
+    /// disposing the innermost one; once done, `route_loop_control!` is
+    /// re-entered with the carried target.
+    ScopeCrossLoopControl(super::generator_transform::LoopControlTarget),
+    /// An in-flight throw crossing one or more open block scopes is
+    /// disposing the innermost one; the cursor was seeded with
+    /// `Completion::Throw`, so it always finishes as a throw (the original
+    /// exception, or a disposer's own error chained onto it), which becomes
+    /// `pending_exception` and re-enters the driver's throw routing.
+    ScopeCrossThrow,
+    /// A `for-of` iteration's environment finished disposing; the `ForOfHead`
+    /// state re-enters and finds `iteration_env` already cleared.
+    ForOfIteration,
 }
 
 /// A function-level DisposeResources parked at one of its `Await`s.

@@ -172,6 +172,21 @@ pub(crate) enum StateTerminator {
         resume_state: usize,
         sent_value_binding: Option<SentValueBinding>,
     },
+    /// Opens a block scope: creates the block's own `Environment` (a child of
+    /// whatever env is active), pushes it onto the driver's `scope_stack`, and
+    /// continues at `body_state` executing against it. Emitted only for a
+    /// block that directly declares `await using` in a plain async function
+    /// (never a generator or async generator) — see
+    /// `has_block_with_await_using`.
+    EnterScope {
+        body_state: usize,
+    },
+    /// Closes the block scope most recently opened by `EnterScope`: pops it
+    /// from `scope_stack` and disposes its resources (suspendably, at each
+    /// `Await` of `DisposeResources`) before continuing at `after_state`.
+    ExitScope {
+        after_state: usize,
+    },
     Completed,
 }
 
@@ -185,6 +200,10 @@ pub(crate) struct LoopControlTarget {
     pub target_state: usize,
     pub try_depth: usize,
     pub for_of_depth: usize,
+    /// Number of block scopes (`EnterScope`/`ExitScope`) open when this
+    /// target's loop/label was registered, so `route_loop_control!` never
+    /// disposes a scope that lexically encloses the target itself.
+    pub scope_depth: usize,
 }
 
 /// Clear IC sites in a sent-value binding pattern (the destructuring target of
@@ -261,6 +280,8 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         | StateTerminator::LoopControl(_)
         | StateTerminator::TryExit { .. }
         | StateTerminator::EnterFinally { .. }
+        | StateTerminator::EnterScope { .. }
+        | StateTerminator::ExitScope { .. }
         | StateTerminator::Completed => {}
     }
 }
@@ -307,17 +328,17 @@ struct TransformContext {
     continue_targets: HashMap<Option<String>, LoopControlTarget>,
     try_stack: Vec<TryInfo>,
     for_of_depth: usize,
+    /// Number of lexical-scope-stack frames active at the current transform
+    /// point. Includes ordinary blocks, catch bindings, `for`-head
+    /// per-iteration frames, and suspendable `await using` scopes; stamped
+    /// onto states and loop-control targets for reconciliation and disposal.
+    scope_depth: usize,
     iteration_labels: Vec<String>,
     temp_vars: Vec<String>,
     generated_temps: HashSet<String>,
     is_async: bool,
     detect_for_await: bool,
     with_scopes: Vec<String>,
-    /// Number of lexical-scope-stack frames (blocks, `for`-head per-iteration
-    /// frames, catch-param frames) active at the point currently being
-    /// transformed. Stamped onto each state as it's sealed; see
-    /// `GeneratorState::scope_depth`.
-    scope_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -342,13 +363,13 @@ impl TransformContext {
             continue_targets: HashMap::new(),
             try_stack: Vec::new(),
             for_of_depth: 0,
+            scope_depth: 0,
             iteration_labels: Vec::new(),
             temp_vars: Vec::new(),
             generated_temps: HashSet::new(),
             is_async,
             detect_for_await: false,
             with_scopes: Vec::new(),
-            scope_depth: 0,
         }
     }
 
@@ -457,6 +478,7 @@ impl TransformContext {
             target_state,
             try_depth: self.try_stack.len(),
             for_of_depth,
+            scope_depth: self.scope_depth,
         }
     }
 
@@ -591,7 +613,7 @@ fn create_simple_machine(
 
 fn stmt_contains_for_await(stmt: &Statement) -> bool {
     match stmt {
-        Statement::ForOf(f) => f.is_await,
+        Statement::ForOf(f) => f.awaits_at_head(),
         Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
         Statement::If(i) => {
             stmt_contains_for_await(&i.consequent)
@@ -660,7 +682,7 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
     if detect_for_await
         && let Statement::ForOf(f) = stmt
-        && f.is_await
+        && f.awaits_at_head()
     {
         return true;
     }
@@ -876,6 +898,31 @@ fn hoist_class_suspensions(
     }
 }
 
+/// Lowers a block scope (a block, or a try/catch/finally clause body, that
+/// directly declares `await using`) through `EnterScope`/`ExitScope`: the
+/// interior is lowered by the ordinary per-statement pipeline, split across
+/// as many states as it needs, executing against the scope's own
+/// `Environment` (created at `EnterScope`) rather than the enclosing one.
+/// `after_state` is where control goes once the scope's own disposal (at
+/// `ExitScope`) finishes on a normal (non-abrupt) exit.
+fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
+    let body_state = ctx.new_state();
+    let exit_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::EnterScope { body_state });
+    ctx.current_state_id = body_state;
+    ctx.scope_depth += 1;
+    transform_statements(stmts, ctx, exit_state);
+    if ctx.current_state_id != exit_state {
+        ctx.finalize_current_state(StateTerminator::Goto(exit_state));
+    }
+    ctx.current_state_id = exit_state;
+    // `ExitScope` must execute while its frame is still the state's required
+    // depth; otherwise reconciliation would truncate it before disposal.
+    ctx.finalize_current_state(StateTerminator::ExitScope { after_state });
+    ctx.scope_depth -= 1;
+    ctx.current_state_id = after_state;
+}
+
 fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, after_state: usize) {
     match stmt {
         Statement::Expression(expr) => {
@@ -889,12 +936,26 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Block(stmts) => {
-            if ctx.is_async && block_has_await_using(stmts) {
-                // Block with `await using` — keep the block intact so it creates
-                // a block_env with its own dispose_stack. It stays the last
-                // statement of its state: the async function executor parks the
-                // block's DisposeResources and suspends at its Awaits, then
-                // continues at the state boundary created after the block.
+            if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
+                // A block with `await using`, in a plain async function: give
+                // it a real scope (`EnterScope`/`ExitScope`) so its interior
+                // lowers through the ordinary per-statement pipeline instead
+                // of being tree-walked intact — see issue #683.
+                let resume_state = if after_state == usize::MAX {
+                    ctx.new_state()
+                } else {
+                    after_state
+                };
+                transform_scope_block(stmts, ctx, resume_state);
+            } else if ctx.is_async && block_has_await_using(stmts) {
+                // The same shape in an async generator: `EnterScope`/
+                // `ExitScope` are emitted only for plain async functions
+                // (`transform_async_function`, gated on `detect_for_await`),
+                // so keep the block intact here, tree-walked with its own
+                // block_env and dispose_stack. It stays the last statement of
+                // its state: the executor parks the block's DisposeResources
+                // and suspends at its Awaits, then continues at the state
+                // boundary created after the block.
                 let resume_state = if after_state == usize::MAX {
                     ctx.new_state()
                 } else {
@@ -902,14 +963,6 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 };
                 ctx.emit_statement(stmt.clone());
                 ctx.finalize_current_state(StateTerminator::Goto(resume_state));
-                if ctx.detect_for_await
-                    && !(ctx.break_targets.is_empty() && ctx.continue_targets.is_empty())
-                {
-                    ctx.states[ctx.current_state_id].block_exits = Some(Rc::new(BlockExits {
-                        breaks: ctx.break_targets.clone(),
-                        continues: ctx.continue_targets.clone(),
-                    }));
-                }
                 ctx.current_state_id = resume_state;
                 // If there were remaining statements after the block in the parent,
                 // they'll be emitted into resume_state by the caller.
@@ -1028,8 +1081,8 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
             } else {
                 ctx.emit_statement(Statement::Expression(Expression::Assign(
                     AssignOp::Assign,
-                    Box::new(Expression::Identifier(with_var.clone())),
-                    Box::new(expr.clone()),
+                    ExprBox::new(Expression::Identifier(with_var.clone())),
+                    ExprBox::new(expr.clone()),
                 )));
             }
             if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await) {
@@ -1091,12 +1144,12 @@ fn transform_yielding_expression(
                     let temp_var = ctx.new_temp_var("yield_val");
                     ctx.emit_statement(Statement::Expression(Expression::Assign(
                         AssignOp::Assign,
-                        Box::new(Expression::Identifier(temp_var.clone())),
-                        Box::new(*inner.clone()),
+                        ExprBox::new(Expression::Identifier(temp_var.clone())),
+                        ExprBox::new(inner.clone().into_expression()),
                     )));
                     Some(Expression::Identifier(temp_var))
                 } else {
-                    Some(*inner.clone())
+                    Some(inner.clone().into_expression())
                 }
             } else {
                 None
@@ -1124,7 +1177,7 @@ fn transform_yielding_expression(
                 transform_yielding_expression(inner_expr, ctx, usize::MAX, Some(inner_binding));
                 Expression::Identifier(temp_var)
             } else {
-                *inner_expr.clone()
+                inner_expr.clone().into_expression()
             };
 
             let resume_state = ctx.new_state();
@@ -1173,7 +1226,7 @@ fn transform_yielding_expression(
                 let false_state = ctx.new_state();
 
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                    condition: *test.clone(),
+                    condition: test.clone().into_expression(),
                     true_state,
                     false_state,
                 });
@@ -1212,12 +1265,12 @@ fn transform_yielding_expression(
                         LogicalOp::And => Expression::Identifier(temp_var.clone()),
                         LogicalOp::Or => Expression::Unary(
                             UnaryOp::Not,
-                            Box::new(Expression::Identifier(temp_var.clone())),
+                            ExprBox::new(Expression::Identifier(temp_var.clone())),
                         ),
                         LogicalOp::NullishCoalescing => Expression::Binary(
                             BinaryOp::StrictNotEq,
-                            Box::new(Expression::Identifier(temp_var.clone())),
-                            Box::new(Expression::Literal(Literal::Null)),
+                            ExprBox::new(Expression::Identifier(temp_var.clone())),
+                            ExprBox::new(Expression::Literal(Literal::Null)),
                         ),
                     };
 
@@ -1235,7 +1288,7 @@ fn transform_yielding_expression(
                 } else {
                     let combined = Expression::Logical(
                         *op,
-                        Box::new(Expression::Identifier(temp_var)),
+                        ExprBox::new(Expression::Identifier(temp_var)),
                         right.clone(),
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
@@ -1245,12 +1298,12 @@ fn transform_yielding_expression(
                 let eval_right_state = ctx.new_state();
 
                 let condition = match op {
-                    LogicalOp::And => *left.clone(),
+                    LogicalOp::And => left.clone().into_expression(),
                     LogicalOp::Or => Expression::Unary(UnaryOp::Not, left.clone()),
                     LogicalOp::NullishCoalescing => Expression::Binary(
                         BinaryOp::StrictNotEq,
                         left.clone(),
-                        Box::new(Expression::Literal(Literal::Null)),
+                        ExprBox::new(Expression::Literal(Literal::Null)),
                     ),
                 };
 
@@ -1283,14 +1336,14 @@ fn transform_yielding_expression(
 
                     let combined = Expression::Binary(
                         *op,
-                        Box::new(Expression::Identifier(temp_var)),
-                        Box::new(Expression::Identifier(temp_var2)),
+                        ExprBox::new(Expression::Identifier(temp_var)),
+                        ExprBox::new(Expression::Identifier(temp_var2)),
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 } else {
                     let combined = Expression::Binary(
                         *op,
-                        Box::new(Expression::Identifier(temp_var)),
+                        ExprBox::new(Expression::Identifier(temp_var)),
                         right.clone(),
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
@@ -1303,7 +1356,7 @@ fn transform_yielding_expression(
                 let combined = Expression::Binary(
                     *op,
                     left.clone(),
-                    Box::new(Expression::Identifier(temp_var)),
+                    ExprBox::new(Expression::Identifier(temp_var)),
                 );
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
@@ -1314,7 +1367,7 @@ fn transform_yielding_expression(
         }
 
         Expression::New(callee, args, _) => {
-            let mut temp_callee = *callee.clone();
+            let mut temp_callee = callee.clone().into_expression();
             if expr_has_suspension(callee, ctx.is_async) {
                 let temp_var = ctx.new_temp_var("new_callee");
                 let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
@@ -1329,7 +1382,7 @@ fn transform_yielding_expression(
                         let temp_var = ctx.new_temp_var(&format!("new_arg_{}", i));
                         let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
                         transform_yielding_expression(inner, ctx, usize::MAX, Some(arg_binding));
-                        temp_args.push(Expression::Spread(Box::new(Expression::Identifier(
+                        temp_args.push(Expression::Spread(ExprBox::new(Expression::Identifier(
                             temp_var,
                         ))));
                     } else {
@@ -1346,7 +1399,7 @@ fn transform_yielding_expression(
             }
 
             let combined =
-                Expression::New(Box::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
+                Expression::New(ExprBox::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1359,14 +1412,14 @@ fn transform_yielding_expression(
                 let combined = Expression::Assign(
                     *op,
                     left.clone(),
-                    Box::new(Expression::Identifier(temp_var)),
+                    ExprBox::new(Expression::Identifier(temp_var)),
                 );
                 emit_expression_with_binding(&combined, &binding, ctx);
             } else if expr_has_suspension(left, ctx.is_async) {
                 // LHS has suspension (e.g. c[await 9] = 1, or destructuring [x = yield] = vals)
                 // Pre-evaluate suspension points in LHS member expressions
                 let new_left = extract_lhs_suspensions(left, ctx);
-                let combined = Expression::Assign(*op, Box::new(new_left), right.clone());
+                let combined = Expression::Assign(*op, ExprBox::new(new_left), right.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
@@ -1393,7 +1446,7 @@ fn transform_yielding_expression(
                         let temp_var = ctx.new_temp_var(&format!("arr_elem_{}", i));
                         let elem_binding = SentValueBindingKind::Variable(temp_var.clone());
                         transform_yielding_expression(inner, ctx, usize::MAX, Some(elem_binding));
-                        new_elements.push(Some(Expression::Spread(Box::new(
+                        new_elements.push(Some(Expression::Spread(ExprBox::new(
                             Expression::Identifier(temp_var),
                         ))));
                     }
@@ -1425,7 +1478,7 @@ fn transform_yielding_expression(
                         let temp_var = ctx.new_temp_var(&format!("obj_key_{}", i));
                         let key_binding = SentValueBindingKind::Variable(temp_var.clone());
                         transform_yielding_expression(e, ctx, usize::MAX, Some(key_binding));
-                        PropertyKey::Computed(Box::new(Expression::Identifier(temp_var)))
+                        PropertyKey::Computed(ExprBox::new(Expression::Identifier(temp_var)))
                     } else {
                         prop.key.clone()
                     }
@@ -1438,7 +1491,7 @@ fn transform_yielding_expression(
                         let temp_var = ctx.new_temp_var(&format!("obj_val_{}", i));
                         let val_binding = SentValueBindingKind::Variable(temp_var.clone());
                         transform_yielding_expression(inner, ctx, usize::MAX, Some(val_binding));
-                        Expression::Spread(Box::new(Expression::Identifier(temp_var)))
+                        Expression::Spread(ExprBox::new(Expression::Identifier(temp_var)))
                     } else {
                         prop.value.clone()
                     }
@@ -1471,7 +1524,7 @@ fn transform_yielding_expression(
         }
 
         Expression::Member(obj, prop, _) => {
-            let mut temp_obj = *obj.clone();
+            let mut temp_obj = obj.clone().into_expression();
             if expr_has_suspension(obj, ctx.is_async) {
                 let tv = ctx.new_temp_var("mem_obj");
                 let b = SentValueBindingKind::Variable(tv.clone());
@@ -1484,15 +1537,15 @@ fn transform_yielding_expression(
                     let b = SentValueBindingKind::Variable(tv.clone());
                     transform_yielding_expression(e, ctx, usize::MAX, Some(b));
                     let combined = Expression::Member(
-                        Box::new(temp_obj),
-                        MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
+                        ExprBox::new(temp_obj),
+                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
                         PropSiteId::UNASSIGNED,
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
                 _ => {
                     let combined = Expression::Member(
-                        Box::new(temp_obj),
+                        ExprBox::new(temp_obj),
                         prop.clone(),
                         PropSiteId::UNASSIGNED,
                     );
@@ -1502,7 +1555,7 @@ fn transform_yielding_expression(
         }
 
         Expression::OptionalChain(base, chain) => {
-            let mut temp_base = *base.clone();
+            let mut temp_base = base.clone().into_expression();
             if expr_has_suspension(base, ctx.is_async) {
                 let tv = ctx.new_temp_var("oc_base");
                 let b = SentValueBindingKind::Variable(tv.clone());
@@ -1524,8 +1577,8 @@ fn transform_yielding_expression(
                 // temp != null catches both null and undefined via loose equality
                 let condition = Expression::Binary(
                     BinaryOp::NotEq,
-                    Box::new(Expression::Identifier(base_var.clone())),
-                    Box::new(Expression::Literal(Literal::Null)),
+                    ExprBox::new(Expression::Identifier(base_var.clone())),
+                    ExprBox::new(Expression::Literal(Literal::Null)),
                 );
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
                     condition,
@@ -1551,7 +1604,7 @@ fn transform_yielding_expression(
                 ctx.finalize_current_state(StateTerminator::Goto(after_oc));
                 ctx.current_state_id = after_oc;
             } else {
-                let combined = Expression::OptionalChain(Box::new(temp_base), chain.clone());
+                let combined = Expression::OptionalChain(ExprBox::new(temp_base), chain.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
@@ -1560,7 +1613,7 @@ fn transform_yielding_expression(
             let tv = ctx.new_temp_var("unary");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Unary(*op, Box::new(Expression::Identifier(tv)));
+            let combined = Expression::Unary(*op, ExprBox::new(Expression::Identifier(tv)));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1568,7 +1621,7 @@ fn transform_yielding_expression(
             let tv = ctx.new_temp_var("typeof");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Typeof(Box::new(Expression::Identifier(tv)));
+            let combined = Expression::Typeof(ExprBox::new(Expression::Identifier(tv)));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1576,7 +1629,7 @@ fn transform_yielding_expression(
             let tv = ctx.new_temp_var("void");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Void(Box::new(Expression::Identifier(tv)));
+            let combined = Expression::Void(ExprBox::new(Expression::Identifier(tv)));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1584,7 +1637,7 @@ fn transform_yielding_expression(
             let tv = ctx.new_temp_var("del");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Delete(Box::new(Expression::Identifier(tv)));
+            let combined = Expression::Delete(ExprBox::new(Expression::Identifier(tv)));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1592,7 +1645,8 @@ fn transform_yielding_expression(
             let tv = ctx.new_temp_var("upd");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Update(*op, *prefix, Box::new(Expression::Identifier(tv)));
+            let combined =
+                Expression::Update(*op, *prefix, ExprBox::new(Expression::Identifier(tv)));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1618,7 +1672,7 @@ fn transform_yielding_expression(
         }
 
         Expression::TaggedTemplate(tag, tpl) => {
-            let mut temp_tag = *tag.clone();
+            let mut temp_tag = tag.clone().into_expression();
             if expr_has_suspension(tag, ctx.is_async) {
                 let tv = ctx.new_temp_var("tag_fn");
                 let b = SentValueBindingKind::Variable(tv.clone());
@@ -1637,7 +1691,7 @@ fn transform_yielding_expression(
                 }
             }
             let combined = Expression::TaggedTemplate(
-                Box::new(temp_tag),
+                ExprBox::new(temp_tag),
                 TemplateLiteral {
                     id: tpl.id,
                     quasis: tpl.quasis.clone(),
@@ -1652,21 +1706,21 @@ fn transform_yielding_expression(
             let tv = ctx.new_temp_var("spread");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Spread(Box::new(Expression::Identifier(tv)));
+            let combined = Expression::Spread(ExprBox::new(Expression::Identifier(tv)));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
         Expression::Import(spec, opts)
         | Expression::ImportDefer(spec, opts)
         | Expression::ImportSource(spec, opts) => {
-            let mut temp_spec = *spec.clone();
+            let mut temp_spec = spec.clone().into_expression();
             if expr_has_suspension(spec, ctx.is_async) {
                 let tv = ctx.new_temp_var("imp_spec");
                 let b = SentValueBindingKind::Variable(tv.clone());
                 transform_yielding_expression(spec, ctx, usize::MAX, Some(b));
                 temp_spec = Expression::Identifier(tv);
             }
-            let mut temp_opts = opts.clone().map(|o| *o);
+            let mut temp_opts = opts.clone().map(ExprBox::into_expression);
             if let Some(o) = opts
                 && expr_has_suspension(o, ctx.is_async)
             {
@@ -1675,14 +1729,14 @@ fn transform_yielding_expression(
                 transform_yielding_expression(o, ctx, usize::MAX, Some(b));
                 temp_opts = Some(Expression::Identifier(tv));
             }
-            let boxed_opts = temp_opts.map(Box::new);
+            let boxed_opts = temp_opts.map(ExprBox::new);
             let combined = match expr {
-                Expression::Import(_, _) => Expression::Import(Box::new(temp_spec), boxed_opts),
+                Expression::Import(_, _) => Expression::Import(ExprBox::new(temp_spec), boxed_opts),
                 Expression::ImportDefer(_, _) => {
-                    Expression::ImportDefer(Box::new(temp_spec), boxed_opts)
+                    Expression::ImportDefer(ExprBox::new(temp_spec), boxed_opts)
                 }
                 Expression::ImportSource(_, _) => {
-                    Expression::ImportSource(Box::new(temp_spec), boxed_opts)
+                    Expression::ImportSource(ExprBox::new(temp_spec), boxed_opts)
                 }
                 _ => unreachable!(),
             };
@@ -1703,17 +1757,25 @@ fn oc_chain_to_regular_expr(chain: &Expression, base_var: &str) -> Expression {
             Expression::Identifier(base_var.to_string())
         }
         Expression::Identifier(name) => Expression::Member(
-            Box::new(Expression::Identifier(base_var.to_string())),
+            ExprBox::new(Expression::Identifier(base_var.to_string())),
             MemberProperty::Dot(name.clone()),
             PropSiteId::UNASSIGNED,
         ),
         Expression::Member(inner, prop, _) => {
             let inner_expr = oc_chain_to_regular_expr(inner, base_var);
-            Expression::Member(Box::new(inner_expr), prop.clone(), PropSiteId::UNASSIGNED)
+            Expression::Member(
+                ExprBox::new(inner_expr),
+                prop.clone(),
+                PropSiteId::UNASSIGNED,
+            )
         }
         Expression::Call(callee, args, _) => {
             let callee_expr = oc_chain_to_regular_expr(callee, base_var);
-            Expression::Call(Box::new(callee_expr), args.clone(), CallSiteId::UNASSIGNED)
+            Expression::Call(
+                ExprBox::new(callee_expr),
+                args.clone(),
+                CallSiteId::UNASSIGNED,
+            )
         }
         other => other.clone(),
     }
@@ -1728,7 +1790,7 @@ fn transform_call_expression(
     let mut temp_callee = callee.clone();
     if expr_has_suspension(callee, ctx.is_async) {
         if let Expression::Member(obj, prop, _) = callee {
-            let mut temp_obj = *obj.clone();
+            let mut temp_obj = obj.clone().into_expression();
             if expr_has_suspension(obj, ctx.is_async) {
                 let tv = ctx.new_temp_var("call_obj");
                 let b = SentValueBindingKind::Variable(tv.clone());
@@ -1741,14 +1803,14 @@ fn transform_call_expression(
                     let b = SentValueBindingKind::Variable(tv.clone());
                     transform_yielding_expression(e, ctx, usize::MAX, Some(b));
                     temp_callee = Expression::Member(
-                        Box::new(temp_obj),
-                        MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
+                        ExprBox::new(temp_obj),
+                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
                         PropSiteId::UNASSIGNED,
                     );
                 }
                 _ => {
                     temp_callee = Expression::Member(
-                        Box::new(temp_obj),
+                        ExprBox::new(temp_obj),
                         prop.clone(),
                         PropSiteId::UNASSIGNED,
                     );
@@ -1769,7 +1831,7 @@ fn transform_call_expression(
                 let temp_var = ctx.new_temp_var(&format!("call_arg_{}", i));
                 let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(inner, ctx, usize::MAX, Some(arg_binding));
-                temp_args.push(Expression::Spread(Box::new(Expression::Identifier(
+                temp_args.push(Expression::Spread(ExprBox::new(Expression::Identifier(
                     temp_var,
                 ))));
             } else {
@@ -1785,7 +1847,7 @@ fn transform_call_expression(
         }
     }
 
-    let combined = Expression::Call(Box::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
+    let combined = Expression::Call(ExprBox::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
     emit_expression_with_binding(&combined, &binding, ctx);
 }
 
@@ -1809,8 +1871,8 @@ fn emit_expression_with_binding(
                 };
             let assign = Expression::Assign(
                 AssignOp::Assign,
-                Box::new(Expression::Identifier(name.clone())),
-                Box::new(value),
+                ExprBox::new(Expression::Identifier(name.clone())),
+                ExprBox::new(value),
             );
             ctx.emit_statement(Statement::Expression(assign));
         }
@@ -1848,7 +1910,7 @@ fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Exp
                 );
                 Expression::Identifier(temp)
             } else {
-                *obj.clone()
+                obj.clone().into_expression()
             };
             let new_prop = match prop {
                 MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
@@ -1859,11 +1921,11 @@ fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Exp
                         usize::MAX,
                         Some(SentValueBindingKind::Variable(temp.clone())),
                     );
-                    MemberProperty::Computed(Box::new(Expression::Identifier(temp)))
+                    MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
                 }
                 other => other.clone(),
             };
-            Expression::Member(Box::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
+            Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
         }
         _ => expr.clone(),
     }
@@ -2445,6 +2507,20 @@ fn transform_for_in_of_loop(
     ctx.current_state_id = after_loop;
 }
 
+/// Lowers a `try`/`catch`/`finally` clause's own statement list. A clause
+/// body that directly declares `await using` (no extra `{ }`) gets its own
+/// scope, exactly like a nested block that does — its resource must dispose
+/// at the clause's own exit, before control reaches `Catch`/`Finally`, not at
+/// function exit (issue #683). Every other clause body lowers as it always
+/// has: flattened into the enclosing state graph.
+fn transform_clause_body(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
+    if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
+        transform_scope_block(stmts, ctx, after_state);
+    } else {
+        transform_statements(stmts, ctx, after_state);
+    }
+}
+
 fn transform_try_statement(
     try_stmt: &TryStatement,
     ctx: &mut TransformContext,
@@ -2493,13 +2569,17 @@ fn transform_try_statement(
     // the generic `Statement::Block` case), so no bridge state is needed
     // here — just bump/restore `scope_depth` and mark the entry.
     ctx.current_state_id = try_body_state;
-    ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock);
-    ctx.scope_depth += 1;
-    transform_statements(&try_stmt.block, ctx, clause_completion_state);
-    if ctx.current_state_id != clause_completion_state {
-        ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
+    if ctx.is_async && ctx.detect_for_await && block_has_await_using(&try_stmt.block) {
+        transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
+    } else {
+        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock);
+        ctx.scope_depth += 1;
+        transform_statements(&try_stmt.block, ctx, clause_completion_state);
+        if ctx.current_state_id != clause_completion_state {
+            ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
+        }
+        ctx.scope_depth -= 1;
     }
-    ctx.scope_depth -= 1;
 
     if let Some(ref info) = catch_info {
         let catch_body_state = ctx.new_state();
@@ -2518,7 +2598,7 @@ fn transform_try_statement(
         ctx.current_state_id = catch_body_state;
         ctx.scope_depth += 1;
         if let Some(handler) = &try_stmt.handler {
-            transform_statements(&handler.body, ctx, clause_completion_state);
+            transform_clause_body(&handler.body, ctx, clause_completion_state);
         }
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
@@ -2535,15 +2615,19 @@ fn transform_try_statement(
         });
 
         ctx.current_state_id = finally_body_state;
-        ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock);
-        ctx.scope_depth += 1;
         if let Some(finalizer) = &try_stmt.finalizer {
-            transform_statements(finalizer, ctx, finally_exit_state);
+            if ctx.is_async && ctx.detect_for_await && block_has_await_using(finalizer) {
+                transform_scope_block(finalizer, ctx, finally_exit_state);
+            } else {
+                ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock);
+                ctx.scope_depth += 1;
+                transform_statements(finalizer, ctx, finally_exit_state);
+                if ctx.current_state_id != finally_exit_state {
+                    ctx.finalize_current_state(StateTerminator::Goto(finally_exit_state));
+                }
+                ctx.scope_depth -= 1;
+            }
         }
-        if ctx.current_state_id != finally_exit_state {
-            ctx.finalize_current_state(StateTerminator::Goto(finally_exit_state));
-        }
-        ctx.scope_depth -= 1;
         ctx.current_state_id = finally_exit_state;
         ctx.finalize_current_state(StateTerminator::TryExit {
             after_state: after_try,
@@ -2599,8 +2683,8 @@ fn lower_switch_dispatch_with_suspending_tests(
         ctx.finalize_current_state(StateTerminator::ConditionalGoto {
             condition: Expression::Binary(
                 BinaryOp::StrictEq,
-                Box::new(Expression::Identifier(disc_var.clone())),
-                Box::new(selector),
+                ExprBox::new(Expression::Identifier(disc_var.clone())),
+                ExprBox::new(selector),
             ),
             true_state: case_state,
             false_state: next_test_state,
@@ -2888,7 +2972,9 @@ fn rewrite_for_left(left: &ForInOfLeft) -> ForInOfLeft {
 
 fn rewrite_expr(expr: &Expression) -> Expression {
     match expr {
-        Expression::Await(inner) => Expression::Yield(Some(Box::new(rewrite_expr(inner))), false),
+        Expression::Await(inner) => {
+            Expression::Yield(Some(ExprBox::new(rewrite_expr(inner))), false)
+        }
         Expression::Function(_)
         | Expression::ArrowFunction(_)
         | Expression::Class(_)
@@ -2909,7 +2995,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
                 .map(|p| Property {
                     key: match &p.key {
                         PropertyKey::Computed(e) => {
-                            PropertyKey::Computed(Box::new(rewrite_expr(e)))
+                            PropertyKey::Computed(ExprBox::new(rewrite_expr(e)))
                         }
                         other => other.clone(),
                     },
@@ -2922,52 +3008,62 @@ fn rewrite_expr(expr: &Expression) -> Expression {
                 .collect(),
             *trailing,
         ),
-        Expression::Unary(op, e) => Expression::Unary(*op, Box::new(rewrite_expr(e))),
-        Expression::Binary(op, l, r) => {
-            Expression::Binary(*op, Box::new(rewrite_expr(l)), Box::new(rewrite_expr(r)))
-        }
-        Expression::Logical(op, l, r) => {
-            Expression::Logical(*op, Box::new(rewrite_expr(l)), Box::new(rewrite_expr(r)))
-        }
+        Expression::Unary(op, e) => Expression::Unary(*op, ExprBox::new(rewrite_expr(e))),
+        Expression::Binary(op, l, r) => Expression::Binary(
+            *op,
+            ExprBox::new(rewrite_expr(l)),
+            ExprBox::new(rewrite_expr(r)),
+        ),
+        Expression::Logical(op, l, r) => Expression::Logical(
+            *op,
+            ExprBox::new(rewrite_expr(l)),
+            ExprBox::new(rewrite_expr(r)),
+        ),
         Expression::Update(op, prefix, e) => {
-            Expression::Update(*op, *prefix, Box::new(rewrite_expr(e)))
+            Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)))
         }
-        Expression::Assign(op, l, r) => {
-            Expression::Assign(*op, Box::new(rewrite_expr(l)), Box::new(rewrite_expr(r)))
-        }
+        Expression::Assign(op, l, r) => Expression::Assign(
+            *op,
+            ExprBox::new(rewrite_expr(l)),
+            ExprBox::new(rewrite_expr(r)),
+        ),
         Expression::Conditional(t, c, a) => Expression::Conditional(
-            Box::new(rewrite_expr(t)),
-            Box::new(rewrite_expr(c)),
-            Box::new(rewrite_expr(a)),
+            ExprBox::new(rewrite_expr(t)),
+            ExprBox::new(rewrite_expr(c)),
+            ExprBox::new(rewrite_expr(a)),
         ),
         Expression::Call(callee, args, _) => Expression::Call(
-            Box::new(rewrite_expr(callee)),
+            ExprBox::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
             CallSiteId::UNASSIGNED,
         ),
         Expression::New(callee, args, _) => Expression::New(
-            Box::new(rewrite_expr(callee)),
+            ExprBox::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
             CallSiteId::UNASSIGNED,
         ),
         Expression::Member(obj, prop, _) => Expression::Member(
-            Box::new(rewrite_expr(obj)),
+            ExprBox::new(rewrite_expr(obj)),
             match prop {
-                MemberProperty::Computed(e) => MemberProperty::Computed(Box::new(rewrite_expr(e))),
+                MemberProperty::Computed(e) => {
+                    MemberProperty::Computed(ExprBox::new(rewrite_expr(e)))
+                }
                 other => other.clone(),
             },
             PropSiteId::UNASSIGNED,
         ),
-        Expression::OptionalChain(base, chain) => {
-            Expression::OptionalChain(Box::new(rewrite_expr(base)), Box::new(rewrite_expr(chain)))
-        }
+        Expression::OptionalChain(base, chain) => Expression::OptionalChain(
+            ExprBox::new(rewrite_expr(base)),
+            ExprBox::new(rewrite_expr(chain)),
+        ),
         Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
-        Expression::Spread(e) => Expression::Spread(Box::new(rewrite_expr(e))),
-        Expression::Yield(inner, delegate) => {
-            Expression::Yield(inner.as_ref().map(|e| Box::new(rewrite_expr(e))), *delegate)
-        }
+        Expression::Spread(e) => Expression::Spread(ExprBox::new(rewrite_expr(e))),
+        Expression::Yield(inner, delegate) => Expression::Yield(
+            inner.as_ref().map(|e| ExprBox::new(rewrite_expr(e))),
+            *delegate,
+        ),
         Expression::TaggedTemplate(tag, tl) => Expression::TaggedTemplate(
-            Box::new(rewrite_expr(tag)),
+            ExprBox::new(rewrite_expr(tag)),
             TemplateLiteral {
                 id: tl.id,
                 quasis: tl.quasis.clone(),
@@ -2981,23 +3077,23 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             raw_quasis: tl.raw_quasis.clone(),
             expressions: tl.expressions.iter().map(rewrite_expr).collect(),
         }),
-        Expression::Typeof(e) => Expression::Typeof(Box::new(rewrite_expr(e))),
-        Expression::Void(e) => Expression::Void(Box::new(rewrite_expr(e))),
-        Expression::Delete(e) => Expression::Delete(Box::new(rewrite_expr(e))),
+        Expression::Typeof(e) => Expression::Typeof(ExprBox::new(rewrite_expr(e))),
+        Expression::Void(e) => Expression::Void(ExprBox::new(rewrite_expr(e))),
+        Expression::Delete(e) => Expression::Delete(ExprBox::new(rewrite_expr(e))),
         Expression::Sequence(exprs) => {
             Expression::Sequence(exprs.iter().map(rewrite_expr).collect())
         }
         Expression::Import(spec, opts) => Expression::Import(
-            Box::new(rewrite_expr(spec)),
-            opts.as_ref().map(|o| Box::new(rewrite_expr(o))),
+            ExprBox::new(rewrite_expr(spec)),
+            opts.as_ref().map(|o| ExprBox::new(rewrite_expr(o))),
         ),
         Expression::ImportDefer(spec, opts) => Expression::ImportDefer(
-            Box::new(rewrite_expr(spec)),
-            opts.as_ref().map(|o| Box::new(rewrite_expr(o))),
+            ExprBox::new(rewrite_expr(spec)),
+            opts.as_ref().map(|o| ExprBox::new(rewrite_expr(o))),
         ),
         Expression::ImportSource(spec, opts) => Expression::ImportSource(
-            Box::new(rewrite_expr(spec)),
-            opts.as_ref().map(|o| Box::new(rewrite_expr(o))),
+            ExprBox::new(rewrite_expr(spec)),
+            opts.as_ref().map(|o| ExprBox::new(rewrite_expr(o))),
         ),
     }
 }
@@ -3012,7 +3108,7 @@ mod tests {
 
     fn make_yield_expr(val: f64) -> Expression {
         Expression::Yield(
-            Some(Box::new(Expression::Literal(Literal::Number(val)))),
+            Some(ExprBox::new(Expression::Literal(Literal::Number(val)))),
             false,
         )
     }
@@ -3087,7 +3183,7 @@ mod tests {
             name: "C".to_string(),
             super_class: None,
             body: vec![ClassElement::Method(ClassMethod {
-                key: PropertyKey::Computed(Box::new(make_yield())),
+                key: PropertyKey::Computed(ExprBox::new(make_yield())),
                 kind: ClassMethodKind::Method,
                 value: empty_function_expr(),
                 is_static: false,
@@ -3403,5 +3499,25 @@ mod tests {
             with_jump[0].inline_jumps[0].terminator,
             StateTerminator::LoopControl(_)
         ));
+    }
+
+    #[test]
+    fn test_plain_await_using_for_of_head_is_lowered() {
+        // The only "suspension" here is the `await using` ForDeclaration's
+        // per-iteration disposal Await, not the (non-`for await`) iteration
+        // protocol or anything in the body. It must still take the state
+        // machine, not the `create_simple_machine` fast path.
+        let body = parse_fn_body("async function f(y) { for (await using x of y) {} }");
+        let sm = transform_async_function(&body, &[]);
+        assert!(
+            sm.states.len() > 1,
+            "expected a real state machine, got the simple-machine fast path"
+        );
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ForOfHead { .. })),
+            "expected a ForOfHead terminator"
+        );
     }
 }

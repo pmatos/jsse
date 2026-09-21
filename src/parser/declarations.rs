@@ -109,7 +109,7 @@ impl<'a> Parser<'a> {
             let pat = if self.current == Token::Assign {
                 self.advance()?;
                 let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), Box::new(default))
+                Pattern::Assign(Box::new(pat), ExprBox::new(default))
             } else {
                 pat
             };
@@ -139,7 +139,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Assign {
                     self.advance()?;
                     let default = self.parse_assignment_expression()?;
-                    pat = Pattern::Assign(Box::new(pat), Box::new(default));
+                    pat = Pattern::Assign(Box::new(pat), ExprBox::new(default));
                 }
                 props.push(ObjectPatternProperty::KeyValue(key, pat));
             } else {
@@ -174,7 +174,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let default = self.parse_assignment_expression()?;
                     let pat =
-                        Pattern::Assign(Box::new(Pattern::Identifier(name)), Box::new(default));
+                        Pattern::Assign(Box::new(Pattern::Identifier(name)), ExprBox::new(default));
                     props.push(ObjectPatternProperty::KeyValue(key, pat));
                 } else {
                     props.push(ObjectPatternProperty::Shorthand(name));
@@ -218,7 +218,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let expr = self.parse_assignment_expression()?;
                 self.eat(&Token::RightBracket)?;
-                Ok(PropertyKey::Computed(Box::new(expr)))
+                Ok(PropertyKey::Computed(ExprBox::new(expr)))
             }
             Token::Keyword(kw) => {
                 let name = kw.to_string();
@@ -749,49 +749,22 @@ impl<'a> Parser<'a> {
 
             if self.current == Token::LeftBrace {
                 self.eat(&Token::LeftBrace)?;
-                let prev_super_property = self.allow_super_property;
-                let prev_in_function = self.in_function;
-                let prev_in_non_arrow_function = self.in_non_arrow_function;
-                let prev_in_generator = self.in_generator;
-                let prev_in_async = self.in_async;
-                let prev_in_iteration = self.in_iteration;
-                let prev_in_switch = self.in_switch;
-                let prev_in_static_block = self.in_static_block;
-                let prev_allow_super_call = self.allow_super_call;
-                let prev_block = self.in_block_or_function;
-                let prev_sc = self.in_switch_case;
-                self.allow_super_property = true;
-                self.allow_super_call = false;
-                self.in_function = 0;
-                self.in_non_arrow_function = 0;
-                self.in_generator = false;
-                self.in_async = false;
-                self.in_iteration = 0;
-                self.in_switch = 0;
-                self.in_static_block = true;
-                self.in_block_or_function = true;
-                self.in_switch_case = false;
-                let prev_labels = std::mem::take(&mut self.labels);
-
-                // As in `parse_function_body_inner`, restore the saved context on
-                // the failure path too: the zeroed counters must not escape an
-                // unterminated static block into the enclosing construct.
-                let result = self.parse_static_block_statements();
-
-                self.labels = prev_labels;
-                self.allow_super_property = prev_super_property;
-                self.allow_super_call = prev_allow_super_call;
-                self.in_function = prev_in_function;
-                self.in_non_arrow_function = prev_in_non_arrow_function;
-                self.in_generator = prev_in_generator;
-                self.in_async = prev_in_async;
-                self.in_iteration = prev_in_iteration;
-                self.in_switch = prev_in_switch;
-                self.in_static_block = prev_in_static_block;
-                self.in_block_or_function = prev_block;
-                self.in_switch_case = prev_sc;
-
-                let stmts = result?;
+                let stmts = self.with_function_context(
+                    |p| {
+                        p.allow_super_property = true;
+                        p.allow_super_call = false;
+                        p.in_function = 0;
+                        p.in_non_arrow_function = 0;
+                        p.in_generator = false;
+                        p.in_async = false;
+                        p.in_iteration = 0;
+                        p.in_switch = 0;
+                        p.in_static_block = true;
+                        p.in_block_or_function = true;
+                        p.in_switch_case = false;
+                    },
+                    |p| p.parse_static_block_statements(),
+                )?;
                 if crate::ast::stmts_contain_matching(&stmts, &crate::ast::is_arguments_reference) {
                     return Err(self.error("'arguments' is not allowed in class static blocks"));
                 }
@@ -1095,7 +1068,7 @@ impl<'a> Parser<'a> {
             let expr = self.parse_assignment_expression()?;
             self.no_in = saved_no_in;
             self.eat(&Token::RightBracket)?;
-            Ok((PropertyKey::Computed(Box::new(expr)), true))
+            Ok((PropertyKey::Computed(ExprBox::new(expr)), true))
         } else if let Token::PrivateName(name) = &self.current {
             let name = name.clone();
             self.advance()?;
@@ -1213,7 +1186,7 @@ impl<'a> Parser<'a> {
             let pat = if self.current == Token::Assign {
                 self.advance()?;
                 let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), Box::new(default))
+                Pattern::Assign(Box::new(pat), ExprBox::new(default))
             } else {
                 pat
             };
@@ -1283,52 +1256,30 @@ impl<'a> Parser<'a> {
         let saved_param_names = self.function_param_names.take();
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
-        let prev_generator = self.in_generator;
-        let prev_async = self.in_async;
-        let prev_iteration = self.in_iteration;
-        let prev_switch = self.in_switch;
-        let prev_labels = std::mem::take(&mut self.labels);
-        let prev_super_property = self.allow_super_property;
-        let prev_super_call = self.allow_super_call;
-        self.in_generator = is_generator;
-        self.in_async = is_async;
-        self.in_iteration = 0;
-        self.in_switch = 0;
-        self.in_function += 1;
-        self.allow_super_property = super_property;
-        self.allow_super_call = super_call;
-        let prev_formal = self.in_formal_parameters;
-        self.in_formal_parameters = false;
-        let prev_block = self.in_block_or_function;
-        let prev_sc = self.in_switch_case;
-        let prev_static_block = self.in_static_block;
-        self.in_block_or_function = true;
-        self.in_switch_case = false;
-        self.in_static_block = false;
 
-        // The body parse below may fail anywhere; the saved context must be put
-        // back on that path too, or an enclosing construct sees the body's
-        // zeroed counters. `for (;;) { function f() {` used to underflow
-        // `in_iteration` in `parse_iteration_body` that way.
-        let result = self
-            .parse_function_body_statements(saved_param_names.as_ref())
-            .and_then(|body| {
-                self.eat(&Token::RightBrace)?;
-                Ok(body)
-            });
+        let result = self.with_function_context(
+            |p| {
+                p.in_generator = is_generator;
+                p.in_async = is_async;
+                p.in_iteration = 0;
+                p.in_switch = 0;
+                p.in_function += 1;
+                p.allow_super_property = super_property;
+                p.allow_super_call = super_call;
+                p.in_formal_parameters = false;
+                p.in_block_or_function = true;
+                p.in_switch_case = false;
+                p.in_static_block = false;
+            },
+            |p| {
+                p.parse_function_body_statements(saved_param_names.as_ref())
+                    .and_then(|body| {
+                        p.eat(&Token::RightBrace)?;
+                        Ok(body)
+                    })
+            },
+        );
 
-        self.in_function -= 1;
-        self.in_generator = prev_generator;
-        self.in_async = prev_async;
-        self.in_iteration = prev_iteration;
-        self.in_switch = prev_switch;
-        self.labels = prev_labels;
-        self.allow_super_property = prev_super_property;
-        self.allow_super_call = prev_super_call;
-        self.in_formal_parameters = prev_formal;
-        self.in_block_or_function = prev_block;
-        self.in_switch_case = prev_sc;
-        self.in_static_block = prev_static_block;
         self.function_param_names = None;
         self.set_strict(prev_strict);
         result

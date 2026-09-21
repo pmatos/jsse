@@ -7,6 +7,9 @@ mod access;
 mod generator_runtime;
 mod literals;
 mod modules;
+mod operand;
+
+pub(crate) use operand::Operand;
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth
 /// counter on every exit path of `eval_expr` — the tail return, each of its
@@ -3938,9 +3941,9 @@ impl Interpreter {
                     .map(|elem| {
                         elem.as_ref().map(|e| match e {
                             ArrayPatternElement::Pattern(p) => Self::pattern_to_assignment_expr(p),
-                            ArrayPatternElement::Rest(p) => {
-                                Expression::Spread(Box::new(Self::pattern_to_assignment_expr(p)))
-                            }
+                            ArrayPatternElement::Rest(p) => Expression::Spread(ExprBox::new(
+                                Self::pattern_to_assignment_expr(p),
+                            )),
                         })
                     })
                     .collect();
@@ -3968,9 +3971,9 @@ impl Interpreter {
                         },
                         ObjectPatternProperty::Rest(p) => Property {
                             key: PropertyKey::Identifier("__rest__".to_string()),
-                            value: Expression::Spread(Box::new(Self::pattern_to_assignment_expr(
-                                p,
-                            ))),
+                            value: Expression::Spread(ExprBox::new(
+                                Self::pattern_to_assignment_expr(p),
+                            )),
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: false,
@@ -3982,13 +3985,13 @@ impl Interpreter {
             }
             Pattern::Assign(inner, default) => Expression::Assign(
                 AssignOp::Assign,
-                Box::new(Self::pattern_to_assignment_expr(inner)),
+                ExprBox::new(Self::pattern_to_assignment_expr(inner)),
                 default.clone(),
             ),
             Pattern::Rest(inner) => {
-                Expression::Spread(Box::new(Self::pattern_to_assignment_expr(inner)))
+                Expression::Spread(ExprBox::new(Self::pattern_to_assignment_expr(inner)))
             }
-            Pattern::MemberExpression(expr) => *expr.clone(),
+            Pattern::MemberExpression(expr) => expr.clone().into_expression(),
         }
     }
 
@@ -8302,9 +8305,8 @@ impl Interpreter {
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
-        // Lexical scope stack (blocks, loop bodies, try/catch/finally blocks,
-        // for-head per-iteration frames) — see `AsyncFunctionState::scope_stack`.
-        let mut scope_stack: Vec<(EnvRef, usize)> = saved_scope_stack;
+        // Lowered lexical scopes, including suspendable `await using` blocks.
+        let mut scope_stack: Vec<ScopeFrame> = saved_scope_stack;
         // An abrupt completion may need to visit a catch/finally inside an
         // enclosing loop before that loop itself can be closed. Keep that
         // obligation across suspension until the handler completes normally.
@@ -8374,6 +8376,81 @@ impl Interpreter {
         }
 
         // Helper: route a return through finally blocks in try_stack
+        // Disposes open `await using` block scopes down to `scope_target`,
+        // innermost first, stopping early if the new innermost scope has a
+        // still-open for-of loop nested inside it (that loop's own iterator
+        // must close first — the caller's own `unwind_for_of!` handles that,
+        // then calls this macro again to finish). Each disposal may suspend
+        // the function; on suspend this bails out via `return` with `$then`
+        // parked so the resumed call re-enters routing once it settles. A
+        // disposer's own throw replaces whatever completion was in flight and
+        // re-enters throw routing on the next spin of the outer loop.
+        macro_rules! unwind_scopes_to {
+            ($scope_target:expr, $seed:expr, $then:expr) => {{
+                let scope_target: usize = $scope_target;
+                let mut scope_unwind_error: Option<JsValue> = None;
+                while scope_stack.len() > scope_target {
+                    let for_of_still_nested_inside =
+                        scope_stack[scope_stack.len() - 1].for_of_depth < for_of_stack.len();
+                    if for_of_still_nested_inside {
+                        break;
+                    }
+                    let frame = scope_stack.pop().unwrap();
+                    let Some(stack) = self.take_dispose_stack(&frame.env) else {
+                        continue;
+                    };
+                    let mut cursor = DisposeCursor::new(stack, $seed);
+                    match cursor.step(self, None) {
+                        DisposeStep::Await(value) => {
+                            let gc_frame = self.gc_root_frame();
+                            cursor.for_each_value(|v| self.gc_root_value(v));
+                            self.gc_root_value(&value);
+                            self.async_fn_suspend_at_await(
+                                async_id,
+                                &state_machine,
+                                &func_env,
+                                is_strict,
+                                current_id,
+                                &try_stack,
+                                None,
+                                pending_return.take(),
+                                pending_loop_control.take(),
+                                saved_finally_exception.take(),
+                                pending_for_of_unwind.take(),
+                                &resolve_fn,
+                                &reject_fn,
+                                &value,
+                                &for_of_stack,
+                                &scope_stack,
+                            );
+                            self.gc_unroot_frame(gc_frame);
+                            self.scheduler.park_async_function_dispose(
+                                async_id,
+                                PendingDispose {
+                                    cursor,
+                                    then: $then,
+                                },
+                            );
+                            return Completion::Normal(JsValue::UNDEFINED);
+                        }
+                        DisposeStep::Done(Completion::Exit(code)) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        DisposeStep::Done(Completion::Throw(e)) => {
+                            scope_unwind_error = Some(e);
+                            break;
+                        }
+                        DisposeStep::Done(_) => {}
+                    }
+                }
+                if let Some(e) = scope_unwind_error {
+                    pending_exception = Some(e);
+                    continue;
+                }
+            }};
+        }
+
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
@@ -8401,7 +8478,27 @@ impl Interpreter {
                         .unwrap_or(for_of_stack.len()),
                     None => 0,
                 };
+                // A block scope's own DisposeResources must run before the
+                // return propagates past it, exactly like a `finally`'s own
+                // completion timing — see issue #683.
+                let scope_target = match routed_to {
+                    Some((depth, _)) => scope_stack
+                        .iter()
+                        .position(|frame| frame.try_depth > depth)
+                        .unwrap_or(scope_stack.len()),
+                    None => 0,
+                };
+                unwind_scopes_to!(
+                    scope_target,
+                    Completion::Return(ret_val.clone()),
+                    DisposeThen::ScopeCrossReturn
+                );
                 unwind_for_of!(unwind_from);
+                unwind_scopes_to!(
+                    scope_target,
+                    Completion::Return(ret_val.clone()),
+                    DisposeThen::ScopeCrossReturn
+                );
                 if let Some((_, finally_state)) = routed_to {
                     pending_return = Some(ret_val);
                     current_id = finally_state;
@@ -8455,7 +8552,28 @@ impl Interpreter {
                         .max(target.for_of_depth)
                 });
                 debug_assert!(handler_boundary <= for_of_stack.len());
+
+                // A block scope's own DisposeResources must run before the
+                // break/continue propagates past it — same timing as above.
+                let scope_boundary = routed_to.map_or(target.scope_depth, |(depth, _)| {
+                    scope_stack
+                        .iter()
+                        .position(|frame| frame.try_depth > depth)
+                        .unwrap_or(scope_stack.len())
+                        .max(target.scope_depth)
+                });
+                debug_assert!(scope_boundary <= scope_stack.len());
+                unwind_scopes_to!(
+                    scope_boundary,
+                    Completion::Empty,
+                    DisposeThen::ScopeCrossLoopControl(target)
+                );
                 unwind_for_of!(handler_boundary.min(for_of_stack.len()));
+                unwind_scopes_to!(
+                    scope_boundary,
+                    Completion::Empty,
+                    DisposeThen::ScopeCrossLoopControl(target)
+                );
 
                 if let Some((_, finally_state)) = routed_to {
                     current_id = finally_state;
@@ -8489,6 +8607,43 @@ impl Interpreter {
                     None => return self.async_fn_complete(async_id, &resolve_fn),
                 }
             }};
+        }
+
+        /// Evaluate a state-terminator operand, or abandon this terminator.
+        ///
+        /// Expands to the driver's answer to "which completion kinds carry a
+        /// value here": a throw is parked for the loop head to route, a host
+        /// exit tears the suspended function down and propagates verbatim.
+        /// Before this macro each operand site spelled that out inline and all
+        /// seven got the exit case wrong.
+        ///
+        /// The default throw tail `continue`s the *innermost* enclosing loop,
+        /// so it is only correct directly inside the state loop. A site nested
+        /// in another loop must pass its own `throw(e) => …` tail; the switch
+        /// case test below is the one such site.
+        macro_rules! operand {
+            ($expr:expr, $env:expr) => {
+                operand!($expr, $env, throw(e) => {
+                    pending_exception = Some(e);
+                    continue;
+                })
+            };
+            ($expr:expr, $env:expr, throw($e:ident) => $on_throw:expr) => {
+                match self.eval_operand($expr, $env) {
+                    Operand::Value(v) => v,
+                    Operand::Throw($e) => $on_throw,
+                    // Issue #242: uncatchable. Mirrors the statement-result
+                    // path's own exit handling further down this loop.
+                    Operand::Abort(exit) => {
+                        self.scheduler.remove_async_function_state(async_id);
+                        return exit;
+                    }
+                    // Preserves today's reading at the six non-`Await` operand
+                    // sites; the `Await` site handles `Suspend` itself and so
+                    // does not use this macro.
+                    Operand::Suspend(_) | Operand::Other(_) => JsValue::UNDEFINED,
+                }
+            };
         }
 
         loop {
@@ -8533,6 +8688,40 @@ impl Interpreter {
                     DisposeStep::Done(done) => match (disposal.then, done) {
                         (DisposeThen::Block, finished) => preloaded_stmt_result = Some(finished),
                         (DisposeThen::Return, Completion::Throw(e)) => pending_exception = Some(e),
+                        (DisposeThen::ScopeExit(_), Completion::Throw(e)) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ScopeExit(after_state), _) => {
+                            current_id = after_state;
+                        }
+                        (DisposeThen::ScopeCrossReturn, Completion::Throw(e)) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ScopeCrossReturn, Completion::Return(v)) => {
+                            route_return!(v);
+                        }
+                        (DisposeThen::ScopeCrossReturn, _) => unreachable!(
+                            "a scope-cross return cursor is seeded with Completion::Return and only ever finishes as Return or Throw"
+                        ),
+                        (DisposeThen::ScopeCrossLoopControl(_), Completion::Throw(e)) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ScopeCrossLoopControl(target), _) => {
+                            route_loop_control!(target);
+                        }
+                        (DisposeThen::ScopeCrossThrow, Completion::Throw(e)) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ScopeCrossThrow, _) => unreachable!(
+                            "a scope-cross throw cursor is seeded with Completion::Throw and always finishes as Throw"
+                        ),
+                        // The head's own error routing (`for_of_protocol_failure`,
+                        // pending_exception) mirrors what the blocking call used to
+                        // do inline; a non-throw completion just re-enters the head.
+                        (DisposeThen::ForOfIteration, Completion::Throw(e)) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ForOfIteration, _) => {}
                         (_, Completion::Throw(e)) => {
                             self.scheduler.remove_async_function_state(async_id);
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
@@ -8618,6 +8807,21 @@ impl Interpreter {
                     }
                 }
 
+                // A block scope's own DisposeResources must run before the
+                // exception propagates past it, exactly like the return and
+                // loop-control routing above — see issue #683.
+                let scope_target = handler.map_or(0, |(depth, _, _, _)| {
+                    scope_stack
+                        .iter()
+                        .position(|frame| frame.try_depth > depth)
+                        .unwrap_or(scope_stack.len())
+                });
+                unwind_scopes_to!(
+                    scope_target,
+                    Completion::Throw(exc.clone()),
+                    DisposeThen::ScopeCrossThrow
+                );
+
                 if needs_for_of_unwind {
                     // A return-replacing throw or an IteratorClose failure can
                     // retain enclosing loops until an intervening handler has
@@ -8642,6 +8846,12 @@ impl Interpreter {
                         _ => unreachable!("unwinding a throw must stay abrupt"),
                     }
                 }
+
+                unwind_scopes_to!(
+                    scope_target,
+                    Completion::Throw(exc.clone()),
+                    DisposeThen::ScopeCrossThrow
+                );
 
                 if needs_for_of_unwind {
                     pending_for_of_unwind = if for_of_stack.is_empty() {
@@ -8695,6 +8905,7 @@ impl Interpreter {
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
                 &state_machine.states[current_id],
+                try_stack.len(),
                 for_of_stack.len(),
                 &for_of_env,
             );
@@ -8817,6 +9028,11 @@ impl Interpreter {
                             target_state: loop_state.head_state,
                             try_depth: loop_state.try_depth,
                             for_of_depth: pos + 1,
+                            // This raw completion has no transform-time
+                            // LoopControlTarget to read a scope depth from;
+                            // pin the floor at the current depth so this path
+                            // never crosses a scope it wasn't computed for.
+                            scope_depth: scope_stack.len(),
                         };
                         route_loop_control!(target);
                         continue;
@@ -8856,13 +9072,18 @@ impl Interpreter {
                     resume_state,
                     sent_value_binding,
                 } => {
-                    let await_val = match self.eval_expr(&value, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    // The only operand site with bespoke `Suspend` handling
+                    // — an inline yield here parks the function at *this*
+                    // state, not at `resume_state` — so it spells the match out
+                    // rather than using `operand!`. The `Abort` arm is the
+                    // macro's, verbatim.
+                    let await_val = match self.eval_operand(&value, &term_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             pending_exception = Some(e);
                             continue;
                         }
-                        Completion::Yield(v) => {
+                        Operand::Suspend(v) => {
                             self.async_fn_suspend_at_await(
                                 async_id,
                                 &state_machine,
@@ -8883,7 +9104,12 @@ impl Interpreter {
                             );
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
-                        _ => JsValue::UNDEFINED,
+                        // Issue #242: uncatchable.
+                        Operand::Abort(exit) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return exit;
+                        }
+                        Operand::Other(_) => JsValue::UNDEFINED,
                     };
 
                     self.async_fn_suspend_at_await(
@@ -8909,18 +9135,7 @@ impl Interpreter {
 
                 StateTerminator::Return(ref expr) => {
                     let ret_val = if let Some(e) = expr {
-                        let mut result = self.eval_expr(e, &term_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                pending_exception = Some(e);
-                                continue;
-                            }
-                            _ => JsValue::UNDEFINED,
-                        }
+                        operand!(e, &term_env)
                     } else {
                         JsValue::UNDEFINED
                     };
@@ -8930,11 +9145,10 @@ impl Interpreter {
                 }
 
                 StateTerminator::Throw(ref expr) => {
-                    let throw_val = match self.eval_expr(expr, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => e,
-                        _ => JsValue::UNDEFINED,
-                    };
+                    // A throw *evaluating* the operand and the operand's own
+                    // value are both "the value to throw", so this site keeps
+                    // its own throw tail rather than parking the exception.
+                    let throw_val = operand!(expr, &term_env, throw(e) => e);
                     pending_exception = Some(throw_val);
                     continue;
                 }
@@ -8958,14 +9172,7 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
+                    let cond_val = operand!(condition, &term_env);
                     current_id = if self.to_boolean_val(&cond_val) {
                         true_state
                     } else {
@@ -9033,7 +9240,11 @@ impl Interpreter {
                     if let Some(pattern) = param {
                         let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &catch_env);
                     }
-                    scope_stack.push((catch_env, for_of_stack.len()));
+                    scope_stack.push(ScopeFrame {
+                        env: catch_env,
+                        try_depth: try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
                     current_id = body_state;
                 }
 
@@ -9052,25 +9263,17 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
+                    let disc_val = operand!(discriminant, &term_env);
                     let mut matched = false;
                     for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &term_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                pending_exception = Some(e);
-                                matched = true;
-                                break;
-                            }
-                            _ => JsValue::UNDEFINED,
-                        };
+                        // Inside `for case in cases`: park the exception and
+                        // leave the case loop, not the state loop — the
+                        // `pending_exception.is_some()` check below routes it.
+                        let case_val = operand!(&case.test, &term_env, throw(e) => {
+                            pending_exception = Some(e);
+                            matched = true;
+                            break;
+                        });
                         if strict_equality(&disc_val, &case_val) {
                             current_id = case.state;
                             matched = true;
@@ -9100,16 +9303,7 @@ impl Interpreter {
                     // before evaluating the iterable expression
                     let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
-                    let iterable_result = self.eval_expr(iterable, &iterable_env);
-
-                    let iterable_val = match iterable_result {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
+                    let iterable_val = operand!(iterable, &iterable_env);
                     let iterator = if is_await {
                         match self.get_async_iterator(&iterable_val) {
                             Ok(it) => it,
@@ -9171,34 +9365,50 @@ impl Interpreter {
                         }
                     };
 
-                    // Dispose resources from previous iteration (for using/await using)
-                    if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take() {
-                        let disp = self.dispose_resources(&disp_env, Completion::Empty);
-                        if let Completion::Exit(code) = disp {
-                            // A disposer that called `__host_exit` (issue #242)
-                            // propagates out uncatchably.
-                            self.scheduler.remove_async_function_state(async_id);
-                            return Completion::Exit(code);
-                        }
-                        if let Completion::Throw(e) = disp {
-                            pending_exception = Some(e);
+                    // Dispose resources from the previous iteration. Synchronous
+                    // resources finish inline; async resources park the cursor so
+                    // the function suspends at each DisposeResources Await.
+                    if let Some(disp_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Some(stack) = self.take_dispose_stack(&disp_env)
+                    {
+                        if stack
+                            .iter()
+                            .all(|resource| resource.hint == DisposeHint::Sync)
+                        {
+                            match self.run_dispose_cursor_blocking(DisposeCursor::new(
+                                stack,
+                                Completion::Empty,
+                            )) {
+                                Completion::Exit(code) => {
+                                    self.scheduler.remove_async_function_state(async_id);
+                                    return Completion::Exit(code);
+                                }
+                                Completion::Throw(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            pending_dispose = Some(PendingDispose {
+                                cursor: DisposeCursor::new(stack, Completion::Empty),
+                                then: DisposeThen::ForOfIteration,
+                            });
                             continue;
                         }
                     }
 
-                    // For `for await`, use a temp var to distinguish first
-                    // entry (call iterator_next + await) from resume (result ready)
-                    let await_tmp = format!("{}__await", iter_var);
+                    // For `for await`, use the presence of a private temp binding to
+                    // distinguish first entry from resume. The fulfilled value may
+                    // itself be `undefined`, so no JavaScript value can be a sentinel.
                     let step_result = if is_await {
-                        let cached = func_env.borrow().get(&await_tmp);
-                        if let Some(v) = cached
-                            && !(v).is_undefined()
-                        {
-                            // Resume after await — clear the temp and use the value
-                            func_env
-                                .borrow_mut()
-                                .set(&await_tmp, JsValue::UNDEFINED)
-                                .ok();
+                        let await_tmp = format!("{}__await", iter_var);
+                        let cached = func_env
+                            .borrow_mut()
+                            .bindings
+                            .remove(&await_tmp)
+                            .map(|binding| binding.value);
+                        if let Some(v) = cached {
                             v
                         } else {
                             // First entry — call iterator_next, then suspend for await
@@ -9214,8 +9424,7 @@ impl Interpreter {
                                     continue;
                                 }
                             };
-                            // Ensure the temp var exists
-                            if func_env.borrow().get(&await_tmp).is_none() {
+                            if !func_env.borrow().bindings.contains_key(&await_tmp) {
                                 func_env.borrow_mut().declare(&await_tmp, BindingKind::Var);
                             }
                             use crate::interpreter::generator_transform::{
@@ -9259,6 +9468,12 @@ impl Interpreter {
                             }
                         }
                     };
+                    if is_await && !step_result.is_object() {
+                        for_of_protocol_failure = Some(iter_var.clone());
+                        pending_exception =
+                            Some(self.create_type_error("Iterator result is not an object"));
+                        continue;
+                    }
                     let done = match self.iterator_complete(&step_result) {
                         Ok(d) => d,
                         Err(e) => {
@@ -9344,6 +9559,33 @@ impl Interpreter {
 
                 StateTerminator::Completed => {
                     complete_function!();
+                }
+
+                StateTerminator::EnterScope { body_state } => {
+                    let scope_env = Environment::new(Some(term_env.clone()));
+                    scope_stack.push(ScopeFrame {
+                        env: scope_env,
+                        try_depth: try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
+                    current_id = body_state;
+                }
+
+                StateTerminator::ExitScope { after_state } => {
+                    let frame = scope_stack
+                        .pop()
+                        .expect("ExitScope without a matching EnterScope");
+                    match self.take_dispose_stack(&frame.env) {
+                        Some(stack) => {
+                            pending_dispose = Some(PendingDispose {
+                                cursor: DisposeCursor::new(stack, Completion::Empty),
+                                then: DisposeThen::ScopeExit(after_state),
+                            });
+                        }
+                        None => {
+                            current_id = after_state;
+                        }
+                    }
                 }
 
                 StateTerminator::Yield { .. } => {
@@ -9503,7 +9745,7 @@ impl Interpreter {
         reject_fn: &JsValue,
         await_val: &JsValue,
         for_of_stack: &[ForOfLoopState],
-        scope_stack: &[(EnvRef, usize)],
+        scope_stack: &[ScopeFrame],
     ) {
         let promise = self.promise_resolve_value(await_val);
         let promise_id = if let Some(o) = (promise)

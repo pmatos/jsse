@@ -391,14 +391,27 @@ pub(crate) struct AsyncFunctionState {
     /// Set while the function-level disposal is parked at an `Await`; the
     /// resumption feeds its outcome to this cursor instead of the body.
     pub pending_dispose: Option<super::PendingDispose>,
-    /// Lexical scope stack for plain blocks, loop bodies, `try`/`catch`/
-    /// `finally` blocks, and `for`-head per-iteration frames — reconciled
-    /// toward each state's static depth by `Interpreter::reconcile_scope_stack`.
-    /// Independent of `for_of_stack`/`try_stack`, which keep their own depth
-    /// bookkeeping; the `usize` on each frame is the `for_of_stack` depth at
-    /// push time, letting the two stacks compose correctly even when they
-    /// interleave (see `reconcile_scope_stack`'s doc comment).
-    pub scope_stack: Vec<(EnvRef, usize)>,
+    /// Lexical scope stack for lowered blocks, loop bodies, clause bodies,
+    /// catch bindings, and `for`-head per-iteration frames. Frames created by
+    /// `EnterScope` additionally own `await using` resources and are disposed
+    /// when control crosses them.
+    pub scope_stack: Vec<ScopeFrame>,
+}
+
+/// One lowered lexical environment, innermost last. `EnterScope`/`ExitScope`
+/// use the same frame shape for `await using` blocks so abrupt completion can
+/// order scope disposal against `finally` handlers and nested for-of loops.
+#[derive(Clone)]
+pub(crate) struct ScopeFrame {
+    pub(crate) env: EnvRef,
+    /// Depth of the driver's try stack when the scope was entered, so an
+    /// abrupt completion can tell a `finally` lexically inside the scope from
+    /// one outside it, exactly as `ForOfLoopState::try_depth` does.
+    pub(crate) try_depth: usize,
+    /// Depth of the driver's for-of stack when the scope was entered, used to
+    /// order this frame's disposal against a for-of loop nested more deeply
+    /// (which must close first) or more shallowly (which closes after).
+    pub(crate) for_of_depth: usize,
 }
 
 #[derive(Clone)]

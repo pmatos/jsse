@@ -719,7 +719,7 @@ impl Interpreter {
         // the GC-visible `generator_scope_stacks` side table like
         // `for_of_stack`, since a generator's driver state lives outside the
         // object's `IteratorState` enum.
-        let mut scope_stack: Vec<(EnvRef, usize)> = self
+        let mut scope_stack: Vec<ScopeFrame> = self
             .generator_scope_stacks
             .get(&o.id)
             .cloned()
@@ -784,6 +784,7 @@ impl Interpreter {
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
                 &state_machine.states[current_id],
+                current_try_stack.len(),
                 for_of_stack.len(),
                 &for_of_env,
             );
@@ -898,17 +899,13 @@ impl Interpreter {
                     sent_value_binding,
                 } => {
                     let yield_val = if let Some(expr) = value {
-                        let mut _result = self.eval_expr(expr, &term_env);
-                        while let Completion::TailCall { func, this, args } = _result {
-                            _result = self.call_function(&func, &this, &args);
-                        }
-                        match _result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
+                        match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => {
                                 // Route genuine throws through the try-stack for
-                                // catch/finally handling (a `Completion::Exit`
-                                // takes the `other` arm below and never reaches
-                                // here — issue #242).
+                                // catch/finally handling; a `Completion::Exit`
+                                // is an `Operand::Abort` and never reaches here
+                                // (issue #242).
                                 let e = route_exception!(e);
                                 obj_rc.borrow_mut().kind =
                                     crate::interpreter::types::ObjectKind::Iterator(
@@ -920,7 +917,8 @@ impl Interpreter {
                                     );
                                 return Completion::Throw(e);
                             }
-                            other => return other,
+                            Operand::Abort(c) | Operand::Other(c) => return c,
+                            Operand::Suspend(v) => return Completion::Yield(v),
                         }
                     } else {
                         JsValue::UNDEFINED
@@ -1209,13 +1207,9 @@ impl Interpreter {
 
                 StateTerminator::Return(expr) => {
                     let ret_val = if let Some(e) = expr {
-                        let mut result = self.eval_expr(e, &term_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(err) => {
+                        match self.eval_operand(e, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(err) => {
                                 let disp =
                                     self.dispose_resources(&func_env, Completion::Throw(err));
                                 obj_rc.borrow_mut().kind =
@@ -1229,7 +1223,8 @@ impl Interpreter {
                                 self.generator_inline_iters.remove(&o.id);
                                 return disp;
                             }
-                            other => return other,
+                            Operand::Abort(c) | Operand::Other(c) => return c,
+                            Operand::Suspend(v) => return Completion::Yield(v),
                         }
                     } else {
                         JsValue::UNDEFINED
@@ -1261,14 +1256,12 @@ impl Interpreter {
 
                 StateTerminator::Throw(expr) => {
                     let throw_val = {
-                        let mut result = self.eval_expr(expr, &term_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => e,
-                            other => return other,
+                        // A throw *evaluating* the operand and the operand's
+                        // own value are both "the value to throw".
+                        match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) | Operand::Throw(v) => v,
+                            Operand::Abort(c) | Operand::Other(c) => return c,
+                            Operand::Suspend(v) => return Completion::Yield(v),
                         }
                     };
 
@@ -1352,9 +1345,9 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let cond_val = match self.eval_operand(condition, &term_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             let e = route_exception!(e);
                             // §27.5.3.3: DisposeResources when generator throws
                             let disp = self.dispose_resources(&func_env, Completion::Throw(e));
@@ -1369,7 +1362,8 @@ impl Interpreter {
                             self.generator_inline_iters.remove(&o.id);
                             return disp;
                         }
-                        other => return other,
+                        Operand::Abort(c) | Operand::Other(c) => return c,
+                        Operand::Suspend(v) => return Completion::Yield(v),
                     };
                     current_id = if self.to_boolean_val(&cond_val) {
                         *true_state
@@ -1448,7 +1442,11 @@ impl Interpreter {
                         let _ =
                             self.bind_pattern(pattern, exception_val, BindingKind::Let, &catch_env);
                     }
-                    scope_stack.push((catch_env, for_of_stack.len()));
+                    scope_stack.push(ScopeFrame {
+                        env: catch_env,
+                        try_depth: current_try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
                     self.sync_generator_scope_stack(o.id, &scope_stack);
                     current_id = *body_state;
                 }
@@ -1467,16 +1465,18 @@ impl Interpreter {
                     after_state,
                 } => {
                     let target: Result<usize, JsValue> = 'dispatch: {
-                        let disc_val = match self.eval_expr(discriminant, &term_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => break 'dispatch Err(e),
-                            other => return other,
+                        let disc_val = match self.eval_operand(discriminant, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => break 'dispatch Err(e),
+                            Operand::Abort(c) | Operand::Other(c) => return c,
+                            Operand::Suspend(v) => return Completion::Yield(v),
                         };
                         for case in cases {
-                            let case_val = match self.eval_expr(&case.test, &term_env) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => break 'dispatch Err(e),
-                                other => return other,
+                            let case_val = match self.eval_operand(&case.test, &term_env) {
+                                Operand::Value(v) => v,
+                                Operand::Throw(e) => break 'dispatch Err(e),
+                                Operand::Abort(c) | Operand::Other(c) => return c,
+                                Operand::Suspend(v) => return Completion::Yield(v),
                             };
                             if strict_equality(&disc_val, &case_val) {
                                 break 'dispatch Ok(case.state);
@@ -1520,9 +1520,9 @@ impl Interpreter {
                     // environment used by any loop iteration.
                     let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
-                    let iterable_val = match self.eval_expr(iterable, &iterable_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let iterable_val = match self.eval_operand(iterable, &iterable_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             let e = route_exception!(e);
                             obj_rc.borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
@@ -1534,7 +1534,8 @@ impl Interpreter {
                                 );
                             return Completion::Throw(e);
                         }
-                        other => return other,
+                        Operand::Abort(c) | Operand::Other(c) => return c,
+                        Operand::Suspend(v) => return Completion::Yield(v),
                     };
                     let iterator = match self.for_of_init_iterator(&iterable_val, *is_for_in) {
                         Ok(iter) => iter,
@@ -1851,6 +1852,11 @@ impl Interpreter {
 
                 StateTerminator::Await { .. } => {
                     unreachable!("Await terminator in sync generator")
+                }
+                StateTerminator::EnterScope { .. } | StateTerminator::ExitScope { .. } => {
+                    unreachable!(
+                        "EnterScope/ExitScope are emitted only for plain async function bodies"
+                    )
                 }
             }
         }
@@ -4000,7 +4006,7 @@ impl Interpreter {
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
         let mut check_abrupt_on_resume = check_abrupt_on_resume;
-        let mut scope_stack: Vec<(EnvRef, usize)> = self
+        let mut scope_stack: Vec<ScopeFrame> = self
             .generator_scope_stacks
             .get(&o.id)
             .cloned()
@@ -4010,6 +4016,26 @@ impl Interpreter {
             .get(&o.id)
             .cloned()
             .unwrap_or_default();
+
+        /// Tear this async generator down for an uncatchable host exit
+        /// (`__host_exit`, issue #242) and propagate the completion verbatim.
+        ///
+        /// One copy of the §27.6.3.3 teardown for every operand site. Four of
+        /// the eight used to spell it out and four silently coerced the exit to
+        /// `undefined`; there is now nowhere to make that choice.
+        macro_rules! abort_async_generator {
+            ($exit:expr) => {{
+                self.discard_generator_for_of_loops_on_exit(o.id, &mut for_of_stack, &func_env);
+                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                    IteratorState::completed_state_machine_async_generator(
+                        state_machine,
+                        func_env,
+                        is_strict,
+                    ),
+                );
+                return $exit;
+            }};
+        }
 
         macro_rules! route_exception {
             ($error:expr) => {{
@@ -4195,6 +4221,7 @@ impl Interpreter {
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
                 &state_machine.states[current_id],
+                current_try_stack.len(),
                 for_of_stack.len(),
                 &for_of_env,
             );
@@ -4345,13 +4372,13 @@ impl Interpreter {
                     sent_value_binding,
                 } => {
                     let yield_val = if let Some(expr) = value {
-                        match self.eval_expr(expr, &term_env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
+                        match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => {
                                 // Route genuine throws through the try-stack for
-                                // catch/finally handling (a `Completion::Exit`
-                                // takes the `other` arm below and never reaches
-                                // here — issue #242).
+                                // catch/finally handling; a `Completion::Exit`
+                                // is an `Operand::Abort` and never reaches here
+                                // (issue #242).
                                 let e = route_exception!(e);
                                 self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().kind =
@@ -4366,13 +4393,10 @@ impl Interpreter {
                                 self.drain_microtasks();
                                 return Completion::Normal(promise);
                             }
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::UNDEFINED
-                                }
-                            }
+                            Operand::Abort(exit) => abort_async_generator!(exit),
+                            // Preserves this site's existing reading.
+                            Operand::Suspend(yv) => yv,
+                            Operand::Other(_) => JsValue::UNDEFINED,
                         }
                     } else {
                         JsValue::UNDEFINED
@@ -4808,13 +4832,9 @@ impl Interpreter {
                 StateTerminator::Return(expr) => {
                     if let Some(e) = expr {
                         // return expr; — §13.10.1 step 3: Await(exprValue)
-                        let mut result = self.eval_expr(e, &term_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        let ret_val = match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(err) => {
+                        let ret_val = match self.eval_operand(e, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(err) => {
                                 let err = route_exception!(err);
                                 let disp =
                                     self.dispose_resources(&func_env, Completion::Throw(err));
@@ -4835,24 +4855,9 @@ impl Interpreter {
                                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
                                 return Completion::Normal(promise);
                             }
-                            exit @ Completion::Exit(_) => {
-                                self.discard_generator_for_of_loops_on_exit(
-                                    o.id,
-                                    &mut for_of_stack,
-                                    &func_env,
-                                );
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::completed_state_machine_async_generator(
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                        ),
-                                    );
-                                return exit;
-                            }
-                            Completion::Yield(yv) => yv,
-                            _ => JsValue::UNDEFINED,
+                            Operand::Abort(exit) => abort_async_generator!(exit),
+                            Operand::Suspend(yv) => yv,
+                            Operand::Other(_) => JsValue::UNDEFINED,
                         };
 
                         if current_try_stack.iter().any(|try_info| {
@@ -5148,20 +5153,14 @@ impl Interpreter {
 
                 StateTerminator::Throw(expr) => {
                     let throw_val = {
-                        let mut result = self.eval_expr(expr, &term_env);
-                        while let Completion::TailCall { func, this, args } = result {
-                            result = self.call_function(&func, &this, &args);
-                        }
-                        match result {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => e,
-                            other => {
-                                if let Completion::Yield(yv) = other {
-                                    yv
-                                } else {
-                                    JsValue::UNDEFINED
-                                }
-                            }
+                        // A throw *evaluating* the operand and the operand's
+                        // own value are both "the value to throw".
+                        match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) | Operand::Throw(v) => v,
+                            Operand::Abort(exit) => abort_async_generator!(exit),
+                            // Preserves this site's existing reading.
+                            Operand::Suspend(yv) => yv,
+                            Operand::Other(_) => JsValue::UNDEFINED,
                         }
                     };
 
@@ -5228,9 +5227,9 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let cond_val = match self.eval_operand(condition, &term_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             let e = route_exception!(e);
                             // §27.6.3.3: DisposeResources when async generator throws
                             let disp = self.dispose_resources(&func_env, Completion::Throw(e));
@@ -5252,24 +5251,9 @@ impl Interpreter {
                             self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
-                        exit @ Completion::Exit(_) => {
-                            self.discard_generator_for_of_loops_on_exit(
-                                o.id,
-                                &mut for_of_stack,
-                                &func_env,
-                            );
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::completed_state_machine_async_generator(
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                    ),
-                                );
-                            return exit;
-                        }
-                        Completion::Yield(yv) => yv,
-                        _ => JsValue::UNDEFINED,
+                        Operand::Abort(exit) => abort_async_generator!(exit),
+                        Operand::Suspend(yv) => yv,
+                        Operand::Other(_) => JsValue::UNDEFINED,
                     };
                     current_id = if self.to_boolean_val(&cond_val) {
                         *true_state
@@ -5332,7 +5316,11 @@ impl Interpreter {
                         let _ =
                             self.bind_pattern(pattern, exception_val, BindingKind::Let, &catch_env);
                     }
-                    scope_stack.push((catch_env, for_of_stack.len()));
+                    scope_stack.push(ScopeFrame {
+                        env: catch_env,
+                        try_depth: current_try_stack.len(),
+                        for_of_depth: for_of_stack.len(),
+                    });
                     self.sync_generator_scope_stack(o.id, &scope_stack);
                     current_id = *body_state;
                 }
@@ -5351,22 +5339,20 @@ impl Interpreter {
                     after_state,
                 } => {
                     let target: Result<usize, Completion> = 'dispatch: {
-                        let disc_val = match self.eval_expr(discriminant, &term_env) {
-                            Completion::Normal(v) => v,
-                            abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
-                                break 'dispatch Err(abrupt);
-                            }
-                            Completion::Yield(yv) => yv,
-                            _ => JsValue::UNDEFINED,
+                        let disc_val = match self.eval_operand(discriminant, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => break 'dispatch Err(Completion::Throw(e)),
+                            Operand::Abort(exit) => break 'dispatch Err(exit),
+                            Operand::Suspend(yv) => yv,
+                            Operand::Other(_) => JsValue::UNDEFINED,
                         };
                         for case in cases {
-                            let case_val = match self.eval_expr(&case.test, &term_env) {
-                                Completion::Normal(v) => v,
-                                abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
-                                    break 'dispatch Err(abrupt);
-                                }
-                                Completion::Yield(yv) => yv,
-                                _ => JsValue::UNDEFINED,
+                            let case_val = match self.eval_operand(&case.test, &term_env) {
+                                Operand::Value(v) => v,
+                                Operand::Throw(e) => break 'dispatch Err(Completion::Throw(e)),
+                                Operand::Abort(exit) => break 'dispatch Err(exit),
+                                Operand::Suspend(yv) => yv,
+                                Operand::Other(_) => JsValue::UNDEFINED,
                             };
                             if strict_equality(&disc_val, &case_val) {
                                 break 'dispatch Ok(case.state);
@@ -5430,9 +5416,9 @@ impl Interpreter {
                 } => {
                     let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
-                    let iterable_val = match self.eval_expr(iterable, &iterable_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let iterable_val = match self.eval_operand(iterable, &iterable_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             let e = route_exception!(e);
                             self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().kind =
@@ -5447,13 +5433,9 @@ impl Interpreter {
                             self.drain_microtasks();
                             return Completion::Normal(promise);
                         }
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::UNDEFINED
-                            }
-                        }
+                        Operand::Abort(exit) => abort_async_generator!(exit),
+                        Operand::Suspend(yv) => yv,
+                        Operand::Other(_) => JsValue::UNDEFINED,
                     };
                     let iterator = if *is_await {
                         match self.get_async_iterator(&iterable_val) {
@@ -5855,15 +5837,16 @@ impl Interpreter {
                     resume_state,
                     sent_value_binding,
                 } => {
-                    let await_val = match self.eval_expr(value, &term_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
+                    let await_val = match self.eval_operand(value, &term_env) {
+                        Operand::Value(v) => v,
+                        Operand::Throw(e) => {
                             pending_exception = Some(e);
                             check_abrupt_on_resume = true;
                             current_id = *resume_state;
                             continue;
                         }
-                        _ => JsValue::UNDEFINED,
+                        Operand::Abort(exit) => abort_async_generator!(exit),
+                        Operand::Suspend(_) | Operand::Other(_) => JsValue::UNDEFINED,
                     };
 
                     // §27.7.5.3 Await: always suspend and schedule continuation
@@ -5947,6 +5930,11 @@ impl Interpreter {
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
+                }
+                StateTerminator::EnterScope { .. } | StateTerminator::ExitScope { .. } => {
+                    unreachable!(
+                        "EnterScope/ExitScope are emitted only for plain async function bodies"
+                    )
                 }
             }
         }
@@ -6843,7 +6831,7 @@ impl Interpreter {
     }
 
     /// `sync_generator_for_of_stack`'s counterpart for `generator_scope_stacks`.
-    fn sync_generator_scope_stack(&mut self, generator_id: u64, scope_stack: &[(EnvRef, usize)]) {
+    fn sync_generator_scope_stack(&mut self, generator_id: u64, scope_stack: &[ScopeFrame]) {
         if scope_stack.is_empty() {
             if !self.generator_scope_stacks.is_empty() {
                 self.generator_scope_stacks.remove(&generator_id);
