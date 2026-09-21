@@ -5882,189 +5882,14 @@ impl Interpreter {
                 .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
         };
 
-        let state = obj_rc.borrow().iterator_state().cloned();
-        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
+        let is_async_generator = matches!(
+            obj_rc.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator { .. })
+        );
+        if is_async_generator {
             return self.async_gen_enqueue(this, sent_value, super::AsyncGenRequestKind::Next);
         }
-        let Some(IteratorState::AsyncGenerator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            return self.reject_with_type_error("not an async generator object");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let Some(po) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            po.id
-        } else {
-            0
-        };
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-
-        // Determine target_yield and previous sent values based on execution state
-        let (target_yield, prev_sent, is_suspended_start) = match &execution_state {
-            GeneratorExecutionState::Completed => {
-                let result = self.create_iter_result_object(JsValue::UNDEFINED, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            GeneratorExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-            GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
-            GeneratorExecutionState::SuspendedYield {
-                target_yield,
-                prev_sent,
-            } => (*target_yield, prev_sent.clone(), false),
-        };
-
-        // Build the full prev_sent_values for this call by appending the current sent_value.
-        // For SuspendedStart (first call), sent_value is irrelevant (no yield to resume from).
-        let mut new_prev_sent = prev_sent.clone();
-        if !is_suspended_start {
-            new_prev_sent.push(sent_value.clone());
-        }
-
-        // Mark as executing
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::AsyncGenerator {
-                body: body.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: GeneratorExecutionState::Executing,
-            });
-
-        self.generator_context = Some(GeneratorContext {
-            target_yield,
-            current_yield: 0,
-            prev_sent_values: new_prev_sent.clone(),
-            is_async: true,
-            resume_kind: GeneratorResumeKind::Next,
-        });
-
-        let caller_realm = self.current_realm_id;
-        if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
-            self.current_realm_id = gen_realm;
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        self.call_stack_envs.push(func_env.clone());
-        let result = self.exec_body(&body, &func_env);
-        self.call_stack_envs.pop();
-        let _ctx = self.generator_context.take();
-
-        self.current_realm_id = caller_realm;
-        match result {
-            Completion::Yield(v) => {
-                let awaited = match self.await_value(&v) {
-                    Completion::Normal(av) => av,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::AsyncGenerator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    other => {
-                        if let Completion::Yield(yv) = other {
-                            yv
-                        } else {
-                            JsValue::UNDEFINED
-                        }
-                    }
-                };
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::SuspendedYield {
-                            target_yield: target_yield + 1,
-                            prev_sent: new_prev_sent,
-                        },
-                    },
-                );
-                let iter_result = self.create_iter_result_object(awaited, false);
-                let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-            }
-            Completion::Return(v) => {
-                let awaited = match self.await_value(&v) {
-                    Completion::Normal(av) => av,
-                    Completion::Throw(e) => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::AsyncGenerator {
-                                body,
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::Completed,
-                            },
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-                    other => {
-                        if let Completion::Yield(yv) = other {
-                            yv
-                        } else {
-                            JsValue::UNDEFINED
-                        }
-                    }
-                };
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                let iter_result = self.create_iter_result_object(awaited, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-            }
-            Completion::Normal(_) => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                let iter_result = self.create_iter_result_object(JsValue::UNDEFINED, true);
-                let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-            }
-            Completion::Throw(e) => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-            }
-            _ => {}
-        }
-        self.drain_microtasks();
-        Completion::Normal(promise)
+        self.reject_with_type_error("not an async generator object")
     }
 
     /// Per spec §27.6.3.9 step 10.a: AsyncGenerator awaiting-return
@@ -6141,14 +5966,14 @@ impl Interpreter {
             return self
                 .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
         };
-        let state = obj_rc.borrow().iterator_state().cloned();
-
-        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
+        let is_async_generator = matches!(
+            obj_rc.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator { .. })
+        );
+        if is_async_generator {
             return self.async_gen_enqueue(this, value, super::AsyncGenRequestKind::Return);
         }
-
-        // Non-state-machine IteratorState::AsyncGenerator path is below
-        self.async_generator_return_legacy(this, value)
+        self.reject_with_type_error("not an async generator object")
     }
 
     fn async_generator_return_state_machine_with_promise(
@@ -6345,76 +6170,6 @@ impl Interpreter {
         )
     }
 
-    fn async_generator_return_legacy(&mut self, this: &JsValue, value: JsValue) -> Completion {
-        let Some(o) = (this)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-        let state = obj_rc.borrow().iterator_state().cloned();
-
-        // NOTE: The old state machine path has been removed since it now routes through the queue.
-        // Only the legacy IteratorState::AsyncGenerator path remains here.
-
-        let Some(IteratorState::AsyncGenerator {
-            body,
-            func_env,
-            is_strict,
-            execution_state,
-        }) = state
-        else {
-            return self.reject_with_type_error("not an async generator object");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let Some(po) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            po.id
-        } else {
-            0
-        };
-        let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-
-        match &execution_state {
-            GeneratorExecutionState::SuspendedStart | GeneratorExecutionState::Completed => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                self.async_generator_await_return(value, promise_id)
-            }
-            GeneratorExecutionState::Executing => {
-                let err = self.create_type_error("AsyncGenerator is already executing");
-                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
-                self.drain_microtasks();
-                Completion::Normal(promise)
-            }
-            GeneratorExecutionState::SuspendedYield { .. } => {
-                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                    IteratorState::AsyncGenerator {
-                        body,
-                        func_env,
-                        is_strict,
-                        execution_state: GeneratorExecutionState::Completed,
-                    },
-                );
-                self.async_generator_await_return(value, promise_id)
-            }
-        }
-    }
-
     pub(crate) fn async_generator_throw(
         &mut self,
         this: &JsValue,
@@ -6432,44 +6187,14 @@ impl Interpreter {
             return self
                 .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
         };
-        let state = obj_rc.borrow().iterator_state().cloned();
-
-        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
+        let is_async_generator = matches!(
+            obj_rc.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator { .. })
+        );
+        if is_async_generator {
             return self.async_gen_enqueue(this, exception, super::AsyncGenRequestKind::Throw);
         }
-
-        // Non-state-machine path (legacy)
-        let Some(IteratorState::AsyncGenerator {
-            body,
-            func_env,
-            is_strict,
-            ..
-        }) = state
-        else {
-            return self.reject_with_type_error("not an async generator object");
-        };
-
-        let promise = self.create_promise_object();
-        let promise_id = if let Some(po) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            po.id
-        } else {
-            0
-        };
-        let (_, reject_fn) = self.create_resolving_functions(promise_id);
-
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::AsyncGenerator {
-                body,
-                func_env,
-                is_strict,
-                execution_state: GeneratorExecutionState::Completed,
-            });
-        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exception]);
-        self.drain_microtasks();
-        Completion::Normal(promise)
+        self.reject_with_type_error("not an async generator object")
     }
 
     fn align_generator_for_of_stack(
