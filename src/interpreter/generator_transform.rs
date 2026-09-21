@@ -179,8 +179,10 @@ pub(crate) enum StateTerminator {
 /// State-machine target for an abrupt `break` or `continue` completion.
 ///
 /// The depths describe the execution context that remains active at
-/// `target_state`, allowing the async-function driver to run intervening
-/// finalizers and close only the `for-of` iterators crossed by the jump.
+/// `target_state`, allowing the state-machine drivers (sync/async generators
+/// via `route_generator_loop_control`, async functions via
+/// `route_loop_control!`) to run intervening finalizers and close only the
+/// `for-of` iterators crossed by the jump.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopControlTarget {
     pub target_state: usize,
@@ -188,7 +190,9 @@ pub(crate) struct LoopControlTarget {
     pub for_of_depth: usize,
     /// Number of block scopes (`EnterScope`/`ExitScope`) open when this
     /// target's loop/label was registered, so `route_loop_control!` never
-    /// disposes a scope that lexically encloses the target itself.
+    /// disposes a scope that lexically encloses the target itself. Only
+    /// async functions emit `EnterScope`/`ExitScope`; generator routing does
+    /// not consume this field.
     pub scope_depth: usize,
 }
 
