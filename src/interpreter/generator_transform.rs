@@ -622,10 +622,11 @@ fn stmt_contains_for_await(stmt: &Statement, head: fn(&ForOfStatement) -> bool) 
                     .as_ref()
                     .is_some_and(|f| f.iter().any(|s| stmt_contains_for_await(s, head)))
         }
-        Statement::Switch(s) => s
-            .cases
-            .iter()
-            .any(|c| c.consequent.iter().any(|s| stmt_contains_for_await(s, head))),
+        Statement::Switch(s) => s.cases.iter().any(|c| {
+            c.consequent
+                .iter()
+                .any(|s| stmt_contains_for_await(s, head))
+        }),
         Statement::Labeled(_, inner) => stmt_contains_for_await(inner, head),
         Statement::With(_, s) => stmt_contains_for_await(s, head),
         _ => false,
