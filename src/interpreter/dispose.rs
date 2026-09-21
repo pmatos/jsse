@@ -201,6 +201,61 @@ pub(crate) struct PendingDispose {
     pub(crate) then: DisposeThen,
 }
 
+/// What an async generator does with the request at its front once the
+/// disposal of its function-level resources finishes.
+#[derive(Clone, Copy)]
+pub(crate) enum GeneratorDisposeThen {
+    /// The body ran to its end: resolve `{ value: undefined, done: true }`.
+    Complete,
+    /// An uncaught throw left the body: reject with the (possibly chained) error.
+    Throw,
+    /// A `return expr;` whose operand was already awaited: resolve
+    /// `{ value, done: true }` directly.
+    ReturnSettle,
+    /// A `.return(v)` unwinding at a yield: `v` is awaited after disposal, as
+    /// for a generator without resources.
+    ReturnAwait,
+}
+
+pub(crate) enum GeneratorDisposeState {
+    /// Suspended at the `Await` of a `return` operand; the resources are still
+    /// on the generator's function environment.
+    ReturnOperand,
+    Disposing {
+        cursor: DisposeCursor,
+        then: GeneratorDisposeThen,
+    },
+}
+
+/// An async generator request parked at one of the `Await`s of its body's
+/// DisposeResources. The request stays at the front of the generator's queue,
+/// so a later request cannot start the generator early.
+pub(crate) struct GeneratorDisposal {
+    pub(crate) state: GeneratorDisposeState,
+    pub(crate) promise: JsValue,
+    pub(crate) resolve: JsValue,
+    pub(crate) reject: JsValue,
+}
+
+impl GeneratorDisposal {
+    pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
+        if let GeneratorDisposeState::Disposing { cursor, .. } = &self.state {
+            cursor.for_each_value(&mut f);
+        }
+        f(&self.promise);
+        f(&self.resolve);
+        f(&self.reject);
+    }
+}
+
+/// Outcome of starting a disposal that may suspend the async generator.
+pub(crate) enum GeneratorDisposeStart {
+    /// Disposal finished without an `Await` (or had nothing to dispose).
+    Done(Completion),
+    /// The request is parked; the driver must return without settling it.
+    Parked,
+}
+
 /// A `disposeAsync()` call suspended at one of DisposeResources' `Await`s.
 pub(crate) struct AsyncDisposal {
     pub(crate) cursor: DisposeCursor,
