@@ -179,8 +179,10 @@ pub(crate) enum StateTerminator {
 /// State-machine target for an abrupt `break` or `continue` completion.
 ///
 /// The depths describe the execution context that remains active at
-/// `target_state`, allowing the async-function driver to run intervening
-/// finalizers and close only the `for-of` iterators crossed by the jump.
+/// `target_state`, allowing the state-machine drivers (sync/async generators
+/// via `route_generator_loop_control`, async functions via
+/// `route_loop_control!`) to run intervening finalizers and close only the
+/// `for-of` iterators crossed by the jump.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopControlTarget {
     pub target_state: usize,
@@ -188,7 +190,9 @@ pub(crate) struct LoopControlTarget {
     pub for_of_depth: usize,
     /// Number of block scopes (`EnterScope`/`ExitScope`) open when this
     /// target's loop/label was registered, so `route_loop_control!` never
-    /// disposes a scope that lexically encloses the target itself.
+    /// disposes a scope that lexically encloses the target itself. Only
+    /// async functions emit `EnterScope`/`ExitScope`; generator routing does
+    /// not consume this field.
     pub scope_depth: usize,
 }
 
@@ -432,7 +436,7 @@ impl TransformContext {
                 continue;
             }
             if let Some(target) = self.jump_target(kind, &label) {
-                let terminator = self.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 self.pending_inline_jumps.push(InlineJump {
                     kind,
                     label,
@@ -448,14 +452,6 @@ impl TransformContext {
             JumpKind::Continue => &self.continue_targets,
         };
         targets.get(label).copied()
-    }
-
-    fn jump_terminator(&self, target: LoopControlTarget) -> StateTerminator {
-        if self.is_async && self.detect_for_await {
-            StateTerminator::LoopControl(target)
-        } else {
-            StateTerminator::Goto(target.target_state)
-        }
     }
 
     fn loop_control_target(&self, target_state: usize, for_of_depth: usize) -> LoopControlTarget {
@@ -1067,7 +1063,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Break(label) => {
             if let Some(target) = ctx.jump_target(JumpKind::Break, label) {
-                let terminator = ctx.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -1077,7 +1073,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Continue(label) => {
             if let Some(target) = ctx.jump_target(JumpKind::Continue, label) {
-                let terminator = ctx.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -2512,7 +2508,17 @@ fn transform_try_statement(
     } else {
         None
     };
-    let clause_completion_state = finally_entry_state.unwrap_or(after_try);
+    // A finally-less try/catch still needs a `TryExit` on its normal-completion
+    // path: `TryEnter` unconditionally pushes a runtime `TryContextInfo`, and
+    // only `TryExit` pops it. Without this, a finally-less try/catch's context
+    // leaks on the runtime stack forever, desyncing every depth computed
+    // afterwards (`try_depth`/`for_of_depth` on later `LoopControlTarget`s,
+    // and exception-handler search) from this transform's own `try_stack`
+    // bookkeeping, which pops on every try regardless of `finally`.
+    let no_finally_exit_state = finally_entry_state.is_none().then(|| ctx.new_state());
+    let clause_completion_state = finally_entry_state
+        .or(no_finally_exit_state)
+        .expect("exactly one of finally_entry_state/no_finally_exit_state is set");
 
     ctx.finalize_current_state(StateTerminator::TryEnter {
         try_state: try_body_state,
@@ -2594,6 +2600,11 @@ fn transform_try_statement(
             }
         }
         ctx.current_state_id = finally_exit_state;
+        ctx.finalize_current_state(StateTerminator::TryExit {
+            after_state: after_try,
+        });
+    } else if let Some(exit_state) = no_finally_exit_state {
+        ctx.current_state_id = exit_state;
         ctx.finalize_current_state(StateTerminator::TryExit {
             after_state: after_try,
         });
@@ -3428,8 +3439,43 @@ mod tests {
         assert_eq!(with_jump.len(), 1);
         let jump = &with_jump[0].inline_jumps[0];
         assert_eq!(jump.label, None);
-        assert!(matches!(jump.terminator, StateTerminator::Goto(t) if t == after_switch));
+        assert!(
+            matches!(&jump.terminator, StateTerminator::LoopControl(t) if t.target_state == after_switch)
+        );
         assert_eq!(with_jump[0].inline_jumps.len(), 1);
+    }
+
+    fn loop_control_targets(sm: &GeneratorStateMachine) -> Vec<LoopControlTarget> {
+        sm.states
+            .iter()
+            .filter_map(|s| match &s.terminator {
+                StateTerminator::LoopControl(target) => Some(*target),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_break_in_yielding_try_of_sync_generator_lowers_to_loop_control() {
+        let body = parse_fn_body(
+            "function* g() { for (;;) { try { yield 1; break; } finally { f(); } } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let targets = loop_control_targets(&sm);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].try_depth, 0);
+        assert_eq!(targets[0].for_of_depth, 0);
+    }
+
+    #[test]
+    fn test_loop_control_target_records_enclosing_try_depth() {
+        let body = parse_fn_body(
+            "function* g() { try { for (;;) { try { yield 1; continue; } finally { f(); } } } finally { h(); } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let targets = loop_control_targets(&sm);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].try_depth, 1);
     }
 
     #[test]

@@ -4,6 +4,17 @@
 //! `AsyncGenerator` prototype methods wired up in `builtins/iterators.rs`.
 
 use super::*;
+use crate::interpreter::generator_transform::LoopControlTarget;
+
+/// Whether a jump to `target` stays inside the innermost running finally body
+/// (a loop nested in it) rather than leaving it. A jump that leaves replaces
+/// the throw or return that entered that finally.
+fn stays_inside_running_finally(try_stack: &[TryContextInfo], target: &LoopControlTarget) -> bool {
+    try_stack
+        .iter()
+        .rposition(|try_info| try_info.entered_finally)
+        .is_some_and(|running| target.try_depth > running)
+}
 
 impl Interpreter {
     pub(crate) fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
@@ -484,7 +495,7 @@ impl Interpreter {
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
-        use crate::interpreter::generator_transform::{LoopControlTarget, StateTerminator};
+        use crate::interpreter::generator_transform::StateTerminator;
 
         let Some(o) = (this)
             .as_object_id()
@@ -756,6 +767,46 @@ impl Interpreter {
                         return Completion::Exit(code);
                     }
                     _ => unreachable!("routing a throw returned a non-abrupt completion"),
+                }
+            }};
+        }
+
+        macro_rules! route_loop_control_result {
+            ($target:expr) => {{
+                match self.route_generator_loop_control(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    $target,
+                ) {
+                    Ok(next_state) => next_state,
+                    Err(Completion::Throw(error)) => {
+                        let error = route_exception!(error);
+                        let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        self.generator_inline_iters.remove(&o.id);
+                        return disp;
+                    }
+                    Err(Completion::Exit(code)) => {
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        return Completion::Exit(code);
+                    }
+                    Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
                 }
             }};
         }
@@ -1279,14 +1330,20 @@ impl Interpreter {
                     return disp;
                 }
 
-                // Async-function transforms are currently the only machines
-                // that emit LoopControl. If a shared transform emits one for a
-                // generator, abrupt loop cleanup is identical to Goto.
-                StateTerminator::Goto(next_state)
-                | StateTerminator::LoopControl(LoopControlTarget {
-                    target_state: next_state,
-                    ..
-                }) => {
+                // A break/continue that leaves try statements must run each
+                // finally it crosses, so it is routed rather than jumped.
+                StateTerminator::LoopControl(target) => {
+                    let target = *target;
+                    // A jump that leaves the running finally body replaces the
+                    // throw or return that entered it.
+                    if !stays_inside_running_finally(&current_try_stack, &target) {
+                        pending_exception = None;
+                        pending_return = None;
+                    }
+                    current_id = route_loop_control_result!(target);
+                }
+
+                StateTerminator::Goto(next_state) => {
                     if let Err(completion) = self.align_generator_for_of_stack(
                         o.id,
                         &mut for_of_stack,
@@ -1384,12 +1441,13 @@ impl Interpreter {
                         _after_state: *after_state,
                         entered_catch: false,
                         entered_finally: false,
+                        pending_loop_control: None,
                     });
                     current_id = *try_state;
                 }
 
                 StateTerminator::TryExit { after_state } => {
-                    current_try_stack.pop();
+                    let finished = current_try_stack.pop();
                     if let Some(exc) = pending_exception.take() {
                         // Re-throw pending exception after finally completes
                         let exc = route_exception!(exc);
@@ -1426,6 +1484,12 @@ impl Interpreter {
                             },
                         );
                         return self.generator_return_state_machine(this, ret_val);
+                    }
+                    if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
+                        // The finalizer ran on behalf of a break/continue:
+                        // resume it, through any finalizer still in the way.
+                        current_id = route_loop_control_result!(target);
+                        continue;
                     }
                     current_id = *after_state;
                 }
@@ -3299,7 +3363,7 @@ impl Interpreter {
         resolve_fn: JsValue,
         reject_fn: JsValue,
     ) -> Completion {
-        use crate::interpreter::generator_transform::{LoopControlTarget, StateTerminator};
+        use crate::interpreter::generator_transform::StateTerminator;
 
         let Some(o) = (this)
             .as_object_id()
@@ -4095,6 +4159,54 @@ impl Interpreter {
                 }
             }};
         }
+
+        macro_rules! route_loop_control_result {
+            ($target:expr) => {{
+                match self.route_generator_loop_control(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    $target,
+                ) {
+                    Ok(next_state) => next_state,
+                    Err(Completion::Throw(error)) => {
+                        let error = route_exception!(error);
+                        let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                        let error = match disp {
+                            Completion::Throw(error) => error,
+                            Completion::Exit(code) => return Completion::Exit(code),
+                            _ => unreachable!("disposing a throw must stay abrupt"),
+                        };
+                        self.generator_inline_iters.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_async_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+                    Err(Completion::Exit(code)) => {
+                        self.generator_inline_iters.remove(&o.id);
+                        self.generator_for_of_stacks.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::completed_state_machine_async_generator(
+                                state_machine,
+                                func_env,
+                                is_strict,
+                            ),
+                        );
+                        return Completion::Exit(code);
+                    }
+                    Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
+                }
+            }};
+        }
+
         loop {
             if check_abrupt_on_resume {
                 check_abrupt_on_resume = false;
@@ -5292,14 +5404,20 @@ impl Interpreter {
                     return Completion::Normal(promise);
                 }
 
-                // Async-function transforms are currently the only machines
-                // that emit LoopControl. If a shared transform emits one for
-                // an async generator, cleanup is identical to Goto.
-                StateTerminator::Goto(next_state)
-                | StateTerminator::LoopControl(LoopControlTarget {
-                    target_state: next_state,
-                    ..
-                }) => {
+                // A break/continue that leaves try statements must run each
+                // finally it crosses, so it is routed rather than jumped.
+                StateTerminator::LoopControl(target) => {
+                    let target = *target;
+                    // A jump that leaves the running finally body replaces the
+                    // throw or return that entered it.
+                    if !stays_inside_running_finally(&current_try_stack, &target) {
+                        pending_exception = None;
+                        pending_return = None;
+                    }
+                    current_id = route_loop_control_result!(target);
+                }
+
+                StateTerminator::Goto(next_state) => {
                     if let Err(completion) = self.align_generator_for_of_stack(
                         o.id,
                         &mut for_of_stack,
@@ -5382,12 +5500,13 @@ impl Interpreter {
                         _after_state: *after_state,
                         entered_catch: false,
                         entered_finally: false,
+                        pending_loop_control: None,
                     });
                     current_id = *try_state;
                 }
 
                 StateTerminator::TryExit { after_state } => {
-                    current_try_stack.pop();
+                    let finished = current_try_stack.pop();
                     if let Some(exc) = pending_exception.take() {
                         // Re-throw pending exception after finally completes
                         let exc = route_exception!(exc);
@@ -5407,6 +5526,12 @@ impl Interpreter {
                         pending_return = Some(ret_val);
                         check_abrupt_on_resume = true;
                         current_id = *after_state;
+                        continue;
+                    }
+                    if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
+                        // The finalizer ran on behalf of a break/continue:
+                        // resume it, through any finalizer still in the way.
+                        current_id = route_loop_control_result!(target);
                         continue;
                     }
                     current_id = *after_state;
@@ -7098,17 +7223,17 @@ impl Interpreter {
                 && !try_info.entered_finally
                 && let Some(catch_state) = try_info.catch_state
             {
-                return Some((depth, catch_state, true, try_info.finally_state.is_some()));
+                return Some((depth, catch_state));
             }
             if !try_info.entered_finally
                 && let Some(finally_state) = try_info.finally_state
             {
-                return Some((depth, finally_state, false, true));
+                return Some((depth, finally_state));
             }
             None
         });
 
-        let keep_len = handler.map_or(0, |(handler_depth, _, _, _)| {
+        let keep_len = handler.map_or(0, |(handler_depth, _)| {
             for_of_stack
                 .iter()
                 .position(|loop_state| loop_state.try_depth > handler_depth)
@@ -7128,18 +7253,79 @@ impl Interpreter {
             _ => unreachable!("unwinding a throw must preserve abrupt completion"),
         };
 
-        if let Some((depth, handler_state, is_catch, has_finally)) = handler {
-            let retained_depth = if is_catch && !has_finally {
-                depth
-            } else {
-                depth + 1
-            };
-            try_stack.truncate(retained_depth);
+        if let Some((depth, handler_state)) = handler {
+            // Retain this context (rather than discarding a catch-only entry
+            // early) even when it has no `finally`: with every try/catch now
+            // routed through a `TryExit` on its normal-completion path (see
+            // `transform_try_statement`), the context must still be here for
+            // that `TryExit` to pop once the catch body finishes.
+            try_stack.truncate(depth + 1);
             *pending_exception = Some(error);
             *current_id = handler_state;
             Completion::Empty
         } else {
             Completion::Throw(error)
+        }
+    }
+
+    /// Route a `break`/`continue` toward its target, first running every
+    /// finally the jump leaves. The innermost un-entered finalizer between the
+    /// jump and its target takes control, with the jump parked on its context;
+    /// its `TryExit` calls this again until none is left. Loops nested inside
+    /// the selected finalizer close first, loops containing it stay open until
+    /// routing resumes, and never more than the target itself retains. The
+    /// target records both stack depths, so nothing depends on state-id
+    /// equality. Returns the state to resume at, or the throw/exit completion
+    /// that replaced the jump.
+    fn route_generator_loop_control(
+        &mut self,
+        generator_id: u64,
+        for_of_stack: &mut Vec<ForOfLoopState>,
+        try_stack: &mut Vec<TryContextInfo>,
+        func_env: &EnvRef,
+        target: LoopControlTarget,
+    ) -> Result<usize, Completion> {
+        let routed_to = (target.try_depth..try_stack.len()).rev().find_map(|depth| {
+            let try_info = &try_stack[depth];
+            if try_info.entered_finally {
+                return None;
+            }
+            try_info.finally_state.map(|state| (depth, state))
+        });
+
+        let keep_len = routed_to.map_or(target.for_of_depth, |(depth, _)| {
+            for_of_stack
+                .iter()
+                .position(|loop_state| loop_state.try_depth > depth)
+                .unwrap_or(for_of_stack.len())
+                .max(target.for_of_depth)
+        });
+        debug_assert!(keep_len <= for_of_stack.len());
+
+        let closed = self.unwind_generator_for_of_loops(
+            generator_id,
+            for_of_stack,
+            try_stack,
+            func_env,
+            keep_len.min(for_of_stack.len()),
+            Completion::Empty,
+        );
+        if matches!(closed, Completion::Throw(_) | Completion::Exit(_)) {
+            return Err(closed);
+        }
+
+        match routed_to {
+            Some((depth, finally_state)) => {
+                // Contexts nested inside the selected finally are left, so
+                // EnterFinally must mark this one.
+                try_stack.truncate(depth + 1);
+                try_stack[depth].pending_loop_control = Some(target);
+                Ok(finally_state)
+            }
+            None => {
+                try_stack.truncate(target.try_depth);
+                Ok(target.target_state)
+            }
         }
     }
 
