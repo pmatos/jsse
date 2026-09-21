@@ -6070,20 +6070,19 @@ impl Interpreter {
             reject: request.2.clone(),
         };
         match self.async_gen_step_disposal(gen_id, disposal, None) {
-            Ok(_) => GeneratorDisposeStart::Parked,
-            Err((completion, _, _)) => GeneratorDisposeStart::Done(completion),
+            None => GeneratorDisposeStart::Parked,
+            Some((completion, _, _)) => GeneratorDisposeStart::Done(completion),
         }
     }
 
-    /// Advance `disposal` one step. `Ok` when it parked at an `Await`;
-    /// `Err` with the finished completion (and the request it belongs to)
-    /// otherwise.
+    /// Advance `disposal` one step. `None` when it parked at an `Await`;
+    /// otherwise the finished completion and the request it belongs to.
     fn async_gen_step_disposal(
         &mut self,
         gen_id: u64,
         mut disposal: GeneratorDisposal,
         awaited: Option<Result<JsValue, JsValue>>,
-    ) -> Result<(), (Completion, GeneratorDisposeThen, GeneratorDisposal)> {
+    ) -> Option<(Completion, GeneratorDisposeThen, GeneratorDisposal)> {
         let GeneratorDisposeState::Disposing { cursor, then } = &mut disposal.state else {
             unreachable!("only a disposing request is stepped");
         };
@@ -6099,9 +6098,9 @@ impl Interpreter {
                         interp.async_gen_dispose_resume(gen_id, outcome)
                     });
                 });
-                Ok(())
+                None
             }
-            DisposeStep::Done(completion) => Err((completion, then, disposal)),
+            DisposeStep::Done(completion) => Some((completion, then, disposal)),
         }
     }
 
@@ -6152,8 +6151,8 @@ impl Interpreter {
         awaited: Option<Result<JsValue, JsValue>>,
     ) -> Completion {
         match self.async_gen_step_disposal(gen_id, disposal, awaited) {
-            Ok(()) => Completion::Normal(JsValue::UNDEFINED),
-            Err((completion, then, disposal)) => {
+            None => Completion::Normal(JsValue::UNDEFINED),
+            Some((completion, then, disposal)) => {
                 self.async_gen_finish_disposal(gen_id, then, completion, &disposal)
             }
         }

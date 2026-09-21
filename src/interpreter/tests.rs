@@ -3866,6 +3866,26 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_async_generator_disposer_stops_parked_request() {
+        // The disposer's exit arrives from a job the parked request resumed
+        // in, so it must propagate as an exit rather than settle the request.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            const it = (async function* () {
+              await using a = { async [Symbol.asyncDispose]() { await null; __host_exit(7); } };
+              yield 1;
+            })();
+            it.next().then(() => {
+              it.next().then(() => { globalThis.log += "settled;"; });
+            });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "log"), "");
+    }
+
+    #[test]
     fn host_exit_skips_iterator_return_cleanup() {
         // A pending exit must not run the iterator's user-defined return()
         // during for-of unwinding — it could re-enter __host_exit and overwrite
