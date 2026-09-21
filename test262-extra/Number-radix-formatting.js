@@ -91,6 +91,69 @@ for (var r = 2; r <= 36; r++) {
   }
 }
 
+// Values >= 2^63 must format exactly, not saturate through i64 (issue #678)
+if ((0xffff000000000000).toString(16) !== "ffff000000000000") {
+  throw new Test262Error('(0xffff000000000000).toString(16) should be "ffff000000000000", got: ' + (0xffff000000000000).toString(16));
+}
+
+// Power-of-two radixes have no digit ambiguity: each digit is a fixed bit-group
+// of the exact value, so the exact expansion is provably correct at the 2^63/2^64
+// boundaries and for Number.MAX_VALUE.
+if ((2 ** 63).toString(16) !== "8000000000000000") {
+  throw new Test262Error('(2 ** 63).toString(16) should be "8000000000000000", got: ' + (2 ** 63).toString(16));
+}
+if ((2 ** 63).toString(2) !== "1" + "0".repeat(63)) {
+  throw new Test262Error('(2 ** 63).toString(2) mismatch, got: ' + (2 ** 63).toString(2));
+}
+if ((2 ** 64).toString(16) !== "10000000000000000") {
+  throw new Test262Error('(2 ** 64).toString(16) should be "10000000000000000", got: ' + (2 ** 64).toString(16));
+}
+if ((2 ** 64).toString(2) !== "1" + "0".repeat(64)) {
+  throw new Test262Error('(2 ** 64).toString(2) mismatch, got: ' + (2 ** 64).toString(2));
+}
+
+var maxValueHex = Number.MAX_VALUE.toString(16);
+if (maxValueHex.length !== 256) {
+  throw new Test262Error('Number.MAX_VALUE.toString(16) should have length 256, got length: ' + maxValueHex.length);
+}
+if (BigInt("0x" + maxValueHex) !== BigInt(Number.MAX_VALUE)) {
+  throw new Test262Error('Number.MAX_VALUE.toString(16) does not round-trip through BigInt');
+}
+var maxValueBin = Number.MAX_VALUE.toString(2);
+if (maxValueBin.length !== 1024) {
+  throw new Test262Error('Number.MAX_VALUE.toString(2) should have length 1024, got length: ' + maxValueBin.length);
+}
+if (BigInt("0b" + maxValueBin) !== BigInt(Number.MAX_VALUE)) {
+  throw new Test262Error('Number.MAX_VALUE.toString(2) does not round-trip through BigInt');
+}
+
+// Radix 36 is not a power of two, so once a magnitude's ULP exceeds 1 (true for
+// everything >= 2^53) multiple digit strings can validly satisfy the spec's
+// "Number::toString" step 5 (sec-numeric-types-number-tostring) reconstruction
+// criterion. So this asserts a round-trip property instead of a specific
+// hardcoded string. (Verified empirically that Node's own radix-36 output for
+// 0xffff000000000000 does *not* round-trip to the original value, so Node's
+// output must not be used as ground truth here — see PR description.)
+function decodeBase36(s) {
+  var negative = s[0] === '-';
+  var digits = negative ? s.slice(1) : s;
+  var value = 0n;
+  for (var i = 0; i < digits.length; i++) {
+    value = value * 36n + BigInt(parseInt(digits[i], 36));
+  }
+  return negative ? -value : value;
+}
+
+[2 ** 63, 2 ** 64, Number.MAX_VALUE].forEach(function (original) {
+  var s = original.toString(36);
+  var decoded = decodeBase36(s);
+  if (Number(decoded) !== original) {
+    throw new Test262Error(
+      original + '.toString(36) = "' + s + '" does not round-trip: Number(decoded) = ' + Number(decoded)
+    );
+  }
+});
+
 // Invalid radix should throw RangeError
 var invalidRadixes = [0, 1, 37, -1, 100];
 for (var i = 0; i < invalidRadixes.length; i++) {
