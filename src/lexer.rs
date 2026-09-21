@@ -854,6 +854,19 @@ impl<'a> Lexer<'a> {
         self.read_digits_with_separators(s, |ch| ch.is_ascii_digit())
     }
 
+    // §12.9.3 NonDecimalIntegerLiteral / LegacyOctalIntegerLiteral value: MV is the
+    // exact integer, rounded once to 𝔽(MV) (§6.1.6.1) — no `u64` upper bound.
+    // `digits` must be non-empty (checked here so the empty-literal cases like
+    // `0x`/`0o`/`0b` stay a SyntaxError) and already validated as radix digits.
+    fn radix_literal_value(&self, digits: &str, radix: u32, what: &str) -> Result<f64, LexError> {
+        if digits.is_empty() {
+            return Err(self.error(format!("Invalid {what} literal")));
+        }
+        Ok(crate::interpreter::prevalidated_radix_digits_to_f64(
+            digits, radix,
+        ))
+    }
+
     fn read_hex_literal(&mut self, mut s: String) -> Result<Token, LexError> {
         s.push(self.advance().unwrap()); // x/X
         if self.peek() == Some('_') {
@@ -866,9 +879,8 @@ impl<'a> Lexer<'a> {
             return Ok(Token::BigIntLiteral(clean));
         }
         let hex_part: String = s[2..].chars().filter(|&c| c != '_').collect();
-        let val =
-            u64::from_str_radix(&hex_part, 16).map_err(|_| self.error("Invalid hex literal"))?;
-        Ok(Token::NumericLiteral(val as f64))
+        let val = self.radix_literal_value(&hex_part, 16, "hex")?;
+        Ok(Token::NumericLiteral(val))
     }
 
     fn read_octal_literal(&mut self, mut s: String) -> Result<Token, LexError> {
@@ -1674,6 +1686,43 @@ mod tests {
             lex_no_lt("1e3"),
             vec![Token::NumericLiteral(1000.0), Token::Eof]
         );
+    }
+
+    #[test]
+    fn wide_hex_literals_round_to_nearest() {
+        // sec-numericvalue / sec-static-semantics-mv: MV is the exact integer,
+        // rounded once to 𝔽(MV) (§6.1.6.1); no upper bound on digit count.
+        assert_eq!(
+            lex_no_lt("0xffffffffffffffffffff"),
+            vec![Token::NumericLiteral(2f64.powi(80)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt("0x10000000000000000"),
+            vec![Token::NumericLiteral(2f64.powi(64)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt("0x1_0000_0000_0000_0000"),
+            vec![Token::NumericLiteral(2f64.powi(64)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt(&format!("0x{}", "f".repeat(256))),
+            vec![Token::NumericLiteral(f64::INFINITY), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt(&format!("0x{}", "f".repeat(255))),
+            vec![Token::NumericLiteral(2f64.powi(1020)), Token::Eof]
+        );
+        // Regression guards: already-green ≤64-bit literals stay exact.
+        assert_eq!(
+            lex_no_lt("0xffffffffffffffff"),
+            vec![Token::NumericLiteral(2f64.powi(64)), Token::Eof]
+        );
+        assert_eq!(
+            lex_no_lt(&format!("0x{}ff", "0".repeat(64))),
+            vec![Token::NumericLiteral(255.0), Token::Eof]
+        );
+        assert!(Lexer::new("0x").next_token().is_err());
+        assert!(Lexer::new("0xg").next_token().is_err());
     }
 
     #[test]
