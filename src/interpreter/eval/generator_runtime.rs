@@ -2580,7 +2580,6 @@ impl Interpreter {
         let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
         let err = self.create_type_error(msg);
         let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
-        self.drain_microtasks();
         Completion::Normal(promise)
     }
 
@@ -6188,7 +6187,6 @@ impl Interpreter {
                     ),
                 );
                 let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exception]);
-                self.drain_microtasks();
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedAtState { .. } => {}
