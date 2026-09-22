@@ -679,14 +679,6 @@ impl Interpreter {
                                         env.set(name, value.clone()).ok();
                                     }
                                 }
-                                SentValueBindingKind::Pattern(pattern) => {
-                                    let _ = self.bind_pattern(
-                                        pattern,
-                                        value.clone(),
-                                        BindingKind::Var,
-                                        &func_env,
-                                    );
-                                }
                                 SentValueBindingKind::Discard
                                 | SentValueBindingKind::InlineYield { .. } => {}
                             }
@@ -804,10 +796,6 @@ impl Interpreter {
                     } else {
                         env.set(name, sent_value.clone()).ok();
                     }
-                }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
                 SentValueBindingKind::InlineYield {
@@ -1239,14 +1227,6 @@ impl Interpreter {
                                 match &binding.kind {
                                     SentValueBindingKind::Variable(name) => {
                                         self.env_set(&term_env, name, value.clone()).ok();
-                                    }
-                                    SentValueBindingKind::Pattern(pattern) => {
-                                        let _ = self.bind_pattern(
-                                            pattern,
-                                            value.clone(),
-                                            BindingKind::Var,
-                                            &term_env,
-                                        );
                                     }
                                     SentValueBindingKind::Discard
                                     | SentValueBindingKind::InlineYield { .. } => {}
@@ -2275,14 +2255,6 @@ impl Interpreter {
                                     SentValueBindingKind::Variable(name) => {
                                         self.env_set(&func_env, name, result_value.clone()).ok();
                                     }
-                                    SentValueBindingKind::Pattern(pattern) => {
-                                        let _ = self.bind_pattern(
-                                            pattern,
-                                            result_value.clone(),
-                                            BindingKind::Var,
-                                            &func_env,
-                                        );
-                                    }
                                     SentValueBindingKind::Discard
                                     | SentValueBindingKind::InlineYield { .. } => {}
                                 }
@@ -2681,9 +2653,6 @@ impl Interpreter {
                 } else {
                     self.env_set(func_env, name, value.clone()).ok();
                 }
-            }
-            SentValueBindingKind::Pattern(pattern) => {
-                let _ = self.bind_pattern(pattern, value.clone(), BindingKind::Var, func_env);
             }
             SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
         }
@@ -3387,10 +3356,6 @@ impl Interpreter {
                     } else {
                         env.set(name, sent_value.clone()).ok();
                     }
-                }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
                 SentValueBindingKind::InlineYield {
@@ -5171,9 +5136,6 @@ impl Interpreter {
         match &binding.kind {
             SentValueBindingKind::Variable(name) => {
                 self.env_set(env, name, value.clone()).ok();
-            }
-            SentValueBindingKind::Pattern(pattern) => {
-                let _ = self.bind_pattern(pattern, value.clone(), BindingKind::Var, env);
             }
             SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
         }

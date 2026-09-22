@@ -196,34 +196,16 @@ pub(crate) struct LoopControlTarget {
     pub scope_depth: usize,
 }
 
-/// Clear IC sites in a sent-value binding pattern (the destructuring target of
-/// `x = yield` / `x = await`). The pattern is applied to the resumed value before
-/// the next `exec_body` switches to a state-body store, so any computed-key or
-/// default-value sites in it run under the caller's handle and must be cleared.
-fn clear_sent_value_binding(binding: &mut Option<SentValueBinding>) {
-    if let Some(SentValueBinding {
-        kind: SentValueBindingKind::Pattern(p),
-    }) = binding
-    {
-        crate::ast::clear_pattern_ic_sites(p);
-    }
-}
-
 /// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
 /// `ast::clear_expr_ic_sites`: terminator expressions run under the caller's IC
 /// handle rather than any state body's store, so they must take the slow path.
 fn clear_terminator_ic_sites(t: &mut StateTerminator) {
     use crate::ast::{clear_expr_ic_sites, clear_for_in_of_left, clear_pattern_ic_sites};
     match t {
-        StateTerminator::Yield {
-            value,
-            sent_value_binding,
-            ..
-        } => {
+        StateTerminator::Yield { value, .. } => {
             if let Some(v) = value {
                 clear_expr_ic_sites(v);
             }
-            clear_sent_value_binding(sent_value_binding);
         }
         StateTerminator::Return(v) => {
             if let Some(v) = v {
@@ -246,13 +228,8 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         // later in ForOfHead, which is where its sites are cleared.
         StateTerminator::ForOfInit { iterable, .. } => clear_expr_ic_sites(iterable),
         StateTerminator::ForOfHead { left, .. } => clear_for_in_of_left(left),
-        StateTerminator::Await {
-            value,
-            sent_value_binding,
-            ..
-        } => {
+        StateTerminator::Await { value, .. } => {
             clear_expr_ic_sites(value);
-            clear_sent_value_binding(sent_value_binding);
         }
         StateTerminator::TryEnter { catch_state, .. } => {
             if let Some(ci) = catch_state
@@ -296,7 +273,6 @@ pub(crate) struct SentValueBinding {
 #[derive(Debug, Clone)]
 pub(crate) enum SentValueBindingKind {
     Variable(String),
-    Pattern(Pattern),
     #[allow(dead_code)]
     Discard,
     InlineYield {
@@ -1760,16 +1736,6 @@ fn emit_expression_with_binding(
             );
             ctx.emit_statement(Statement::Expression(assign));
         }
-        Some(SentValueBindingKind::Pattern(pattern)) => {
-            let decl = Statement::Variable(VariableDeclaration {
-                kind: VarKind::Let,
-                declarations: vec![VariableDeclarator {
-                    pattern: pattern.clone(),
-                    init: Some(expr.clone()),
-                }],
-            });
-            ctx.emit_statement(decl);
-        }
         Some(SentValueBindingKind::Discard)
         | Some(SentValueBindingKind::InlineYield { .. })
         | None => {
@@ -2071,7 +2037,7 @@ fn transform_variable_declaration(
             lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
         } else if let Some(init) = &declarator.init {
             if expr_has_suspension(init, ctx.is_async) {
-                let binding = match &declarator.pattern {
+                match &declarator.pattern {
                     Pattern::Identifier(name) => {
                         // Ensure the variable is declared as a temp var so it exists
                         // in strict mode (the original let/const/var decl is replaced
@@ -2079,11 +2045,21 @@ fn transform_variable_declaration(
                         if !ctx.temp_vars.contains(name) {
                             ctx.temp_vars.push(name.clone());
                         }
-                        SentValueBindingKind::Variable(name.clone())
+                        let binding = SentValueBindingKind::Variable(name.clone());
+                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
                     }
-                    pat => SentValueBindingKind::Pattern(pat.clone()),
-                };
-                transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
+                    pattern => {
+                        let pattern = pattern.clone();
+                        let source = ctx.new_temp_var("dstr_src");
+                        let binding = SentValueBindingKind::Variable(source.clone());
+                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
+                        // decl.kind here (not `Var`) so the resumed value is bound
+                        // via the normal, already-correct BindingPattern evaluation
+                        // path -- InitializeReferencedBinding for let/const,
+                        // PutValue for var.
+                        emit_pattern_binding(decl.kind, pattern, &source, ctx);
+                    }
+                }
             } else {
                 let stmt = Statement::Variable(VariableDeclaration {
                     kind: decl.kind,

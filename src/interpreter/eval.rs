@@ -8248,10 +8248,6 @@ impl Interpreter {
                         env.set(name, sent_value.clone()).ok();
                     }
                 }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
-                }
                 SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
             }
         }
