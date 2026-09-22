@@ -540,3 +540,9 @@ perf-counters clippy clean, **test262 99,911/99,911 with 0 regressions**, test26
 
 **Carved out, not fixed**: the yield-operand disposal gap (`Symbol.dispose` does not run
 when a throw comes from a `yield` operand) — filed as its own backlog entry.
+
+**Integration on 2026-09-22**: After #712 removed queue-driver microtask drains,
+`reject_async_generator_request` settles the request without draining. The
+completion paths added by #734 also use `retire_generator`. The gate above
+records the original PR head; the merge with current `main` was validated
+separately.

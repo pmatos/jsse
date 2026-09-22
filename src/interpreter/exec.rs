@@ -28,9 +28,12 @@ impl Interpreter {
         body: &Body,
         env: &EnvRef,
         _state_machine: &crate::interpreter::generator_transform::GeneratorStateMachine,
+        async_generator: bool,
     ) -> Completion {
+        let saved_async_generator_body =
+            std::mem::replace(&mut self.in_async_generator_body, async_generator);
         #[cfg(feature = "perf-counters")]
-        {
+        let result = {
             self.perf.body_non_function += 1;
             let (name, id) = _state_machine.perf_key.clone().unwrap_or_else(|| {
                 (
@@ -42,9 +45,11 @@ impl Interpreter {
             let result = self.exec_body_inner(body, env);
             self.perf.leave_ast_body();
             result
-        }
+        };
         #[cfg(not(feature = "perf-counters"))]
-        self.exec_body_inner(body, env)
+        let result = self.exec_body_inner(body, env);
+        self.in_async_generator_body = saved_async_generator_body;
+        result
     }
 
     /// Unlabelled Body execution, the script-body fallback, and `eval` reach

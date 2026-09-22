@@ -529,6 +529,12 @@ fn transform_generator_inner_opts(
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
         && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
+        && !body.iter().any(|s| {
+            stmt_contains_for_of_head(s, |f| {
+                f.is_await && !for_in_of_left_contains_suspension(&f.left)
+            })
+        })
+        && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
         && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
@@ -592,34 +598,38 @@ fn create_simple_machine(
 }
 
 fn stmt_contains_for_await(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::awaits_at_head)
+}
+
+fn stmt_contains_await_using_head(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::disposes_at_head)
+}
+
+fn stmt_contains_for_of_head(
+    stmt: &Statement,
+    head: impl Fn(&ForOfStatement) -> bool + Copy,
+) -> bool {
+    let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
-        Statement::ForOf(f) => f.awaits_at_head(),
-        Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
+        Statement::ForOf(f) => head(f),
+        Statement::Block(stmts) => stmts.iter().any(contains),
         Statement::If(i) => {
-            stmt_contains_for_await(&i.consequent)
-                || i.alternate
-                    .as_ref()
-                    .is_some_and(|s| stmt_contains_for_await(s))
+            contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
         }
-        Statement::While(w) => stmt_contains_for_await(&w.body),
-        Statement::DoWhile(d) => stmt_contains_for_await(&d.body),
-        Statement::For(f) => stmt_contains_for_await(&f.body),
-        Statement::ForIn(f) => stmt_contains_for_await(&f.body),
+        Statement::While(w) => contains(&w.body),
+        Statement::DoWhile(d) => contains(&d.body),
+        Statement::For(f) => contains(&f.body),
+        Statement::ForIn(f) => contains(&f.body),
         Statement::Try(t) => {
-            t.block.iter().any(stmt_contains_for_await)
+            t.block.iter().any(contains)
                 || t.handler
                     .as_ref()
-                    .is_some_and(|h| h.body.iter().any(stmt_contains_for_await))
-                || t.finalizer
-                    .as_ref()
-                    .is_some_and(|f| f.iter().any(stmt_contains_for_await))
+                    .is_some_and(|h| h.body.iter().any(contains))
+                || t.finalizer.as_ref().is_some_and(|f| f.iter().any(contains))
         }
-        Statement::Switch(s) => s
-            .cases
-            .iter()
-            .any(|c| c.consequent.iter().any(stmt_contains_for_await)),
-        Statement::Labeled(_, inner) => stmt_contains_for_await(inner),
-        Statement::With(_, s) => stmt_contains_for_await(s),
+        Statement::Switch(s) => s.cases.iter().any(|c| c.consequent.iter().any(contains)),
+        Statement::Labeled(_, inner) => contains(inner),
+        Statement::With(_, s) => contains(s),
         _ => false,
     }
 }
@@ -660,9 +670,15 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 }
 
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
-    if detect_for_await
-        && let Statement::ForOf(f) = stmt
-        && f.awaits_at_head()
+    // A `for await` head performs `Await(nextResult)` on every step
+    // (ForIn/OfBodyEvaluation) whether or not its body suspends, so it is a
+    // suspension point in any async context, generators included. A `yield`
+    // or `await` inside the head's own binding target still needs the
+    // tree-walker's inline replay, so such a loop is left native.
+    if let Statement::ForOf(f) = stmt
+        && ((is_async && f.disposes_at_head())
+            || (detect_for_await && f.awaits_at_head())
+            || (is_async && f.is_await && !for_in_of_left_contains_suspension(&f.left)))
     {
         return true;
     }
@@ -1773,6 +1789,147 @@ fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformCont
     }
 }
 
+fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(Statement::Variable(VariableDeclaration {
+        kind,
+        declarations: vec![VariableDeclarator {
+            pattern,
+            init: Some(Expression::Identifier(source.to_string())),
+        }],
+    }));
+}
+
+fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContext) {
+    ctx.emit_statement(Statement::Expression(Expression::Assign(
+        AssignOp::Assign,
+        ExprBox::new(Expression::Identifier(temp.to_string())),
+        ExprBox::new(value),
+    )));
+}
+
+/// Property read of a pattern key off the destructuring source, standing in
+/// for the `GetV` of `KeyedBindingInitialization`.
+fn pattern_key_read(source: &str, key: &PropertyKey) -> Expression {
+    let key_expr = match key {
+        PropertyKey::Identifier(name) => {
+            Expression::Literal(Literal::String(name.encode_utf16().collect()))
+        }
+        PropertyKey::String(units) => Expression::Literal(Literal::String(units.clone())),
+        PropertyKey::Number(n) => Expression::Literal(Literal::Number(*n)),
+        PropertyKey::Computed(e) => e.clone().into_expression(),
+        PropertyKey::Private(_) => unreachable!("private names are not pattern keys"),
+    };
+    Expression::Member(
+        ExprBox::new(Expression::Identifier(source.to_string())),
+        MemberProperty::Computed(ExprBox::new(key_expr)),
+        PropSiteId::UNASSIGNED,
+    )
+}
+
+/// Binds `pattern` from the value held in temp `source`, suspending at every
+/// `await` the pattern reaches. Only the parts of a pattern that reach an
+/// `await` are broken up; everything else is bound by the tree-walker through
+/// a sub-pattern, so naming, TDZ and nested-pattern semantics are unchanged.
+///
+/// For an object pattern this follows `KeyedBindingInitialization`: the
+/// source is coerced once, then each property in source order evaluates its
+/// computed key, performs exactly one `GetV`, and evaluates its default only
+/// when that value is `undefined` (a present property costs no extra tick).
+/// Callers only pass patterns `pattern_needs_lowering` accepts.
+fn lower_pattern_binding(
+    kind: VarKind,
+    pattern: &Pattern,
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let Pattern::Object(props) = pattern.clone() else {
+        emit_pattern_binding(kind, pattern.clone(), source, ctx);
+        return;
+    };
+    if !pattern_contains_suspension(pattern) {
+        emit_pattern_binding(kind, pattern.clone(), source, ctx);
+        return;
+    }
+    emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
+    for prop in props {
+        match prop {
+            ObjectPatternProperty::KeyValue(key, value) => {
+                lower_pattern_property(kind, key, value, source, ctx);
+            }
+            other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
+        }
+    }
+}
+
+fn lower_pattern_property(
+    kind: VarKind,
+    key: PropertyKey,
+    value: Pattern,
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let key = match key {
+        PropertyKey::Computed(e) if expr_has_suspension(&e, ctx.is_async) => {
+            let key_temp = ctx.new_temp_var("dstr_key");
+            transform_yielding_expression(
+                &e,
+                ctx,
+                usize::MAX,
+                Some(SentValueBindingKind::Variable(key_temp.clone())),
+            );
+            PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp)))
+        }
+        other => other,
+    };
+    if !pattern_contains_suspension(&value) {
+        emit_pattern_binding(
+            kind,
+            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)]),
+            source,
+            ctx,
+        );
+        return;
+    }
+
+    let value_temp = ctx.new_temp_var("dstr_val");
+    emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+    let target = match value {
+        Pattern::Assign(target, default) => {
+            let default_state = ctx.new_state();
+            let join_state = ctx.new_state();
+            ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+                condition: Expression::Binary(
+                    BinaryOp::StrictEq,
+                    ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
+                        value_temp.clone(),
+                    )))),
+                    ExprBox::new(Expression::Literal(Literal::String(
+                        "undefined".encode_utf16().collect(),
+                    ))),
+                ),
+                true_state: default_state,
+                false_state: join_state,
+            });
+            ctx.current_state_id = default_state;
+            if expr_has_suspension(&default, ctx.is_async) {
+                transform_yielding_expression(
+                    &default,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(value_temp.clone())),
+                );
+            } else {
+                emit_temp_assignment(&value_temp, default.into_expression(), ctx);
+            }
+            ctx.finalize_current_state(StateTerminator::Goto(join_state));
+            ctx.current_state_id = join_state;
+            *target
+        }
+        other => other,
+    };
+    lower_pattern_binding(kind, &target, &value_temp, ctx);
+}
+
 /// `var === null || var === void 0` — true exactly when `var` is undefined or
 /// null (unlike `== null`, false for `document.all`-style objects).
 fn nullish_test(var: &str) -> Expression {
@@ -1897,7 +2054,22 @@ fn transform_variable_declaration(
     _after_state: usize,
 ) {
     for declarator in &decl.declarations {
-        if let Some(init) = &declarator.init {
+        if let Some(init) = &declarator.init
+            && pattern_needs_lowering(&declarator.pattern)
+        {
+            let source = ctx.new_temp_var("dstr_src");
+            if expr_has_suspension(init, ctx.is_async) {
+                transform_yielding_expression(
+                    init,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(source.clone())),
+                );
+            } else {
+                emit_temp_assignment(&source, init.clone(), ctx);
+            }
+            lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
+        } else if let Some(init) = &declarator.init {
             if expr_has_suspension(init, ctx.is_async) {
                 let binding = match &declarator.pattern {
                     Pattern::Identifier(name) => {
@@ -3529,5 +3701,111 @@ mod tests {
                 .any(|s| matches!(s.terminator, StateTerminator::ForOfHead { .. })),
             "expected a ForOfHead terminator"
         );
+    }
+
+    fn async_machine(body_src: &str) -> GeneratorStateMachine {
+        let body = parse_fn_body(&format!("async function f() {{ {body_src} }}"));
+        transform_async_function(&body, &[])
+    }
+
+    fn count_terminators(
+        sm: &GeneratorStateMachine,
+        is_kind: impl Fn(&StateTerminator) -> bool,
+    ) -> usize {
+        sm.states.iter().filter(|s| is_kind(&s.terminator)).count()
+    }
+
+    fn state_reads_property_of_source(state: &GeneratorState) -> bool {
+        state.body.as_slice().iter().any(|stmt| {
+            matches!(
+                stmt,
+                Statement::Expression(Expression::Assign(_, _, rhs))
+                    if matches!(&**rhs, Expression::Member(..))
+            )
+        })
+    }
+
+    #[test]
+    fn test_awaiting_default_lowers_to_conditional_await_state() {
+        let sm = async_machine("var { a = await 1 } = {}; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1,
+            "the default's await is a real Await state"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ConditionalGoto { .. }
+            )),
+            1,
+            "the default only runs when the property is undefined"
+        );
+        let reader = sm
+            .states
+            .iter()
+            .find(|s| state_reads_property_of_source(s))
+            .expect("a state reads the property once");
+        assert!(
+            !matches!(reader.terminator, StateTerminator::Await { .. }),
+            "the property read must not share a state with the await"
+        );
+    }
+
+    #[test]
+    fn test_present_property_pattern_without_await_takes_simple_machine() {
+        let sm = async_machine("var { a = 1 } = {}; let [b = 2] = []; a;");
+
+        assert_eq!(sm.states.len(), 1);
+        assert!(sm.temp_vars.is_empty());
+    }
+
+    #[test]
+    fn test_awaiting_computed_key_is_lowered_at_its_own_position() {
+        let sm = async_machine("var { a, [await k]: b } = o;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1
+        );
+        let first_await = sm
+            .states
+            .iter()
+            .position(|s| matches!(s.terminator, StateTerminator::Await { .. }))
+            .expect("an await state");
+        let a_bound_before_await = sm.states[..=first_await].iter().any(|s| {
+            s.body.as_slice().iter().any(|stmt| match stmt {
+                Statement::Variable(v) => v.declarations.iter().any(|d| {
+                    matches!(&d.pattern, Pattern::Object(props) if props.iter().any(|p| matches!(p,
+                        ObjectPatternProperty::Shorthand(n) if n == "a")))
+                }),
+                _ => false,
+            })
+        });
+        assert!(
+            a_bound_before_await,
+            "the earlier property is read before the key's await suspends"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_pattern_shapes_stay_on_the_tree_walker() {
+        for src in [
+            "var [a = await 1] = [];",
+            "var { a = await 1, ...rest } = {};",
+            "var { x: [a = await 1] } = {};",
+        ] {
+            let sm = async_machine(src);
+            assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
+        }
+    }
+
+    #[test]
+    fn test_async_generator_yield_only_pattern_is_not_lowered() {
+        let body = parse_fn_body("async function* g() { var { a = yield 1 } = {}; }");
+        let sm = transform_async_generator(&body, &[]);
+
+        assert_eq!(sm.states.len(), 1);
     }
 }
