@@ -9665,14 +9665,13 @@ impl Interpreter {
         &mut self,
         loop_state: ForOfLoopState,
         func_env: &EnvRef,
-        completion: Completion,
+        mut completion: Completion,
         generator_id: Option<u64>,
     ) -> Completion {
         debug_assert!(
             loop_state.iteration_env.is_none(),
             "close_for_of_iterator expects the iteration_env already disposed"
         );
-        let mut completion = completion;
 
         // The borrow must end before `iterator_close_result` runs the user's
         // `return` method, which may write bindings in this same environment.

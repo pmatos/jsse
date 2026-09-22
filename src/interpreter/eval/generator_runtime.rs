@@ -3514,33 +3514,21 @@ impl Interpreter {
                         return Completion::Exit(code);
                     }
                     RouteExceptionOutcome::Parked { cursor, value } => {
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine: state_machine.clone(),
-                                func_env: func_env.clone(),
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: current_id,
-                                },
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: current_try_stack,
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
+                        return self.park_for_of_unwind_exception(
+                            o.id,
+                            &obj_rc,
+                            &state_machine,
+                            &func_env,
+                            is_strict,
+                            current_id,
+                            current_try_stack,
+                            saved_in_state_machine,
+                            promise,
+                            &resolve_fn,
+                            &reject_fn,
+                            cursor,
+                            value,
                         );
-                        self.in_state_machine = saved_in_state_machine;
-                        let disposal = GeneratorDisposal::new(
-                            GeneratorDisposeState::Disposing {
-                                cursor,
-                                then: GeneratorDisposeThen::Reenter,
-                            },
-                            (&promise, &resolve_fn, &reject_fn),
-                        );
-                        self.park_async_gen_disposal(o.id, disposal, &value);
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
                     }
                 }
             }};
@@ -5301,6 +5289,59 @@ impl Interpreter {
         });
     }
 
+    /// Suspend the driver at a `for-of` unwind's disposal `Await` while
+    /// routing an in-flight exception: snapshot the throw-routing state so
+    /// `GeneratorDisposeThen::Reenter` restarts
+    /// `async_generator_next_state_machine_impl` from the top on resume, then
+    /// park via [`Self::park_async_gen_disposal`]. `route_exception!`'s
+    /// `RouteExceptionOutcome::Parked` arm is a `macro_rules!` expanded at
+    /// every throw site in that function, so this body lives here once
+    /// rather than once per expansion.
+    fn park_for_of_unwind_exception(
+        &mut self,
+        gen_id: u64,
+        obj_rc: &ObjectHandle,
+        state_machine: &Rc<crate::interpreter::generator_transform::GeneratorStateMachine>,
+        func_env: &EnvRef,
+        is_strict: bool,
+        current_id: usize,
+        try_stack: Vec<TryContextInfo>,
+        saved_in_state_machine: bool,
+        promise: JsValue,
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+        cursor: DisposeCursor,
+        value: JsValue,
+    ) -> Completion {
+        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+            IteratorState::StateMachineAsyncGenerator {
+                state_machine: state_machine.clone(),
+                func_env: func_env.clone(),
+                is_strict,
+                execution_state: StateMachineExecutionState::SuspendedAtState {
+                    state_id: current_id,
+                },
+                _sent_value: JsValue::UNDEFINED,
+                try_stack,
+                pending_binding: None,
+                delegated_iterator: None,
+                pending_exception: None,
+                pending_return: None,
+            },
+        );
+        self.in_state_machine = saved_in_state_machine;
+        let disposal = GeneratorDisposal::new(
+            GeneratorDisposeState::Disposing {
+                cursor,
+                then: GeneratorDisposeThen::Reenter,
+            },
+            (&promise, resolve_fn, reject_fn),
+        );
+        self.park_async_gen_disposal(gen_id, disposal, &value);
+        self.scheduler.set_async_gen_yield_pending(true);
+        Completion::Normal(promise)
+    }
+
     /// Start DisposeResources for `env` on behalf of the request at the front
     /// of async generator `gen_id`'s queue. Finishes inline when no `Await`
     /// is owed; otherwise parks the request (the generator stays `Executing`)
@@ -6265,14 +6306,12 @@ impl Interpreter {
         completion: Completion,
         can_park: bool,
     ) -> ForOfUnwindOutcome {
+        if !can_park {
+            return ForOfUnwindOutcome::Done(self.dispose_resources(env, completion));
+        }
         let Some(stack) = self.take_dispose_stack(env) else {
             return ForOfUnwindOutcome::Done(completion);
         };
-        if !can_park {
-            return ForOfUnwindOutcome::Done(
-                self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion)),
-            );
-        }
         let mut cursor = DisposeCursor::new(stack, completion);
         match cursor.step(self, None) {
             DisposeStep::Done(completion) => ForOfUnwindOutcome::Done(completion),
