@@ -1205,6 +1205,16 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         Statement::Variable(decl) => decl.declarations.iter().any(|d| {
             d.init.as_ref().is_some_and(expr_contains_suspension)
                 || pattern_needs_lowering(&d.pattern)
+                // A raw `yield` in a pattern shape lowering doesn't support
+                // (array patterns) still needs the *enclosing* container
+                // (loop/if/etc.) to become suspend-aware, even though the
+                // declarator itself keeps running on the tree-walker/InlineYield
+                // fallback — otherwise a container like a `for` loop never
+                // gets split into per-iteration states, and replay re-runs
+                // the whole loop instead of just the current iteration.
+                // `await` doesn't need this: it can run on the pre-existing
+                // blocking-tree-walker path without the container's help.
+                || pattern_contains_yield(&d.pattern)
         }),
         Statement::If(if_stmt) => {
             expr_contains_suspension(&if_stmt.test)

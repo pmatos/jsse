@@ -5089,11 +5089,22 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest = args.get(index..).unwrap_or(&[]).to_vec();
                 let rest_array = self.create_array(rest);
-                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                // A parameter pattern can never contain `yield` (an early
+                // SyntaxError in generator formals), so only `Throw` is
+                // reachable here.
+                if let Completion::Throw(e) =
+                    self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)
+                {
+                    return Err(e);
+                }
                 break;
             }
             let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
-            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
+            if let Completion::Throw(e) =
+                self.bind_pattern(param, value, BindingKind::Var, func_env)
+            {
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -9508,7 +9519,7 @@ impl Interpreter {
                                     }
                                 }
                                 if let Some(d) = decl.declarations.first() {
-                                    self.bind_pattern(
+                                    match self.bind_pattern(
                                         &d.pattern,
                                         value,
                                         match decl.kind {
@@ -9519,7 +9530,11 @@ impl Interpreter {
                                             | VarKind::AwaitUsing => BindingKind::Const,
                                         },
                                         &bind_env,
-                                    )
+                                    ) {
+                                        Completion::Normal(_) | Completion::Empty => Ok(()),
+                                        Completion::Throw(e) => Err(e),
+                                        _ => Ok(()),
+                                    }
                                 } else {
                                     Ok(())
                                 }

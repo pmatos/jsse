@@ -1355,23 +1355,37 @@ impl Interpreter {
                     if let Err(e) = self.with_set_mutable_binding(with_obj_id, name, val, strict) {
                         return Completion::Throw(e);
                     }
-                } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
-                    return Completion::Throw(e);
+                } else {
+                    match self.bind_pattern(&d.pattern, val, kind, env) {
+                        Completion::Normal(_) => {}
+                        other => return other,
+                    }
                 }
-            } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
-                return Completion::Throw(e);
+            } else {
+                match self.bind_pattern(&d.pattern, val, kind, env) {
+                    Completion::Normal(_) => {}
+                    other => return other,
+                }
             }
         }
         Completion::Normal(JsValue::UNDEFINED)
     }
 
+    /// Binds `val` to `pat`, declaring/initializing names in `env` per `kind`.
+    ///
+    /// Returns `Completion` rather than `Result<(), JsValue>` so a `yield`
+    /// reached while evaluating a default or computed key (`var {a = yield 1} = {}`,
+    /// `var [a = yield 1] = []`) propagates as `Completion::Yield` instead of
+    /// being silently discarded — see issue #727. `Throw` and (for array
+    /// patterns) the iterator-close bookkeeping are otherwise unchanged from
+    /// the pre-#727 `Result`-returning version.
     pub(crate) fn bind_pattern(
         &mut self,
         pat: &Pattern,
         val: JsValue,
         kind: BindingKind,
         env: &EnvRef,
-    ) -> Result<(), JsValue> {
+    ) -> Completion {
         match pat {
             Pattern::Identifier(name) => {
                 if kind == BindingKind::Var {
@@ -1388,7 +1402,7 @@ impl Interpreter {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
-                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                    let result = if self.with_scope_depth > 0 || self.has_ever_entered_with {
                         match self.resolve_with_has_binding(name, env) {
                             Ok(Some(obj_id)) => {
                                 let strict = env.borrow().strict;
@@ -1399,11 +1413,13 @@ impl Interpreter {
                         }
                     } else {
                         self.env_set(env, name, val)
-                    }
+                    };
+                    propagate!(result);
+                    Completion::Normal(JsValue::UNDEFINED)
                 } else {
                     env.borrow_mut().declare(name, kind);
                     env.borrow_mut().initialize_binding(name, val);
-                    Ok(())
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
             Pattern::Assign(inner, default) => {
@@ -1427,11 +1443,7 @@ impl Interpreter {
                             );
                         }
                     }
-                    match self.eval_expr(default, env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::UNDEFINED,
-                    }
+                    propagate!(self.eval_expr(default, env))
                 } else {
                     val
                 };
@@ -1443,7 +1455,7 @@ impl Interpreter {
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
-                let iterator = self.get_iterator(&val)?;
+                let iterator = propagate!(self.get_iterator(&val));
                 if let Some(o) = iterator
                     .as_object_id()
                     .map(|id| crate::types::JsObject { id })
@@ -1452,6 +1464,7 @@ impl Interpreter {
                 }
                 let mut done = false;
                 let mut error: Option<JsValue> = None;
+                let mut yield_val: Option<JsValue> = None;
 
                 for elem in elements {
                     if let Some(elem) = elem {
@@ -1480,10 +1493,17 @@ impl Interpreter {
                                         }
                                     }
                                 };
-                                if let Err(e) = self.bind_pattern(p, item, kind, env) {
-                                    error = Some(e);
-
-                                    break;
+                                match self.bind_pattern(p, item, kind, env) {
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => {
+                                        error = Some(e);
+                                        break;
+                                    }
+                                    Completion::Yield(v) => {
+                                        yield_val = Some(v);
+                                        break;
+                                    }
+                                    other => return other,
                                 }
                             }
                             ArrayPatternElement::Rest(p) => {
@@ -1515,8 +1535,11 @@ impl Interpreter {
                                 }
                                 if error.is_none() {
                                     let arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(p, arr, kind, env) {
-                                        error = Some(e);
+                                    match self.bind_pattern(p, arr, kind, env) {
+                                        Completion::Normal(_) => {}
+                                        Completion::Throw(e) => error = Some(e),
+                                        Completion::Yield(v) => yield_val = Some(v),
+                                        other => return other,
                                     }
                                 }
                                 break;
@@ -1548,26 +1571,44 @@ impl Interpreter {
                         s.gc_temp_roots.remove(pos);
                     }
                 };
+                // A `yield` mid-pattern suspends the generator; this attempt
+                // at binding is abandoned (the tree-walker replays the whole
+                // statement from the top on resume, per the InlineYield
+                // fallback), so the iterator is never resumed either. Per
+                // §13.15.5.2, close it eventually rather than now: stash it
+                // for `pending_iter_close` to close when the generator
+                // concludes, the same bookkeeping `destructure_array_assignment`
+                // already does for the destructuring-*assignment* form.
+                if let Some(yv) = yield_val {
+                    if !done {
+                        self.pending_iter_close.push(iterator.clone());
+                    }
+                    unroot_iter(self);
+                    return Completion::Yield(yv);
+                }
                 if let Some(err) = error {
                     if !done {
                         let _ = self.iterator_close_result(&iterator);
                     }
                     unroot_iter(self);
-                    return Err(err);
+                    return Completion::Throw(err);
                 }
                 if !done {
                     let r = self.iterator_close_result(&iterator);
                     unroot_iter(self);
-                    return r;
+                    return match r {
+                        Ok(()) => Completion::Normal(JsValue::UNDEFINED),
+                        Err(e) => Completion::Throw(e),
+                    };
                 }
                 unroot_iter(self);
-                Ok(())
+                Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Object(props) => {
                 // RequireObjectCoercible + ToObject for primitives
                 let obj_val = match self.to_object(&val) {
                     Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
+                    Completion::Throw(e) => return Completion::Throw(e),
                     _ => unreachable!(),
                 };
                 let mut excluded_keys = Vec::new();
@@ -1579,11 +1620,7 @@ impl Interpreter {
                                 .as_object_id()
                                 .map(|id| crate::types::JsObject { id })
                             {
-                                match self.get_object_property(o.id, name, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Err(e),
-                                    _ => JsValue::UNDEFINED,
-                                }
+                                propagate!(self.get_object_property(o.id, name, &obj_val))
                             } else {
                                 JsValue::UNDEFINED
                             };
@@ -1592,7 +1629,7 @@ impl Interpreter {
                                 if !var_scope.borrow().bindings.contains_key(name) {
                                     var_scope.borrow_mut().declare(name, kind);
                                 }
-                                self.env_set(env, name, v)?;
+                                propagate!(self.env_set(env, name, v));
                             } else {
                                 env.borrow_mut().declare(name, kind);
                                 env.borrow_mut().initialize_binding(name, v);
@@ -1607,13 +1644,12 @@ impl Interpreter {
                                 PropertyKey::Number(n) => JsPropertyKey::from(
                                     crate::interpreter::to_js_string(&JsValue::number(*n)),
                                 ),
-                                PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => self.to_property_key(&v)?,
-                                    Completion::Throw(e) => return Err(e),
-                                    _ => JsPropertyKey::from_str(""),
-                                },
+                                PropertyKey::Computed(expr) => {
+                                    let v = propagate!(self.eval_expr(expr, env));
+                                    propagate!(self.to_property_key(&v))
+                                }
                                 PropertyKey::Private(_) => {
-                                    return Err(self.create_type_error(
+                                    return Completion::Throw(self.create_type_error(
                                         "Private names are not valid in object patterns",
                                     ));
                                 }
@@ -1654,7 +1690,7 @@ impl Interpreter {
                                 }
                                 let resolved =
                                     if self.with_scope_depth > 0 || self.has_ever_entered_with {
-                                        self.resolve_with_has_binding(binding_name, env)?
+                                        propagate!(self.resolve_with_has_binding(binding_name, env))
                                     } else {
                                         None
                                     };
@@ -1664,11 +1700,7 @@ impl Interpreter {
                                     .as_object_id()
                                     .map(|id| crate::types::JsObject { id })
                                 {
-                                    match self.get_object_property(o.id, &key_str, &obj_val) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::UNDEFINED,
-                                    }
+                                    propagate!(self.get_object_property(o.id, &key_str, &obj_val))
                                 } else {
                                     JsValue::UNDEFINED
                                 };
@@ -1677,11 +1709,7 @@ impl Interpreter {
                                 if v.is_undefined()
                                     && let Some(dflt) = default_expr
                                 {
-                                    v = match self.eval_expr(dflt, env) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::UNDEFINED,
-                                    };
+                                    v = propagate!(self.eval_expr(dflt, env));
                                     if dflt.is_anonymous_function_definition() {
                                         self.set_function_name(&v, binding_name);
                                     }
@@ -1690,28 +1718,24 @@ impl Interpreter {
                                 // Step 6: InitializeReferencedBinding(lhs, v)
                                 let strict = env.borrow().strict;
                                 match resolved {
-                                    Some(obj_id) => self.with_set_mutable_binding(
+                                    Some(obj_id) => propagate!(self.with_set_mutable_binding(
                                         obj_id,
                                         binding_name,
                                         v,
                                         strict,
-                                    )?,
-                                    None => self.env_set(env, binding_name, v)?,
+                                    )),
+                                    None => propagate!(self.env_set(env, binding_name, v)),
                                 }
                             } else {
                                 let v = if let Some(o) = obj_val
                                     .as_object_id()
                                     .map(|id| crate::types::JsObject { id })
                                 {
-                                    match self.get_object_property(o.id, &key_str, &obj_val) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::UNDEFINED,
-                                    }
+                                    propagate!(self.get_object_property(o.id, &key_str, &obj_val))
                                 } else {
                                     JsValue::UNDEFINED
                                 };
-                                self.bind_pattern(pat, v, kind, env)?;
+                                propagate!(self.bind_pattern(pat, v, kind, env));
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
@@ -1720,8 +1744,11 @@ impl Interpreter {
                                 .as_object_id()
                                 .map(|id| crate::types::JsObject { id })
                             {
-                                let pairs =
-                                    self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
+                                let pairs = propagate!(self.copy_data_properties(
+                                    o.id,
+                                    &obj_val,
+                                    &excluded_keys
+                                ));
                                 for (k, v) in pairs {
                                     self.get_object_cell_expect(rest_obj_id)
                                         .borrow_mut()
@@ -1730,14 +1757,17 @@ impl Interpreter {
                             }
                             let rest_id = rest_obj_id;
                             let rest_val = JsValue::object(rest_id);
-                            self.bind_pattern(pat, rest_val, kind, env)?;
+                            propagate!(self.bind_pattern(pat, rest_val, kind, env));
                         }
                     }
                 }
-                Ok(())
+                Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Rest(inner) => self.bind_pattern(inner, val, kind, env),
-            Pattern::MemberExpression(expr) => self.assign_to_expr(expr, val, env),
+            Pattern::MemberExpression(expr) => match self.assign_to_expr(expr, val, env) {
+                Ok(()) => Completion::Normal(JsValue::UNDEFINED),
+                Err(e) => Completion::Throw(e),
+            },
         }
     }
 
@@ -2136,7 +2166,7 @@ impl Interpreter {
                                 &for_env
                             };
                             if let Some(d) = decl.declarations.first()
-                                && let Err(e) =
+                                && let Completion::Throw(e) =
                                     self.bind_pattern(&d.pattern, key_val, kind, bind_env)
                             {
                                 break 'unroot Completion::Throw(e);
@@ -2157,7 +2187,7 @@ impl Interpreter {
                                 }
                             }
                             _ => {
-                                if let Err(e) =
+                                if let Completion::Throw(e) =
                                     self.bind_pattern(pat, key_val, BindingKind::Let, &for_env)
                                 {
                                     break 'unroot Completion::Throw(e);
@@ -2358,7 +2388,8 @@ impl Interpreter {
                         }
                     }
                     if let Some(d) = decl.declarations.first()
-                        && let Err(e) = self.bind_pattern(&d.pattern, val, kind, bind_env)
+                        && let Completion::Throw(e) =
+                            self.bind_pattern(&d.pattern, val, kind, bind_env)
                     {
                         self.iterator_close(iterator, e.clone());
                         return Completion::Throw(e);
@@ -2483,7 +2514,8 @@ impl Interpreter {
                         if matches!(param, Pattern::Identifier(_)) {
                             catch_env.borrow_mut().is_simple_catch_scope = true;
                         }
-                        if let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
+                        if let Completion::Throw(e) =
+                            self.bind_pattern(param, val, BindingKind::Let, &catch_env)
                         {
                             return Completion::Throw(e);
                         }

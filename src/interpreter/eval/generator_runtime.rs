@@ -1763,7 +1763,7 @@ impl Interpreter {
                                         }
                                     }
                                     if let Some(d) = decl.declarations.first()
-                                        && let Err(e) =
+                                        && let Completion::Throw(e) =
                                             self.bind_pattern(&d.pattern, val, kind, &bind_env)
                                     {
                                         self.iterator_close(&iterator, e.clone());
@@ -4934,7 +4934,7 @@ impl Interpreter {
                                         }
                                     }
                                     if let Some(d) = decl.declarations.first()
-                                        && let Err(e) =
+                                        && let Completion::Throw(e) =
                                             self.bind_pattern(&d.pattern, val, kind, &bind_env)
                                     {
                                         self.iterator_close(&iterator, e.clone());
