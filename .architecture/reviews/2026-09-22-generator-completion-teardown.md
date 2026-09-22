@@ -468,3 +468,40 @@ and verification concentrate afterwards), **3 seam placement** (does something a
 vary across the seam), **4 test surface** (can the behaviour be exercised through the
 interface without reaching past it), **5 blast radius** (smaller diff wins between
 otherwise-equal designs).
+
+**Verdict: Design A.** Adjudicated with the advisor.
+
+- *Criterion 1, depth — decisive.* A's caller learns one thing (`gen_id`). C's learns six
+  (`obj_rc`, `gen_id`, `flavor`, `state_machine`, `func_env`, `is_strict`), and `flavor` is
+  *itself* the drift the seam exists to remove: a sync driver can pass `Async` and nothing
+  stops it. A absorbs that decision by reading the variant tag off the live state.
+  B's caller learns five policy enums, each axis with one real caller.
+- *Criterion 4, test surface — confirms.* `retire_generator(id)` plus assertions on the
+  three side tables and the latch is a test that touches nothing but the interface.
+- *Criterion 5, blast radius* — C migrates 48 sites against A's 88, but criterion 5 only
+  separates otherwise-equal designs, so it does not rescue C.
+
+**Runner-up design: C.** It lost on interface width, not on evidence, and it was *right*
+where it disagreed with A: `:2245` (`generator_return_state_machine`) reads
+`generator_inline_iters` **after** the latch to run user `return()` closes, so it is
+excluded rather than hoisted. B lost on speculative generality — its own report says a
+risk-minimising reviewer should prefer a narrower seam.
+
+**Conditions carried into implementation**, all from the adjudication:
+
+1. The read-back must hold at every migrated site, not only where
+   `async_gen_finish_disposal` proves it (async, parked-disposal only — there is no sync
+   precedent). Verified before implementing by enumerating every write to a generator
+   object's `ObjectKind::Iterator`.
+2. Ship `retire_generator` with a `debug_assert!` on the non-state-machine arm and a
+   `#[must_use] -> bool`, not neither. A silent no-op is the failure class this repo hunts.
+3. Preserve verbatim: `:2245`, the 6 A2 no-drain sites, the bare-`Exit`-from-disposal
+   returns, and S1's un-routed `:1276` (its latch may still be migrated; its missing
+   `route_exception!` is not this PR's to change).
+4. The side-table **widening is a deliberate behaviour change**, not a side effect of the
+   seam: `generator_scope_stacks` is cleared at *zero* sync latch sites today, so the first
+   failing test is red because of the widening. It is GC-retention-only — three independent
+   reader enumerations agree that no reader exists for a `Completed` generator — and it is
+   stated as such in the PR body.
+5. The yield-operand disposal gap that Design B's pass surfaced is **preserved
+   byte-for-byte** and filed separately. Fixing it is scope the score did not cover.
