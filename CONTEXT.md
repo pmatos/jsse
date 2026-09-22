@@ -82,6 +82,25 @@ loop — so what the seam owns is the classification, the part that had no busin
 differing.
 _Avoid_: terminator expression, operand completion, state operand.
 
+**Generator Retirement**:
+The transition a generator object makes when it is finished and nothing will
+resume it: every per-generator side table the drivers root for it
+(`generator_inline_iters`, `generator_for_of_stacks`, `generator_scope_stacks`)
+is dropped, and its `IteratorState` is latched into the Completed terminal state
+of the flavour it already is. `retire_generator`
+(`interpreter/eval/generator_runtime.rs`) owns it for all three entry paths —
+sync driver, async-generator driver, and a parked disposal finishing in
+`async_gen_finish_disposal`. The flavour and the state machine, function
+environment and strictness a finished generator still carries are read back out
+of the live `IteratorState`, which every driver writes when it latches
+`Executing`, so a caller cannot latch the wrong flavour. Retiring runs no user
+code, so the order of table release against the latch is unobservable; a caller
+that still needs a side table after finishing — `generator_return_state_machine`,
+which drains `generator_inline_iters` to run each stashed iterator's `return()` —
+keeps its own teardown.
+_Avoid_: generator cleanup, completing the generator, generator disposal (that is
+`await using` disposal, a different thing).
+
 **Loop Control**:
 A `break`/`continue` the transform lowers to `StateTerminator::LoopControl(LoopControlTarget)` instead of a bare `Goto`. The target records where the jump lands (`target_state`) and how many `try` contexts (`try_depth`), `for-of` loops (`for_of_depth`) and block scopes (`scope_depth`) remain active there, so routing never depends on state-id equality. The driver routes it through the innermost un-entered `finally` between the jump and its target, closing the `for-of` iterators it crosses first, and resumes the jump when that finalizer's `TryExit` runs (`route_loop_control!` for async functions, `route_generator_loop_control` for sync and async generators). The generator drivers park the jump on the finalizer's `TryContextInfo.pending_loop_control`, so a jump or throw that leaves the finalizer discards it along with the context, and a nested finalizer cannot overwrite it.
 _Avoid_: goto, jump state.
