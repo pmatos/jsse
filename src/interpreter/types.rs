@@ -356,6 +356,18 @@ pub(crate) enum StateMachineExecutionState {
     Completed,
 }
 
+/// A Completion Record intercepted by a running `finally`, owned by the
+/// `TryContextInfo` whose finalizer is running it (issue #719). ECMAScript
+/// carries exactly one Completion Record at a time, so this is a tagged union
+/// rather than three independently optional fields: a context can be
+/// restoring a throw, a return, or a loop-control jump, never more than one.
+#[derive(Debug, Clone)]
+pub(crate) enum PendingCompletion {
+    Return(JsValue),
+    Throw(JsValue),
+    LoopControl(LoopControlTarget),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TryContextInfo {
     pub catch_state: Option<usize>,
@@ -363,11 +375,11 @@ pub(crate) struct TryContextInfo {
     pub _after_state: usize,
     pub entered_catch: bool,
     pub entered_finally: bool,
-    /// The `break`/`continue` this context's finalizer is running on behalf
-    /// of. Living on the context means a jump or throw that leaves the
-    /// finalizer discards it together with the context, and a nested finalizer
-    /// cannot overwrite it.
-    pub pending_loop_control: Option<LoopControlTarget>,
+    /// The completion this context's finalizer is running on behalf of.
+    /// Living on the context means a jump or throw that leaves the finalizer
+    /// discards it together with the context, and a nested finalizer cannot
+    /// overwrite it.
+    pub pending_completion: Option<PendingCompletion>,
 }
 
 #[derive(Debug, Clone)]
