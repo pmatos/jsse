@@ -48,6 +48,18 @@ enum ForOfUnwindOutcome {
     },
 }
 
+impl ForOfUnwindOutcome {
+    /// Unwraps a `can_park: false` call, where `Parked` cannot occur.
+    fn expect_done(self) -> Completion {
+        match self {
+            ForOfUnwindOutcome::Done(completion) => completion,
+            ForOfUnwindOutcome::Parked { .. } => {
+                unreachable!("can_park is false: unwind never parks")
+            }
+        }
+    }
+}
+
 /// Outcome of routing an in-flight exception through `try`/`for-of` unwinding
 /// (`route_generator_exception`).
 enum RouteExceptionOutcome {
@@ -2117,20 +2129,17 @@ impl Interpreter {
                     .position(|loop_state| loop_state.try_depth > handler_depth)
                     .unwrap_or(for_of_stack.len())
             });
-            let return_completion = match self.unwind_generator_for_of_loops(
-                o.id,
-                &mut for_of_stack,
-                &mut try_stack,
-                &func_env,
-                unwind_from,
-                Completion::Return(value.clone()),
-                false,
-            ) {
-                ForOfUnwindOutcome::Done(completion) => completion,
-                ForOfUnwindOutcome::Parked { .. } => {
-                    unreachable!("can_park is false: unwind never parks")
-                }
-            };
+            let return_completion = self
+                .unwind_generator_for_of_loops(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut try_stack,
+                    &func_env,
+                    unwind_from,
+                    Completion::Return(value.clone()),
+                    false,
+                )
+                .expect_done();
             let return_value = match return_completion {
                 Completion::Return(return_value) => return_value,
                 Completion::Throw(error) => {
@@ -3514,7 +3523,7 @@ impl Interpreter {
                                     state_id: current_id,
                                 },
                                 _sent_value: JsValue::UNDEFINED,
-                                try_stack: current_try_stack.clone(),
+                                try_stack: current_try_stack,
                                 pending_binding: None,
                                 delegated_iterator: None,
                                 pending_exception: None,
@@ -3663,20 +3672,17 @@ impl Interpreter {
                             .position(|loop_state| loop_state.try_depth > handler_depth)
                             .unwrap_or(for_of_stack.len())
                     });
-                    let return_completion = match self.unwind_generator_for_of_loops(
-                        o.id,
-                        &mut for_of_stack,
-                        &mut current_try_stack,
-                        &func_env,
-                        unwind_from,
-                        Completion::Return(ret_val),
-                        false,
-                    ) {
-                        ForOfUnwindOutcome::Done(completion) => completion,
-                        ForOfUnwindOutcome::Parked { .. } => {
-                            unreachable!("can_park is false: unwind never parks")
-                        }
-                    };
+                    let return_completion = self
+                        .unwind_generator_for_of_loops(
+                            o.id,
+                            &mut for_of_stack,
+                            &mut current_try_stack,
+                            &func_env,
+                            unwind_from,
+                            Completion::Return(ret_val),
+                            false,
+                        )
+                        .expect_done();
                     let return_value = match return_completion {
                         Completion::Return(value) => value,
                         Completion::Throw(error) => {
@@ -4290,20 +4296,17 @@ impl Interpreter {
                             );
                         }
 
-                        let return_completion = match self.unwind_generator_for_of_loops(
-                            o.id,
-                            &mut for_of_stack,
-                            &mut current_try_stack,
-                            &func_env,
-                            0,
-                            Completion::Return(ret_val),
-                            false,
-                        ) {
-                            ForOfUnwindOutcome::Done(completion) => completion,
-                            ForOfUnwindOutcome::Parked { .. } => {
-                                unreachable!("can_park is false: unwind never parks")
-                            }
-                        };
+                        let return_completion = self
+                            .unwind_generator_for_of_loops(
+                                o.id,
+                                &mut for_of_stack,
+                                &mut current_try_stack,
+                                &func_env,
+                                0,
+                                Completion::Return(ret_val),
+                                false,
+                            )
+                            .expect_done();
                         let ret_val = match return_completion {
                             Completion::Return(value) => value,
                             Completion::Throw(error) => {
@@ -4431,20 +4434,17 @@ impl Interpreter {
                             check_abrupt_on_resume = true;
                             continue;
                         }
-                        let return_completion = match self.unwind_generator_for_of_loops(
-                            o.id,
-                            &mut for_of_stack,
-                            &mut current_try_stack,
-                            &func_env,
-                            0,
-                            Completion::Return(JsValue::UNDEFINED),
-                            false,
-                        ) {
-                            ForOfUnwindOutcome::Done(completion) => completion,
-                            ForOfUnwindOutcome::Parked { .. } => {
-                                unreachable!("can_park is false: unwind never parks")
-                            }
-                        };
+                        let return_completion = self
+                            .unwind_generator_for_of_loops(
+                                o.id,
+                                &mut for_of_stack,
+                                &mut current_try_stack,
+                                &func_env,
+                                0,
+                                Completion::Return(JsValue::UNDEFINED),
+                                false,
+                            )
+                            .expect_done();
                         let return_value = match return_completion {
                             Completion::Return(value) => value,
                             Completion::Throw(error) => {
@@ -5954,22 +5954,20 @@ impl Interpreter {
             for_of_stack.len()
         };
 
-        match self.unwind_generator_for_of_loops(
-            generator_id,
-            for_of_stack,
-            try_stack,
-            func_env,
-            keep_len,
-            Completion::Empty,
-            false,
-        ) {
-            ForOfUnwindOutcome::Done(completion @ (Completion::Throw(_) | Completion::Exit(_))) => {
-                Err(completion)
-            }
-            ForOfUnwindOutcome::Done(_) => Ok(()),
-            ForOfUnwindOutcome::Parked { .. } => {
-                unreachable!("can_park is false: unwind never parks")
-            }
+        match self
+            .unwind_generator_for_of_loops(
+                generator_id,
+                for_of_stack,
+                try_stack,
+                func_env,
+                keep_len,
+                Completion::Empty,
+                false,
+            )
+            .expect_done()
+        {
+            completion @ (Completion::Throw(_) | Completion::Exit(_)) => Err(completion),
+            _ => Ok(()),
         }
     }
 
@@ -6114,20 +6112,17 @@ impl Interpreter {
         });
         debug_assert!(keep_len <= for_of_stack.len());
 
-        let closed = match self.unwind_generator_for_of_loops(
-            generator_id,
-            for_of_stack,
-            try_stack,
-            func_env,
-            keep_len.min(for_of_stack.len()),
-            Completion::Empty,
-            false,
-        ) {
-            ForOfUnwindOutcome::Done(completion) => completion,
-            ForOfUnwindOutcome::Parked { .. } => {
-                unreachable!("can_park is false: unwind never parks")
-            }
-        };
+        let closed = self
+            .unwind_generator_for_of_loops(
+                generator_id,
+                for_of_stack,
+                try_stack,
+                func_env,
+                keep_len.min(for_of_stack.len()),
+                Completion::Empty,
+                false,
+            )
+            .expect_done();
         if matches!(closed, Completion::Throw(_) | Completion::Exit(_)) {
             return Err(closed);
         }
