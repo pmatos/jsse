@@ -2,14 +2,18 @@
 description: >
   A break or continue that leaves one or more for-await-of loops in an async
   generator closes each iterator, after any finally block nested inside the
-  loop body has run.
+  loop body has run and before any finally block enclosing the loop runs —
+  including when the for-await is reached only via the fix for issue #721
+  (a for-await nested in a try/if/block container, not itself a top-level
+  suspension point).
 esid: sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset
 info: |
   ForIn/OfBodyEvaluation: if LoopContinues(result, labelSet) is false, the
   iterator is closed with AsyncIteratorClose. A labelled break targeting a
   statement outside the loop is not a continuing completion, so it closes the
   loop's iterator. A finally block inside the loop body completes before the
-  body's completion reaches the loop.
+  body's completion reaches the loop; a finally block enclosing the loop runs
+  only after AsyncIteratorClose has already run.
 flags: [async]
 includes: [compareArray.js, asyncHelpers.js]
 features: [async-iteration]
@@ -106,6 +110,23 @@ async function* enclosingFinallyRunsAfterInnerClose() {
   yield 'after';
 }
 
+// Unlike enclosingFinallyRunsAfterInnerClose above, nothing in this loop body
+// yields, so the enclosing try's suspension comes solely from the nested
+// for-await head (issue #721's fix), not from a yield the transform already
+// knew to lower for. Confirms the container's LoopControlTarget bookkeeping
+// still closes the iterator and runs the finally exactly once when the
+// for-await is reached only via container recursion.
+async function* breakInTryWrappingForAwait() {
+  try {
+    for await (var x of tracked(log, 'loop', [1, 2])) {
+      break;
+    }
+  } finally {
+    log.push('finally');
+  }
+  yield 'after';
+}
+
 async function main() {
   log = [];
   assert.compareArray(await drain(labeledBreakClosesIterator()), [1, 'after'], 'labelled break: values');
@@ -157,6 +178,18 @@ async function main() {
     log,
     ['inner finally', 'close loop', 'outer finally'],
     'a finally enclosing the loop runs after the loop closed its iterator'
+  );
+
+  log = [];
+  assert.compareArray(
+    await drain(breakInTryWrappingForAwait()),
+    ['after'],
+    'break in a try-wrapped for-await: values'
+  );
+  assert.compareArray(
+    log,
+    ['close loop', 'finally'],
+    'the loop closes its iterator before the enclosing try\'s finally runs'
   );
 }
 
