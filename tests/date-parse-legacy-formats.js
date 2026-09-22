@@ -5,7 +5,11 @@
 // local midnight, and returns NaN for anything unrecognizable or out of
 // bounds. Like V8 and SpiderMonkey it does not validate the day against the
 // month length (`2/30/2000` rolls over), but unlike V8 it takes zero-padded
-// 3+ digit years literally.
+// 3+ digit years literally. The written-month
+// form also accepts a `-`-prefixed 4+ digit year token (e.g. `-0001`), so that
+// jsse's own `toDateString()`/`toString()` output for negative years round-trips
+// through `Date.parse`; the numeric-slash form keeps rejecting a `-`-prefixed
+// year (`1/1/-5`).
 
 function sameValue(actual, expected, label) {
   if (!Object.is(actual, expected)) {
@@ -85,6 +89,7 @@ var invalidWritten = [
   "may 1999 1999", "may 0 0", "may 32 2000", "invalid date", "foo", "may",
   "may 1", "Mon May", "5/1 may 2000", "may may 1 2000", "Mon Tue may 1 2000",
   "may 1 2000 2001", "may 1st 2000", "may-1-2000",
+  "may 1 -5", "-1 -2 may", "may 1 2000 -0001", "2000-13-01",
 ];
 for (var n = 0; n < invalidWritten.length; n++) {
   sameValue(Date.parse(invalidWritten[n]), NaN, JSON.stringify(invalidWritten[n]));
@@ -122,3 +127,20 @@ for (var x = 0; x < dayStarts.length; x++) {
 }
 sameValue(new Date(new Date(2026, 8, 21).toDateString()).getTime(), local(2026, 8, 21),
   "Date constructor toDateString round trip");
+
+// Negative-year written-month tokens (round-trips `toDateString()` output for
+// years before 0, e.g. "Fri Jan 01 -0001").
+var negYear = new Date(-62198755200000);
+sameValue(
+  Date.parse(negYear.toDateString()),
+  local(negYear.getFullYear(), negYear.getMonth(), negYear.getDate()),
+  "toDateString round-trip for year -1"
+);
+
+var negYear1 = local(-1, 4, 1);
+var writtenNegYear1 = [
+  "-0001 may 1", "may 1 -0001", "Mon may 1 -0001", "1 -0001 may",
+];
+for (var p = 0; p < writtenNegYear1.length; p++) {
+  sameValue(Date.parse(writtenNegYear1[p]), negYear1, JSON.stringify(writtenNegYear1[p]));
+}

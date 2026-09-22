@@ -2,7 +2,6 @@ use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -22,9 +21,6 @@ pub(crate) struct GeneratorState {
     pub id: usize,
     pub body: Body,
     pub terminator: StateTerminator,
-    /// Break/continue targets for an `await using` block left intact as the
-    /// last statement of this state; see [`BlockExits`].
-    pub block_exits: Option<Rc<BlockExits>>,
     /// Jumps that a yield-free statement in `body` can surface as a raw
     /// `break`/`continue` completion, with the terminator that stands in for
     /// the state's own when one does.
@@ -62,16 +58,6 @@ pub(crate) enum ScopeAction {
     /// binding is `const` (spec still runs this for `const` heads; see
     /// `exec_for`, which this generalizes).
     CopyForward(Vec<(String, bool)>),
-}
-
-/// Where a `break` or `continue` that escapes an isolated `await using` block
-/// resumes. The block runs verbatim, so its jumps surface as raw completions
-/// once its DisposeResources finishes; the async-function driver resolves them
-/// through these tables, keyed by label (`None` for the unlabeled form).
-#[derive(Debug)]
-pub(crate) struct BlockExits {
-    pub breaks: HashMap<Option<String>, LoopControlTarget>,
-    pub continues: HashMap<Option<String>, LoopControlTarget>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,8 +179,10 @@ pub(crate) enum StateTerminator {
 /// State-machine target for an abrupt `break` or `continue` completion.
 ///
 /// The depths describe the execution context that remains active at
-/// `target_state`, allowing the async-function driver to run intervening
-/// finalizers and close only the `for-of` iterators crossed by the jump.
+/// `target_state`, allowing the state-machine drivers (sync/async generators
+/// via `route_generator_loop_control`, async functions via
+/// `route_loop_control!`) to run intervening finalizers and close only the
+/// `for-of` iterators crossed by the jump.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopControlTarget {
     pub target_state: usize,
@@ -202,7 +190,9 @@ pub(crate) struct LoopControlTarget {
     pub for_of_depth: usize,
     /// Number of block scopes (`EnterScope`/`ExitScope`) open when this
     /// target's loop/label was registered, so `route_loop_control!` never
-    /// disposes a scope that lexically encloses the target itself.
+    /// disposes a scope that lexically encloses the target itself. Only
+    /// async functions emit `EnterScope`/`ExitScope`; generator routing does
+    /// not consume this field.
     pub scope_depth: usize,
 }
 
@@ -388,7 +378,6 @@ impl TransformContext {
             id,
             body: Body::new(Vec::new()),
             terminator: StateTerminator::Completed,
-            block_exits: None,
             inline_jumps: Vec::new(),
             scope_depth: 0,
             scope_action: None,
@@ -447,7 +436,7 @@ impl TransformContext {
                 continue;
             }
             if let Some(target) = self.jump_target(kind, &label) {
-                let terminator = self.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 self.pending_inline_jumps.push(InlineJump {
                     kind,
                     label,
@@ -463,14 +452,6 @@ impl TransformContext {
             JumpKind::Continue => &self.continue_targets,
         };
         targets.get(label).copied()
-    }
-
-    fn jump_terminator(&self, target: LoopControlTarget) -> StateTerminator {
-        if self.is_async && self.detect_for_await {
-            StateTerminator::LoopControl(target)
-        } else {
-            StateTerminator::Goto(target.target_state)
-        }
     }
 
     fn loop_control_target(&self, target_state: usize, for_of_depth: usize) -> LoopControlTarget {
@@ -548,6 +529,7 @@ fn transform_generator_inner_opts(
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
         && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
+        && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
         && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
@@ -597,7 +579,6 @@ fn create_simple_machine(
             id: 0,
             body,
             terminator: StateTerminator::Completed,
-            block_exits: None,
             inline_jumps: Vec::new(),
             scope_depth: 0,
             scope_action: None,
@@ -612,34 +593,38 @@ fn create_simple_machine(
 }
 
 fn stmt_contains_for_await(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::awaits_at_head)
+}
+
+fn stmt_contains_await_using_head(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::disposes_at_head)
+}
+
+fn stmt_contains_for_of_head(
+    stmt: &Statement,
+    head: impl Fn(&ForOfStatement) -> bool + Copy,
+) -> bool {
+    let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
-        Statement::ForOf(f) => f.awaits_at_head(),
-        Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
+        Statement::ForOf(f) => head(f),
+        Statement::Block(stmts) => stmts.iter().any(contains),
         Statement::If(i) => {
-            stmt_contains_for_await(&i.consequent)
-                || i.alternate
-                    .as_ref()
-                    .is_some_and(|s| stmt_contains_for_await(s))
+            contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
         }
-        Statement::While(w) => stmt_contains_for_await(&w.body),
-        Statement::DoWhile(d) => stmt_contains_for_await(&d.body),
-        Statement::For(f) => stmt_contains_for_await(&f.body),
-        Statement::ForIn(f) => stmt_contains_for_await(&f.body),
+        Statement::While(w) => contains(&w.body),
+        Statement::DoWhile(d) => contains(&d.body),
+        Statement::For(f) => contains(&f.body),
+        Statement::ForIn(f) => contains(&f.body),
         Statement::Try(t) => {
-            t.block.iter().any(stmt_contains_for_await)
+            t.block.iter().any(contains)
                 || t.handler
                     .as_ref()
-                    .is_some_and(|h| h.body.iter().any(stmt_contains_for_await))
-                || t.finalizer
-                    .as_ref()
-                    .is_some_and(|f| f.iter().any(stmt_contains_for_await))
+                    .is_some_and(|h| h.body.iter().any(contains))
+                || t.finalizer.as_ref().is_some_and(|f| f.iter().any(contains))
         }
-        Statement::Switch(s) => s
-            .cases
-            .iter()
-            .any(|c| c.consequent.iter().any(stmt_contains_for_await)),
-        Statement::Labeled(_, inner) => stmt_contains_for_await(inner),
-        Statement::With(_, s) => stmt_contains_for_await(s),
+        Statement::Switch(s) => s.cases.iter().any(|c| c.consequent.iter().any(contains)),
+        Statement::Labeled(_, inner) => contains(inner),
+        Statement::With(_, s) => contains(s),
         _ => false,
     }
 }
@@ -680,9 +665,8 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 }
 
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
-    if detect_for_await
-        && let Statement::ForOf(f) = stmt
-        && f.awaits_at_head()
+    if let Statement::ForOf(f) = stmt
+        && ((is_async && f.disposes_at_head()) || (detect_for_await && f.awaits_at_head()))
     {
         return true;
     }
@@ -947,25 +931,6 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     after_state
                 };
                 transform_scope_block(stmts, ctx, resume_state);
-            } else if ctx.is_async && block_has_await_using(stmts) {
-                // The same shape in an async generator: `EnterScope`/
-                // `ExitScope` are emitted only for plain async functions
-                // (`transform_async_function`, gated on `detect_for_await`),
-                // so keep the block intact here, tree-walked with its own
-                // block_env and dispose_stack. It stays the last statement of
-                // its state: the executor parks the block's DisposeResources
-                // and suspends at its Awaits, then continues at the state
-                // boundary created after the block.
-                let resume_state = if after_state == usize::MAX {
-                    ctx.new_state()
-                } else {
-                    after_state
-                };
-                ctx.emit_statement(stmt.clone());
-                ctx.finalize_current_state(StateTerminator::Goto(resume_state));
-                ctx.current_state_id = resume_state;
-                // If there were remaining statements after the block in the parent,
-                // they'll be emitted into resume_state by the caller.
             } else {
                 // §14.2.2 Block Evaluation: a fresh declarative environment per
                 // entry, discarded on the way out. Force a state boundary
@@ -1102,7 +1067,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Break(label) => {
             if let Some(target) = ctx.jump_target(JumpKind::Break, label) {
-                let terminator = ctx.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -1112,7 +1077,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Continue(label) => {
             if let Some(target) = ctx.jump_target(JumpKind::Continue, label) {
-                let terminator = ctx.jump_terminator(target);
+                let terminator = StateTerminator::LoopControl(target);
                 ctx.finalize_current_state(terminator);
                 ctx.current_state_id = ctx.new_state();
             } else {
@@ -1252,74 +1217,38 @@ fn transform_yielding_expression(
         }
 
         Expression::Logical(op, left, right) => {
-            if expr_has_suspension(left, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("logical");
-                let left_binding = SentValueBindingKind::Variable(temp_var.clone());
-                transform_yielding_expression(left, ctx, usize::MAX, Some(left_binding));
+            let left_var = ctx.new_temp_var("logical");
+            bind_expression_to_temp(left, &left_var, ctx);
 
-                if expr_has_suspension(right, ctx.is_async) {
-                    let after_logical = ctx.new_state();
-                    let eval_right_state = ctx.new_state();
-
-                    let condition = match op {
-                        LogicalOp::And => Expression::Identifier(temp_var.clone()),
-                        LogicalOp::Or => Expression::Unary(
-                            UnaryOp::Not,
-                            ExprBox::new(Expression::Identifier(temp_var.clone())),
-                        ),
-                        LogicalOp::NullishCoalescing => Expression::Binary(
-                            BinaryOp::StrictNotEq,
-                            ExprBox::new(Expression::Identifier(temp_var.clone())),
-                            ExprBox::new(Expression::Literal(Literal::Null)),
-                        ),
-                    };
-
-                    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                        condition,
-                        true_state: eval_right_state,
-                        false_state: after_logical,
-                    });
-
-                    ctx.current_state_id = eval_right_state;
-                    transform_yielding_expression(right, ctx, after_logical, binding);
-                    ctx.finalize_current_state(StateTerminator::Goto(after_logical));
-
-                    ctx.current_state_id = after_logical;
-                } else {
-                    let combined = Expression::Logical(
-                        *op,
-                        ExprBox::new(Expression::Identifier(temp_var)),
-                        right.clone(),
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-            } else if expr_has_suspension(right, ctx.is_async) {
+            if expr_has_suspension(right, ctx.is_async) {
                 let after_logical = ctx.new_state();
                 let eval_right_state = ctx.new_state();
 
-                let condition = match op {
-                    LogicalOp::And => left.clone().into_expression(),
-                    LogicalOp::Or => Expression::Unary(UnaryOp::Not, left.clone()),
-                    LogicalOp::NullishCoalescing => Expression::Binary(
-                        BinaryOp::StrictNotEq,
-                        left.clone(),
-                        ExprBox::new(Expression::Literal(Literal::Null)),
-                    ),
-                };
-
+                let condition = short_circuit_continue_test(*op, &left_var);
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
                     condition,
                     true_state: eval_right_state,
                     false_state: after_logical,
                 });
 
-                emit_expression_with_binding(left, &binding, ctx);
-
                 ctx.current_state_id = eval_right_state;
-                transform_yielding_expression(right, ctx, after_logical, binding);
+                transform_yielding_expression(
+                    right,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(left_var.clone())),
+                );
                 ctx.finalize_current_state(StateTerminator::Goto(after_logical));
 
                 ctx.current_state_id = after_logical;
+                emit_expression_with_binding(&Expression::Identifier(left_var), &binding, ctx);
+            } else {
+                let combined = Expression::Logical(
+                    *op,
+                    ExprBox::new(Expression::Identifier(left_var)),
+                    right.clone(),
+                );
+                emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
 
@@ -1404,22 +1333,46 @@ fn transform_yielding_expression(
         }
 
         Expression::Assign(op, left, right) => {
-            if expr_has_suspension(right, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("assign");
-                let right_binding = SentValueBindingKind::Variable(temp_var.clone());
-                transform_yielding_expression(right, ctx, usize::MAX, Some(right_binding));
-
-                let combined = Expression::Assign(
-                    *op,
-                    left.clone(),
-                    ExprBox::new(Expression::Identifier(temp_var)),
-                );
+            let right_suspends = expr_has_suspension(right, ctx.is_async);
+            let target = lower_reference_operand(left, right_suspends, ctx);
+            if !right_suspends {
+                let combined = Expression::Assign(*op, ExprBox::new(target), right.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
-            } else if expr_has_suspension(left, ctx.is_async) {
-                // LHS has suspension (e.g. c[await 9] = 1, or destructuring [x = yield] = vals)
-                // Pre-evaluate suspension points in LHS member expressions
-                let new_left = extract_lhs_suspensions(left, ctx);
-                let combined = Expression::Assign(*op, ExprBox::new(new_left), right.clone());
+            } else if let Some(logical_op) = op.logical_op() {
+                let store = Expression::Assign(
+                    AssignOp::Assign,
+                    ExprBox::new(target.clone()),
+                    right.clone(),
+                );
+                let combined =
+                    Expression::Logical(logical_op, ExprBox::new(target), ExprBox::new(store));
+                transform_yielding_expression(&combined, ctx, usize::MAX, binding);
+            } else {
+                let old_value = op
+                    .binary_op()
+                    .filter(|_| {
+                        matches!(target, Expression::Identifier(_) | Expression::Member(..))
+                    })
+                    .map(|binary_op| {
+                        let old_var = ctx.new_temp_var("assign_old");
+                        let old_binding = Some(SentValueBindingKind::Variable(old_var.clone()));
+                        emit_expression_with_binding(&target, &old_binding, ctx);
+                        (binary_op, old_var)
+                    });
+                let value_var = ctx.new_temp_var("assign");
+                bind_expression_to_temp(right, &value_var, ctx);
+                let mut value = Expression::Identifier(value_var);
+                let mut assign_op = *op;
+                if let Some((binary_op, old_var)) = old_value {
+                    value = Expression::Binary(
+                        binary_op,
+                        ExprBox::new(Expression::Identifier(old_var)),
+                        ExprBox::new(value),
+                    );
+                    assign_op = AssignOp::Assign;
+                }
+                let combined =
+                    Expression::Assign(assign_op, ExprBox::new(target), ExprBox::new(value));
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
@@ -1523,87 +1476,24 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&Expression::Class(class_expr), &binding, ctx);
         }
 
-        Expression::Member(obj, prop, _) => {
-            let mut temp_obj = obj.clone().into_expression();
-            if expr_has_suspension(obj, ctx.is_async) {
-                let tv = ctx.new_temp_var("mem_obj");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
-                temp_obj = Expression::Identifier(tv);
-            }
-            match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let tv = ctx.new_temp_var("mem_prop");
-                    let b = SentValueBindingKind::Variable(tv.clone());
-                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
-                    let combined = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
-                        PropSiteId::UNASSIGNED,
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-                _ => {
-                    let combined = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        prop.clone(),
-                        PropSiteId::UNASSIGNED,
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-            }
+        Expression::Member(..) => {
+            let combined = lower_reference_operand(expr, false, ctx);
+            emit_expression_with_binding(&combined, &binding, ctx);
         }
 
         Expression::OptionalChain(base, chain) => {
-            let mut temp_base = base.clone().into_expression();
-            if expr_has_suspension(base, ctx.is_async) {
-                let tv = ctx.new_temp_var("oc_base");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(base, ctx, usize::MAX, Some(b));
-                temp_base = Expression::Identifier(tv);
-            }
             if expr_has_suspension(chain, ctx.is_async) {
-                let base_var = ctx.new_temp_var("oc_bv");
-                ctx.emit_statement(Statement::Variable(VariableDeclaration {
-                    kind: VarKind::Var,
-                    declarations: vec![VariableDeclarator {
-                        pattern: Pattern::Identifier(base_var.clone()),
-                        init: Some(temp_base),
-                    }],
-                }));
-                let after_oc = ctx.new_state();
-                let eval_chain_state = ctx.new_state();
-                let skip_state = ctx.new_state();
-                // temp != null catches both null and undefined via loose equality
-                let condition = Expression::Binary(
-                    BinaryOp::NotEq,
-                    ExprBox::new(Expression::Identifier(base_var.clone())),
-                    ExprBox::new(Expression::Literal(Literal::Null)),
-                );
-                ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                    condition,
-                    true_state: eval_chain_state,
-                    false_state: skip_state,
-                });
-                // Skip: result is undefined
-                ctx.current_state_id = skip_state;
-                emit_expression_with_binding(
-                    &Expression::Identifier("undefined".to_string()),
-                    &binding,
+                lower_optional_chain(
+                    base,
+                    chain,
+                    Expression::Identifier("undefined".to_string()),
+                    |regular| regular,
+                    binding,
                     ctx,
                 );
-                ctx.finalize_current_state(StateTerminator::Goto(after_oc));
-                // Eval chain: substitute base and transform as regular expression
-                ctx.current_state_id = eval_chain_state;
-                let regular = oc_chain_to_regular_expr(chain, &base_var);
-                if expr_has_suspension(&regular, ctx.is_async) {
-                    transform_yielding_expression(&regular, ctx, usize::MAX, binding);
-                } else {
-                    emit_expression_with_binding(&regular, &binding, ctx);
-                }
-                ctx.finalize_current_state(StateTerminator::Goto(after_oc));
-                ctx.current_state_id = after_oc;
             } else {
+                let temp_base = hoist_suspending_expr(base, "oc_base", ctx)
+                    .unwrap_or_else(|| base.clone().into_expression());
                 let combined = Expression::OptionalChain(ExprBox::new(temp_base), chain.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
@@ -1633,20 +1523,33 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Delete(inner) => {
-            let tv = ctx.new_temp_var("del");
-            let b = SentValueBindingKind::Variable(tv.clone());
-            transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Delete(ExprBox::new(Expression::Identifier(tv)));
-            emit_expression_with_binding(&combined, &binding, ctx);
-        }
+        Expression::Delete(inner) => match &**inner {
+            Expression::Member(..) => {
+                let target = lower_reference_operand(inner, false, ctx);
+                let combined = Expression::Delete(ExprBox::new(target));
+                emit_expression_with_binding(&combined, &binding, ctx);
+            }
+            Expression::OptionalChain(base, chain) => lower_optional_chain(
+                base,
+                chain,
+                Expression::Literal(Literal::Boolean(true)),
+                |regular| Expression::Delete(ExprBox::new(regular)),
+                binding,
+                ctx,
+            ),
+            other => {
+                transform_yielding_expression(other, ctx, usize::MAX, None);
+                emit_expression_with_binding(
+                    &Expression::Literal(Literal::Boolean(true)),
+                    &binding,
+                    ctx,
+                );
+            }
+        },
 
         Expression::Update(op, prefix, inner) => {
-            let tv = ctx.new_temp_var("upd");
-            let b = SentValueBindingKind::Variable(tv.clone());
-            transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined =
-                Expression::Update(*op, *prefix, ExprBox::new(Expression::Identifier(tv)));
+            let target = lower_reference_operand(inner, false, ctx);
+            let combined = Expression::Update(*op, *prefix, ExprBox::new(target));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1787,42 +1690,11 @@ fn transform_call_expression(
     binding: Option<SentValueBindingKind>,
     ctx: &mut TransformContext,
 ) {
-    let mut temp_callee = callee.clone();
-    if expr_has_suspension(callee, ctx.is_async) {
-        if let Expression::Member(obj, prop, _) = callee {
-            let mut temp_obj = obj.clone().into_expression();
-            if expr_has_suspension(obj, ctx.is_async) {
-                let tv = ctx.new_temp_var("call_obj");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
-                temp_obj = Expression::Identifier(tv);
-            }
-            match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let tv = ctx.new_temp_var("call_prop");
-                    let b = SentValueBindingKind::Variable(tv.clone());
-                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
-                    temp_callee = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-                _ => {
-                    temp_callee = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        prop.clone(),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-            }
-        } else {
-            let temp_var = ctx.new_temp_var("call_callee");
-            let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
-            transform_yielding_expression(callee, ctx, usize::MAX, Some(callee_binding));
-            temp_callee = Expression::Identifier(temp_var);
-        }
-    }
+    let temp_callee = if matches!(callee, Expression::Member(..)) {
+        lower_reference_operand(callee, false, ctx)
+    } else {
+        hoist_suspending_expr(callee, "call_callee", ctx).unwrap_or_else(|| callee.clone())
+    };
 
     let mut temp_args = Vec::new();
     for (i, arg) in args.iter().enumerate() {
@@ -1894,41 +1766,133 @@ fn emit_expression_with_binding(
     }
 }
 
-/// Extract suspension points from assignment LHS expressions (e.g. `c[await 9]`).
-/// Transforms `await` sub-expressions into temp vars via state machine yields,
-/// returning a clean LHS expression without suspensions.
-fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Expression {
-    match expr {
-        Expression::Member(obj, prop, _) => {
-            let new_obj = if expr_has_suspension(obj, ctx.is_async) {
-                let temp = ctx.new_temp_var("lhs_obj");
-                transform_yielding_expression(
-                    obj,
-                    ctx,
-                    usize::MAX,
-                    Some(SentValueBindingKind::Variable(temp.clone())),
-                );
-                Expression::Identifier(temp)
-            } else {
-                obj.clone().into_expression()
-            };
-            let new_prop = match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let temp = ctx.new_temp_var("lhs_comp");
-                    transform_yielding_expression(
-                        e,
-                        ctx,
-                        usize::MAX,
-                        Some(SentValueBindingKind::Variable(temp.clone())),
-                    );
-                    MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
-                }
-                other => other.clone(),
-            };
-            Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
-        }
-        _ => expr.clone(),
+/// Evaluate `expr` into the temp `var`, suspending first if it contains a
+/// suspension point.
+fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformContext) {
+    let binding = Some(SentValueBindingKind::Variable(var.to_string()));
+    if expr_has_suspension(expr, ctx.is_async) {
+        transform_yielding_expression(expr, ctx, usize::MAX, binding);
+    } else {
+        emit_expression_with_binding(expr, &binding, ctx);
     }
+}
+
+/// `var === null || var === void 0` — true exactly when `var` is undefined or
+/// null (unlike `== null`, false for `document.all`-style objects).
+fn nullish_test(var: &str) -> Expression {
+    let is = |rhs: Expression| {
+        Expression::Binary(
+            BinaryOp::StrictEq,
+            ExprBox::new(Expression::Identifier(var.to_string())),
+            ExprBox::new(rhs),
+        )
+    };
+    Expression::Logical(
+        LogicalOp::Or,
+        ExprBox::new(is(Expression::Literal(Literal::Null))),
+        ExprBox::new(is(Expression::Void(ExprBox::new(Expression::Literal(
+            Literal::Number(0.0),
+        ))))),
+    )
+}
+
+/// The condition under which `var <op> rhs` goes on to evaluate `rhs`.
+fn short_circuit_continue_test(op: LogicalOp, var: &str) -> Expression {
+    match op {
+        LogicalOp::And => Expression::Identifier(var.to_string()),
+        LogicalOp::Or => Expression::Unary(
+            UnaryOp::Not,
+            ExprBox::new(Expression::Identifier(var.to_string())),
+        ),
+        LogicalOp::NullishCoalescing => nullish_test(var),
+    }
+}
+
+/// Lower an optional chain whose chain part suspends: the base is evaluated
+/// once into a temp, a nullish base yields `skip_value`, and otherwise the chain
+/// runs as a regular expression on that temp, passed through `wrap`.
+fn lower_optional_chain(
+    base: &Expression,
+    chain: &Expression,
+    skip_value: Expression,
+    wrap: impl FnOnce(Expression) -> Expression,
+    binding: Option<SentValueBindingKind>,
+    ctx: &mut TransformContext,
+) {
+    let base_var = ctx.new_temp_var("oc_bv");
+    bind_expression_to_temp(base, &base_var, ctx);
+    let after_oc = ctx.new_state();
+    let eval_chain_state = ctx.new_state();
+    let skip_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+        condition: nullish_test(&base_var),
+        true_state: skip_state,
+        false_state: eval_chain_state,
+    });
+    ctx.current_state_id = skip_state;
+    emit_expression_with_binding(&skip_value, &binding, ctx);
+    ctx.finalize_current_state(StateTerminator::Goto(after_oc));
+    ctx.current_state_id = eval_chain_state;
+    let regular = wrap(oc_chain_to_regular_expr(chain, &base_var));
+    if expr_has_suspension(&regular, ctx.is_async) {
+        transform_yielding_expression(&regular, ctx, usize::MAX, binding);
+    } else {
+        emit_expression_with_binding(&regular, &binding, ctx);
+    }
+    ctx.finalize_current_state(StateTerminator::Goto(after_oc));
+    ctx.current_state_id = after_oc;
+}
+
+/// An operand whose value cannot change across a suspension, so capturing it
+/// into another temp would only add a copy.
+fn is_settled_operand(expr: &Expression, ctx: &TransformContext) -> bool {
+    match expr {
+        Expression::Super | Expression::Literal(_) => true,
+        Expression::Identifier(name) => ctx.generated_temps.contains(name),
+        _ => false,
+    }
+}
+
+/// Lower the suspension points out of a member Reference (the operand of
+/// `delete`, `++`/`--`, a call callee, or an assignment target) while keeping it
+/// a Reference: the base value and then the raw computed key are captured in
+/// temps, in source order, and the returned member expression is suspension-free.
+///
+/// The base and key are captured only when the key or base suspends, or when
+/// `capture_all` is set (the caller is about to suspend on something else, e.g.
+/// an assignment's right-hand side, so both must be evaluated first). Other
+/// expressions are returned unchanged.
+fn lower_reference_operand(
+    expr: &Expression,
+    capture_all: bool,
+    ctx: &mut TransformContext,
+) -> Expression {
+    let Expression::Member(obj, prop, _) = expr else {
+        return expr.clone();
+    };
+    let key_suspends =
+        matches!(prop, MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async));
+    if !capture_all && !key_suspends && !expr_has_suspension(obj, ctx.is_async) {
+        return expr.clone();
+    }
+    let new_obj = if is_settled_operand(obj, ctx) {
+        obj.clone().into_expression()
+    } else {
+        let temp = ctx.new_temp_var("ref_obj");
+        bind_expression_to_temp(obj, &temp, ctx);
+        Expression::Identifier(temp)
+    };
+    let new_prop = match prop {
+        MemberProperty::Computed(e)
+            if key_suspends || (capture_all && !is_settled_operand(e, ctx)) =>
+        {
+            let temp = ctx.new_temp_var("ref_key");
+            bind_expression_to_temp(e, &temp, ctx);
+            MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
+        }
+        other => other.clone(),
+    };
+    Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
 }
 
 fn transform_variable_declaration(
@@ -2547,7 +2511,17 @@ fn transform_try_statement(
     } else {
         None
     };
-    let clause_completion_state = finally_entry_state.unwrap_or(after_try);
+    // A finally-less try/catch still needs a `TryExit` on its normal-completion
+    // path: `TryEnter` unconditionally pushes a runtime `TryContextInfo`, and
+    // only `TryExit` pops it. Without this, a finally-less try/catch's context
+    // leaks on the runtime stack forever, desyncing every depth computed
+    // afterwards (`try_depth`/`for_of_depth` on later `LoopControlTarget`s,
+    // and exception-handler search) from this transform's own `try_stack`
+    // bookkeeping, which pops on every try regardless of `finally`.
+    let no_finally_exit_state = finally_entry_state.is_none().then(|| ctx.new_state());
+    let clause_completion_state = finally_entry_state
+        .or(no_finally_exit_state)
+        .expect("exactly one of finally_entry_state/no_finally_exit_state is set");
 
     ctx.finalize_current_state(StateTerminator::TryEnter {
         try_state: try_body_state,
@@ -2629,6 +2603,11 @@ fn transform_try_statement(
             }
         }
         ctx.current_state_id = finally_exit_state;
+        ctx.finalize_current_state(StateTerminator::TryExit {
+            after_state: after_try,
+        });
+    } else if let Some(exit_state) = no_finally_exit_state {
+        ctx.current_state_id = exit_state;
         ctx.finalize_current_state(StateTerminator::TryExit {
             after_state: after_try,
         });
@@ -3463,8 +3442,43 @@ mod tests {
         assert_eq!(with_jump.len(), 1);
         let jump = &with_jump[0].inline_jumps[0];
         assert_eq!(jump.label, None);
-        assert!(matches!(jump.terminator, StateTerminator::Goto(t) if t == after_switch));
+        assert!(
+            matches!(&jump.terminator, StateTerminator::LoopControl(t) if t.target_state == after_switch)
+        );
         assert_eq!(with_jump[0].inline_jumps.len(), 1);
+    }
+
+    fn loop_control_targets(sm: &GeneratorStateMachine) -> Vec<LoopControlTarget> {
+        sm.states
+            .iter()
+            .filter_map(|s| match &s.terminator {
+                StateTerminator::LoopControl(target) => Some(*target),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_break_in_yielding_try_of_sync_generator_lowers_to_loop_control() {
+        let body = parse_fn_body(
+            "function* g() { for (;;) { try { yield 1; break; } finally { f(); } } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let targets = loop_control_targets(&sm);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].try_depth, 0);
+        assert_eq!(targets[0].for_of_depth, 0);
+    }
+
+    #[test]
+    fn test_loop_control_target_records_enclosing_try_depth() {
+        let body = parse_fn_body(
+            "function* g() { try { for (;;) { try { yield 1; continue; } finally { f(); } } } finally { h(); } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let targets = loop_control_targets(&sm);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].try_depth, 1);
     }
 
     #[test]

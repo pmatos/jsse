@@ -8575,9 +8575,13 @@ impl Interpreter {
                     DisposeThen::ScopeCrossLoopControl(target)
                 );
 
-                if let Some((_, finally_state)) = routed_to {
+                if let Some((depth, finally_state)) = routed_to {
+                    // Contexts nested inside the selected finally are left, so
+                    // EnterFinally must mark this one.
+                    try_stack.truncate(depth + 1);
                     current_id = finally_state;
                 } else {
+                    try_stack.truncate(target.try_depth);
                     pending_loop_control = None;
                     current_id = target.target_state;
                 }
@@ -8865,17 +8869,14 @@ impl Interpreter {
 
                 if let Some((depth, state, is_catch, _)) = handler {
                     if is_catch {
-                        // A catch-only context is finished once its handler is
-                        // selected, but try-catch-finally must retain this
-                        // context so abrupt control from the catch still routes
-                        // through its attached finalizer. EnterCatch marks it
-                        // entered, preventing the catch from handling itself.
-                        let retained_depth = if try_stack[depth].finally_state.is_some() {
-                            depth + 1
-                        } else {
-                            depth
-                        };
-                        try_stack.truncate(retained_depth);
+                        // Always retain this context, catch-only or not:
+                        // every try/catch now routes its normal-completion
+                        // path through a `TryExit` (see
+                        // `transform_try_statement`), which must still find
+                        // this context on the stack to pop once the catch
+                        // body finishes. EnterCatch marks it entered,
+                        // preventing the catch from handling itself.
+                        try_stack.truncate(depth + 1);
                     } else if pending_completion_was_replaced {
                         // Drop the completed inner finally contexts so
                         // EnterFinally marks the handler selected above.
@@ -8992,14 +8993,6 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Break(label, _) => {
-                    if let Some(target) = state_machine.states[current_id]
-                        .block_exits
-                        .as_ref()
-                        .and_then(|exits| exits.breaks.get(label).copied())
-                    {
-                        route_loop_control!(target);
-                        continue;
-                    }
                     // Close iterator for the innermost matching for-of loop
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
                         let after_state = for_of_stack[pos].after_state;
@@ -9009,14 +9002,6 @@ impl Interpreter {
                     }
                 }
                 Completion::Continue(label, _) => {
-                    if let Some(target) = state_machine.states[current_id]
-                        .block_exits
-                        .as_ref()
-                        .and_then(|exits| exits.continues.get(label).copied())
-                    {
-                        route_loop_control!(target);
-                        continue;
-                    }
                     // An inline statement can surface continue directly rather
                     // than through a LoopControl terminator. Route it through
                     // intervening finalizers before returning to the loop head.
@@ -9192,6 +9177,7 @@ impl Interpreter {
                         _after_state: after_state,
                         entered_catch: false,
                         entered_finally: false,
+                        pending_loop_control: None,
                     });
                     current_id = try_state;
                 }

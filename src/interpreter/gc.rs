@@ -438,7 +438,7 @@ impl Interpreter {
         roots.extend_from_slice(&self.gc_temp_roots);
         // Values held by active bytecode operand stacks
         roots.extend_from_slice(&self.gc_bytecode_roots);
-        // Queued microtasks and armed timers both keep their values alive.
+        // Queued microtasks, pending async-generator requests and armed timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
         for val in &self.pending_iter_close {
@@ -454,6 +454,10 @@ impl Interpreter {
         }
         for scope_stack in self.generator_scope_stacks.values() {
             Self::collect_scope_stack_roots(scope_stack, &mut roots, &mut seen_envs);
+        }
+        for (generator_id, disposal) in &self.generator_pending_dispose {
+            roots.push(*generator_id);
+            disposal.for_each_value(|v| Self::collect_value_roots(v, &mut roots));
         }
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
@@ -747,6 +751,8 @@ impl Interpreter {
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);
         self.generator_scope_stacks.remove(&id);
+        self.scheduler.remove_async_gen_queue(id);
+        self.generator_pending_dispose.remove(&id);
     }
 
     fn gc_collect_major(&mut self) {
@@ -1084,11 +1090,6 @@ impl Interpreter {
             IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
             IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
             IteratorState::Generator {
-                func_env,
-                execution_state,
-                ..
-            }
-            | IteratorState::AsyncGenerator {
                 func_env,
                 execution_state,
                 ..
@@ -1581,6 +1582,48 @@ mod tests {
         interp.gc_safepoint();
 
         assert!(interp.objects.get_cell(dead).is_none());
+    }
+
+    fn enqueue_request(interp: &mut Interpreter, gen_id: u64, promise: u64) {
+        interp
+            .scheduler
+            .async_gen_queue_or_default(gen_id)
+            .push_back(crate::interpreter::AsyncGenRequest {
+                kind: crate::interpreter::AsyncGenRequestKind::Next,
+                value: JsValue::UNDEFINED,
+                promise: obj(promise),
+                resolve_fn: JsValue::UNDEFINED,
+                reject_fn: JsValue::UNDEFINED,
+            });
+    }
+
+    #[test]
+    fn pending_async_generator_request_keeps_generator_and_promise_alive() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let generator = interp.alloc_object(JsObjectData::new());
+        let promise = interp.alloc_object(JsObjectData::new());
+        enqueue_request(&mut interp, generator, promise);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(generator).is_some());
+        assert!(interp.objects.get_cell(promise).is_some());
+    }
+
+    #[test]
+    fn freed_async_generator_drops_its_request_queue() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let generator = interp.alloc_object(JsObjectData::new());
+        interp.scheduler.async_gen_queue_or_default(generator);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(generator).is_none());
+        assert!(interp.scheduler.async_gen_queue(generator).is_none());
     }
 
     #[test]

@@ -2124,8 +2124,13 @@ fn parse_legacy_written_month(s: &str) -> Option<f64> {
     let mut month = None;
     let mut has_weekday = false;
     let mut numbers = Vec::new();
+    let mut neg_year = None;
     for token in s.split([' ', ',']).filter(|t| !t.is_empty()) {
-        if let Some(value) = parse_legacy_digits(token) {
+        if let Some(year) = parse_legacy_negative_year(token) {
+            if neg_year.replace(year).is_some() {
+                return None;
+            }
+        } else if let Some(value) = parse_legacy_digits(token) {
             numbers.push((token, value));
         } else if let Some(index) = legacy_name_index(token, &LEGACY_MONTH_NAMES) {
             if month.replace(index as u32 + 1).is_some() {
@@ -2141,6 +2146,12 @@ fn parse_legacy_written_month(s: &str) -> Option<f64> {
         }
     }
     let month = month?;
+    if let Some(year) = neg_year {
+        let [day] = numbers[..] else {
+            return None;
+        };
+        return make_legacy_local_date_signed(year, month, day.1);
+    }
     let [first, second] = numbers[..] else {
         return None;
     };
@@ -2156,6 +2167,17 @@ fn parse_legacy_digits(token: &str) -> Option<u32> {
         return None;
     }
     token.parse().ok()
+}
+
+/// A `-`-prefixed 4-6 digit year token, as produced by `toDateString()`/`toString()`
+/// for years before 0 (e.g. `-0001`). Written-month-only: `parse_legacy_numeric_slash`
+/// must keep rejecting a `-`-prefixed year (`1/1/-5`), so this is never called from there.
+fn parse_legacy_negative_year(token: &str) -> Option<i64> {
+    let digits = token.strip_prefix('-')?;
+    if !(4..=6).contains(&digits.len()) {
+        return None;
+    }
+    parse_legacy_digits(digits).map(|v| -(v as i64))
 }
 
 fn parse_legacy_numeric_slash(s: &str) -> Option<f64> {
@@ -2186,14 +2208,23 @@ fn expand_legacy_year((text, value): LegacyNumber) -> u32 {
 }
 
 fn make_legacy_local_date(year: LegacyNumber, month: u32, day: u32) -> Option<f64> {
+    make_legacy_local_date_from_year(expand_legacy_year(year) as f64, month, day)
+}
+
+/// Like `make_legacy_local_date`, but for a `-`-prefixed negative-year token, which is
+/// already a literal signed year (see `parse_legacy_negative_year`) and so skips
+/// `expand_legacy_year`'s two-digit-year expansion.
+fn make_legacy_local_date_signed(year: i64, month: u32, day: u32) -> Option<f64> {
+    make_legacy_local_date_from_year(year as f64, month, day)
+}
+
+/// Shared month/day bounds check and local-date construction for the legacy
+/// written-month and numeric-slash parsers, given an already-resolved year.
+fn make_legacy_local_date_from_year(year: f64, month: u32, day: u32) -> Option<f64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    let d = make_day(
-        expand_legacy_year(year) as f64,
-        (month - 1) as f64,
-        day as f64,
-    );
+    let d = make_day(year, (month - 1) as f64, day as f64);
     Some(make_date_clipped(d, 0.0, true))
 }
 

@@ -363,6 +363,11 @@ pub(crate) struct TryContextInfo {
     pub _after_state: usize,
     pub entered_catch: bool,
     pub entered_finally: bool,
+    /// The `break`/`continue` this context's finalizer is running on behalf
+    /// of. Living on the context means a jump or throw that leaves the
+    /// finalizer discards it together with the context, and a nested finalizer
+    /// cannot overwrite it.
+    pub pending_loop_control: Option<LoopControlTarget>,
 }
 
 #[derive(Debug, Clone)]
@@ -1462,12 +1467,6 @@ pub(crate) enum IteratorState {
         delegated_iterator: Option<DelegatedIteratorInfo>,
         pending_exception: Option<JsValue>,
         pending_return: Option<JsValue>,
-    },
-    AsyncGenerator {
-        body: Body,
-        func_env: EnvRef,
-        is_strict: bool,
-        execution_state: GeneratorExecutionState,
     },
     StateMachineAsyncGenerator {
         state_machine: Rc<GeneratorStateMachine>,
