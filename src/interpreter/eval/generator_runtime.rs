@@ -1439,51 +1439,58 @@ impl Interpreter {
                         _after_state: *after_state,
                         entered_catch: false,
                         entered_finally: false,
-                        pending_loop_control: None,
+                        pending_completion: None,
                     });
                     current_id = *try_state;
                 }
 
                 StateTerminator::TryExit { after_state } => {
                     let finished = current_try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        // Re-throw pending exception after finally completes
-                        let exc = route_exception!(exc);
-                        self.retire_generator(o.id);
-                        return Completion::Throw(exc);
+                    match finished.and_then(|ctx| ctx.pending_completion) {
+                        Some(PendingCompletion::Throw(exc)) => {
+                            // Re-throw the completion this finally intercepted,
+                            // now that it has run to normal completion.
+                            let exc = route_exception!(exc);
+                            self.retire_generator(o.id);
+                            return Completion::Throw(exc);
+                        }
+                        Some(PendingCompletion::Return(ret_val)) => {
+                            // Re-enter the abrupt-return driver after each finally.
+                            // It uses loop `try_depth` boundaries to decide which
+                            // iteration environments close before the next outer
+                            // finally, and which remain until an inner finally has
+                            // finished.
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state:
+                                            StateMachineExecutionState::SuspendedAtState {
+                                                state_id: *after_state,
+                                            },
+                                        _sent_value: JsValue::UNDEFINED,
+                                        try_stack: current_try_stack,
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                        pending_return: None,
+                                    },
+                                );
+                            return self.generator_return_state_machine(this, ret_val);
+                        }
+                        Some(PendingCompletion::LoopControl(target)) => {
+                            // The finalizer ran on behalf of a break/continue:
+                            // resume it, through any finalizer still in the way.
+                            current_id = route_loop_control_result!(target);
+                            continue;
+                        }
+                        None => {
+                            current_id = *after_state;
+                        }
                     }
-                    if let Some(ret_val) = pending_return.take() {
-                        // Re-enter the abrupt-return driver after each finally.
-                        // It uses loop `try_depth` boundaries to decide which
-                        // iteration environments close before the next outer
-                        // finally, and which remain until an inner finally has
-                        // finished.
-                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: *after_state,
-                                },
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: current_try_stack,
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            },
-                        );
-                        return self.generator_return_state_machine(this, ret_val);
-                    }
-                    if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
-                        // The finalizer ran on behalf of a break/continue:
-                        // resume it, through any finalizer still in the way.
-                        current_id = route_loop_control_result!(target);
-                        continue;
-                    }
-                    current_id = *after_state;
                 }
 
                 StateTerminator::EnterCatch { body_state, param } => {
@@ -1510,6 +1517,14 @@ impl Interpreter {
                 StateTerminator::EnterFinally { body_state } => {
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_finally = true;
+                        // A throw routed here by `route_generator_exception`
+                        // (which only knows to jump to this finally, not that
+                        // this is the context that must restore it) is now
+                        // owned by this context: a nested try/finally's own
+                        // `TryExit` must not see it (issue #719).
+                        if let Some(exc) = pending_exception.take() {
+                            ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                        }
                     }
                     current_id = *body_state;
                 }
@@ -2106,6 +2121,11 @@ impl Interpreter {
 
             if let Some(idx) = finally_idx {
                 let finally_state = try_stack[idx].finally_state.unwrap();
+                // Own this return on the context whose finally is about to
+                // run it, not the driver: a nested try/finally's own TryExit
+                // must not see it (issue #719).
+                try_stack[idx].pending_completion =
+                    Some(PendingCompletion::Return(return_value.clone()));
                 // Keep the selected entry until TryExit so EnterFinally marks
                 // and pops that context, not the surrounding one.
                 let remaining_stack = try_stack[..=idx].to_vec();
@@ -2122,7 +2142,7 @@ impl Interpreter {
                         pending_binding: None,
                         delegated_iterator: None,
                         pending_exception: None,
-                        pending_return: Some(return_value.clone()),
+                        pending_return: None,
                     },
                 );
                 return self.generator_next_state_machine(this, JsValue::UNDEFINED);
@@ -4491,7 +4511,7 @@ impl Interpreter {
                         _after_state: *after_state,
                         entered_catch: false,
                         entered_finally: false,
-                        pending_loop_control: None,
+                        pending_completion: None,
                     });
                     current_id = *try_state;
                 }
@@ -4509,7 +4529,9 @@ impl Interpreter {
                         current_id = *after_state;
                         continue;
                     }
-                    if let Some(target) = finished.and_then(|ctx| ctx.pending_loop_control) {
+                    if let Some(PendingCompletion::LoopControl(target)) =
+                        finished.and_then(|ctx| ctx.pending_completion)
+                    {
                         // The finalizer ran on behalf of a break/continue:
                         // resume it, through any finalizer still in the way.
                         current_id = route_loop_control_result!(target);
@@ -6006,7 +6028,7 @@ impl Interpreter {
                 // Contexts nested inside the selected finally are left, so
                 // EnterFinally must mark this one.
                 try_stack.truncate(depth + 1);
-                try_stack[depth].pending_loop_control = Some(target);
+                try_stack[depth].pending_completion = Some(PendingCompletion::LoopControl(target));
                 Ok(finally_state)
             }
             None => {

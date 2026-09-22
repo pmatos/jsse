@@ -1106,6 +1106,7 @@ impl Interpreter {
                 delegated_iterator,
                 pending_exception,
                 pending_return,
+                try_stack,
                 _sent_value,
                 ..
             }
@@ -1114,6 +1115,7 @@ impl Interpreter {
                 delegated_iterator,
                 pending_exception,
                 pending_return,
+                try_stack,
                 _sent_value,
                 ..
             } => {
@@ -1128,6 +1130,14 @@ impl Interpreter {
                 }
                 if let Some(v) = pending_return {
                     Self::collect_value_roots(v, worklist);
+                }
+                for try_info in try_stack {
+                    match &try_info.pending_completion {
+                        Some(PendingCompletion::Return(v) | PendingCompletion::Throw(v)) => {
+                            Self::collect_value_roots(v, worklist);
+                        }
+                        Some(PendingCompletion::LoopControl(_)) | None => {}
+                    }
                 }
             }
             _ => {}
