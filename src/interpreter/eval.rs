@@ -901,6 +901,9 @@ impl Interpreter {
             Expression::Spread(_) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
             Expression::Yield(expr, delegate) => {
                 if *delegate {
+                    if self.in_async_generator_body {
+                        return self.eval_inline_async_yield_star(expr.as_deref(), env);
+                    }
                     let iterable = if let Some(e) = expr {
                         match self.eval_expr(e, env) {
                             Completion::Normal(v) => v,
@@ -8094,7 +8097,6 @@ impl Interpreter {
             self.bind_function_parameters(params, args, &func_env, has_simple_params)
         {
             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-            self.drain_microtasks();
             self.gc_unroot_frame(gc_frame);
             // A default-param expression may have called `__host_exit`
             // (issue #229): return abrupt so the caller unwinds.
@@ -8928,7 +8930,7 @@ impl Interpreter {
                     let outer_block =
                         std::mem::replace(&mut self.suspendable_dispose_block, isolated_block);
                     let result =
-                        self.exec_state_machine_body(state_body, &term_env, &state_machine);
+                        self.exec_state_machine_body(state_body, &term_env, &state_machine, false);
                     self.suspendable_dispose_block = outer_block;
                     self.in_state_machine = saved_in_state_machine;
                     if let Some(cursor) = self.parked_block_dispose.take() {

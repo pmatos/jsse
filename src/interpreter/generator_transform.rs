@@ -529,6 +529,12 @@ fn transform_generator_inner_opts(
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
         && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
+        && !body.iter().any(|s| {
+            stmt_contains_for_of_head(s, |f| {
+                f.is_await && !for_in_of_left_contains_suspension(&f.left)
+            })
+        })
+        && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
         && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
@@ -592,34 +598,38 @@ fn create_simple_machine(
 }
 
 fn stmt_contains_for_await(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::awaits_at_head)
+}
+
+fn stmt_contains_await_using_head(stmt: &Statement) -> bool {
+    stmt_contains_for_of_head(stmt, ForOfStatement::disposes_at_head)
+}
+
+fn stmt_contains_for_of_head(
+    stmt: &Statement,
+    head: impl Fn(&ForOfStatement) -> bool + Copy,
+) -> bool {
+    let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
-        Statement::ForOf(f) => f.awaits_at_head(),
-        Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
+        Statement::ForOf(f) => head(f),
+        Statement::Block(stmts) => stmts.iter().any(contains),
         Statement::If(i) => {
-            stmt_contains_for_await(&i.consequent)
-                || i.alternate
-                    .as_ref()
-                    .is_some_and(|s| stmt_contains_for_await(s))
+            contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
         }
-        Statement::While(w) => stmt_contains_for_await(&w.body),
-        Statement::DoWhile(d) => stmt_contains_for_await(&d.body),
-        Statement::For(f) => stmt_contains_for_await(&f.body),
-        Statement::ForIn(f) => stmt_contains_for_await(&f.body),
+        Statement::While(w) => contains(&w.body),
+        Statement::DoWhile(d) => contains(&d.body),
+        Statement::For(f) => contains(&f.body),
+        Statement::ForIn(f) => contains(&f.body),
         Statement::Try(t) => {
-            t.block.iter().any(stmt_contains_for_await)
+            t.block.iter().any(contains)
                 || t.handler
                     .as_ref()
-                    .is_some_and(|h| h.body.iter().any(stmt_contains_for_await))
-                || t.finalizer
-                    .as_ref()
-                    .is_some_and(|f| f.iter().any(stmt_contains_for_await))
+                    .is_some_and(|h| h.body.iter().any(contains))
+                || t.finalizer.as_ref().is_some_and(|f| f.iter().any(contains))
         }
-        Statement::Switch(s) => s
-            .cases
-            .iter()
-            .any(|c| c.consequent.iter().any(stmt_contains_for_await)),
-        Statement::Labeled(_, inner) => stmt_contains_for_await(inner),
-        Statement::With(_, s) => stmt_contains_for_await(s),
+        Statement::Switch(s) => s.cases.iter().any(|c| c.consequent.iter().any(contains)),
+        Statement::Labeled(_, inner) => contains(inner),
+        Statement::With(_, s) => contains(s),
         _ => false,
     }
 }
@@ -660,9 +670,15 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 }
 
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
-    if detect_for_await
-        && let Statement::ForOf(f) = stmt
-        && f.awaits_at_head()
+    // A `for await` head performs `Await(nextResult)` on every step
+    // (ForIn/OfBodyEvaluation) whether or not its body suspends, so it is a
+    // suspension point in any async context, generators included. A `yield`
+    // or `await` inside the head's own binding target still needs the
+    // tree-walker's inline replay, so such a loop is left native.
+    if let Statement::ForOf(f) = stmt
+        && ((is_async && f.disposes_at_head())
+            || (detect_for_await && f.awaits_at_head())
+            || (is_async && f.is_await && !for_in_of_left_contains_suspension(&f.left)))
     {
         return true;
     }
@@ -1213,74 +1229,38 @@ fn transform_yielding_expression(
         }
 
         Expression::Logical(op, left, right) => {
-            if expr_has_suspension(left, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("logical");
-                let left_binding = SentValueBindingKind::Variable(temp_var.clone());
-                transform_yielding_expression(left, ctx, usize::MAX, Some(left_binding));
+            let left_var = ctx.new_temp_var("logical");
+            bind_expression_to_temp(left, &left_var, ctx);
 
-                if expr_has_suspension(right, ctx.is_async) {
-                    let after_logical = ctx.new_state();
-                    let eval_right_state = ctx.new_state();
-
-                    let condition = match op {
-                        LogicalOp::And => Expression::Identifier(temp_var.clone()),
-                        LogicalOp::Or => Expression::Unary(
-                            UnaryOp::Not,
-                            ExprBox::new(Expression::Identifier(temp_var.clone())),
-                        ),
-                        LogicalOp::NullishCoalescing => Expression::Binary(
-                            BinaryOp::StrictNotEq,
-                            ExprBox::new(Expression::Identifier(temp_var.clone())),
-                            ExprBox::new(Expression::Literal(Literal::Null)),
-                        ),
-                    };
-
-                    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                        condition,
-                        true_state: eval_right_state,
-                        false_state: after_logical,
-                    });
-
-                    ctx.current_state_id = eval_right_state;
-                    transform_yielding_expression(right, ctx, after_logical, binding);
-                    ctx.finalize_current_state(StateTerminator::Goto(after_logical));
-
-                    ctx.current_state_id = after_logical;
-                } else {
-                    let combined = Expression::Logical(
-                        *op,
-                        ExprBox::new(Expression::Identifier(temp_var)),
-                        right.clone(),
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-            } else if expr_has_suspension(right, ctx.is_async) {
+            if expr_has_suspension(right, ctx.is_async) {
                 let after_logical = ctx.new_state();
                 let eval_right_state = ctx.new_state();
 
-                let condition = match op {
-                    LogicalOp::And => left.clone().into_expression(),
-                    LogicalOp::Or => Expression::Unary(UnaryOp::Not, left.clone()),
-                    LogicalOp::NullishCoalescing => Expression::Binary(
-                        BinaryOp::StrictNotEq,
-                        left.clone(),
-                        ExprBox::new(Expression::Literal(Literal::Null)),
-                    ),
-                };
-
+                let condition = short_circuit_continue_test(*op, &left_var);
                 ctx.finalize_current_state(StateTerminator::ConditionalGoto {
                     condition,
                     true_state: eval_right_state,
                     false_state: after_logical,
                 });
 
-                emit_expression_with_binding(left, &binding, ctx);
-
                 ctx.current_state_id = eval_right_state;
-                transform_yielding_expression(right, ctx, after_logical, binding);
+                transform_yielding_expression(
+                    right,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(left_var.clone())),
+                );
                 ctx.finalize_current_state(StateTerminator::Goto(after_logical));
 
                 ctx.current_state_id = after_logical;
+                emit_expression_with_binding(&Expression::Identifier(left_var), &binding, ctx);
+            } else {
+                let combined = Expression::Logical(
+                    *op,
+                    ExprBox::new(Expression::Identifier(left_var)),
+                    right.clone(),
+                );
+                emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
 
@@ -1365,22 +1345,46 @@ fn transform_yielding_expression(
         }
 
         Expression::Assign(op, left, right) => {
-            if expr_has_suspension(right, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("assign");
-                let right_binding = SentValueBindingKind::Variable(temp_var.clone());
-                transform_yielding_expression(right, ctx, usize::MAX, Some(right_binding));
-
-                let combined = Expression::Assign(
-                    *op,
-                    left.clone(),
-                    ExprBox::new(Expression::Identifier(temp_var)),
-                );
+            let right_suspends = expr_has_suspension(right, ctx.is_async);
+            let target = lower_reference_operand(left, right_suspends, ctx);
+            if !right_suspends {
+                let combined = Expression::Assign(*op, ExprBox::new(target), right.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
-            } else if expr_has_suspension(left, ctx.is_async) {
-                // LHS has suspension (e.g. c[await 9] = 1, or destructuring [x = yield] = vals)
-                // Pre-evaluate suspension points in LHS member expressions
-                let new_left = extract_lhs_suspensions(left, ctx);
-                let combined = Expression::Assign(*op, ExprBox::new(new_left), right.clone());
+            } else if let Some(logical_op) = op.logical_op() {
+                let store = Expression::Assign(
+                    AssignOp::Assign,
+                    ExprBox::new(target.clone()),
+                    right.clone(),
+                );
+                let combined =
+                    Expression::Logical(logical_op, ExprBox::new(target), ExprBox::new(store));
+                transform_yielding_expression(&combined, ctx, usize::MAX, binding);
+            } else {
+                let old_value = op
+                    .binary_op()
+                    .filter(|_| {
+                        matches!(target, Expression::Identifier(_) | Expression::Member(..))
+                    })
+                    .map(|binary_op| {
+                        let old_var = ctx.new_temp_var("assign_old");
+                        let old_binding = Some(SentValueBindingKind::Variable(old_var.clone()));
+                        emit_expression_with_binding(&target, &old_binding, ctx);
+                        (binary_op, old_var)
+                    });
+                let value_var = ctx.new_temp_var("assign");
+                bind_expression_to_temp(right, &value_var, ctx);
+                let mut value = Expression::Identifier(value_var);
+                let mut assign_op = *op;
+                if let Some((binary_op, old_var)) = old_value {
+                    value = Expression::Binary(
+                        binary_op,
+                        ExprBox::new(Expression::Identifier(old_var)),
+                        ExprBox::new(value),
+                    );
+                    assign_op = AssignOp::Assign;
+                }
+                let combined =
+                    Expression::Assign(assign_op, ExprBox::new(target), ExprBox::new(value));
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
@@ -1484,87 +1488,24 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&Expression::Class(class_expr), &binding, ctx);
         }
 
-        Expression::Member(obj, prop, _) => {
-            let mut temp_obj = obj.clone().into_expression();
-            if expr_has_suspension(obj, ctx.is_async) {
-                let tv = ctx.new_temp_var("mem_obj");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
-                temp_obj = Expression::Identifier(tv);
-            }
-            match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let tv = ctx.new_temp_var("mem_prop");
-                    let b = SentValueBindingKind::Variable(tv.clone());
-                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
-                    let combined = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
-                        PropSiteId::UNASSIGNED,
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-                _ => {
-                    let combined = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        prop.clone(),
-                        PropSiteId::UNASSIGNED,
-                    );
-                    emit_expression_with_binding(&combined, &binding, ctx);
-                }
-            }
+        Expression::Member(..) => {
+            let combined = lower_reference_operand(expr, false, ctx);
+            emit_expression_with_binding(&combined, &binding, ctx);
         }
 
         Expression::OptionalChain(base, chain) => {
-            let mut temp_base = base.clone().into_expression();
-            if expr_has_suspension(base, ctx.is_async) {
-                let tv = ctx.new_temp_var("oc_base");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(base, ctx, usize::MAX, Some(b));
-                temp_base = Expression::Identifier(tv);
-            }
             if expr_has_suspension(chain, ctx.is_async) {
-                let base_var = ctx.new_temp_var("oc_bv");
-                ctx.emit_statement(Statement::Variable(VariableDeclaration {
-                    kind: VarKind::Var,
-                    declarations: vec![VariableDeclarator {
-                        pattern: Pattern::Identifier(base_var.clone()),
-                        init: Some(temp_base),
-                    }],
-                }));
-                let after_oc = ctx.new_state();
-                let eval_chain_state = ctx.new_state();
-                let skip_state = ctx.new_state();
-                // temp != null catches both null and undefined via loose equality
-                let condition = Expression::Binary(
-                    BinaryOp::NotEq,
-                    ExprBox::new(Expression::Identifier(base_var.clone())),
-                    ExprBox::new(Expression::Literal(Literal::Null)),
-                );
-                ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                    condition,
-                    true_state: eval_chain_state,
-                    false_state: skip_state,
-                });
-                // Skip: result is undefined
-                ctx.current_state_id = skip_state;
-                emit_expression_with_binding(
-                    &Expression::Identifier("undefined".to_string()),
-                    &binding,
+                lower_optional_chain(
+                    base,
+                    chain,
+                    Expression::Identifier("undefined".to_string()),
+                    |regular| regular,
+                    binding,
                     ctx,
                 );
-                ctx.finalize_current_state(StateTerminator::Goto(after_oc));
-                // Eval chain: substitute base and transform as regular expression
-                ctx.current_state_id = eval_chain_state;
-                let regular = oc_chain_to_regular_expr(chain, &base_var);
-                if expr_has_suspension(&regular, ctx.is_async) {
-                    transform_yielding_expression(&regular, ctx, usize::MAX, binding);
-                } else {
-                    emit_expression_with_binding(&regular, &binding, ctx);
-                }
-                ctx.finalize_current_state(StateTerminator::Goto(after_oc));
-                ctx.current_state_id = after_oc;
             } else {
+                let temp_base = hoist_suspending_expr(base, "oc_base", ctx)
+                    .unwrap_or_else(|| base.clone().into_expression());
                 let combined = Expression::OptionalChain(ExprBox::new(temp_base), chain.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
@@ -1594,20 +1535,33 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Delete(inner) => {
-            let tv = ctx.new_temp_var("del");
-            let b = SentValueBindingKind::Variable(tv.clone());
-            transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Delete(ExprBox::new(Expression::Identifier(tv)));
-            emit_expression_with_binding(&combined, &binding, ctx);
-        }
+        Expression::Delete(inner) => match &**inner {
+            Expression::Member(..) => {
+                let target = lower_reference_operand(inner, false, ctx);
+                let combined = Expression::Delete(ExprBox::new(target));
+                emit_expression_with_binding(&combined, &binding, ctx);
+            }
+            Expression::OptionalChain(base, chain) => lower_optional_chain(
+                base,
+                chain,
+                Expression::Literal(Literal::Boolean(true)),
+                |regular| Expression::Delete(ExprBox::new(regular)),
+                binding,
+                ctx,
+            ),
+            other => {
+                transform_yielding_expression(other, ctx, usize::MAX, None);
+                emit_expression_with_binding(
+                    &Expression::Literal(Literal::Boolean(true)),
+                    &binding,
+                    ctx,
+                );
+            }
+        },
 
         Expression::Update(op, prefix, inner) => {
-            let tv = ctx.new_temp_var("upd");
-            let b = SentValueBindingKind::Variable(tv.clone());
-            transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined =
-                Expression::Update(*op, *prefix, ExprBox::new(Expression::Identifier(tv)));
+            let target = lower_reference_operand(inner, false, ctx);
+            let combined = Expression::Update(*op, *prefix, ExprBox::new(target));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1748,42 +1702,11 @@ fn transform_call_expression(
     binding: Option<SentValueBindingKind>,
     ctx: &mut TransformContext,
 ) {
-    let mut temp_callee = callee.clone();
-    if expr_has_suspension(callee, ctx.is_async) {
-        if let Expression::Member(obj, prop, _) = callee {
-            let mut temp_obj = obj.clone().into_expression();
-            if expr_has_suspension(obj, ctx.is_async) {
-                let tv = ctx.new_temp_var("call_obj");
-                let b = SentValueBindingKind::Variable(tv.clone());
-                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
-                temp_obj = Expression::Identifier(tv);
-            }
-            match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let tv = ctx.new_temp_var("call_prop");
-                    let b = SentValueBindingKind::Variable(tv.clone());
-                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
-                    temp_callee = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        MemberProperty::Computed(ExprBox::new(Expression::Identifier(tv))),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-                _ => {
-                    temp_callee = Expression::Member(
-                        ExprBox::new(temp_obj),
-                        prop.clone(),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-            }
-        } else {
-            let temp_var = ctx.new_temp_var("call_callee");
-            let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
-            transform_yielding_expression(callee, ctx, usize::MAX, Some(callee_binding));
-            temp_callee = Expression::Identifier(temp_var);
-        }
-    }
+    let temp_callee = if matches!(callee, Expression::Member(..)) {
+        lower_reference_operand(callee, false, ctx)
+    } else {
+        hoist_suspending_expr(callee, "call_callee", ctx).unwrap_or_else(|| callee.clone())
+    };
 
     let mut temp_args = Vec::new();
     for (i, arg) in args.iter().enumerate() {
@@ -1855,41 +1778,274 @@ fn emit_expression_with_binding(
     }
 }
 
-/// Extract suspension points from assignment LHS expressions (e.g. `c[await 9]`).
-/// Transforms `await` sub-expressions into temp vars via state machine yields,
-/// returning a clean LHS expression without suspensions.
-fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Expression {
-    match expr {
-        Expression::Member(obj, prop, _) => {
-            let new_obj = if expr_has_suspension(obj, ctx.is_async) {
-                let temp = ctx.new_temp_var("lhs_obj");
+/// Evaluate `expr` into the temp `var`, suspending first if it contains a
+/// suspension point.
+fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformContext) {
+    let binding = Some(SentValueBindingKind::Variable(var.to_string()));
+    if expr_has_suspension(expr, ctx.is_async) {
+        transform_yielding_expression(expr, ctx, usize::MAX, binding);
+    } else {
+        emit_expression_with_binding(expr, &binding, ctx);
+    }
+}
+
+fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(Statement::Variable(VariableDeclaration {
+        kind,
+        declarations: vec![VariableDeclarator {
+            pattern,
+            init: Some(Expression::Identifier(source.to_string())),
+        }],
+    }));
+}
+
+fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContext) {
+    ctx.emit_statement(Statement::Expression(Expression::Assign(
+        AssignOp::Assign,
+        ExprBox::new(Expression::Identifier(temp.to_string())),
+        ExprBox::new(value),
+    )));
+}
+
+/// Property read of a pattern key off the destructuring source, standing in
+/// for the `GetV` of `KeyedBindingInitialization`.
+fn pattern_key_read(source: &str, key: &PropertyKey) -> Expression {
+    let key_expr = match key {
+        PropertyKey::Identifier(name) => {
+            Expression::Literal(Literal::String(name.encode_utf16().collect()))
+        }
+        PropertyKey::String(units) => Expression::Literal(Literal::String(units.clone())),
+        PropertyKey::Number(n) => Expression::Literal(Literal::Number(*n)),
+        PropertyKey::Computed(e) => e.clone().into_expression(),
+        PropertyKey::Private(_) => unreachable!("private names are not pattern keys"),
+    };
+    Expression::Member(
+        ExprBox::new(Expression::Identifier(source.to_string())),
+        MemberProperty::Computed(ExprBox::new(key_expr)),
+        PropSiteId::UNASSIGNED,
+    )
+}
+
+/// Binds `pattern` from the value held in temp `source`, suspending at every
+/// `await` the pattern reaches. Only the parts of a pattern that reach an
+/// `await` are broken up; everything else is bound by the tree-walker through
+/// a sub-pattern, so naming, TDZ and nested-pattern semantics are unchanged.
+///
+/// For an object pattern this follows `KeyedBindingInitialization`: the
+/// source is coerced once, then each property in source order evaluates its
+/// computed key, performs exactly one `GetV`, and evaluates its default only
+/// when that value is `undefined` (a present property costs no extra tick).
+/// Callers only pass patterns `pattern_needs_lowering` accepts.
+fn lower_pattern_binding(
+    kind: VarKind,
+    pattern: &Pattern,
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let Pattern::Object(props) = pattern.clone() else {
+        emit_pattern_binding(kind, pattern.clone(), source, ctx);
+        return;
+    };
+    if !pattern_contains_suspension(pattern) {
+        emit_pattern_binding(kind, pattern.clone(), source, ctx);
+        return;
+    }
+    emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
+    for prop in props {
+        match prop {
+            ObjectPatternProperty::KeyValue(key, value) => {
+                lower_pattern_property(kind, key, value, source, ctx);
+            }
+            other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
+        }
+    }
+}
+
+fn lower_pattern_property(
+    kind: VarKind,
+    key: PropertyKey,
+    value: Pattern,
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let key = match key {
+        PropertyKey::Computed(e) if expr_has_suspension(&e, ctx.is_async) => {
+            let key_temp = ctx.new_temp_var("dstr_key");
+            transform_yielding_expression(
+                &e,
+                ctx,
+                usize::MAX,
+                Some(SentValueBindingKind::Variable(key_temp.clone())),
+            );
+            PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp)))
+        }
+        other => other,
+    };
+    if !pattern_contains_suspension(&value) {
+        emit_pattern_binding(
+            kind,
+            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)]),
+            source,
+            ctx,
+        );
+        return;
+    }
+
+    let value_temp = ctx.new_temp_var("dstr_val");
+    emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+    let target = match value {
+        Pattern::Assign(target, default) => {
+            let default_state = ctx.new_state();
+            let join_state = ctx.new_state();
+            ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+                condition: Expression::Binary(
+                    BinaryOp::StrictEq,
+                    ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
+                        value_temp.clone(),
+                    )))),
+                    ExprBox::new(Expression::Literal(Literal::String(
+                        "undefined".encode_utf16().collect(),
+                    ))),
+                ),
+                true_state: default_state,
+                false_state: join_state,
+            });
+            ctx.current_state_id = default_state;
+            if expr_has_suspension(&default, ctx.is_async) {
                 transform_yielding_expression(
-                    obj,
+                    &default,
                     ctx,
                     usize::MAX,
-                    Some(SentValueBindingKind::Variable(temp.clone())),
+                    Some(SentValueBindingKind::Variable(value_temp.clone())),
                 );
-                Expression::Identifier(temp)
             } else {
-                obj.clone().into_expression()
-            };
-            let new_prop = match prop {
-                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
-                    let temp = ctx.new_temp_var("lhs_comp");
-                    transform_yielding_expression(
-                        e,
-                        ctx,
-                        usize::MAX,
-                        Some(SentValueBindingKind::Variable(temp.clone())),
-                    );
-                    MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
-                }
-                other => other.clone(),
-            };
-            Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
+                emit_temp_assignment(&value_temp, default.into_expression(), ctx);
+            }
+            ctx.finalize_current_state(StateTerminator::Goto(join_state));
+            ctx.current_state_id = join_state;
+            *target
         }
-        _ => expr.clone(),
+        other => other,
+    };
+    lower_pattern_binding(kind, &target, &value_temp, ctx);
+}
+
+/// `var === null || var === void 0` — true exactly when `var` is undefined or
+/// null (unlike `== null`, false for `document.all`-style objects).
+fn nullish_test(var: &str) -> Expression {
+    let is = |rhs: Expression| {
+        Expression::Binary(
+            BinaryOp::StrictEq,
+            ExprBox::new(Expression::Identifier(var.to_string())),
+            ExprBox::new(rhs),
+        )
+    };
+    Expression::Logical(
+        LogicalOp::Or,
+        ExprBox::new(is(Expression::Literal(Literal::Null))),
+        ExprBox::new(is(Expression::Void(ExprBox::new(Expression::Literal(
+            Literal::Number(0.0),
+        ))))),
+    )
+}
+
+/// The condition under which `var <op> rhs` goes on to evaluate `rhs`.
+fn short_circuit_continue_test(op: LogicalOp, var: &str) -> Expression {
+    match op {
+        LogicalOp::And => Expression::Identifier(var.to_string()),
+        LogicalOp::Or => Expression::Unary(
+            UnaryOp::Not,
+            ExprBox::new(Expression::Identifier(var.to_string())),
+        ),
+        LogicalOp::NullishCoalescing => nullish_test(var),
     }
+}
+
+/// Lower an optional chain whose chain part suspends: the base is evaluated
+/// once into a temp, a nullish base yields `skip_value`, and otherwise the chain
+/// runs as a regular expression on that temp, passed through `wrap`.
+fn lower_optional_chain(
+    base: &Expression,
+    chain: &Expression,
+    skip_value: Expression,
+    wrap: impl FnOnce(Expression) -> Expression,
+    binding: Option<SentValueBindingKind>,
+    ctx: &mut TransformContext,
+) {
+    let base_var = ctx.new_temp_var("oc_bv");
+    bind_expression_to_temp(base, &base_var, ctx);
+    let after_oc = ctx.new_state();
+    let eval_chain_state = ctx.new_state();
+    let skip_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+        condition: nullish_test(&base_var),
+        true_state: skip_state,
+        false_state: eval_chain_state,
+    });
+    ctx.current_state_id = skip_state;
+    emit_expression_with_binding(&skip_value, &binding, ctx);
+    ctx.finalize_current_state(StateTerminator::Goto(after_oc));
+    ctx.current_state_id = eval_chain_state;
+    let regular = wrap(oc_chain_to_regular_expr(chain, &base_var));
+    if expr_has_suspension(&regular, ctx.is_async) {
+        transform_yielding_expression(&regular, ctx, usize::MAX, binding);
+    } else {
+        emit_expression_with_binding(&regular, &binding, ctx);
+    }
+    ctx.finalize_current_state(StateTerminator::Goto(after_oc));
+    ctx.current_state_id = after_oc;
+}
+
+/// An operand whose value cannot change across a suspension, so capturing it
+/// into another temp would only add a copy.
+fn is_settled_operand(expr: &Expression, ctx: &TransformContext) -> bool {
+    match expr {
+        Expression::Super | Expression::Literal(_) => true,
+        Expression::Identifier(name) => ctx.generated_temps.contains(name),
+        _ => false,
+    }
+}
+
+/// Lower the suspension points out of a member Reference (the operand of
+/// `delete`, `++`/`--`, a call callee, or an assignment target) while keeping it
+/// a Reference: the base value and then the raw computed key are captured in
+/// temps, in source order, and the returned member expression is suspension-free.
+///
+/// The base and key are captured only when the key or base suspends, or when
+/// `capture_all` is set (the caller is about to suspend on something else, e.g.
+/// an assignment's right-hand side, so both must be evaluated first). Other
+/// expressions are returned unchanged.
+fn lower_reference_operand(
+    expr: &Expression,
+    capture_all: bool,
+    ctx: &mut TransformContext,
+) -> Expression {
+    let Expression::Member(obj, prop, _) = expr else {
+        return expr.clone();
+    };
+    let key_suspends =
+        matches!(prop, MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async));
+    if !capture_all && !key_suspends && !expr_has_suspension(obj, ctx.is_async) {
+        return expr.clone();
+    }
+    let new_obj = if is_settled_operand(obj, ctx) {
+        obj.clone().into_expression()
+    } else {
+        let temp = ctx.new_temp_var("ref_obj");
+        bind_expression_to_temp(obj, &temp, ctx);
+        Expression::Identifier(temp)
+    };
+    let new_prop = match prop {
+        MemberProperty::Computed(e)
+            if key_suspends || (capture_all && !is_settled_operand(e, ctx)) =>
+        {
+            let temp = ctx.new_temp_var("ref_key");
+            bind_expression_to_temp(e, &temp, ctx);
+            MemberProperty::Computed(ExprBox::new(Expression::Identifier(temp)))
+        }
+        other => other.clone(),
+    };
+    Expression::Member(ExprBox::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
 }
 
 fn transform_variable_declaration(
@@ -1898,7 +2054,22 @@ fn transform_variable_declaration(
     _after_state: usize,
 ) {
     for declarator in &decl.declarations {
-        if let Some(init) = &declarator.init {
+        if let Some(init) = &declarator.init
+            && pattern_needs_lowering(&declarator.pattern)
+        {
+            let source = ctx.new_temp_var("dstr_src");
+            if expr_has_suspension(init, ctx.is_async) {
+                transform_yielding_expression(
+                    init,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(source.clone())),
+                );
+            } else {
+                emit_temp_assignment(&source, init.clone(), ctx);
+            }
+            lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
+        } else if let Some(init) = &declarator.init {
             if expr_has_suspension(init, ctx.is_async) {
                 let binding = match &declarator.pattern {
                     Pattern::Identifier(name) => {
@@ -3530,5 +3701,111 @@ mod tests {
                 .any(|s| matches!(s.terminator, StateTerminator::ForOfHead { .. })),
             "expected a ForOfHead terminator"
         );
+    }
+
+    fn async_machine(body_src: &str) -> GeneratorStateMachine {
+        let body = parse_fn_body(&format!("async function f() {{ {body_src} }}"));
+        transform_async_function(&body, &[])
+    }
+
+    fn count_terminators(
+        sm: &GeneratorStateMachine,
+        is_kind: impl Fn(&StateTerminator) -> bool,
+    ) -> usize {
+        sm.states.iter().filter(|s| is_kind(&s.terminator)).count()
+    }
+
+    fn state_reads_property_of_source(state: &GeneratorState) -> bool {
+        state.body.as_slice().iter().any(|stmt| {
+            matches!(
+                stmt,
+                Statement::Expression(Expression::Assign(_, _, rhs))
+                    if matches!(&**rhs, Expression::Member(..))
+            )
+        })
+    }
+
+    #[test]
+    fn test_awaiting_default_lowers_to_conditional_await_state() {
+        let sm = async_machine("var { a = await 1 } = {}; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1,
+            "the default's await is a real Await state"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ConditionalGoto { .. }
+            )),
+            1,
+            "the default only runs when the property is undefined"
+        );
+        let reader = sm
+            .states
+            .iter()
+            .find(|s| state_reads_property_of_source(s))
+            .expect("a state reads the property once");
+        assert!(
+            !matches!(reader.terminator, StateTerminator::Await { .. }),
+            "the property read must not share a state with the await"
+        );
+    }
+
+    #[test]
+    fn test_present_property_pattern_without_await_takes_simple_machine() {
+        let sm = async_machine("var { a = 1 } = {}; let [b = 2] = []; a;");
+
+        assert_eq!(sm.states.len(), 1);
+        assert!(sm.temp_vars.is_empty());
+    }
+
+    #[test]
+    fn test_awaiting_computed_key_is_lowered_at_its_own_position() {
+        let sm = async_machine("var { a, [await k]: b } = o;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1
+        );
+        let first_await = sm
+            .states
+            .iter()
+            .position(|s| matches!(s.terminator, StateTerminator::Await { .. }))
+            .expect("an await state");
+        let a_bound_before_await = sm.states[..=first_await].iter().any(|s| {
+            s.body.as_slice().iter().any(|stmt| match stmt {
+                Statement::Variable(v) => v.declarations.iter().any(|d| {
+                    matches!(&d.pattern, Pattern::Object(props) if props.iter().any(|p| matches!(p,
+                        ObjectPatternProperty::Shorthand(n) if n == "a")))
+                }),
+                _ => false,
+            })
+        });
+        assert!(
+            a_bound_before_await,
+            "the earlier property is read before the key's await suspends"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_pattern_shapes_stay_on_the_tree_walker() {
+        for src in [
+            "var [a = await 1] = [];",
+            "var { a = await 1, ...rest } = {};",
+            "var { x: [a = await 1] } = {};",
+        ] {
+            let sm = async_machine(src);
+            assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
+        }
+    }
+
+    #[test]
+    fn test_async_generator_yield_only_pattern_is_not_lowered() {
+        let body = parse_fn_body("async function* g() { var { a = yield 1 } = {}; }");
+        let sm = transform_async_generator(&body, &[]);
+
+        assert_eq!(sm.states.len(), 1);
     }
 }
