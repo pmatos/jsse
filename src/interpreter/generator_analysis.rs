@@ -781,6 +781,17 @@ pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
     }
 }
 
+pub(crate) fn for_in_of_left_contains_suspension(left: &ForInOfLeft) -> bool {
+    match left {
+        ForInOfLeft::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| pattern_contains_suspension(&d.pattern)),
+        ForInOfLeft::Pattern(p) => pattern_contains_suspension(p),
+        ForInOfLeft::Expression(e) => expr_contains_suspension(e),
+    }
+}
+
 pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
     match expr {
         Expression::Yield(_, _) | Expression::Await(_) => true,

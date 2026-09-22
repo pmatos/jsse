@@ -37,6 +37,10 @@ inner result as `undefined`.
 
 ## Known boundaries (unchanged, not fixed here)
 
+_Superseded in part by ADR-2026-09-22-2326: a delegated `.return(v)` now Awaits
+`v` first (a rejection reaches the delegate's `throw`), and a `.return()` that
+ends a delegation disposes the generator's resources._
+
 - A rejected inner result still rejects the request and completes the
   generator instead of throwing into the generator's own `try`/`catch`.
 - `finally` blocks are not run when `.return()` unwinds a delegated `yield*`.
