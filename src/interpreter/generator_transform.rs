@@ -611,7 +611,7 @@ fn stmt_contains_for_of_head(
 ) -> bool {
     let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
-        Statement::ForOf(f) => head(f),
+        Statement::ForOf(f) => head(f) || contains(&f.body),
         Statement::Block(stmts) => stmts.iter().any(contains),
         Statement::If(i) => {
             contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
@@ -675,11 +675,11 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
     // suspension point in any async context, generators included. A `yield`
     // or `await` inside the head's own binding target still needs the
     // tree-walker's inline replay, so such a loop is left native.
-    if let Statement::ForOf(f) = stmt
-        && ((is_async && f.disposes_at_head())
+    if stmt_contains_for_of_head(stmt, |f| {
+        (is_async && f.disposes_at_head())
             || (detect_for_await && f.awaits_at_head())
-            || (is_async && f.is_await && !for_in_of_left_contains_suspension(&f.left)))
-    {
+            || (is_async && f.is_await && !for_in_of_left_contains_suspension(&f.left))
+    }) {
         return true;
     }
     if is_async {
@@ -3384,6 +3384,79 @@ mod tests {
                 .any(|stmt| matches!(stmt, Statement::ClassDeclaration(_)))
         });
         assert!(class_emitted);
+    }
+
+    fn for_await_stmt(body: Statement) -> Statement {
+        Statement::ForOf(ForOfStatement {
+            left: ForInOfLeft::Pattern(Pattern::Identifier("y".to_string())),
+            right: Expression::Identifier("ys".to_string()),
+            body: Box::new(body),
+            is_await: true,
+        })
+    }
+
+    fn for_of_stmt(body: Statement) -> Statement {
+        Statement::ForOf(ForOfStatement {
+            left: ForInOfLeft::Pattern(Pattern::Identifier("x".to_string())),
+            right: Expression::Identifier("xs".to_string()),
+            body: Box::new(body),
+            is_await: false,
+        })
+    }
+
+    #[test]
+    fn test_stmt_contains_for_await_recurses_into_outer_loop_body() {
+        // `for (const x of xs) { for await (const y of ys) {} }` — the outer
+        // loop's own head doesn't await, but its body contains one.
+        let outer = for_of_stmt(for_await_stmt(Statement::Block(vec![])));
+        assert!(stmt_contains_for_await(&outer));
+    }
+
+    fn try_wrapping(body: Statement) -> Statement {
+        Statement::Try(TryStatement {
+            block: vec![body],
+            handler: None,
+            finalizer: Some(vec![]),
+        })
+    }
+
+    fn if_wrapping(body: Statement) -> Statement {
+        Statement::If(IfStatement {
+            test: Expression::Literal(Literal::Boolean(true)),
+            consequent: Box::new(body),
+            alternate: None,
+        })
+    }
+
+    fn block_wrapping(body: Statement) -> Statement {
+        Statement::Block(vec![body])
+    }
+
+    #[test]
+    fn test_stmt_has_suspension_sees_for_await_nested_in_try_if_block() {
+        let inner = for_await_stmt(Statement::Block(vec![]));
+        for wrap in [try_wrapping, if_wrapping, block_wrapping] {
+            let stmt = wrap(inner.clone());
+            assert!(
+                stmt_has_suspension(&stmt, true, true),
+                "expected suspension for {stmt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stmt_has_suspension_sees_for_await_nested_for_async_generator() {
+        // Async generator shape: `detect_for_await = false`, disjunct 3
+        // (`f.is_await && !for_in_of_left_contains_suspension`) must still fire
+        // through the same container recursion.
+        let inner = for_await_stmt(Statement::Block(vec![]));
+        for wrap in [try_wrapping, if_wrapping, block_wrapping] {
+            let stmt = wrap(inner.clone());
+            assert!(
+                stmt_has_suspension(&stmt, true, false),
+                "expected suspension for {stmt:?}"
+            );
+        }
     }
 
     #[test]
