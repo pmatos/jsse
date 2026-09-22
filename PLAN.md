@@ -24,9 +24,9 @@ earlier attempt, committed on this branch before this run started:
   with the two new hungry shapes and re-sized the existing additive/logical
   cases and the leak-check probe for the new debug `EVAL_DEPTH_LIMIT`).
 
-I re-ran slice 5 (the full regression pass this plan calls for) in this
-session before writing this status note, rather than trusting the commit
-messages alone:
+A prior attempt (same workspace, same branch) reported re-running slice 5
+(the full regression pass this plan calls for) before writing this status
+note originally:
 
 - `cargo test --release`: 650 passed, 0 failed, 1 ignored.
 - `cargo test` (debug): 650 passed, 0 failed, 1 ignored.
@@ -42,20 +42,38 @@ messages alone:
   `tests/recursion-limit-interpreter.js`) plus the one-line stale-comment fix
   in `src/parser/mod.rs` that §5/§9 anticipated — nothing stray.
 
-Everything this plan asked for is implemented and green. While implementing
-slice 4, the prior attempt found a distinct, narrower native-stack gap in the
-*parser* on very deep flat/member-chain expressions and filed it separately
-rather than folding it into this PR: jsse#612 (open), out of scope here.
+**This run (a second planning-stage re-entry into the same reused
+workspace) did not re-execute that regression pass** — re-running it here
+would be redundant work in a stage that is not supposed to touch production
+code or tests, and the run-instructions' memory-budget guidance argues
+against an unnecessary rebuild. What this run *did* verify directly, from
+primary sources, before trusting the above:
+
+- `src/interpreter/mod.rs` carries the named `_DEBUG`/`_RELEASE` constant
+  pairs at exactly §4's values (`CALL_DEPTH_REARM_LIMIT` 120/3,000,
+  `CALL_DEPTH_SOFT_LIMIT` 160/4,000, `CALL_DEPTH_HARD_LIMIT` 200/5,000,
+  `EVAL_DEPTH_LIMIT` 2,000/50,000) plus the `const _: () = assert!(...)`
+  coupling check evaluated over both arms — read directly via `grep`/`Read`
+  in this session.
+- `PROXY_CHAIN_DEPTH_LIMIT` is untouched, and `src/parser/mod.rs`'s
+  forward-reference comment now points at #607 (`src/parser/mod.rs:99-101`).
+- `git status --short` is clean, `HEAD` is `30b50eb0` on top of the five
+  commits listed above, the branch has no upstream and `git ls-remote
+  --heads origin <this branch>` returns empty, and `gh pr list --head <this
+  branch> --state all` returns empty — no PR exists.
+- There is no stray `EVIDENCE.md` in this workspace (checked directly); the
+  prior attempt's note about one is stale and is corrected here rather than
+  repeated.
+
+While implementing slice 4, the prior attempt found a distinct, narrower
+native-stack gap in the *parser* on very deep flat/member-chain expressions
+and filed it separately rather than folding it into this PR: jsse#612
+(open), out of scope here.
 
 **What is not yet done, and is not something the planning stage can do:**
-the branch has never been pushed to `origin` and no PR exists yet (confirmed
-via `git ls-remote --heads origin <this branch>` and `gh pr list --head
-<this branch> --state all`, both empty). Closing out this issue only needs
-the implementation stage to push this branch and open the PR against
-`main` — no further source or test changes are needed. An unrelated stray
-`EVIDENCE.md` (untracked, from a separate blocked `/simplify` run against
-this same reused workspace that predates a PR existing) is left in place
-for that stage to see and is not part of this plan's file list.
+the branch has never been pushed to `origin` and no PR exists yet. Closing
+out this issue only needs the implementation stage to push this branch and
+open the PR against `main` — no further source or test changes are needed.
 
 ## 1. Problem restated
 
