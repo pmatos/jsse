@@ -2671,6 +2671,33 @@ fn transform_for_in_of_loop(
     let head_state = ctx.new_state();
     let body_state = ctx.new_state();
 
+    // `ForOfHead` binds its per-iteration `left` with a single, non-suspending
+    // runtime call, the same constraint `EnterCatch` has on its `param` (see
+    // the comment there). A `Variable` head whose pattern's default contains
+    // `yield` desugars the same way: `ForOfInit`/`ForOfHead` see a trivial
+    // `Pattern::Identifier`, and the real pattern becomes a synthesized
+    // `let <pattern> = <temp>;` prepended to the loop body, where the
+    // ordinary `Statement::Variable` lowering picks it up. Left as a residual
+    // for the (destructuring-assignment) `ForInOfLeft::Pattern` head, and for
+    // the head's own `for (let x of [x])`-style self-referential TDZ check
+    // against the *original* names, both out of scope for #727.
+    let mut left_param_temp: Option<(VarKind, Pattern, String)> = None;
+    let left: ForInOfLeft = match left {
+        ForInOfLeft::Variable(decl) => {
+            let mut decl = decl.clone();
+            if let Some(d) = decl.declarations.first_mut()
+                && pattern_contains_yield(&d.pattern)
+            {
+                let temp = ctx.new_temp_var("for_head_param");
+                left_param_temp = Some((decl.kind, d.pattern.clone(), temp.clone()));
+                d.pattern = Pattern::Identifier(temp);
+            }
+            ForInOfLeft::Variable(decl)
+        }
+        other => other.clone(),
+    };
+    let left = &left;
+
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
 
@@ -2716,13 +2743,26 @@ fn transform_for_in_of_loop(
 
     ctx.current_state_id = body_state;
     ctx.for_of_depth += 1;
-    if stmt_has_suspension(body, ctx.is_async, ctx.detect_for_await) {
-        transform_yielding_statement(body, ctx, head_state);
+    let effective_body = match left_param_temp {
+        Some((kind, orig_pattern, temp)) => Statement::Block(vec![
+            Statement::Variable(VariableDeclaration {
+                kind,
+                declarations: vec![VariableDeclarator {
+                    pattern: orig_pattern,
+                    init: Some(Expression::Identifier(temp)),
+                }],
+            }),
+            body.clone(),
+        ]),
+        None => body.clone(),
+    };
+    if stmt_has_suspension(&effective_body, ctx.is_async, ctx.detect_for_await) {
+        transform_yielding_statement(&effective_body, ctx, head_state);
         if ctx.current_state_id != head_state {
             ctx.finalize_current_state(StateTerminator::Goto(head_state));
         }
     } else {
-        ctx.emit_statement(body.clone());
+        ctx.emit_statement(effective_body);
         ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
     ctx.for_of_depth -= 1;
@@ -2770,11 +2810,29 @@ fn transform_try_statement(
 
     let try_body_state = ctx.new_state();
 
+    // `EnterCatch` binds its `param` with a single, non-suspending runtime
+    // call (it needs the not-yet-known thrown value, so it can't go through
+    // the ordinary per-statement transform pipeline). A pattern whose default
+    // contains `yield` can't run through that call: desugar to a trivial
+    // `Pattern::Identifier` for `EnterCatch` itself, and re-home the real
+    // pattern as a synthesized `let <param> = <temp>;` prepended to the catch
+    // body, where the ordinary `Statement::Variable` lowering (already tested
+    // for #727) picks it up — `lower_pattern_binding` for a supported shape,
+    // native replay confined to `catch_body_state` for one that isn't.
+    let mut catch_param_temp: Option<(Pattern, String)> = None;
     let catch_info = try_stmt.handler.as_ref().map(|h| {
         let catch_entry_state = ctx.new_state();
+        let param = match &h.param {
+            Some(p) if pattern_contains_yield(p) => {
+                let temp = ctx.new_temp_var("catch_param");
+                catch_param_temp = Some((p.clone(), temp.clone()));
+                Some(Pattern::Identifier(temp))
+            }
+            other => other.clone(),
+        };
         CatchInfo {
             state: catch_entry_state,
-            param: h.param.clone(),
+            param,
         }
     });
 
@@ -2844,7 +2902,21 @@ fn transform_try_statement(
         ctx.current_state_id = catch_body_state;
         ctx.scope_depth += 1;
         if let Some(handler) = &try_stmt.handler {
-            transform_clause_body(&handler.body, ctx, clause_completion_state);
+            if let Some((orig_param, temp)) = catch_param_temp.take() {
+                let synth_decl = Statement::Variable(VariableDeclaration {
+                    kind: VarKind::Let,
+                    declarations: vec![VariableDeclarator {
+                        pattern: orig_param,
+                        init: Some(Expression::Identifier(temp)),
+                    }],
+                });
+                let body_with_param: Vec<Statement> = std::iter::once(synth_decl)
+                    .chain(handler.body.iter().cloned())
+                    .collect();
+                transform_clause_body(&body_with_param, ctx, clause_completion_state);
+            } else {
+                transform_clause_body(&handler.body, ctx, clause_completion_state);
+            }
         }
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));

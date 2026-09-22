@@ -6,14 +6,23 @@ description: >
   inside a loop that must itself become suspend-aware.
 esid: sec-runtime-semantics-iteratorbindinginitialization
 info: |
-  SingleNameBinding : BindingIdentifier Initializer_opt
+  SingleNameBinding : BindingIdentifier Initializer?
 
-  1. Let bindingId be StringValue of BindingIdentifier.
+  1. Let bindingId be the StringValue of BindingIdentifier.
   2. Let lhs be ? ResolveBinding(bindingId, environment).
-  3. Let v be ? GetValue(v).
-  4. If Initializer is present and v is undefined, then
-     a. Let defaultValue be ? Evaluation of Initializer.
-     b. Let v be ? GetValue(defaultValue).
+  3. Let v be undefined.
+  4. If iteratorRecord.[[Done]] is false, then
+     a. Let next be ? IteratorStepValue(iteratorRecord).
+     b. If next is not done, then
+       i. Set v to next.
+  5. If Initializer is present and v is undefined, then
+     a. If IsAnonymousFunctionDefinition(Initializer) is true, then
+       i. Set v to ? NamedEvaluation of Initializer with argument bindingId.
+     b. Else,
+       i. Let defaultValue be ? Evaluation of Initializer.
+       ii. Set v to ? GetValue(defaultValue).
+  6. If environment is undefined, return ? PutValue(lhs, v).
+  7. Return ? InitializeReferencedBinding(lhs, v).
 
   Nothing in this algorithm restricts a `yield` expression from appearing as
   the Initializer of a SingleNameBinding, so a generator must suspend at it

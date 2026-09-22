@@ -1466,6 +1466,16 @@ impl Interpreter {
                 let mut error: Option<JsValue> = None;
                 let mut yield_val: Option<JsValue> = None;
 
+                let unroot_iter = |s: &mut Self| {
+                    if let Some(o) = iterator
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                        && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
+                    {
+                        s.gc_temp_roots.remove(pos);
+                    }
+                };
+
                 for elem in elements {
                     if let Some(elem) = elem {
                         match elem {
@@ -1503,7 +1513,10 @@ impl Interpreter {
                                         yield_val = Some(v);
                                         break;
                                     }
-                                    other => return other,
+                                    other => {
+                                        unroot_iter(self);
+                                        return other;
+                                    }
                                 }
                             }
                             ArrayPatternElement::Rest(p) => {
@@ -1539,7 +1552,10 @@ impl Interpreter {
                                         Completion::Normal(_) => {}
                                         Completion::Throw(e) => error = Some(e),
                                         Completion::Yield(v) => yield_val = Some(v),
-                                        other => return other,
+                                        other => {
+                                            unroot_iter(self);
+                                            return other;
+                                        }
                                     }
                                 }
                                 break;
@@ -1562,15 +1578,6 @@ impl Interpreter {
                         }
                     }
                 }
-                let unroot_iter = |s: &mut Self| {
-                    if let Some(o) = iterator
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                        && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
-                    {
-                        s.gc_temp_roots.remove(pos);
-                    }
-                };
                 // A `yield` mid-pattern suspends the generator; this attempt
                 // at binding is abandoned (the tree-walker replays the whole
                 // statement from the top on resume, per the InlineYield
@@ -2165,11 +2172,11 @@ impl Interpreter {
                             } else {
                                 &for_env
                             };
-                            if let Some(d) = decl.declarations.first()
-                                && let Completion::Throw(e) =
-                                    self.bind_pattern(&d.pattern, key_val, kind, bind_env)
-                            {
-                                break 'unroot Completion::Throw(e);
+                            if let Some(d) = decl.declarations.first() {
+                                match self.bind_pattern(&d.pattern, key_val, kind, bind_env) {
+                                    Completion::Normal(_) => {}
+                                    other => break 'unroot other,
+                                }
                             }
                         }
                         ForInOfLeft::Pattern(pat) => match pat {
@@ -2187,10 +2194,9 @@ impl Interpreter {
                                 }
                             }
                             _ => {
-                                if let Completion::Throw(e) =
-                                    self.bind_pattern(pat, key_val, BindingKind::Let, &for_env)
-                                {
-                                    break 'unroot Completion::Throw(e);
+                                match self.bind_pattern(pat, key_val, BindingKind::Let, &for_env) {
+                                    Completion::Normal(_) => {}
+                                    other => break 'unroot other,
                                 }
                             }
                         },
@@ -2387,12 +2393,15 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     }
-                    if let Some(d) = decl.declarations.first()
-                        && let Completion::Throw(e) =
-                            self.bind_pattern(&d.pattern, val, kind, bind_env)
-                    {
-                        self.iterator_close(iterator, e.clone());
-                        return Completion::Throw(e);
+                    if let Some(d) = decl.declarations.first() {
+                        match self.bind_pattern(&d.pattern, val, kind, bind_env) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                self.iterator_close(iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
+                        }
                     }
                 }
                 ForInOfLeft::Pattern(pat) => match self.assign_to_for_pattern(pat, val, env) {
@@ -2514,10 +2523,9 @@ impl Interpreter {
                         if matches!(param, Pattern::Identifier(_)) {
                             catch_env.borrow_mut().is_simple_catch_scope = true;
                         }
-                        if let Completion::Throw(e) =
-                            self.bind_pattern(param, val, BindingKind::Let, &catch_env)
-                        {
-                            return Completion::Throw(e);
+                        match self.bind_pattern(param, val, BindingKind::Let, &catch_env) {
+                            Completion::Normal(_) => {}
+                            other => return other,
                         }
                     }
                     let catch_block_env = Environment::new(Some(catch_env.clone()));

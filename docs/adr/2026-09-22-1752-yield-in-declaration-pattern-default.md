@@ -119,6 +119,74 @@ Completion::Throw(e) = ...`) — those call sites' own suspension detection is
 issue #726's territory, out of scope here, and the catch-binding sites
 already dropped `Throw` too before this change (#739's finding).
 
+## Post-review follow-up: catch-param and for-in/of head defaults
+
+The initial PR left `catch ({a = yield 1})` and `for (var {a = yield 1} of
+x)` / `for (var {a = yield 1} in x)` discarding non-`Throw` completions,
+described below as "matching pre-existing behavior." An automated review
+pass on the PR verified that claim empirically and found it false in two
+ways:
+
+- **A statement whose *only* suspension is in a catch-param or
+  for-in/of-head pattern default still runs opaquely on the tree-walker**
+  (`contains_yield`/`contains_suspension` never looked at `handler.param` or
+  a loop's own head pattern) — on this path `bind_pattern`'s already-correct
+  `Completion::Yield` propagation (from the main fix above) reaches the
+  generator runtime's existing InlineYield fallback and suspends/resumes
+  correctly. Widening the analysis to *also* flag this case would have been
+  counterproductive: it would have routed a working case into the driver's
+  dedicated (and, until this follow-up, still-broken) `EnterCatch`/`ForOfHead`
+  terminators instead — so `contains_yield`/`contains_suspension` were left
+  untouched.
+- **Once *any other* suspension elsewhere in the same `try`/`catch` or loop
+  already forces the compiled state machine**, the driver's `EnterCatch` /
+  `ForOfHead` terminators bind the pattern with a single non-suspending
+  runtime call and discard whatever `bind_pattern` returns beyond `Throw`.
+  A `Completion::Yield` from a catch-param or head-pattern default is
+  silently dropped, leaving the binding stuck in TDZ — reachable, and
+  crashing with `ReferenceError: Cannot access 'a' before initialization`,
+  e.g. `function* g(){ try{ yield 0; throw{} }catch({a=yield 1}){return a} }`.
+
+**Fix:** in `generator_transform.rs`, `transform_try_statement` and
+`transform_for_in_of_loop` now desugar a yield-containing catch param or
+`ForInOfLeft::Variable` head pattern *at transform time*: the terminator
+(`EnterCatch`/`ForOfHead`) binds a trivial synthesized
+`Pattern::Identifier($tmp)` instead (never suspends, so the existing
+runtime dispatch needs no changes), and the real pattern becomes a
+synthesized `let <pattern> = $tmp;` prepended to the catch body / loop body,
+which flows through the ordinary `Statement::Variable` lowering
+(`lower_pattern_binding` for the object-pattern shapes the tests use — a
+real state-machine yield, no replay at all — or native InlineYield replay,
+confined to the catch/loop body, for shapes `pattern_lowering_supported`
+declines). Confirmed via a counting-iterator test that the underlying
+for-of iterator is stepped exactly once per element even when its own head
+pattern suspends per iteration — no restart, unlike the pre-existing #725
+gap for array patterns in a plain declaration.
+
+**Left as residual, not attempted here:**
+- `ForInOfLeft::Pattern` (destructuring-*assignment* form, `for ({a=yield 1}
+  of x)` with no `var`/`let`/`const`) — uses a different lowering pipeline
+  (`lower_pattern_assignment`) this follow-up didn't touch.
+- A loop whose iterable expression self-references the head binding under
+  TDZ (`for (let {a=yield 1} of [a]) {}` should `ReferenceError`) — the
+  desugar's synthesized `let` no longer contributes the *original* name to
+  the transform-time TDZ pre-declaration (`ForOfInit`'s `left` field, read by
+  `for_of_head_tdz_env`), which now only knows about `$tmp`. Exceedingly
+  narrow (self-reference *and* a yield-only pattern default in the same
+  head), not covered by any test.
+- Multi-element loops whose head pattern default suspends and whose pattern
+  shape is *not* lowerable (array patterns) still hit the pre-existing #725
+  replay-restarts-the-iterator gap — now reachable via `yield` in a loop
+  head too, not just via a plain declaration. Not new: same root cause,
+  same tracking issue.
+- `for (var {a = await 1} = ...)` and `catch ({a = await 1})` /
+  `for (var {a = await 1} of x)`: issue #726 tracks the equivalent `await`
+  gap, predating this PR. The desugar above is gated on
+  `pattern_contains_yield` specifically and leaves `await`-only patterns
+  untouched — #726 remains open, though its own proposed fix (a
+  strip-to-temp rewrite) is essentially what this follow-up implemented for
+  `yield`.
+
 ## What this still does not cover
 
 - **Full array-pattern iterator-safety under suspension** (#725): the
@@ -130,15 +198,19 @@ already dropped `Throw` too before this change (#739's finding).
   `n === 2` — the source expression is evaluated twice — a pre-existing,
   accepted limitation of the InlineYield replay fallback, not a regression
   introduced here.
-- **`catch ({a = yield 1})` and `for (var {a = yield 1} of x)` /
-  `for (var {a = yield 1} in x)`** (#726): `bind_pattern`'s signature change
-  mechanically flows through these call sites, but they still discard
-  non-`Throw` completions, matching pre-existing behavior. Not claimed fixed
-  here.
 - **`for (var {a = yield 1} = {};;)` initializers**: `contains_yield`'s and
   `analyze_statement`'s `Statement::For` arms still only look at a `var`
   init's own `init` expression, not its pattern, matching the equivalent gap
   ADR-2026-09-21-2143 already documents for `await`. Not touched here.
 - **Object rest beside a suspending sibling** (`{a = yield 1, ...rest}`):
-  unchanged, `pattern_lowering_supported` still declines it regardless of
-  suspension kind.
+  `pattern_lowering_supported` still declines it (a `Rest` property always
+  fails its per-property check), so it stays on the InlineYield replay
+  fallback. Confirmed by an automated review pass to be worse than a
+  side-effect-count discrepancy: replaying `bind_pattern`'s tree-walking
+  evaluation of the *whole* object pattern re-invokes a non-idempotent
+  property getter, and if the getter's second call no longer returns
+  `undefined`, the default (`yield 1`) is skipped entirely on replay — the
+  generator resumes bound to the getter's second-call result, silently
+  discarding the value sent to `.next()`. Root cause is the same "replay
+  isn't safe for non-idempotent code" class as #725, one property-access
+  layer deeper; not attempted here.
