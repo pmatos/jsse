@@ -950,20 +950,25 @@ pub(crate) fn pattern_contains_suspension(pattern: &Pattern) -> bool {
 /// True when the state-machine transform can lower every part of the pattern
 /// that reaches a suspension into suspension states. Object patterns can; the
 /// rest of the shapes (array patterns, an object rest beside a suspending
-/// sibling, member-expression targets) are still evaluated by the tree-walker.
-fn pattern_lowering_supported(pattern: &Pattern) -> bool {
+/// sibling) are still evaluated by the tree-walker. A member-expression
+/// target is only supported for the assignment form (`allow_member_expression`)
+/// — a declaration can never bind into one.
+fn pattern_lowering_supported(pattern: &Pattern, allow_member_expression: bool) -> bool {
     if !pattern_contains_suspension(pattern) {
         return true;
     }
     match pattern {
         Pattern::Object(props) => props.iter().all(|prop| match prop {
-            ObjectPatternProperty::KeyValue(_, value) => pattern_lowering_supported(value),
+            ObjectPatternProperty::KeyValue(_, value) => {
+                pattern_lowering_supported(value, allow_member_expression)
+            }
             ObjectPatternProperty::Shorthand(_) => true,
             ObjectPatternProperty::Rest(_) => false,
         }),
-        Pattern::Assign(inner, _) => pattern_lowering_supported(inner),
+        Pattern::Assign(inner, _) => pattern_lowering_supported(inner, allow_member_expression),
         Pattern::Identifier(_) => true,
-        Pattern::Array(_) | Pattern::Rest(_) | Pattern::MemberExpression(_) => false,
+        Pattern::MemberExpression(_) => allow_member_expression,
+        Pattern::Array(_) | Pattern::Rest(_) => false,
     }
 }
 
@@ -971,7 +976,16 @@ fn pattern_lowering_supported(pattern: &Pattern) -> bool {
 /// states (see `lower_pattern_binding`). An `await` triggers the lowering;
 /// yield-only patterns stay on the replay path.
 pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
-    pattern_contains_await(pattern) && pattern_lowering_supported(pattern)
+    pattern_contains_await(pattern) && pattern_lowering_supported(pattern, false)
+}
+
+/// True for a destructuring-assignment pattern (`[..] = ..` / `{..} = ..`)
+/// whose suspensions the transform lowers into states (see
+/// `lower_pattern_assignment`). Unlike the declaration form, a
+/// member-expression target (`o[await k]`) is supported: assignment can
+/// target one, a declaration cannot.
+pub(crate) fn pattern_needs_assignment_lowering(pattern: &Pattern) -> bool {
+    pattern_contains_await(pattern) && pattern_lowering_supported(pattern, true)
 }
 
 /// Checks if a statement is, or is reached through `if`/labeled statements from,

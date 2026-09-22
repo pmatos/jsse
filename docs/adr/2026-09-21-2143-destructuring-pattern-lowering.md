@@ -62,6 +62,12 @@ per property, in source order:
   temps (`$dstr_src`, `$dstr_key`, `$dstr_val`) live in the function-env
   `temp_vars`, already GC-rooted as locals.
 
+_Superseded in part by ADR-2026-09-22-1815: destructuring-**assignment**
+forms (`[a = await 1] = []`, `({a = await 1} = {})`) no longer hang — the
+async-function `await`-to-`yield` rewrite no longer touches a
+destructuring-assignment left side, and object assignment patterns get the
+same lowering this ADR gives declaration patterns._
+
 ## What this change does not cover
 
 Each of these is unchanged behavior, tracked as a follow-up (#724 assignment forms,
@@ -79,10 +85,9 @@ declaration pattern):
   `for (var {a = await 1} of …)`): the driver binds these in
   `EnterCatch`/`ForOfHead` where no state boundary exists.
 - **Destructuring *assignment* forms** (`[a = await 1] = []`,
-  `({a = await 1} = {})`): the left side is an `Expression` already rewritten to
-  `Yield`, and `extract_lhs_suspensions` only handles `Member`, so the emitted
-  statement keeps a `Yield` the async-function driver has no inline path for —
-  it hangs.
+  `({a = await 1} = {})`): fixed by ADR-2026-09-22-1815 — object patterns now
+  get the same lowering, array patterns fall back to the blocking-tree-walker
+  path below instead of hanging.
 - **`for (var {a = await 1} = …;;)` initializers.**
 - **`yield` in a declaration pattern** (`var {a = yield 1} = {}`), in sync and
   async generators, which silently never yields.

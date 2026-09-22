@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
+use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
 
@@ -1320,6 +1321,25 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
+        Expression::Assign(op, left, right)
+            if *op == AssignOp::Assign
+                && matches!(
+                    left.as_ref(),
+                    Expression::Array(..) | Expression::Object(..)
+                )
+                && expr_to_pattern(left.clone().into_expression())
+                    .is_ok_and(|p| pattern_needs_assignment_lowering(&p)) =>
+        {
+            let pattern = expr_to_pattern(left.clone().into_expression())
+                .expect("checked by the guard above");
+            let source = ctx.new_temp_var("dstr_src");
+            bind_expression_to_temp(right, &source, ctx);
+            lower_pattern_assignment(&pattern, &source, ctx);
+            // The assignment expression's completion value is the RHS value
+            // (`rval` in DestructuringAssignmentEvaluation), already held in `source`.
+            emit_expression_with_binding(&Expression::Identifier(source), &binding, ctx);
+        }
+
         Expression::Assign(op, left, right) => {
             let right_suspends = expr_has_suspension(right, ctx.is_async);
             let target = lower_reference_operand(left, right_suspends, ctx);
@@ -1827,6 +1847,42 @@ fn lower_pattern_binding(
     }
 }
 
+/// Evaluate `default` into `value_temp` only when it currently holds
+/// `undefined` — the "if Initializer is present and v is undefined" step
+/// shared by `KeyedBindingInitialization` and
+/// `KeyedDestructuringAssignmentEvaluation`. Used by both the declaration and
+/// assignment pattern-property lowerings.
+fn lower_conditional_default(value_temp: &str, default: &Expression, ctx: &mut TransformContext) {
+    let default_state = ctx.new_state();
+    let join_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+        condition: Expression::Binary(
+            BinaryOp::StrictEq,
+            ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
+                value_temp.to_string(),
+            )))),
+            ExprBox::new(Expression::Literal(Literal::String(
+                "undefined".encode_utf16().collect(),
+            ))),
+        ),
+        true_state: default_state,
+        false_state: join_state,
+    });
+    ctx.current_state_id = default_state;
+    if expr_has_suspension(default, ctx.is_async) {
+        transform_yielding_expression(
+            default,
+            ctx,
+            usize::MAX,
+            Some(SentValueBindingKind::Variable(value_temp.to_string())),
+        );
+    } else {
+        emit_temp_assignment(value_temp, default.clone(), ctx);
+    }
+    ctx.finalize_current_state(StateTerminator::Goto(join_state));
+    ctx.current_state_id = join_state;
+}
+
 fn lower_pattern_property(
     kind: VarKind,
     key: PropertyKey,
@@ -1861,39 +1917,111 @@ fn lower_pattern_property(
     emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
     let target = match value {
         Pattern::Assign(target, default) => {
-            let default_state = ctx.new_state();
-            let join_state = ctx.new_state();
-            ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                condition: Expression::Binary(
-                    BinaryOp::StrictEq,
-                    ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
-                        value_temp.clone(),
-                    )))),
-                    ExprBox::new(Expression::Literal(Literal::String(
-                        "undefined".encode_utf16().collect(),
-                    ))),
-                ),
-                true_state: default_state,
-                false_state: join_state,
-            });
-            ctx.current_state_id = default_state;
-            if expr_has_suspension(&default, ctx.is_async) {
-                transform_yielding_expression(
-                    &default,
-                    ctx,
-                    usize::MAX,
-                    Some(SentValueBindingKind::Variable(value_temp.clone())),
-                );
-            } else {
-                emit_temp_assignment(&value_temp, default.into_expression(), ctx);
-            }
-            ctx.finalize_current_state(StateTerminator::Goto(join_state));
-            ctx.current_state_id = join_state;
+            lower_conditional_default(&value_temp, &default, ctx);
             *target
         }
         other => other,
     };
     lower_pattern_binding(kind, &target, &value_temp, ctx);
+}
+
+/// Assignment-form twin of `lower_pattern_binding`: an `ObjectAssignmentPattern`
+/// left side of `=`. A leaf resolves to a plain assignment expression
+/// statement instead of a `Statement::Variable`, and a
+/// `Pattern::MemberExpression` leaf's reference is captured (base and
+/// computed key, in source order) before the property read, per the
+/// `KeyedDestructuringAssignmentEvaluation` step order. Callers only pass
+/// patterns `pattern_needs_assignment_lowering` accepts.
+fn lower_pattern_assignment(pattern: &Pattern, source: &str, ctx: &mut TransformContext) {
+    let Pattern::Object(props) = pattern.clone() else {
+        emit_pattern_assignment(pattern.clone(), source, ctx);
+        return;
+    };
+    if !pattern_contains_suspension(pattern) {
+        emit_pattern_assignment(pattern.clone(), source, ctx);
+        return;
+    }
+    // RequireObjectCoercible(source), same as the declaration form's `<kind> {} = src`.
+    emit_pattern_assignment(Pattern::Object(Vec::new()), source, ctx);
+    for prop in props {
+        match prop {
+            ObjectPatternProperty::KeyValue(key, value) => {
+                lower_pattern_assignment_property(key, value, source, ctx);
+            }
+            other => emit_pattern_assignment(Pattern::Object(vec![other]), source, ctx),
+        }
+    }
+}
+
+fn emit_pattern_assignment(pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(Statement::Expression(Expression::Assign(
+        AssignOp::Assign,
+        ExprBox::new(pattern_to_expr(pattern)),
+        ExprBox::new(Expression::Identifier(source.to_string())),
+    )));
+}
+
+fn lower_pattern_assignment_property(
+    key: PropertyKey,
+    value: Pattern,
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let key = match key {
+        PropertyKey::Computed(e) if expr_has_suspension(&e, ctx.is_async) => {
+            let key_temp = ctx.new_temp_var("dstr_key");
+            transform_yielding_expression(
+                &e,
+                ctx,
+                usize::MAX,
+                Some(SentValueBindingKind::Variable(key_temp.clone())),
+            );
+            PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp)))
+        }
+        other => other,
+    };
+    if !pattern_contains_suspension(&value) {
+        emit_pattern_assignment(
+            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)]),
+            source,
+            ctx,
+        );
+        return;
+    }
+
+    let (target, default) = match value {
+        Pattern::Assign(target, default) => (*target, Some(default)),
+        other => (other, None),
+    };
+
+    // A member-expression target is not a pattern: `KeyedDestructuringAssignmentEvaluation`
+    // evaluates its reference (base, then computed key) before the property read, so a
+    // suspension inside the read or a later default must not reorder around it.
+    if let Pattern::MemberExpression(member_expr) = &target {
+        let captured_ref = lower_reference_operand(member_expr, true, ctx);
+        let value_temp = ctx.new_temp_var("dstr_val");
+        emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+        if let Some(default) = default {
+            lower_conditional_default(&value_temp, &default, ctx);
+        }
+        ctx.emit_statement(Statement::Expression(Expression::Assign(
+            AssignOp::Assign,
+            ExprBox::new(captured_ref),
+            ExprBox::new(Expression::Identifier(value_temp)),
+        )));
+        return;
+    }
+
+    let value_temp = ctx.new_temp_var("dstr_val");
+    emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+    let target = match default {
+        Some(default) => {
+            lower_conditional_default(&value_temp, &default, ctx);
+            target
+        }
+        None => target,
+    };
+    lower_pattern_assignment(&target, &value_temp, ctx);
 }
 
 /// `var === null || var === void 0` — true exactly when `var` is undefined or
@@ -3145,11 +3273,20 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Update(op, prefix, e) => {
             Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)))
         }
-        Expression::Assign(op, l, r) => Expression::Assign(
-            *op,
-            ExprBox::new(rewrite_expr(l)),
-            ExprBox::new(rewrite_expr(r)),
-        ),
+        Expression::Assign(op, l, r) => {
+            // A destructuring-assignment cover-grammar LHS (`[..] = ..` / `{..} = ..`)
+            // is not itself a suspension boundary the tree-walker can split; leave any
+            // `await` inside it untouched, same as a `Pattern` already does, and let
+            // pattern lowering (or the blocking-`await_value` fallback) handle it.
+            let new_l = if *op == AssignOp::Assign
+                && matches!(l.as_ref(), Expression::Array(..) | Expression::Object(..))
+            {
+                l.clone()
+            } else {
+                ExprBox::new(rewrite_expr(l))
+            };
+            Expression::Assign(*op, new_l, ExprBox::new(rewrite_expr(r)))
+        }
         Expression::Conditional(t, c, a) => Expression::Conditional(
             ExprBox::new(rewrite_expr(t)),
             ExprBox::new(rewrite_expr(c)),
@@ -3856,5 +3993,36 @@ mod tests {
         let sm = transform_async_generator(&body, &[]);
 
         assert_eq!(sm.states.len(), 1);
+    }
+
+    fn stmt_contains_yield(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Expression(e) => expr_contains_yield(e),
+            Statement::Return(Some(e)) => expr_contains_yield(e),
+            Statement::Variable(decl) => decl
+                .declarations
+                .iter()
+                .any(|d| d.init.as_ref().is_some_and(expr_contains_yield)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn test_destructuring_assignment_await_is_not_rewritten_to_yield() {
+        // Regression for issue #724: an `await` inside a destructuring-assignment
+        // cover-grammar LHS (`[..] = ..` / `{..} = ..`) must never be turned into a
+        // bare `Yield` node, because a plain async function's driver has no inline
+        // path to service one outside a real suspension state.
+        for src in ["[a = await 1] = [];", "({a = await 1} = {});"] {
+            let sm = async_machine(src);
+            let has_bare_yield = sm
+                .states
+                .iter()
+                .any(|s| s.body.as_slice().iter().any(stmt_contains_yield));
+            assert!(
+                !has_bare_yield,
+                "destructuring-assignment await must survive as Await, not Yield: {src}"
+            );
+        }
     }
 }
