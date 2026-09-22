@@ -5089,13 +5089,30 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest = args.get(index..).unwrap_or(&[]).to_vec();
                 let rest_array = self.create_array(rest);
-                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                self.bind_pattern_or_throw(inner, rest_array, BindingKind::Var, func_env)?;
                 break;
             }
             let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
-            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
+            self.bind_pattern_or_throw(param, value, BindingKind::Var, func_env)?;
         }
         Ok(())
+    }
+
+    /// Like `bind_pattern`, but for call sites where the pattern is known to
+    /// never contain `yield` (e.g. function parameters, an early SyntaxError
+    /// in generator formals) so only `Throw` is reachable, and the caller
+    /// wants plain `Result` propagation via `?`.
+    fn bind_pattern_or_throw(
+        &mut self,
+        pat: &Pattern,
+        val: JsValue,
+        kind: BindingKind,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        match self.bind_pattern(pat, val, kind, env) {
+            Completion::Throw(e) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     pub(crate) fn call_function(
@@ -9508,7 +9525,7 @@ impl Interpreter {
                                     }
                                 }
                                 if let Some(d) = decl.declarations.first() {
-                                    self.bind_pattern(
+                                    match self.bind_pattern(
                                         &d.pattern,
                                         value,
                                         match decl.kind {
@@ -9519,7 +9536,10 @@ impl Interpreter {
                                             | VarKind::AwaitUsing => BindingKind::Const,
                                         },
                                         &bind_env,
-                                    )
+                                    ) {
+                                        Completion::Throw(e) => Err(e),
+                                        _ => Ok(()),
+                                    }
                                 } else {
                                     Ok(())
                                 }

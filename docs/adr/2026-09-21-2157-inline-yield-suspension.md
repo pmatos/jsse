@@ -75,8 +75,12 @@ suspension points.
 - `generator_context` is a single interpreter-wide slot: an inline yield inside
   a generator that is itself advanced from another generator's replay clobbers
   the outer context.
-- `var/let/const {a = yield 1} = {}` and `catch ({a = yield 1})` do not reach the
-  fallback — they swallow the yield.
+- `var/let/const {a = yield 1} = {}`, `catch ({a = yield 1})`, and
+  `for (var {a = yield 1} of x)` now reach the fallback correctly (#727:
+  `bind_pattern` propagates `Completion::Yield` instead of swallowing it,
+  and the catch-param/for-head cases are desugared to a temp at transform
+  time — see ADR-2026-09-22-1752). `await`-only patterns in the same
+  positions remain issue #726's territory, not touched by #727.
 - `x[yield 1] = yield 2` evaluates the right-hand suspension first.
 - The boundaries listed in ADR-2026-09-21-2300 (a rejected inner result completes
   the generator instead of throwing into its own `try`/`catch`; `finally` blocks

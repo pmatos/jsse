@@ -1775,14 +1775,40 @@ fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformCont
     }
 }
 
-fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
-    ctx.emit_statement(Statement::Variable(VariableDeclaration {
+fn synth_pattern_let_decl(kind: VarKind, pattern: Pattern, source: &str) -> Statement {
+    Statement::Variable(VariableDeclaration {
         kind,
         declarations: vec![VariableDeclarator {
             pattern,
             init: Some(Expression::Identifier(source.to_string())),
         }],
-    }));
+    })
+}
+
+fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(synth_pattern_let_decl(kind, pattern, source));
+}
+
+/// If `pattern` contains a yield-only default, computed key, or
+/// member-expression target, returns a trivial `Pattern::Identifier(temp)`
+/// to bind in its place plus a synthesized `let <pattern> = <temp>;` that
+/// re-homes the real binding -- for call sites (`EnterCatch`/`ForOfHead`)
+/// that bind their pattern via a single non-suspending runtime call and so
+/// can't run a yield-containing pattern through it directly (see #727).
+/// Returns `None` when `pattern` has no yield, so the caller can skip the
+/// rewrite (and its clones) entirely in the common case.
+fn hoist_yield_pattern(
+    pattern: &Pattern,
+    kind: VarKind,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> Option<(Pattern, Statement)> {
+    if !pattern_contains_yield(pattern) {
+        return None;
+    }
+    let temp = ctx.new_temp_var(prefix);
+    let synth = synth_pattern_let_decl(kind, pattern.clone(), &temp);
+    Some((Pattern::Identifier(temp), synth))
 }
 
 fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContext) {
@@ -2671,6 +2697,31 @@ fn transform_for_in_of_loop(
     let head_state = ctx.new_state();
     let body_state = ctx.new_state();
 
+    // `ForOfHead` binds its per-iteration `left` with a single, non-suspending
+    // runtime call, the same constraint `EnterCatch` has on its `param` (see
+    // the comment there). A `Variable` head whose pattern's default contains
+    // `yield` desugars the same way: `ForOfInit`/`ForOfHead` see a trivial
+    // `Pattern::Identifier`, and the real pattern becomes a synthesized
+    // `let <pattern> = <temp>;` prepended to the loop body, where the
+    // ordinary `Statement::Variable` lowering picks it up. Left as a residual
+    // for the (destructuring-assignment) `ForInOfLeft::Pattern` head, and for
+    // the head's own `for (let x of [x])`-style self-referential TDZ check
+    // against the *original* names, both out of scope for #727.
+    let mut left_param_synth: Option<Statement> = None;
+    let rewritten_left = if let ForInOfLeft::Variable(decl) = left
+        && let Some(d) = decl.declarations.first()
+        && let Some((new_pattern, synth)) =
+            hoist_yield_pattern(&d.pattern, decl.kind, "for_head_param", ctx)
+    {
+        let mut decl = decl.clone();
+        decl.declarations[0].pattern = new_pattern;
+        left_param_synth = Some(synth);
+        Some(ForInOfLeft::Variable(decl))
+    } else {
+        None
+    };
+    let left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
+
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
 
@@ -2716,13 +2767,21 @@ fn transform_for_in_of_loop(
 
     ctx.current_state_id = body_state;
     ctx.for_of_depth += 1;
-    if stmt_has_suspension(body, ctx.is_async, ctx.detect_for_await) {
-        transform_yielding_statement(body, ctx, head_state);
+    let synthesized_body;
+    let effective_body: &Statement = match left_param_synth {
+        Some(synth) => {
+            synthesized_body = Statement::Block(vec![synth, body.clone()]);
+            &synthesized_body
+        }
+        None => body,
+    };
+    if stmt_has_suspension(effective_body, ctx.is_async, ctx.detect_for_await) {
+        transform_yielding_statement(effective_body, ctx, head_state);
         if ctx.current_state_id != head_state {
             ctx.finalize_current_state(StateTerminator::Goto(head_state));
         }
     } else {
-        ctx.emit_statement(body.clone());
+        ctx.emit_statement(effective_body.clone());
         ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
     ctx.for_of_depth -= 1;
@@ -2770,11 +2829,30 @@ fn transform_try_statement(
 
     let try_body_state = ctx.new_state();
 
+    // `EnterCatch` binds its `param` with a single, non-suspending runtime
+    // call (it needs the not-yet-known thrown value, so it can't go through
+    // the ordinary per-statement transform pipeline). A pattern whose default
+    // contains `yield` can't run through that call: desugar to a trivial
+    // `Pattern::Identifier` for `EnterCatch` itself, and re-home the real
+    // pattern as a synthesized `let <param> = <temp>;` prepended to the catch
+    // body, where the ordinary `Statement::Variable` lowering (already tested
+    // for #727) picks it up — `lower_pattern_binding` for a supported shape,
+    // native replay confined to `catch_body_state` for one that isn't.
+    let mut catch_param_synth: Option<Statement> = None;
     let catch_info = try_stmt.handler.as_ref().map(|h| {
         let catch_entry_state = ctx.new_state();
+        let param = if let Some(p) = &h.param
+            && let Some((new_pattern, synth)) =
+                hoist_yield_pattern(p, VarKind::Let, "catch_param", ctx)
+        {
+            catch_param_synth = Some(synth);
+            Some(new_pattern)
+        } else {
+            h.param.clone()
+        };
         CatchInfo {
             state: catch_entry_state,
-            param: h.param.clone(),
+            param,
         }
     });
 
@@ -2844,7 +2922,14 @@ fn transform_try_statement(
         ctx.current_state_id = catch_body_state;
         ctx.scope_depth += 1;
         if let Some(handler) = &try_stmt.handler {
-            transform_clause_body(&handler.body, ctx, clause_completion_state);
+            if let Some(synth) = catch_param_synth.take() {
+                let body_with_param: Vec<Statement> = std::iter::once(synth)
+                    .chain(handler.body.iter().cloned())
+                    .collect();
+                transform_clause_body(&body_with_param, ctx, clause_completion_state);
+            } else {
+                transform_clause_body(&handler.body, ctx, clause_completion_state);
+            }
         }
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
@@ -3394,6 +3479,27 @@ mod tests {
 
         assert_eq!(sm.num_yields, 0);
         assert_eq!(sm.states.len(), 1);
+    }
+
+    #[test]
+    fn yield_in_declaration_pattern_default_is_lowered() {
+        let program =
+            crate::parser::Parser::new("function* g(){ var {a = yield 1} = {}; return a }")
+                .expect("parser init")
+                .parse_program()
+                .expect("parse program");
+        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
+            panic!("expected a function declaration");
+        };
+        let sm = transform_generator(f.body.as_slice(), &f.params);
+        assert_eq!(sm.num_yields, 1);
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::Yield { .. })),
+            "expected a Yield terminator state, got {:#?}",
+            sm.states
+        );
     }
 
     #[test]
@@ -3988,11 +4094,17 @@ mod tests {
     }
 
     #[test]
-    fn test_async_generator_yield_only_pattern_is_not_lowered() {
+    fn test_async_generator_yield_only_object_pattern_is_lowered() {
         let body = parse_fn_body("async function* g() { var { a = yield 1 } = {}; }");
         let sm = transform_async_generator(&body, &[]);
 
-        assert_eq!(sm.states.len(), 1);
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::Yield { .. })),
+            "expected a Yield terminator state, got {:#?}",
+            sm.states
+        );
     }
 
     fn stmt_contains_yield(stmt: &Statement) -> bool {

@@ -142,6 +142,7 @@ fn analyze_statement(
                 if let Some(init) = &declarator.init {
                     analyze_expression(init, analysis, ctx, true);
                 }
+                analyze_pattern_expressions(&declarator.pattern, analysis, ctx);
             }
         }
 
@@ -663,6 +664,51 @@ fn collect_pattern_vars(
     }
 }
 
+/// Walks the expressions embedded in a binding pattern -- computed keys,
+/// member-expression targets, and default (`Initializer`) values -- feeding
+/// each to `analyze_expression` so a `yield` reachable only through a pattern
+/// (e.g. `var { a = yield 1 } = {}`) still registers a `YieldPoint`.
+/// `collect_pattern_vars` only gathers bound names and deliberately ignores
+/// these expressions, so this walk is a separate pass over the same pattern.
+fn analyze_pattern_expressions(
+    pattern: &Pattern,
+    analysis: &mut GeneratorAnalysis,
+    ctx: &mut AnalysisContext,
+) {
+    match pattern {
+        Pattern::Identifier(_) => {}
+        Pattern::Array(elements) => {
+            for elem in elements.iter().flatten() {
+                match elem {
+                    ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                        analyze_pattern_expressions(p, analysis, ctx);
+                    }
+                }
+            }
+        }
+        Pattern::Object(props) => {
+            for prop in props {
+                match prop {
+                    ObjectPatternProperty::KeyValue(key, value) => {
+                        if let PropertyKey::Computed(key_expr) = key {
+                            analyze_expression(key_expr, analysis, ctx, true);
+                        }
+                        analyze_pattern_expressions(value, analysis, ctx);
+                    }
+                    ObjectPatternProperty::Shorthand(_) => {}
+                    ObjectPatternProperty::Rest(p) => analyze_pattern_expressions(p, analysis, ctx),
+                }
+            }
+        }
+        Pattern::Assign(inner, default) => {
+            analyze_pattern_expressions(inner, analysis, ctx);
+            analyze_expression(default, analysis, ctx, true);
+        }
+        Pattern::Rest(inner) => analyze_pattern_expressions(inner, analysis, ctx),
+        Pattern::MemberExpression(e) => analyze_expression(e, analysis, ctx, true),
+    }
+}
+
 pub(crate) fn contains_yield(stmt: &Statement) -> bool {
     match stmt {
         Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {
@@ -670,10 +716,9 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
         }
         Statement::Expression(expr) => expr_contains_yield(expr),
         Statement::Block(stmts) => stmts.iter().any(contains_yield),
-        Statement::Variable(decl) => decl
-            .declarations
-            .iter()
-            .any(|d| d.init.as_ref().is_some_and(expr_contains_yield)),
+        Statement::Variable(decl) => decl.declarations.iter().any(|d| {
+            d.init.as_ref().is_some_and(expr_contains_yield) || pattern_contains_yield(&d.pattern)
+        }),
         Statement::If(if_stmt) => {
             expr_contains_yield(&if_stmt.test)
                 || contains_yield(&if_stmt.consequent)
@@ -941,6 +986,13 @@ pub(crate) fn pattern_contains_await(pattern: &Pattern) -> bool {
     pattern_any_expr(pattern, &expr_contains_await)
 }
 
+/// Like `pattern_contains_await`, but for `yield`: true when a default
+/// initializer, computed key, or member-expression target in the pattern
+/// contains a `yield` (in its raw, un-rewritten form).
+pub(crate) fn pattern_contains_yield(pattern: &Pattern) -> bool {
+    pattern_any_expr(pattern, &expr_contains_yield)
+}
+
 /// Like `pattern_contains_await`, but a `yield` counts too. Once a pattern is
 /// lowered, its yields and awaits are suspended alike.
 pub(crate) fn pattern_contains_suspension(pattern: &Pattern) -> bool {
@@ -973,10 +1025,11 @@ fn pattern_lowering_supported(pattern: &Pattern, allow_member_expression: bool) 
 }
 
 /// True for a declaration pattern whose suspensions the transform lowers into
-/// states (see `lower_pattern_binding`). An `await` triggers the lowering;
-/// yield-only patterns stay on the replay path.
+/// states (see `lower_pattern_binding`). Both `await` and `yield` trigger the
+/// lowering; a pattern shape it can't lower (array patterns, an object rest
+/// beside a suspending sibling) stays on the replay path regardless.
 pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
-    pattern_contains_await(pattern) && pattern_lowering_supported(pattern, false)
+    pattern_contains_suspension(pattern) && pattern_lowering_supported(pattern, false)
 }
 
 /// True for a destructuring-assignment pattern (`[..] = ..` / `{..} = ..`)
@@ -1152,6 +1205,16 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         Statement::Variable(decl) => decl.declarations.iter().any(|d| {
             d.init.as_ref().is_some_and(expr_contains_suspension)
                 || pattern_needs_lowering(&d.pattern)
+                // A raw `yield` in a pattern shape lowering doesn't support
+                // (array patterns) still needs the *enclosing* container
+                // (loop/if/etc.) to become suspend-aware, even though the
+                // declarator itself keeps running on the tree-walker/InlineYield
+                // fallback — otherwise a container like a `for` loop never
+                // gets split into per-iteration states, and replay re-runs
+                // the whole loop instead of just the current iteration.
+                // `await` doesn't need this: it can run on the pre-existing
+                // blocking-tree-walker path without the container's help.
+                || pattern_contains_yield(&d.pattern)
         }),
         Statement::If(if_stmt) => {
             expr_contains_suspension(&if_stmt.test)
@@ -1647,11 +1710,20 @@ mod tests {
     }
 
     #[test]
-    fn pattern_yield_alone_neither_triggers_nor_is_missed_once_lowering() {
+    fn contains_yield_sees_yield_in_declaration_pattern_default() {
+        let stmt = first_statement_in("function*", "var { a = yield 1 } = {};");
+        assert!(
+            contains_yield(&stmt),
+            "expected contains_yield true: {stmt:?}"
+        );
+    }
+
+    #[test]
+    fn pattern_yield_alone_is_lowered_like_await() {
         let pattern = declared_pattern_in("async function*", "var { a = yield 1 } = {};");
         assert!(!pattern_contains_await(&pattern));
         assert!(pattern_contains_suspension(&pattern));
-        assert!(!pattern_needs_lowering(&pattern));
+        assert!(pattern_needs_lowering(&pattern));
 
         let mixed =
             declared_pattern_in("async function*", "var { a = await 1, b = yield 2 } = {};");
