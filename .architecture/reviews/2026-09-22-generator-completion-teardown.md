@@ -505,3 +505,38 @@ risk-minimising reviewer should prefer a narrower seam.
    stated as such in the PR body.
 5. The yield-operand disposal gap that Design B's pass surfaced is **preserved
    byte-for-byte** and filed separately. Fixing it is scope the score did not cover.
+
+### Delivered
+
+`retire_generator` and `reject_async_generator_request` in
+`src/interpreter/eval/generator_runtime.rs`. **67 `retire_generator` call sites** and
+**22 `reject_async_generator_request` call sites** replace 77 hand-written teardowns; the
+file drops 787 lines and gains 194 (net **−593**). Three latch spellings remain by design:
+the two inside `retire_generator` itself, and `generator_return_state_machine`'s
+(`:2145`), which reads `generator_inline_iters` after latching to run each stashed
+iterator's `return()` — the one site Design C was right about and Design A wanted to
+hoist.
+
+`async_gen_finish_disposal`'s 21-line longhand — three table removals plus a read-back
+latch — became one call, which is the evidence the seam is not driver-shaped.
+
+**Deviation from the design's scope**: Design A proposed the reject wrapper for the 27 A1
+sites, but only 22 tails were byte-identical enough to adopt it (the rest pop the
+async-generator queue, or settle through `async_generator_await_return`, or deliberately
+skip the drain). Those keep their hand-written settle and take `retire_generator` only, so
+the drain policy is unchanged everywhere.
+
+**Behaviour change, deliberate and stated in the PR**: every retirement now clears all
+three side tables. Before this change, 0 of the 32 sync latch sites cleared
+`generator_scope_stacks`, and the A1 family cleared only `generator_inline_iters`, so a
+finished generator kept GC roots alive until it was itself collected
+(`gc.rs:751-753`). It is GC-retention-only: three independent enumerations of the readers
+of `generator_for_of_stacks` / `generator_scope_stacks` agree that every reader sits behind
+a `Completed` early return.
+
+**Gate (on top of `c9dad852`)**: 765 lib unit tests including the 2 new pins, lint and
+perf-counters clippy clean, **test262 99,911/99,911 with 0 regressions**, test262-extra
+569/569, 15 custom tests.
+
+**Carved out, not fixed**: the yield-operand disposal gap (`Symbol.dispose` does not run
+when a throw comes from a `yield` operand) — filed as its own backlog entry.
