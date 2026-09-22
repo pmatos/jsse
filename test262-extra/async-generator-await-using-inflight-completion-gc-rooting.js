@@ -70,10 +70,63 @@ asyncTest(async function () {
       log.push('finally');
     }
   })();
-  await returned.next();
+  var result = await returned.next();
   assert.compareArray(
     log,
     ['dispose-tail', 'finally'],
     'a return crossing a block scope completes after a collection during its disposal'
   );
+  assert.sameValue(result.value.marker, 'ret-value', 'the in-flight return value survives the collection');
+
+  log = [];
+  var thrownAtYield = { message: 'at-yield' };
+  var throwing = (async function* () {
+    try {
+      {
+        await using tail = {
+          marker: 'tail',
+          async [Symbol.asyncDispose]() { log.push('dispose-' + this.marker); }
+        };
+        await using collector = makeCollector();
+        yield 1;
+      }
+    } catch (e) {
+      log.push('caught-' + (e === thrownAtYield));
+    }
+  })();
+  await throwing.next();
+  var settledThrow = throwing.throw(thrownAtYield);
+  assert.compareArray(log, [], 'the disposal parks: nothing past the first disposer ran synchronously');
+  await settledThrow;
+  assert.compareArray(
+    log,
+    ['dispose-tail', 'caught-true'],
+    'a throw injected at a yield survives collections while its block disposal is parked'
+  );
+
+  log = [];
+  var returnedAtYield = { marker: 'ret-at-yield' };
+  var returning = (async function* () {
+    try {
+      {
+        await using tail = {
+          marker: 'tail',
+          async [Symbol.asyncDispose]() { log.push('dispose-' + this.marker); }
+        };
+        await using collector = makeCollector();
+        yield 1;
+      }
+    } finally {
+      log.push('finally');
+    }
+  })();
+  await returning.next();
+  var settledReturn = returning.return(returnedAtYield);
+  var returnedResult = await settledReturn;
+  assert.compareArray(
+    log,
+    ['dispose-tail', 'finally'],
+    'a return injected at a yield completes while its block disposal is parked across collections'
+  );
+  assert.sameValue(returnedResult.value, returnedAtYield, 'the returned object survives with its identity');
 });
