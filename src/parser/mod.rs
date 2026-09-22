@@ -1422,7 +1422,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
+pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
     match expr {
         Expression::Identifier(name) => Ok(Pattern::Identifier(name)),
         Expression::Assign(AssignOp::Assign, left, right) => {
@@ -1526,7 +1526,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
     }
 }
 
-fn pattern_to_expr(pat: Pattern) -> Expression {
+pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
     match pat {
         Pattern::Identifier(name) => Expression::Identifier(name),
         Pattern::Rest(inner) => Expression::Spread(ExprBox::new(pattern_to_expr(*inner))),
