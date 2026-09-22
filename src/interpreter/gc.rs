@@ -1093,11 +1093,6 @@ impl Interpreter {
                 func_env,
                 execution_state,
                 ..
-            }
-            | IteratorState::AsyncGenerator {
-                func_env,
-                execution_state,
-                ..
             } => {
                 Self::collect_env_roots(func_env, worklist, seen_envs);
                 if let GeneratorExecutionState::SuspendedYield { prev_sent, .. } = execution_state {
