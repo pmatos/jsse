@@ -256,6 +256,7 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 - **Files**: ~1 estimated — `src/interpreter/eval/generator_runtime.rs`
 - **Modules**: `src/interpreter/eval/generator_runtime.rs`
 - **Summary**: Extract `settle_and_return(settle_fn, arg, promise)` for the "call settle fn + drain microtasks + return promise" async-generator exit tails. **2026-09-18 re-check: 54 canonical tails, not ~47** — 56 `drain_microtasks()` sites of which 54 are the canonical shape (48 `reject_fn`, 6 `resolve_fn`; 48 spelled `return Completion::Normal(promise);`, 6 as a bare tail expression). The prior "sequence after `complete-state-machine-generator-ctor`" note is **struck as stale**: #592 landed 2026-09-03 and the tail count went *up*, not down — the two do not interact. Heat raised 3→4 on that growth.
+- **2026-09-21 re-check (#712): the canonical tail is now "settle + return" with no drain.** The 34 `drain_microtasks()` calls after settling in the queue driver are deleted (ADR-2026-09-21-2246), so this candidate shrinks to a pure call-shape extraction of `call settle fn + return promise`; the drain-once ordering invariant no longer applies.
 
 ## this-weak-map-set
 
