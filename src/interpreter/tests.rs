@@ -5121,3 +5121,74 @@ fn module_with_a_plain_for_of_head_and_no_await_is_not_top_level_await() {
     let program = parse_module_program("for (x of []) {}");
     assert!(!Interpreter::module_has_tla(&program));
 }
+
+/// The completion transition — "this generator is finished, tear it down" —
+/// behind `retire_generator`. These pin its post-conditions as an invariant
+/// over *all three* per-generator side tables, rather than per call site.
+mod generator_retirement_tests {
+    use super::*;
+
+    fn assert_retired(interp: &Interpreter, gen_id: u64) {
+        assert!(
+            !interp.generator_inline_iters.contains_key(&gen_id),
+            "generator_inline_iters still holds the finished generator"
+        );
+        assert!(
+            !interp.generator_for_of_stacks.contains_key(&gen_id),
+            "generator_for_of_stacks still holds the finished generator"
+        );
+        assert!(
+            !interp.generator_scope_stacks.contains_key(&gen_id),
+            "generator_scope_stacks still holds the finished generator"
+        );
+    }
+
+    #[test]
+    fn completed_sync_generator_releases_every_side_table() {
+        let interp = run_script(
+            r#"
+            globalThis.gen = (function* () {
+              { let a = 1; yield a; throw new Error("boom"); }
+            })();
+            gen.next();
+            try { gen.next(); } catch (e) { globalThis.err = e.message; }
+            "#,
+        );
+        assert_eq!(global_string(&interp, "err"), "boom");
+        let gen_id = global_object_id(&interp, "gen");
+        let generator = interp.get_object(gen_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert_retired(&interp, gen_id);
+    }
+
+    #[test]
+    fn rejected_async_generator_releases_every_side_table() {
+        let interp = run_script(
+            r#"
+            globalThis.gen = (async function* () {
+              for (const x of [1, 2, 3]) { yield x; throw new Error("boom"); }
+            })();
+            gen.next()
+              .then(function () { return gen.next(); })
+              .then(function () {}, function (e) { globalThis.err = e.message; });
+            "#,
+        );
+        assert_eq!(global_string(&interp, "err"), "boom");
+        let gen_id = global_object_id(&interp, "gen");
+        let generator = interp.get_object(gen_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert_retired(&interp, gen_id);
+    }
+}
