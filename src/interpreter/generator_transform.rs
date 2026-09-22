@@ -2023,14 +2023,37 @@ fn lower_pattern_assignment_property(
         return;
     }
 
+    let (target, default) = match value {
+        Pattern::Assign(target, default) => (*target, Some(default)),
+        other => (other, None),
+    };
+
+    // A member-expression target is not a pattern: `KeyedDestructuringAssignmentEvaluation`
+    // evaluates its reference (base, then computed key) before the property read, so a
+    // suspension inside the read or a later default must not reorder around it.
+    if let Pattern::MemberExpression(member_expr) = &target {
+        let captured_ref = lower_reference_operand(member_expr, true, ctx);
+        let value_temp = ctx.new_temp_var("dstr_val");
+        emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+        if let Some(default) = default {
+            lower_conditional_default(&value_temp, &default, ctx);
+        }
+        ctx.emit_statement(Statement::Expression(Expression::Assign(
+            AssignOp::Assign,
+            ExprBox::new(captured_ref),
+            ExprBox::new(Expression::Identifier(value_temp)),
+        )));
+        return;
+    }
+
     let value_temp = ctx.new_temp_var("dstr_val");
     emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
-    let target = match value {
-        Pattern::Assign(target, default) => {
+    let target = match default {
+        Some(default) => {
             lower_conditional_default(&value_temp, &default, ctx);
-            *target
+            target
         }
-        other => other,
+        None => target,
     };
     lower_pattern_assignment(&target, &value_temp, ctx);
 }
