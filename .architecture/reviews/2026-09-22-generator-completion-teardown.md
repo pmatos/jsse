@@ -365,4 +365,106 @@ It lost on leverage (4), not on evidence.
 
 ## Design
 
-*(Written at step 4.)*
+Three interfaces were designed in parallel by sub-agents, each under a different
+constraint. The dependency category is **in-process**: everything behind the seam is
+in-memory `Interpreter` state (three `FxHashMap` side tables plus the generator object's
+`ObjectKind`). No adapter is needed, and no design proposed one.
+
+**Problem-space constraints given to all three.** The latch consumes the driver's owned
+locals (`state_machine`, `func_env` are *moved* into
+`IteratorState::completed_state_machine_*`), so today every latch must be followed by a
+`return`. `obj_rc` is an `Rc<RefCell<JsObjectData>>` held by the driver, and several latch
+sites live inside driver-local `macro_rules!` that capture those locals textually. Drain
+versus no-drain is JS-observable (microtask ordering) and must be preserved per site;
+side-table clearing breadth is GC-retention-only, and all three designs independently
+verified by enumerating readers that no reader exists for a `Completed` generator.
+
+### Design A: minimise the interface
+
+Two private methods:
+
+```rust
+fn retire_generator(&mut self, gen_id: u64);
+fn reject_async_generator_request(
+    &mut self,
+    gen_id: u64,
+    request: (&JsValue, &JsValue, &JsValue), // (promise, resolve, reject)
+    error: JsValue,
+) -> Completion;
+```
+
+`retire_generator` reads the generator's identity (`state_machine`, `func_env`,
+`is_strict`, and the sync/async variant tag) **back out of the live `IteratorState`**,
+clears all three side tables, then latches. Because it takes only `gen_id`, the driver's
+locals stop being moved and the call sites become one-liners. Scope: all 88 latch sites,
+plus the 27 A1 sites through the second method. `async_gen_finish_disposal` becomes its
+first non-driver caller, which is the evidence the seam is not driver-shaped.
+
+*Strongest argument against (the design's own)*: a site that today cannot fail to latch
+becomes a site that silently no-ops if the `IteratorState` is not what was assumed. That
+is the silent-failure class this repo dislikes, mitigable with `debug_assert!` or a
+`#[must_use] -> bool`.
+
+### Design B: maximise flexibility
+
+A `GeneratorFrame` value plus a `Teardown` policy record, so every drifting axis becomes a
+named policy value:
+
+```rust
+struct GeneratorFrame { obj: ObjectHandle, flavour: Flavour, state_machine: Rc<GeneratorStateMachine>, func_env: EnvRef, is_strict: bool }
+enum SideTables { Keep, Inline, InlineAndForOf, All }
+enum Dispose { Skip, FuncEnv }   enum Drain { Skip, Microtasks }   enum Queue { Leave, Advance }
+enum Settle { Bare(Completion), IterResultDone(JsValue), Reject(JsValue), ResolveDone(JsValue),
+              AwaitReturn(JsValue), FromCompletion { completion: Completion, return_awaits: bool } }
+struct Teardown { tables: SideTables, dispose: Dispose, settle: Settle, drain: Drain, queue: Queue }
+fn finish_generator(&mut self, gen_id: u64, frame: Option<&GeneratorFrame>,
+                    request: Option<(&JsValue,&JsValue,&JsValue)>, plan: Teardown) -> Completion;
+```
+
+Scope: 85 of 88 sites. It owns the ordering `dispose → release tables → latch → settle →
+queue`. This design pass also produced a **new spec finding** while enumerating the
+policies: jsse does not run `Symbol.dispose` when a throw comes from evaluating a **yield
+operand** (`using x = …; yield (()=>{throw e})()` disposes on Node, not on jsse), because
+`StateTerminator::Throw` (`:1331`) disposes before latching and the `Operand::Throw` arm of
+`Yield` (`:969`) does not. Under this design that becomes `Dispose::Skip` — greppable
+rather than a missing line.
+
+*Strongest argument against (the design's own)*: an 85-site mechanical rewrite of the
+engine's hairiest file for a seam whose flexibility axes have exactly one caller each
+(`Queue::Advance`, `FromCompletion`, `frame: None`). Speculative generality, and a
+4-variant enum can encode a wrong policy just as silently as a missing line.
+
+### Design C: optimise for the most common caller
+
+One plain method plus two per-driver macros over it, following #694's precedent
+(`eval_operand` + one thin macro per driver):
+
+```rust
+pub(crate) enum GeneratorFlavor { Sync, Async }
+pub(crate) fn latch_generator_completed(
+    &mut self, obj_rc: &ObjectHandle, gen_id: u64, flavor: GeneratorFlavor,
+    state_machine: Rc<GeneratorStateMachine>, func_env: EnvRef, is_strict: bool,
+);
+// driver-local:
+macro_rules! complete_generator { … }      // fixes the flavour and the moved locals
+macro_rules! reject_and_complete { … }     // A1's whole tail, including the return
+```
+
+The method keeps the identity in the driver's own locals (nothing is read back out, so no
+silent no-op is possible) and clears all three side tables before latching. Scope: 48
+sites — A1 ×27, the exit family ×15, S1 ×6. It explicitly leaves S2, S4, A2 (no-drain),
+the queue-popping `async_gen_*` helper tails, and **:2245**, which reads
+`generator_inline_iters` *after* the latch to run user `return()` closes — clearing there
+would skip those closes.
+
+*Strongest argument against (the design's own)*: the widening rests on a whole-file
+enumeration of readers, and the macro hides a `return`.
+
+### Adjudication
+
+All three were adjudicated against the skill's fixed criteria, in order: **1 depth**
+(behaviour per unit of interface a caller must learn), **2 locality** (where change, bugs
+and verification concentrate afterwards), **3 seam placement** (does something actually
+vary across the seam), **4 test surface** (can the behaviour be exercised through the
+interface without reaching past it), **5 blast radius** (smaller diff wins between
+otherwise-equal designs).
