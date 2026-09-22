@@ -852,6 +852,7 @@ impl Interpreter {
                 &state_machine.states[current_id].body,
                 &term_env,
                 &state_machine,
+                false,
             );
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
@@ -2720,6 +2721,57 @@ impl Interpreter {
         let _ = result;
     }
 
+    /// `yield*` evaluated by the inline-yield fallback of an async generator.
+    ///
+    /// The delegation is the driver's, so each step suspends at its `Await`:
+    /// this hands the iterable over as the yielded value (flagged by
+    /// `inline_yield_delegates`) and, once the delegation has completed,
+    /// answers a replay with its result from `prev_sent_values`. The operand
+    /// is not re-evaluated on a replay unless it holds a yield of its own,
+    /// whose slot must be numbered first.
+    pub(crate) fn eval_inline_async_yield_star(
+        &mut self,
+        operand: Option<&Expression>,
+        env: &EnvRef,
+    ) -> Completion {
+        let operand_yields =
+            operand.is_some_and(crate::interpreter::generator_analysis::expr_contains_yield);
+        if !operand_yields
+            && let Some(ctx) = self.generator_context.as_mut()
+            && ctx.current_yield < ctx.target_yield
+        {
+            let slot = ctx.current_yield;
+            ctx.current_yield += 1;
+            return Completion::Normal(
+                ctx.prev_sent_values
+                    .get(slot)
+                    .cloned()
+                    .unwrap_or(JsValue::UNDEFINED),
+            );
+        }
+        let iterable = match operand {
+            Some(e) => match self.eval_expr(e, env) {
+                Completion::Normal(v) => v,
+                other => return other,
+            },
+            None => JsValue::UNDEFINED,
+        };
+        if let Some(ctx) = self.generator_context.as_mut() {
+            let slot = ctx.current_yield;
+            ctx.current_yield += 1;
+            if slot < ctx.target_yield {
+                return Completion::Normal(
+                    ctx.prev_sent_values
+                        .get(slot)
+                        .cloned()
+                        .unwrap_or(JsValue::UNDEFINED),
+                );
+            }
+        }
+        self.inline_yield_delegates = true;
+        Completion::Yield(iterable)
+    }
+
     /// Bind the value of a completed `yield*` to its result binding.
     fn bind_yield_star_result(
         &mut self,
@@ -2966,8 +3018,19 @@ impl Interpreter {
                 return;
             }
             // §15.5.5 step 8.a.v: return IteratorValue(innerResult)
-            // Bind the yield* result and resume the state machine
+            // Bind the yield* result and resume the state machine. An inline
+            // `yield*` has no binding to write: its state replays with the
+            // result as the value of the delegated slot.
             self.bind_yield_star_result(&func_env, &deleg_info.sent_value_binding, &value);
+            let replay_binding = deleg_info
+                .sent_value_binding
+                .clone()
+                .filter(|binding| {
+                    matches!(
+                        binding.kind,
+                        crate::interpreter::generator_transform::SentValueBindingKind::InlineYield { .. }
+                    )
+                });
             obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                 IteratorState::StateMachineAsyncGenerator {
                     state_machine,
@@ -2978,7 +3041,7 @@ impl Interpreter {
                     },
                     _sent_value: JsValue::UNDEFINED,
                     try_stack,
-                    pending_binding: None,
+                    pending_binding: replay_binding,
                     delegated_iterator: None,
                     pending_exception: None,
                     pending_return: None,
@@ -3978,7 +4041,9 @@ impl Interpreter {
                 &state_machine.states[current_id].body,
                 &term_env,
                 &state_machine,
+                true,
             );
+            let inline_yield_is_delegate = std::mem::take(&mut self.inline_yield_delegates);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -4050,68 +4115,40 @@ impl Interpreter {
                     this, v, promise, resolve_fn, reject_fn,
                 );
             }
-            if let Completion::Yield(yield_val) = stmt_result {
-                let _is_destructuring = self.destructuring_yield;
-                self.destructuring_yield = false;
-                let awaited_val = match self.await_value(&yield_val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        self.generator_inline_iters.remove(&o.id);
-                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::completed_state_machine_async_generator(
-                                state_machine,
-                                func_env,
-                                is_strict,
-                            ),
-                        );
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
+            // A `Completion::Yield` out of the state body is an inline yield:
+            // it came from an expression the transform does not decompose.
+            // It suspends through the same `Yield` terminator tail as a
+            // lowered yield (one `Await`, settled from a later job); the
+            // re-entry uses `InlineYield` to fast-forward past earlier yields.
+            let mut inline_yield_operand: Option<JsValue> = None;
+            let terminator = match stmt_result {
+                Completion::Yield(yield_val) => {
+                    self.destructuring_yield = false;
+                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                    if inline_yield_is_delegate {
+                        self.stash_pending_iter_close(o.id);
                     }
-                    _ => yield_val,
-                };
-                self.stash_pending_iter_close(o.id);
-                self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                // Any Completion::Yield from exec_statements is an inline yield:
-                // it came from a loop body or complex control flow that isn't
-                // decomposed by the state machine transformer. Use InlineYield
-                // to re-enter the same state and fast-forward past previous yields.
-                {
                     let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
-                    let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
-                    obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::StateMachineAsyncGenerator {
-                            state_machine: state_machine.clone(),
-                            func_env: func_env.clone(),
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: current_id,
-                            },
-                            _sent_value: JsValue::UNDEFINED,
-                            try_stack: current_try_stack.clone(),
-                            pending_binding: Some(
-                                crate::interpreter::generator_transform::SentValueBinding {
-                                    kind: SentValueBindingKind::InlineYield {
-                                        yield_target: yield_count,
-                                        prev_sent: inline_prev,
-                                    },
+                    let prev_sent = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
+                    inline_yield_operand = Some(yield_val);
+                    StateTerminator::Yield {
+                        value: None,
+                        is_delegate: inline_yield_is_delegate,
+                        resume_state: current_id,
+                        sent_value_binding: Some(
+                            crate::interpreter::generator_transform::SentValueBinding {
+                                kind: SentValueBindingKind::InlineYield {
+                                    yield_target: yield_count,
+                                    prev_sent,
                                 },
-                            ),
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        },
-                    );
+                            },
+                        ),
+                    }
                 }
-                let iter_result = self.create_iter_result_object(awaited_val, false);
-                let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-                self.drain_microtasks();
-                return Completion::Normal(promise);
-            }
-
-            let terminator = state_machine.states[current_id]
-                .inline_jump_terminator(&stmt_result)
-                .unwrap_or(terminator);
+                other => state_machine.states[current_id]
+                    .inline_jump_terminator(&other)
+                    .unwrap_or(terminator),
+            };
 
             match &terminator {
                 StateTerminator::Yield {
@@ -4120,7 +4157,9 @@ impl Interpreter {
                     resume_state,
                     sent_value_binding,
                 } => {
-                    let yield_val = if let Some(expr) = value {
+                    let yield_val = if let Some(operand) = inline_yield_operand.take() {
+                        operand
+                    } else if let Some(expr) = value {
                         match self.eval_operand(expr, &term_env) {
                             Operand::Value(v) => v,
                             Operand::Throw(e) => {
