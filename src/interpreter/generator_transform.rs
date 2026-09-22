@@ -529,7 +529,7 @@ fn transform_generator_inner_opts(
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
         && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
-        && !body.iter().any(stmt_contains_await_using_head)
+        && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
         && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
@@ -600,7 +600,10 @@ fn stmt_contains_await_using_head(stmt: &Statement) -> bool {
     stmt_contains_for_of_head(stmt, ForOfStatement::disposes_at_head)
 }
 
-fn stmt_contains_for_of_head(stmt: &Statement, head: fn(&ForOfStatement) -> bool) -> bool {
+fn stmt_contains_for_of_head(
+    stmt: &Statement,
+    head: impl Fn(&ForOfStatement) -> bool + Copy,
+) -> bool {
     let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
         Statement::ForOf(f) => head(f),

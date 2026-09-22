@@ -3618,15 +3618,12 @@ impl Interpreter {
         /// completion, or returns from the driver with the request parked at
         /// one of disposal's `Await`s.
         macro_rules! dispose_or_park {
-            ($completion:expr) => {
-                dispose_or_park!($completion, GeneratorDisposeThen::Settle)
-            };
-            ($completion:expr, $then:expr) => {{
+            ($completion:expr) => {{
                 match self.async_gen_dispose(
                     o.id,
                     &func_env,
                     $completion,
-                    $then,
+                    GeneratorDisposeThen::Settle,
                     (&promise, &resolve_fn, &reject_fn),
                 ) {
                     GeneratorDisposeStart::Done(completion) => {
@@ -5121,52 +5118,16 @@ impl Interpreter {
                     if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
                         && let Some(stack) = self.take_dispose_stack(&iteration_env)
                     {
-                        macro_rules! head_disposal_finished {
-                            ($completion:expr) => {
-                                match $completion {
-                                    // §14.7.5.6 step 7.h: a throwing disposer ends
-                                    // the loop with a throw completion, so the
-                                    // iterator still closes (routing unwinds this
-                                    // loop) and the generator's handlers see it.
-                                    Completion::Throw(e) => {
-                                        pending_exception = Some(e);
-                                        pending_return = None;
-                                        check_abrupt_on_resume = true;
-                                        continue;
-                                    }
-                                    // Leave the result promise unsettled: a
-                                    // terminal host exit propagates through the
-                                    // queue boundary, never through normal promise
-                                    // settlement.
-                                    Completion::Exit(code) => {
-                                        self.discard_generator_for_of_loops_on_exit(
-                                            o.id,
-                                            &mut for_of_stack,
-                                            &func_env,
-                                        );
-                                        obj_rc.borrow_mut().kind =
-                                            crate::interpreter::types::ObjectKind::Iterator(
-                                                IteratorState::completed_state_machine_async_generator(
-                                                    state_machine,
-                                                    func_env,
-                                                    is_strict,
-                                                ),
-                                            );
-                                        return Completion::Exit(code);
-                                    }
-                                    _ => {}
-                                }
-                            };
-                        }
                         let cursor = DisposeCursor::new(stack, Completion::Empty);
-                        if pending_exception.is_some() || pending_return.is_some() {
+                        let completion = if pending_exception.is_some() || pending_return.is_some()
+                        {
                             // A `finally` body is running on behalf of a completion
                             // held in this frame's locals, which a parked request
                             // cannot carry across the suspension: dispose inline.
-                            head_disposal_finished!(self.run_dispose_cursor_holding(
+                            self.run_dispose_cursor_holding(
                                 cursor,
                                 &[pending_exception.as_ref(), pending_return.as_ref()],
-                            ));
+                            )
                         } else {
                             let mut cursor = cursor;
                             match cursor.step(self, None) {
@@ -5204,10 +5165,28 @@ impl Interpreter {
                                     self.scheduler.set_async_gen_yield_pending(true);
                                     return Completion::Normal(promise);
                                 }
-                                DisposeStep::Done(completion) => {
-                                    head_disposal_finished!(completion);
-                                }
+                                DisposeStep::Done(completion) => completion,
                             }
+                        };
+                        match completion {
+                            // §14.7.5.6 step 7.h: a throwing disposer ends
+                            // the loop with a throw completion, so the
+                            // iterator still closes (routing unwinds this
+                            // loop) and the generator's handlers see it.
+                            Completion::Throw(e) => {
+                                pending_exception = Some(e);
+                                pending_return = None;
+                                check_abrupt_on_resume = true;
+                                continue;
+                            }
+                            // Leave the result promise unsettled: a
+                            // terminal host exit propagates through the
+                            // queue boundary, never through normal promise
+                            // settlement.
+                            Completion::Exit(code) => {
+                                abort_async_generator!(Completion::Exit(code))
+                            }
+                            _ => {}
                         }
                     }
 
@@ -5822,7 +5801,8 @@ impl Interpreter {
         if let Completion::Exit(code) = completion {
             return Completion::Exit(code);
         }
-        if let Some(obj) = self.get_object_cell(gen_id)
+        if matches!(completion, Completion::Throw(_) | Completion::Return(_))
+            && let Some(obj) = self.get_object_cell(gen_id)
             && let Some(IteratorState::StateMachineAsyncGenerator {
                 pending_exception,
                 pending_return,
