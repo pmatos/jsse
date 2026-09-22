@@ -1775,14 +1775,40 @@ fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformCont
     }
 }
 
-fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
-    ctx.emit_statement(Statement::Variable(VariableDeclaration {
+fn synth_pattern_let_decl(kind: VarKind, pattern: Pattern, source: &str) -> Statement {
+    Statement::Variable(VariableDeclaration {
         kind,
         declarations: vec![VariableDeclarator {
             pattern,
             init: Some(Expression::Identifier(source.to_string())),
         }],
-    }));
+    })
+}
+
+fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(synth_pattern_let_decl(kind, pattern, source));
+}
+
+/// If `pattern` contains a yield-only default, computed key, or
+/// member-expression target, returns a trivial `Pattern::Identifier(temp)`
+/// to bind in its place plus a synthesized `let <pattern> = <temp>;` that
+/// re-homes the real binding -- for call sites (`EnterCatch`/`ForOfHead`)
+/// that bind their pattern via a single non-suspending runtime call and so
+/// can't run a yield-containing pattern through it directly (see #727).
+/// Returns `None` when `pattern` has no yield, so the caller can skip the
+/// rewrite (and its clones) entirely in the common case.
+fn hoist_yield_pattern(
+    pattern: &Pattern,
+    kind: VarKind,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> Option<(Pattern, Statement)> {
+    if !pattern_contains_yield(pattern) {
+        return None;
+    }
+    let temp = ctx.new_temp_var(prefix);
+    let synth = synth_pattern_let_decl(kind, pattern.clone(), &temp);
+    Some((Pattern::Identifier(temp), synth))
 }
 
 fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContext) {
@@ -2681,22 +2707,20 @@ fn transform_for_in_of_loop(
     // for the (destructuring-assignment) `ForInOfLeft::Pattern` head, and for
     // the head's own `for (let x of [x])`-style self-referential TDZ check
     // against the *original* names, both out of scope for #727.
-    let mut left_param_temp: Option<(VarKind, Pattern, String)> = None;
-    let left: ForInOfLeft = match left {
-        ForInOfLeft::Variable(decl) => {
-            let mut decl = decl.clone();
-            if let Some(d) = decl.declarations.first_mut()
-                && pattern_contains_yield(&d.pattern)
-            {
-                let temp = ctx.new_temp_var("for_head_param");
-                left_param_temp = Some((decl.kind, d.pattern.clone(), temp.clone()));
-                d.pattern = Pattern::Identifier(temp);
-            }
-            ForInOfLeft::Variable(decl)
-        }
-        other => other.clone(),
+    let mut left_param_synth: Option<Statement> = None;
+    let rewritten_left = if let ForInOfLeft::Variable(decl) = left
+        && let Some(d) = decl.declarations.first()
+        && let Some((new_pattern, synth)) =
+            hoist_yield_pattern(&d.pattern, decl.kind, "for_head_param", ctx)
+    {
+        let mut decl = decl.clone();
+        decl.declarations[0].pattern = new_pattern;
+        left_param_synth = Some(synth);
+        Some(ForInOfLeft::Variable(decl))
+    } else {
+        None
     };
-    let left = &left;
+    let left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
 
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
@@ -2743,26 +2767,21 @@ fn transform_for_in_of_loop(
 
     ctx.current_state_id = body_state;
     ctx.for_of_depth += 1;
-    let effective_body = match left_param_temp {
-        Some((kind, orig_pattern, temp)) => Statement::Block(vec![
-            Statement::Variable(VariableDeclaration {
-                kind,
-                declarations: vec![VariableDeclarator {
-                    pattern: orig_pattern,
-                    init: Some(Expression::Identifier(temp)),
-                }],
-            }),
-            body.clone(),
-        ]),
-        None => body.clone(),
+    let synthesized_body;
+    let effective_body: &Statement = match left_param_synth {
+        Some(synth) => {
+            synthesized_body = Statement::Block(vec![synth, body.clone()]);
+            &synthesized_body
+        }
+        None => body,
     };
-    if stmt_has_suspension(&effective_body, ctx.is_async, ctx.detect_for_await) {
-        transform_yielding_statement(&effective_body, ctx, head_state);
+    if stmt_has_suspension(effective_body, ctx.is_async, ctx.detect_for_await) {
+        transform_yielding_statement(effective_body, ctx, head_state);
         if ctx.current_state_id != head_state {
             ctx.finalize_current_state(StateTerminator::Goto(head_state));
         }
     } else {
-        ctx.emit_statement(effective_body);
+        ctx.emit_statement(effective_body.clone());
         ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
     ctx.for_of_depth -= 1;
@@ -2819,16 +2838,17 @@ fn transform_try_statement(
     // body, where the ordinary `Statement::Variable` lowering (already tested
     // for #727) picks it up — `lower_pattern_binding` for a supported shape,
     // native replay confined to `catch_body_state` for one that isn't.
-    let mut catch_param_temp: Option<(Pattern, String)> = None;
+    let mut catch_param_synth: Option<Statement> = None;
     let catch_info = try_stmt.handler.as_ref().map(|h| {
         let catch_entry_state = ctx.new_state();
-        let param = match &h.param {
-            Some(p) if pattern_contains_yield(p) => {
-                let temp = ctx.new_temp_var("catch_param");
-                catch_param_temp = Some((p.clone(), temp.clone()));
-                Some(Pattern::Identifier(temp))
-            }
-            other => other.clone(),
+        let param = if let Some(p) = &h.param
+            && let Some((new_pattern, synth)) =
+                hoist_yield_pattern(p, VarKind::Let, "catch_param", ctx)
+        {
+            catch_param_synth = Some(synth);
+            Some(new_pattern)
+        } else {
+            h.param.clone()
         };
         CatchInfo {
             state: catch_entry_state,
@@ -2902,15 +2922,8 @@ fn transform_try_statement(
         ctx.current_state_id = catch_body_state;
         ctx.scope_depth += 1;
         if let Some(handler) = &try_stmt.handler {
-            if let Some((orig_param, temp)) = catch_param_temp.take() {
-                let synth_decl = Statement::Variable(VariableDeclaration {
-                    kind: VarKind::Let,
-                    declarations: vec![VariableDeclarator {
-                        pattern: orig_param,
-                        init: Some(Expression::Identifier(temp)),
-                    }],
-                });
-                let body_with_param: Vec<Statement> = std::iter::once(synth_decl)
+            if let Some(synth) = catch_param_synth.take() {
+                let body_with_param: Vec<Statement> = std::iter::once(synth)
                     .chain(handler.body.iter().cloned())
                     .collect();
                 transform_clause_body(&body_with_param, ctx, clause_completion_state);

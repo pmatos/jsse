@@ -1356,16 +1356,10 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                 } else {
-                    match self.bind_pattern(&d.pattern, val, kind, env) {
-                        Completion::Normal(_) => {}
-                        other => return other,
-                    }
+                    propagate!(self.bind_pattern(&d.pattern, val, kind, env));
                 }
             } else {
-                match self.bind_pattern(&d.pattern, val, kind, env) {
-                    Completion::Normal(_) => {}
-                    other => return other,
-                }
+                propagate!(self.bind_pattern(&d.pattern, val, kind, env));
             }
         }
         Completion::Normal(JsValue::UNDEFINED)
@@ -1466,16 +1460,6 @@ impl Interpreter {
                 let mut error: Option<JsValue> = None;
                 let mut yield_val: Option<JsValue> = None;
 
-                let unroot_iter = |s: &mut Self| {
-                    if let Some(o) = iterator
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                        && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
-                    {
-                        s.gc_temp_roots.remove(pos);
-                    }
-                };
-
                 for elem in elements {
                     if let Some(elem) = elem {
                         match elem {
@@ -1514,7 +1498,7 @@ impl Interpreter {
                                         break;
                                     }
                                     other => {
-                                        unroot_iter(self);
+                                        self.gc_unroot_value(&iterator);
                                         return other;
                                     }
                                 }
@@ -1553,7 +1537,7 @@ impl Interpreter {
                                         Completion::Throw(e) => error = Some(e),
                                         Completion::Yield(v) => yield_val = Some(v),
                                         other => {
-                                            unroot_iter(self);
+                                            self.gc_unroot_value(&iterator);
                                             return other;
                                         }
                                     }
@@ -1590,25 +1574,25 @@ impl Interpreter {
                     if !done {
                         self.pending_iter_close.push(iterator.clone());
                     }
-                    unroot_iter(self);
+                    self.gc_unroot_value(&iterator);
                     return Completion::Yield(yv);
                 }
                 if let Some(err) = error {
                     if !done {
                         let _ = self.iterator_close_result(&iterator);
                     }
-                    unroot_iter(self);
+                    self.gc_unroot_value(&iterator);
                     return Completion::Throw(err);
                 }
                 if !done {
                     let r = self.iterator_close_result(&iterator);
-                    unroot_iter(self);
+                    self.gc_unroot_value(&iterator);
                     return match r {
                         Ok(()) => Completion::Normal(JsValue::UNDEFINED),
                         Err(e) => Completion::Throw(e),
                     };
                 }
-                unroot_iter(self);
+                self.gc_unroot_value(&iterator);
                 Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Object(props) => {
@@ -1771,10 +1755,10 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Rest(inner) => self.bind_pattern(inner, val, kind, env),
-            Pattern::MemberExpression(expr) => match self.assign_to_expr(expr, val, env) {
-                Ok(()) => Completion::Normal(JsValue::UNDEFINED),
-                Err(e) => Completion::Throw(e),
-            },
+            Pattern::MemberExpression(expr) => {
+                propagate!(self.assign_to_expr(expr, val, env));
+                Completion::Normal(JsValue::UNDEFINED)
+            }
         }
     }
 
@@ -2523,10 +2507,7 @@ impl Interpreter {
                         if matches!(param, Pattern::Identifier(_)) {
                             catch_env.borrow_mut().is_simple_catch_scope = true;
                         }
-                        match self.bind_pattern(param, val, BindingKind::Let, &catch_env) {
-                            Completion::Normal(_) => {}
-                            other => return other,
-                        }
+                        propagate!(self.bind_pattern(param, val, BindingKind::Let, &catch_env));
                     }
                     let catch_block_env = Environment::new(Some(catch_env.clone()));
                     // A call in the catch Block is in tail position only when
