@@ -84,10 +84,9 @@ impl Interpreter {
     }
 
     fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        let prev = self.enter_ic_body(body);
-        let result = self.exec_statements_cached(body.as_slice(), env, None);
-        self.leave_ic_body(prev);
-        result
+        self.with_ic_body(body, |interp| {
+            interp.exec_statements_cached(body.as_slice(), env, None)
+        })
     }
 
     /// Execute a Script Body through the opt-in bytecode path when the entire
@@ -109,24 +108,23 @@ impl Interpreter {
                         self.perf.compile_ok += 1;
                         self.perf.body_non_function += 1;
                     }
-                    let prev = self.enter_ic_body(body);
-                    let result = if let Some(err) =
-                        self.instantiate_body_declarations(body.as_slice(), env, None)
-                    {
-                        err
-                    } else {
-                        self.call_stack_envs.push(env.clone());
-                        let result = crate::interpreter::bytecode::vm::run_script_chunk(
-                            self,
-                            &chunk,
-                            env,
-                            JsValue::UNDEFINED,
-                        );
-                        self.call_stack_envs.pop();
-                        result
-                    };
-                    self.leave_ic_body(prev);
-                    return result;
+                    return self.with_ic_body(body, |interp| {
+                        if let Some(err) =
+                            interp.instantiate_body_declarations(body.as_slice(), env, None)
+                        {
+                            err
+                        } else {
+                            interp.call_stack_envs.push(env.clone());
+                            let result = crate::interpreter::bytecode::vm::run_script_chunk(
+                                interp,
+                                &chunk,
+                                env,
+                                JsValue::UNDEFINED,
+                            );
+                            interp.call_stack_envs.pop();
+                            result
+                        }
+                    });
                 }
                 Err(_e) => {
                     #[cfg(feature = "perf-counters")]
@@ -176,23 +174,24 @@ impl Interpreter {
                 false,
             );
         }
-        let prev = self.enter_ic_body(body);
-        let mut last = Completion::Empty;
-        for stmt in body.as_slice() {
-            self.gc_root_completion(&last);
-            self.gc_safepoint();
-            let comp = self.exec_statement(stmt, env);
-            self.gc_unroot_completion(&last);
-            match comp {
-                Completion::Normal(v) => last = Completion::Normal(v),
-                Completion::Empty => {}
-                other => {
-                    last = other;
-                    break;
+        let last = self.with_ic_body(body, |interp| {
+            let mut last = Completion::Empty;
+            for stmt in body.as_slice() {
+                interp.gc_root_completion(&last);
+                interp.gc_safepoint();
+                let comp = interp.exec_statement(stmt, env);
+                interp.gc_unroot_completion(&last);
+                match comp {
+                    Completion::Normal(v) => last = Completion::Normal(v),
+                    Completion::Empty => {}
+                    other => {
+                        last = other;
+                        break;
+                    }
                 }
             }
-        }
-        self.leave_ic_body(prev);
+            last
+        });
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
         last

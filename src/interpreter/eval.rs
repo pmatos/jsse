@@ -1868,10 +1868,9 @@ impl Interpreter {
                 {
                     self.perf.body_compiled += 1;
                 }
-                let prev = self.enter_ic_body(body);
-                let result = vm::run_chunk(self, &chunk, exec_env, this_val.clone());
-                self.leave_ic_body(prev);
-                return result;
+                return self.with_ic_body(body, |interp| {
+                    vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
+                });
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -1883,9 +1882,9 @@ impl Interpreter {
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
         let analysis = self.hoist_cache.analysis_for(body);
-        let prev = self.enter_ic_body(body);
-        let result = self.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis));
-        self.leave_ic_body(prev);
+        let result = self.with_ic_body(body, |interp| {
+            interp.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis))
+        });
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
         result
