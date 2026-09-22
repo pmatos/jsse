@@ -3397,6 +3397,27 @@ mod tests {
     }
 
     #[test]
+    fn yield_in_declaration_pattern_default_is_lowered() {
+        let program =
+            crate::parser::Parser::new("function* g(){ var {a = yield 1} = {}; return a }")
+                .expect("parser init")
+                .parse_program()
+                .expect("parse program");
+        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
+            panic!("expected a function declaration");
+        };
+        let sm = transform_generator(f.body.as_slice(), &f.params);
+        assert_eq!(sm.num_yields, 1);
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::Yield { .. })),
+            "expected a Yield terminator state, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
     fn test_yield_in_variable() {
         let body = vec![Statement::Variable(VariableDeclaration {
             kind: VarKind::Let,
@@ -3988,11 +4009,17 @@ mod tests {
     }
 
     #[test]
-    fn test_async_generator_yield_only_pattern_is_not_lowered() {
+    fn test_async_generator_yield_only_object_pattern_is_lowered() {
         let body = parse_fn_body("async function* g() { var { a = yield 1 } = {}; }");
         let sm = transform_async_generator(&body, &[]);
 
-        assert_eq!(sm.states.len(), 1);
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::Yield { .. })),
+            "expected a Yield terminator state, got {:#?}",
+            sm.states
+        );
     }
 
     fn stmt_contains_yield(stmt: &Statement) -> bool {
