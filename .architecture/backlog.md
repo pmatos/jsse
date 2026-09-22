@@ -41,7 +41,8 @@ Never delete rows; they are the memory that stops re-surfacing the same work.
 
 ## generator-completion-teardown
 
-- **Status**: proposed
+- **Status**: in-flight
+- **PR**: #735 (2026-09-22 firing)
 - **Score**: 24/25 (leverage 5, locality 4, blast radius 1, heat 5)
 - **Files**: ~2 estimated — `src/interpreter/eval/generator_runtime.rs`, `src/interpreter/types.rs`
 - **Modules**: `src/interpreter/eval/generator_runtime.rs`

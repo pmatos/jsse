@@ -8,7 +8,7 @@ generator/async state machine still dominates: `eval.rs` (17 commits),
 entries for this subsystem were re-verified against the current tree (`997eaee1`), and a
 fresh friction scan covered `eval.rs`, `dispose.rs`, `gc.rs`, `promise.rs`, and `src/parser/`.
 
-**Picked**: `generator-completion-teardown`. See `.architecture/backlog.md`.
+**Picked**: `generator-completion-teardown` — see PR #735 and `.architecture/backlog.md`.
 
 **Branch**: adopted `sym/jsse/routine/refactor-audit/01M335G734`. It passed all four
 conditions: it is not the default branch, it has 0 commits ahead of `origin/main`, it has
