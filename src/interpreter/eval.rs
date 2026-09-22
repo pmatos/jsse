@@ -9644,15 +9644,34 @@ impl Interpreter {
 
     fn close_for_of_loop(
         &mut self,
-        loop_state: ForOfLoopState,
+        mut loop_state: ForOfLoopState,
         func_env: &EnvRef,
         completion: Completion,
         generator_id: Option<u64>,
     ) -> Completion {
-        let mut completion = match loop_state.iteration_env {
+        let completion = match loop_state.iteration_env.take() {
             Some(env) => self.dispose_resources(&env, completion),
             None => completion,
         };
+        self.close_for_of_iterator(loop_state, func_env, completion, generator_id)
+    }
+
+    /// The synchronous half of `close_for_of_loop`: IteratorClose for the
+    /// loop's iterator once its per-iteration environment (if any) has
+    /// already been disposed (`loop_state.iteration_env` is `None`). Split
+    /// out so an async-generator caller can dispose that environment through
+    /// its own resumable path first, then share this synchronous tail.
+    fn close_for_of_iterator(
+        &mut self,
+        loop_state: ForOfLoopState,
+        func_env: &EnvRef,
+        mut completion: Completion,
+        generator_id: Option<u64>,
+    ) -> Completion {
+        debug_assert!(
+            loop_state.iteration_env.is_none(),
+            "close_for_of_iterator expects the iteration_env already disposed"
+        );
 
         // The borrow must end before `iterator_close_result` runs the user's
         // `return` method, which may write bindings in this same environment.
