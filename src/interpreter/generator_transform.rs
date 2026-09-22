@@ -3169,11 +3169,20 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Update(op, prefix, e) => {
             Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)))
         }
-        Expression::Assign(op, l, r) => Expression::Assign(
-            *op,
-            ExprBox::new(rewrite_expr(l)),
-            ExprBox::new(rewrite_expr(r)),
-        ),
+        Expression::Assign(op, l, r) => {
+            // A destructuring-assignment cover-grammar LHS (`[..] = ..` / `{..} = ..`)
+            // is not itself a suspension boundary the tree-walker can split; leave any
+            // `await` inside it untouched, same as a `Pattern` already does, and let
+            // pattern lowering (or the blocking-`await_value` fallback) handle it.
+            let new_l = if *op == AssignOp::Assign
+                && matches!(l.as_ref(), Expression::Array(..) | Expression::Object(..))
+            {
+                l.clone()
+            } else {
+                ExprBox::new(rewrite_expr(l))
+            };
+            Expression::Assign(*op, new_l, ExprBox::new(rewrite_expr(r)))
+        }
         Expression::Conditional(t, c, a) => Expression::Conditional(
             ExprBox::new(rewrite_expr(t)),
             ExprBox::new(rewrite_expr(c)),
@@ -3880,5 +3889,36 @@ mod tests {
         let sm = transform_async_generator(&body, &[]);
 
         assert_eq!(sm.states.len(), 1);
+    }
+
+    fn stmt_contains_yield(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Expression(e) => expr_contains_yield(e),
+            Statement::Return(Some(e)) => expr_contains_yield(e),
+            Statement::Variable(decl) => decl
+                .declarations
+                .iter()
+                .any(|d| d.init.as_ref().is_some_and(expr_contains_yield)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn test_destructuring_assignment_await_is_not_rewritten_to_yield() {
+        // Regression for issue #724: an `await` inside a destructuring-assignment
+        // cover-grammar LHS (`[..] = ..` / `{..} = ..`) must never be turned into a
+        // bare `Yield` node, because a plain async function's driver has no inline
+        // path to service one outside a real suspension state.
+        for src in ["[a = await 1] = [];", "({a = await 1} = {});"] {
+            let sm = async_machine(src);
+            let has_bare_yield = sm
+                .states
+                .iter()
+                .any(|s| s.body.as_slice().iter().any(stmt_contains_yield));
+            assert!(
+                !has_bare_yield,
+                "destructuring-assignment await must survive as Await, not Yield: {src}"
+            );
+        }
     }
 }
