@@ -3797,85 +3797,86 @@ impl Interpreter {
         self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
 
-        let prev_ic_handle = self.enter_ic_body(&program.body);
-
-        // Module items reach `exec_statement` without passing through
-        // `dispatch_body`, so without a frame their work lands in
-        // `ast_work_units` but in no BODY row — module-heavy runs could not
-        // localize their tree-walker work at all (#537 review, third pass).
-        #[cfg(feature = "perf-counters")]
-        {
-            self.perf.body_non_function += 1;
-            let name = self.perf.name_module_body.clone();
-            self.perf
-                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
-        }
-        let mut err = None;
-        // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
-        // structurally from `exec_statement`/`exec_export_declaration`, the
-        // same way `Throw` does — it must stop this loop immediately (a
-        // later module item must not run) and must reach `dispose_resources`
-        // below as `Exit`, not be discarded and reconstructed as `Normal`,
-        // so the disposer short-circuit there actually fires (#554 review).
-        let mut exit_code: Option<i32> = None;
-        for item in &program.module_items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    let result = self.exec_statement(stmt, &module_env);
-                    match result {
-                        Completion::Throw(e) => {
-                            module.borrow_mut().error = Some(e.clone());
-                            err = Some(e);
-                            break;
+        let err = self.with_ic_body(&program.body, |interp| {
+            // Module items reach `exec_statement` without passing through
+            // `dispatch_body`, so without a frame their work lands in
+            // `ast_work_units` but in no BODY row — module-heavy runs could not
+            // localize their tree-walker work at all (#537 review, third pass).
+            #[cfg(feature = "perf-counters")]
+            {
+                interp.perf.body_non_function += 1;
+                let name = interp.perf.name_module_body.clone();
+                interp
+                    .perf
+                    .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
+            }
+            let mut err = None;
+            // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
+            // structurally from `exec_statement`/`exec_export_declaration`, the
+            // same way `Throw` does — it must stop this loop immediately (a
+            // later module item must not run) and must reach `dispose_resources`
+            // below as `Exit`, not be discarded and reconstructed as `Normal`,
+            // so the disposer short-circuit there actually fires (#554 review).
+            let mut exit_code: Option<i32> = None;
+            for item in &program.module_items {
+                match item {
+                    ModuleItem::Statement(stmt) => {
+                        let result = interp.exec_statement(stmt, &module_env);
+                        match result {
+                            Completion::Throw(e) => {
+                                module.borrow_mut().error = Some(e.clone());
+                                err = Some(e);
+                                break;
+                            }
+                            Completion::Exit(code) => {
+                                exit_code = Some(code);
+                                break;
+                            }
+                            _ => {}
                         }
-                        Completion::Exit(code) => {
-                            exit_code = Some(code);
-                            break;
+                    }
+                    ModuleItem::ImportDeclaration(_) => {}
+                    ModuleItem::ExportDeclaration(export) => {
+                        let result = interp.exec_export_declaration(export, &module_env);
+                        match result {
+                            Completion::Throw(e) => {
+                                module.borrow_mut().error = Some(e.clone());
+                                err = Some(e);
+                                break;
+                            }
+                            Completion::Exit(code) => {
+                                exit_code = Some(code);
+                                break;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        interp.collect_exports(export, &module_env, &module);
                     }
                 }
-                ModuleItem::ImportDeclaration(_) => {}
-                ModuleItem::ExportDeclaration(export) => {
-                    let result = self.exec_export_declaration(export, &module_env);
-                    match result {
-                        Completion::Throw(e) => {
-                            module.borrow_mut().error = Some(e.clone());
-                            err = Some(e);
-                            break;
-                        }
-                        Completion::Exit(code) => {
-                            exit_code = Some(code);
-                            break;
-                        }
-                        _ => {}
-                    }
-                    self.collect_exports(export, &module_env, &module);
+            }
+            let completion = match exit_code {
+                Some(code) => Completion::Exit(code),
+                None => match &err {
+                    Some(e) => Completion::Throw(e.clone()),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                },
+            };
+            match interp.dispose_resources(&module_env, completion) {
+                Completion::Throw(e) => {
+                    module.borrow_mut().error = Some(e.clone());
+                    err = Some(e);
                 }
+                Completion::Exit(code) => {
+                    interp.pending_exit = Some(code);
+                    err = None;
+                }
+                _ => {}
             }
-        }
-        let completion = match exit_code {
-            Some(code) => Completion::Exit(code),
-            None => match &err {
-                Some(e) => Completion::Throw(e.clone()),
-                None => Completion::Normal(JsValue::UNDEFINED),
-            },
-        };
-        match self.dispose_resources(&module_env, completion) {
-            Completion::Throw(e) => {
-                module.borrow_mut().error = Some(e.clone());
-                err = Some(e);
-            }
-            Completion::Exit(code) => {
-                self.pending_exit = Some(code);
-                err = None;
-            }
-            _ => {}
-        }
-        module.borrow_mut().program_ast = None;
-        #[cfg(feature = "perf-counters")]
-        self.perf.leave_ast_body();
-        self.leave_ic_body(prev_ic_handle);
+            module.borrow_mut().program_ast = None;
+            #[cfg(feature = "perf-counters")]
+            interp.perf.leave_ast_body();
+            err
+        });
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
         match err {
