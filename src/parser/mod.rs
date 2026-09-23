@@ -148,8 +148,8 @@ pub(crate) struct Parser<'a> {
 /// either limit costs ~14 MB of stack, so both assume the engine stack: a
 /// parser driven on a smaller thread can still overflow first.
 ///
-/// The sibling guards in `interpreter/mod.rs` are still calibrated for release
-/// frames alone — jsse#607.
+/// The sibling guards in `interpreter/mod.rs` (`CALL_DEPTH_*`,
+/// `EVAL_DEPTH_LIMIT`) got the same profile-aware treatment in jsse#607.
 pub(crate) const MAX_PARSE_DEPTH: u32 = if cfg!(debug_assertions) { 400 } else { 4_000 };
 
 impl<'a> Parser<'a> {

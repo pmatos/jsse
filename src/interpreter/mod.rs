@@ -419,17 +419,60 @@ pub(crate) struct Interpreter {
 /// Soft JS call-depth limit: crossing it throws a catchable `RangeError:
 /// Maximum call stack size exceeded`. Sits well below the native capacity of
 /// the 128 MiB execution stack the engine runs on (see `lib.rs`), yet far
-/// above the depth any real program reaches (the old 8 MiB main stack held
-/// every passing test, i.e. depths under ~1500).
-pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = 4_000;
+/// above the depth any real program reaches in release (the old 8 MiB main
+/// stack held every passing test, i.e. depths under ~1500).
+///
+/// Profile-aware because the resource really being bounded is stack *bytes*,
+/// not call count: debug frames run several times larger than release's, so
+/// a single release-sized limit sat *above* debug's native capacity and the
+/// guard never got a chance to fire before SIGABRT — jsse#607, sibling of
+/// jsse#599/#606, which found and fixed the same gap in the parser's
+/// `MAX_PARSE_DEPTH`. Measured by disabling the guard and binary-searching
+/// the abort point over the stack-hungriest call shapes (plain recursion, a
+/// recursive getter, a `Proxy` `apply`-trap forwarding to `target.apply`):
+/// debug's native call capacity is ~1,020 for the `Proxy` shape (the
+/// hungriest measured) vs. release's own ~30,300 for plain recursion.
+/// `cfg!(debug_assertions)` is a proxy for frame size, not the real variable
+/// — a custom profile built with `opt-level = 0, debug-assertions = false`
+/// still gets the release numbers below and could still abort; #606 accepted
+/// the same limitation for `MAX_PARSE_DEPTH`.
+///
+/// Debug keeps release's internal ratios (`rearm` = 0.6×`hard`, `soft` =
+/// 0.8×`hard`); the compile-time assertion below couples all three arms in
+/// both profiles at once, so an edit to one without the others fails to
+/// build regardless of which profile you happen to compile.
+const CALL_DEPTH_SOFT_LIMIT_DEBUG: usize = 160;
+const CALL_DEPTH_SOFT_LIMIT_RELEASE: usize = 4_000;
+pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = if cfg!(debug_assertions) {
+    CALL_DEPTH_SOFT_LIMIT_DEBUG
+} else {
+    CALL_DEPTH_SOFT_LIMIT_RELEASE
+};
+
 /// Hard ceiling enforced even while the soft limit is disarmed (i.e. while a
-/// catch handler is recovering). The [`soft`, `hard`) band gives handlers room
-/// to run; `hard` still sits far below native capacity so it throws rather
-/// than overflowing the stack.
-pub(crate) const CALL_DEPTH_HARD_LIMIT: usize = 5_000;
+/// catch handler is recovering). The [`soft`, `hard`) band gives handlers
+/// room to run; `hard` still sits far below native capacity so it throws
+/// rather than overflowing the stack. Profile-aware for the same reason as
+/// `CALL_DEPTH_SOFT_LIMIT` above.
+const CALL_DEPTH_HARD_LIMIT_DEBUG: usize = 200;
+const CALL_DEPTH_HARD_LIMIT_RELEASE: usize = 5_000;
+pub(crate) const CALL_DEPTH_HARD_LIMIT: usize = if cfg!(debug_assertions) {
+    CALL_DEPTH_HARD_LIMIT_DEBUG
+} else {
+    CALL_DEPTH_HARD_LIMIT_RELEASE
+};
+
 /// The soft limit re-arms only after the stack unwinds below this, so a
-/// recovering handler oscillating just under the soft limit does not re-trip.
-pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
+/// recovering handler oscillating just under the soft limit does not
+/// re-trip. Profile-aware for the same reason as `CALL_DEPTH_SOFT_LIMIT`
+/// above.
+const CALL_DEPTH_REARM_LIMIT_DEBUG: usize = 120;
+const CALL_DEPTH_REARM_LIMIT_RELEASE: usize = 3_000;
+pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = if cfg!(debug_assertions) {
+    CALL_DEPTH_REARM_LIMIT_DEBUG
+} else {
+    CALL_DEPTH_REARM_LIMIT_RELEASE
+};
 
 /// Expression-evaluation nesting limit: crossing it throws a catchable
 /// `RangeError: Maximum call stack size exceeded` instead of overflowing the
@@ -439,22 +482,54 @@ pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
 /// input that reaches this depth is a single flat expression, which has no
 /// intermediate `catch` points, so the throw fully unwinds every `eval_expr`
 /// frame before any handler runs. Expression nesting reachable *through* JS
-/// calls is bounded first by the `CALL_DEPTH_*` guards (hard 5000 × a few eval
-/// frames per level ≈ well under 20k), so this limit never interferes with
-/// normal recursion. It sits far above that (50k) yet at roughly a third of the
-/// measured native overflow point on the 128 MiB execution stack (a flat
-/// expression SIGABRTs between 140k and 150k operands with the guard removed),
-/// leaving ample headroom for the error object's own construction.
-pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
+/// calls is bounded first by the `CALL_DEPTH_*` guards (hard limit × a few
+/// eval frames per level), so this limit never interferes with normal
+/// recursion — see the compile-time assertion below for the exact coupling.
+///
+/// Profile-aware for the same reason as `CALL_DEPTH_HARD_LIMIT` above: debug
+/// frames are several times larger than release's, so a single
+/// release-sized limit sat above debug's native capacity — jsse#607.
+/// Measured by disabling the guard and binary-searching the abort point over
+/// the stack-hungriest expression shapes (a flat `1+1+1+…` chain, a
+/// self-referential member chain `a.b.b.b…`): debug's native capacity is
+/// ~6,990 for the member-chain shape (the hungriest measured) vs. release's
+/// own ~190,600 for the flat additive chain.
+const EVAL_DEPTH_LIMIT_DEBUG: usize = 2_000;
+const EVAL_DEPTH_LIMIT_RELEASE: usize = 50_000;
+pub(crate) const EVAL_DEPTH_LIMIT: usize = if cfg!(debug_assertions) {
+    EVAL_DEPTH_LIMIT_DEBUG
+} else {
+    EVAL_DEPTH_LIMIT_RELEASE
+};
+
+// A single `if cfg!(debug_assertions)` expression only ever const-evaluates
+// the arm that gets compiled, so an assertion written against the four
+// public names above would silently check one profile's numbers only — and
+// since every CI job builds `--release` (see CLAUDE.md), the debug arm's
+// coupling would never be compile-checked anywhere. Asserting over the named
+// `_DEBUG`/`_RELEASE` pairs instead checks both arms on every build,
+// regardless of which one is actually compiled in.
+const _: () = assert!(
+    CALL_DEPTH_REARM_LIMIT_DEBUG < CALL_DEPTH_SOFT_LIMIT_DEBUG
+        && CALL_DEPTH_SOFT_LIMIT_DEBUG < CALL_DEPTH_HARD_LIMIT_DEBUG
+        && EVAL_DEPTH_LIMIT_DEBUG > CALL_DEPTH_HARD_LIMIT_DEBUG * 5
+        && CALL_DEPTH_REARM_LIMIT_RELEASE < CALL_DEPTH_SOFT_LIMIT_RELEASE
+        && CALL_DEPTH_SOFT_LIMIT_RELEASE < CALL_DEPTH_HARD_LIMIT_RELEASE
+        && EVAL_DEPTH_LIMIT_RELEASE > CALL_DEPTH_HARD_LIMIT_RELEASE * 5,
+    "CALL_DEPTH_*/EVAL_DEPTH_LIMIT coupling broken in one profile: REARM < SOFT < HARD and \
+     EVAL_DEPTH_LIMIT > HARD * 5 must hold in both debug and release"
+);
 
 /// Maximum number of Proxy forwarding seams one prototype-chain operation may
 /// cross before reporting stack exhaustion. Ordinary-only chains are not
 /// counted: `OrdinarySetPrototypeOf` prevents them from cycling, and their hot
 /// iterative/tail-recursive paths already handle very deep acyclic chains.
 ///
-/// A Proxy can legally hide a cycle from `OrdinarySetPrototypeOf`. Keeping this
-/// below the JS call-depth ceiling leaves enough native stack to construct and
-/// throw a catchable `RangeError` instead of reaching SIGABRT first.
+/// A Proxy can legally hide a cycle from `OrdinarySetPrototypeOf`. Not
+/// profile-aware, unlike the guards above: its own measured native capacity
+/// (~54,000 in debug, the tighter of the two profiles) already sits a
+/// comfortable ~13.5x above this limit, so it fires safely in both profiles
+/// without needing a `cfg!(debug_assertions)` split — jsse#607.
 pub(crate) const PROXY_CHAIN_DEPTH_LIMIT: usize = 4_000;
 
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
