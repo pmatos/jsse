@@ -1,3 +1,61 @@
+# [0.9.0](https://github.com/pmatos/jsse/compare/v0.8.2...v0.9.0) (2026-09-23)
+
+
+### Bug Fixes
+
+* **ast:** drop Expression's boxed links iteratively via ExprBox ([#697](https://github.com/pmatos/jsse/issues/697)) ([054860f](https://github.com/pmatos/jsse/commit/054860f03ddecb742f79a2949d0f939716b06a8f))
+* **date:** accept bare one/two-digit month strings in Date parsing ([#705](https://github.com/pmatos/jsse/issues/705)) ([3e99c79](https://github.com/pmatos/jsse/commit/3e99c79801d2addc80c4a08d55edabc837fb74ea))
+* **date:** accept negative-year tokens in legacy written-month parser ([#718](https://github.com/pmatos/jsse/issues/718)) ([eba6e18](https://github.com/pmatos/jsse/commit/eba6e183c2b0c02d0db9c12fb099fbeef1aabf6f))
+* **date:** parse legacy date strings in Date.parse and add console.assert ([#675](https://github.com/pmatos/jsse/issues/675)) ([d3c785f](https://github.com/pmatos/jsse/commit/d3c785f15690d1dc0eb7d05e72cc4bb6370e9d1e))
+* **date:** reject out-of-range ISO time components in Date.parse ([#693](https://github.com/pmatos/jsse/issues/693)) ([497b0a0](https://github.com/pmatos/jsse/commit/497b0a0ce1414ceb6ad95c63ff21dc92d3ceb471))
+* **delete:** apply exotic [[Delete]] semantics to optional-chain delete ([#661](https://github.com/pmatos/jsse/issues/661)) ([7e698cd](https://github.com/pmatos/jsse/commit/7e698cda14853f88e3d67f8dd772878b98db306f))
+* **disposable:** suspend at DisposeResources awaits instead of draining inline ([#666](https://github.com/pmatos/jsse/issues/666)) ([181dbe9](https://github.com/pmatos/jsse/commit/181dbe9f0fabb93c52dda73c8aeb8e9c96b27dd3))
+* **disposable:** suspend for-of head disposal, fix await-using-of parse bug ([#699](https://github.com/pmatos/jsse/issues/699)) ([ac2bbd6](https://github.com/pmatos/jsse/commit/ac2bbd65d4b7b2dbfca990253832c3ae491d75be))
+* **disposable:** suspend nested await using blocks at disposal in try/loop/switch bodies ([#688](https://github.com/pmatos/jsse/issues/688)) ([da44e1e](https://github.com/pmatos/jsse/commit/da44e1e6dcd40756e89810dc49d0aaa97d6ea33b))
+* **gc:** root pending async-generator requests so next() promises survive collection ([#706](https://github.com/pmatos/jsse/issues/706)) ([e8910e8](https://github.com/pmatos/jsse/commit/e8910e8b53d1a8eed2aa8481cbb77672025f195b))
+* **generators:** await return operands and park async-generator disposal unwinds ([#734](https://github.com/pmatos/jsse/issues/734)) ([40cb764](https://github.com/pmatos/jsse/commit/40cb764229cb49d3b03dde0191e990cfb5c55b23))
+* **generators:** bind yield/yield* pattern results with the decl's kind ([#739](https://github.com/pmatos/jsse/issues/739)) ([e3caf29](https://github.com/pmatos/jsse/commit/e3caf2936665e9965819766f5a7cabf571b4b5ea))
+* **generators:** decompose class heritage/computed keys to close InlineYield gap ([#658](https://github.com/pmatos/jsse/issues/658)) ([98ee017](https://github.com/pmatos/jsse/commit/98ee0170486cba70959f1e54a2051255858e4bac))
+* **generators:** don't drain microtasks on synchronous async settle paths ([#714](https://github.com/pmatos/jsse/issues/714)) ([f84dc6f](https://github.com/pmatos/jsse/commit/f84dc6fc40d4c12e298a66fe441cf9da708c60f9))
+* **generators:** give await-using blocks real scope states in async functions ([#701](https://github.com/pmatos/jsse/issues/701)) ([557f67d](https://github.com/pmatos/jsse/commit/557f67daf3dcc6c6a2d3ffc20642647ce873574f))
+* **generators:** give lowered blocks/loops/catch their own scope per entry ([#703](https://github.com/pmatos/jsse/issues/703)) ([a129a72](https://github.com/pmatos/jsse/commit/a129a725d4652c0b6858853c0451b0ed96e97b86))
+* **generators:** honor break/continue that escape yield-free try/with ([#690](https://github.com/pmatos/jsse/issues/690)) ([30b1535](https://github.com/pmatos/jsse/commit/30b1535d04e31d083de1d816e55a2abedd351f19))
+* **generators:** lower await in object-pattern defaults to suspension states ([#728](https://github.com/pmatos/jsse/issues/728)) ([d718e14](https://github.com/pmatos/jsse/commit/d718e14ef33c161684009e343ba2df853cb47494))
+* **generators:** lower await/yield in delete, update, assignment and logical operands ([#731](https://github.com/pmatos/jsse/issues/731)) ([c9dad85](https://github.com/pmatos/jsse/commit/c9dad8526c5ac7e88e59f0c972fdc957f579e43d))
+* **generators:** lower yield-free break/continue in switch cases of state-machine bodies ([#672](https://github.com/pmatos/jsse/issues/672)) ([0cbc10a](https://github.com/pmatos/jsse/commit/0cbc10a4e8a7d644a8f6568437bc478d4b07656e))
+* **generators:** park async-generator requests at AwaitReturn, drop inline drains ([#732](https://github.com/pmatos/jsse/issues/732)) ([9039412](https://github.com/pmatos/jsse/commit/903941257a9fae5cee084c96d043008f087bb53b))
+* **generators:** recurse into containers when detecting for-await suspension ([#737](https://github.com/pmatos/jsse/issues/737)) ([96a8325](https://github.com/pmatos/jsse/commit/96a83253dcd030af3f10c2006a3ecc8d95bbc05b))
+* **generators:** route condition and async return-expression throws through enclosing try ([#682](https://github.com/pmatos/jsse/issues/682)) ([5e8ee75](https://github.com/pmatos/jsse/commit/5e8ee75b7ab1306b379498df05aeda0ce2986bf0))
+* **generators:** route switch discriminant/case-test throws through enclosing try ([#664](https://github.com/pmatos/jsse/issues/664)) ([a86201e](https://github.com/pmatos/jsse/commit/a86201e93565ddfb2a52d8f106f843d1d539d91e))
+* **generators:** run finalizers for break/continue leaving a yielding try ([#717](https://github.com/pmatos/jsse/issues/717)) ([cb19f1a](https://github.com/pmatos/jsse/commit/cb19f1a803c017fada4538feb3d4f839eabffd2a))
+* **generators:** run for-in loops that contain yield or await ([#691](https://github.com/pmatos/jsse/issues/691)) ([3361b81](https://github.com/pmatos/jsse/commit/3361b81578d1a4b4fac990403c96bf2a1f135d04))
+* **generators:** scope pending iterator-close list to each generator activation ([#657](https://github.com/pmatos/jsse/issues/657)) ([d79e1f3](https://github.com/pmatos/jsse/commit/d79e1f38726ebbcc5bcf4135026cfacd986d1a6f))
+* **generators:** scope pending throw/return to owning try context ([#740](https://github.com/pmatos/jsse/issues/740)) ([4b9789f](https://github.com/pmatos/jsse/commit/4b9789f8e025a43e322bfd84e9382b6534744b3a))
+* **generators:** stop hanging on await in destructuring-assignment patterns ([#741](https://github.com/pmatos/jsse/issues/741)) ([4c2b2d9](https://github.com/pmatos/jsse/commit/4c2b2d942539d7ec43b64aa564527982e9776558))
+* **generators:** suspend async-generator for-of unwind disposal on throw ([#743](https://github.com/pmatos/jsse/issues/743)) ([cd9dd60](https://github.com/pmatos/jsse/commit/cd9dd60bf17b74fdeb4f192e0b14185f371a1dee))
+* **generators:** suspend await using disposal in async generators ([#715](https://github.com/pmatos/jsse/issues/715)) ([223be07](https://github.com/pmatos/jsse/commit/223be0781112bed5637b0894c5bbdb783b0c6086))
+* **generators:** suspend every yield* step in async generators at its Await ([#723](https://github.com/pmatos/jsse/issues/723)) ([2acae0e](https://github.com/pmatos/jsse/commit/2acae0e38f6ddd533d259581dc0f6c41213f0621))
+* **generators:** suspend for-await head in async generators instead of draining microtasks ([#720](https://github.com/pmatos/jsse/issues/720)) ([0a15c59](https://github.com/pmatos/jsse/commit/0a15c59afdccfc71f5478bb040ea0b6fc05d7dda))
+* **generators:** suspend inline yield and yield* in async generators ([#729](https://github.com/pmatos/jsse/issues/729)) ([3a5c266](https://github.com/pmatos/jsse/commit/3a5c266c3b232edfdd9f952c1dacc39b6e3fd67c))
+* **generators:** suspend yield in var/let/const pattern defaults ([#744](https://github.com/pmatos/jsse/issues/744)) ([1ec69dc](https://github.com/pmatos/jsse/commit/1ec69dc4fb918f8a8e7a3f11cc5d417c97d9662e))
+* **generators:** treat yield/await in switch case tests as suspension points ([#692](https://github.com/pmatos/jsse/issues/692)) ([5ca7aa3](https://github.com/pmatos/jsse/commit/5ca7aa360019a3b9570b050f0a29e20badeb5a60))
+* **interpreter:** calibrate CALL_DEPTH_*/EVAL_DEPTH_LIMIT per build profile ([#736](https://github.com/pmatos/jsse/issues/736)) ([7bc2caa](https://github.com/pmatos/jsse/commit/7bc2caa631e5f9979f7c2d51c91cbc8017c38850))
+* **intl:** remove spurious Intl.Locale.supportedLocalesOf static ([#662](https://github.com/pmatos/jsse/issues/662)) ([0674e9a](https://github.com/pmatos/jsse/commit/0674e9a7c4f5789052215cbedb04b0c07d32c2ec))
+* **lexer:** round non-decimal numeric literals wider than 64 bits ([#698](https://github.com/pmatos/jsse/issues/698)) ([6b519ee](https://github.com/pmatos/jsse/commit/6b519ee3efc5a999e38176b5caab9be9efffae87))
+* **number:** compute exact radix digits for magnitudes >= 2^63 ([#700](https://github.com/pmatos/jsse/issues/700)) ([661efa8](https://github.com/pmatos/jsse/commit/661efa84bac0d7ae974c71ac3fbc35ca5e38450d))
+* **optional-chain:** throw on private access with non-object base ([#660](https://github.com/pmatos/jsse/issues/660)) ([f2f9faa](https://github.com/pmatos/jsse/commit/f2f9faa1617556bbdc88167265b0755b8deeca25))
+* **parseInt:** round integers above 2^53 once instead of per digit ([#676](https://github.com/pmatos/jsse/issues/676)) ([dcc896c](https://github.com/pmatos/jsse/commit/dcc896c88dd8655520ac65c4bf06dfab98527fcd))
+* **parser:** reject script-level function/lexical redeclaration and unleak JetStream harness ([#673](https://github.com/pmatos/jsse/issues/673)) ([b6860cc](https://github.com/pmatos/jsse/commit/b6860ccb6e4964b5d8e69b95f4aa9e3069879709))
+* **parser:** reject strict-reserved name on async function expression ([#667](https://github.com/pmatos/jsse/issues/667)) ([90f6c77](https://github.com/pmatos/jsse/commit/90f6c7771bcd362fcff6cc3fdba9f78696b44a03))
+* **scripts:** fix JetStream runner self, preload and async-failure gaps ([#681](https://github.com/pmatos/jsse/issues/681)) ([3db1026](https://github.com/pmatos/jsse/commit/3db1026c0f4869a81bf3a3d7d448cce99325fc5c))
+* **temporal:** constrain overflow in PlainYearMonth.prototype.toPlainDate ([#668](https://github.com/pmatos/jsse/issues/668)) ([fa77ea9](https://github.com/pmatos/jsse/commit/fa77ea932dd04464af7987fcdd615196145ddfb2))
+* **temporal:** evaluate POSIX TZ footer rules for named-zone offsets ([#659](https://github.com/pmatos/jsse/issues/659)) ([4d03526](https://github.com/pmatos/jsse/commit/4d0352646465d1836faaed52aedee7a4a3551b98))
+
+
+### Features
+
+* **console:** add error, warn, info, debug methods ([#702](https://github.com/pmatos/jsse/issues/702)) ([a056795](https://github.com/pmatos/jsse/commit/a0567954c60ba98648964a840604da12202cc844))
+
 ## [0.8.2](https://github.com/pmatos/jsse/compare/v0.8.1...v0.8.2) (2026-09-20)
 
 
