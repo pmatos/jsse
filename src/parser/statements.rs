@@ -40,27 +40,24 @@ impl<'a> Parser<'a> {
                 }
                 // In sloppy mode, `let` is only a declaration if followed by a
                 // binding start token (identifier, `{`, `[`, or keyword-as-identifier).
-                let saved_lt = self.prev_line_terminator;
-                let saved_ts = self.current_token_start;
-                let saved_te = self.current_token_end;
-                let saved = self.advance()?;
-                // Spec §14.3.1: `let` followed by a token that could be a
-                // BindingIdentifier or BindingPattern is always a declaration.
-                // `yield` and `await` are BindingIdentifiers grammatically even
-                // when static semantics later reject them, so ASI must not apply.
-                let is_decl = matches!(
-                    &self.current,
-                    Token::LeftBrace
-                        | Token::LeftBracket
-                        | Token::Keyword(Keyword::Yield)
-                        | Token::Keyword(Keyword::Await)
-                ) || matches!(&self.current, Token::IdentifierWithEscape(_))
-                    || self.current_identifier_name().is_some();
-                self.push_back(self.current.clone(), self.prev_line_terminator);
-                self.current = saved;
-                self.prev_line_terminator = saved_lt;
-                self.current_token_start = saved_ts;
-                self.current_token_end = saved_te;
+                let is_decl = self.lookahead(|tokens| {
+                    tokens.advance().is_ok()
+                        && matches!(
+                            tokens.current(),
+                            Token::LeftBrace
+                                | Token::LeftBracket
+                                | Token::Identifier(_)
+                                | Token::IdentifierWithEscape(_)
+                                | Token::Keyword(
+                                    Keyword::Yield
+                                        | Keyword::Await
+                                        | Keyword::Let
+                                        | Keyword::Static
+                                        | Keyword::Async
+                                        | Keyword::Of
+                                )
+                        )
+                });
                 if is_decl {
                     self.parse_lexical_declaration()
                 } else {
@@ -71,24 +68,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(super) fn is_async_function(&mut self) -> bool {
-        if !matches!(&self.current, Token::Keyword(Keyword::Async)) {
-            return false;
-        }
-        let saved_lt = self.prev_line_terminator;
-        let saved_ts = self.current_token_start;
-        let saved_te = self.current_token_end;
-        let Ok(saved) = self.advance() else {
-            return false;
-        };
-        let result =
-            self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
-        self.push_back(self.current.clone(), self.prev_line_terminator);
-        self.current = saved;
-        self.prev_line_terminator = saved_lt;
-        self.current_token_start = saved_ts;
-        self.current_token_end = saved_te;
-        result
+    pub(super) fn is_async_function(&self) -> bool {
+        matches!(&self.current, Token::Keyword(Keyword::Async))
+            && self.lookahead(|tokens| {
+                tokens.advance().is_ok()
+                    && !tokens.line_terminator_before()
+                    && tokens.current() == &Token::Keyword(Keyword::Function)
+            })
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
@@ -120,13 +106,9 @@ impl<'a> Parser<'a> {
                     self.error("Lexical declaration cannot appear in a single-statement context")
                 );
             }
-            // ExpressionStatement lookahead: `let [` is not allowed
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            let next_is_bracket = self.current == Token::LeftBracket;
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+            let next_is_bracket = self.lookahead(|tokens| {
+                tokens.advance().is_ok() && tokens.current() == &Token::LeftBracket
+            });
             if next_is_bracket {
                 return Err(
                     self.error("Lexical declaration cannot appear in a single-statement context")
@@ -136,19 +118,9 @@ impl<'a> Parser<'a> {
         if matches!(&self.current, Token::Keyword(Keyword::Class)) {
             return Err(self.error("Class declaration cannot appear in a single-statement context"));
         }
-        if matches!(&self.current, Token::Keyword(Keyword::Async)) {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            let is_async_fn =
-                self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
-            if is_async_fn {
-                return Err(self.error(
-                    "Async function declaration cannot appear in a single-statement context",
-                ));
-            }
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
+            return Err(self
+                .error("Async function declaration cannot appear in a single-statement context"));
         }
         match &self.current {
             Token::LeftBrace => self.parse_block_statement(),
@@ -178,49 +150,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression_statement_or_labeled(&mut self) -> Result<Statement, ParseError> {
-        if let Some(name) = self.current_identifier_name() {
-            let orig_token = self.current.clone();
-            let ident_lt = self.prev_line_terminator;
-            self.advance()?;
-            if self.current == Token::Colon {
-                self.advance()?;
-                let is_iteration = matches!(
-                    self.current,
-                    Token::Keyword(Keyword::For)
-                        | Token::Keyword(Keyword::While)
-                        | Token::Keyword(Keyword::Do)
-                );
-                if self.strict && self.current == Token::Keyword(Keyword::Function) {
-                    return Err(self.error("In strict mode code, functions can only be declared at top level or inside a block"));
-                }
-                if self.labels.iter().any(|(n, _)| n == &name) {
-                    return Err(self.error(format!("Label '{name}' has already been declared")));
-                }
-                self.labels.push((name.clone(), is_iteration));
-                let stmt = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
-                    // Annex B: labeled function declaration in sloppy mode (not generators)
-                    let fdecl = self.parse_function_declaration()?;
-                    if let Statement::FunctionDeclaration(ref f) = fdecl
-                        && f.is_generator
-                    {
-                        self.labels.pop();
-                        return Err(self.error(
-                            "Generators can only be declared at the top level or inside a block",
-                        ));
-                    }
-                    fdecl
-                } else {
-                    self.parse_statement()?
-                };
-                self.labels.pop();
-                return Ok(Statement::Labeled(name, Box::new(stmt)));
+        if let Some(name) = self.current_identifier_name()
+            && self
+                .lookahead(|tokens| tokens.advance().is_ok() && tokens.current() == &Token::Colon)
+        {
+            self.advance()?; // label identifier
+            self.advance()?; // colon
+            let is_iteration = matches!(
+                self.current,
+                Token::Keyword(Keyword::For)
+                    | Token::Keyword(Keyword::While)
+                    | Token::Keyword(Keyword::Do)
+            );
+            if self.strict && self.current == Token::Keyword(Keyword::Function) {
+                return Err(self.error("In strict mode code, functions can only be declared at top level or inside a block"));
             }
-            // Not a label — push back current and restore identifier
-            let after_tok = std::mem::replace(&mut self.current, orig_token);
-            let after_lt = std::mem::replace(&mut self.prev_line_terminator, ident_lt);
-            let after_ts = self.current_token_start;
-            let after_te = self.current_token_end;
-            self.pushback = Some((after_tok, after_lt, after_ts, after_te));
+            if self.labels.iter().any(|(n, _)| n == &name) {
+                return Err(self.error(format!("Label '{name}' has already been declared")));
+            }
+            self.labels.push((name.clone(), is_iteration));
+            let stmt = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
+                // Annex B: labeled function declaration in sloppy mode (not generators)
+                let fdecl = self.parse_function_declaration()?;
+                if let Statement::FunctionDeclaration(f) = &fdecl
+                    && f.is_generator
+                {
+                    self.labels.pop();
+                    return Err(self.error(
+                        "Generators can only be declared at the top level or inside a block",
+                    ));
+                }
+                fdecl
+            } else {
+                self.parse_statement()?
+            };
+            self.labels.pop();
+            return Ok(Statement::Labeled(name, Box::new(stmt)));
         }
         self.parse_expression_statement()
     }
@@ -544,19 +509,10 @@ impl<'a> Parser<'a> {
             );
         }
         // Reject `async function` in iteration body
-        if matches!(&self.current, Token::Keyword(Keyword::Async)) {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            let is_async_fn =
-                self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
-            if is_async_fn {
-                return Err(self.error(
-                    "Declaration not allowed in statement position of iteration statement",
-                ));
-            }
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
+            return Err(
+                self.error("Declaration not allowed in statement position of iteration statement")
+            );
         }
         self.in_iteration += 1;
         let body = self.parse_statement();
@@ -611,32 +567,14 @@ impl<'a> Parser<'a> {
         // `is_using_declaration()` doesn't include Keyword::Of, so check it here:
         // peek two tokens: if `using` `of` `=`, it's a using declaration.
         let is_for_using = if matches!(&self.current, Token::Identifier(n) if n == "using") {
-            if self.is_using_declaration() {
-                true
-            } else {
-                let saved_current = self.current.clone();
-                let saved_lt = self.prev_line_terminator;
-                let saved_ts = self.current_token_start;
-                let saved_te = self.current_token_end;
-                let saved_pushback = self.pushback.clone();
-                let saved_lexer = self.lexer.save_state();
-                let mut result = false;
-                if self.advance().is_ok()
-                    && !self.prev_line_terminator
-                    && matches!(&self.current, Token::Keyword(Keyword::Of))
-                    && self.advance().is_ok()
-                    && self.current == Token::Assign
-                {
-                    result = true;
-                }
-                self.current = saved_current;
-                self.prev_line_terminator = saved_lt;
-                self.current_token_start = saved_ts;
-                self.current_token_end = saved_te;
-                self.pushback = saved_pushback;
-                self.lexer.restore_state(saved_lexer);
-                result
-            }
+            self.is_using_declaration()
+                || self.lookahead(|tokens| {
+                    tokens.advance().is_ok()
+                        && !tokens.line_terminator_before()
+                        && matches!(tokens.current(), Token::Keyword(Keyword::Of))
+                        && tokens.advance().is_ok()
+                        && tokens.current() == &Token::Assign
+                })
         } else {
             false
         };
@@ -730,43 +668,20 @@ impl<'a> Parser<'a> {
         let is_for_await_using = if matches!(&self.current, Token::Keyword(Keyword::Await))
             && (self.in_async || (self.is_module && self.in_function == 0))
         {
-            if self.is_await_using_declaration() {
-                true
-            } else {
-                let saved_current = self.current.clone();
-                let saved_lt = self.prev_line_terminator;
-                let saved_ts = self.current_token_start;
-                let saved_te = self.current_token_end;
-                let saved_pushback = self.pushback.clone();
-                let saved_lexer = self.lexer.save_state();
-                let mut result = false;
-                // peek past `await`
-                if self.advance().is_ok()
-                    && !self.prev_line_terminator
-                    && matches!(&self.current, Token::Identifier(n) if n == "using")
-                {
-                    // peek past `using`
-                    if self.advance().is_ok()
-                        && !self.prev_line_terminator
-                        && matches!(&self.current, Token::Keyword(Keyword::Of))
-                    {
-                        // peek past `of` — if `=` or `of` (for-of keyword), it's a declaration
-                        if self.advance().is_ok()
-                            && (self.current == Token::Assign
-                                || matches!(&self.current, Token::Keyword(Keyword::Of)))
-                        {
-                            result = true;
-                        }
-                    }
-                }
-                self.current = saved_current;
-                self.prev_line_terminator = saved_lt;
-                self.current_token_start = saved_ts;
-                self.current_token_end = saved_te;
-                self.pushback = saved_pushback;
-                self.lexer.restore_state(saved_lexer);
-                result
-            }
+            self.is_await_using_declaration()
+                || self.lookahead(|tokens| {
+                    tokens.advance().is_ok()
+                        && !tokens.line_terminator_before()
+                        && matches!(tokens.current(), Token::Identifier(n) if n == "using")
+                        && tokens.advance().is_ok()
+                        && !tokens.line_terminator_before()
+                        && matches!(tokens.current(), Token::Keyword(Keyword::Of))
+                        && tokens.advance().is_ok()
+                        && matches!(
+                            tokens.current(),
+                            Token::Assign | Token::Keyword(Keyword::Of)
+                        )
+                })
         } else {
             false
         };
@@ -923,24 +838,25 @@ impl<'a> Parser<'a> {
                 // `for (let [` → destructuring declaration
                 // `for (let ident` → let declaration
                 // `for (let; ...)` → identifier (let followed by `;`, `=`, `)`, etc.)
-                let saved_lt = self.prev_line_terminator;
-                let saved = self.advance()?; // consume `let`
-                let is_let_identifier = self.current == Token::Keyword(Keyword::In)
-                    || self.current == Token::Semicolon
-                    || self.current == Token::RightParen
-                    || self.current == Token::Assign
-                    || self.current == Token::Comma
-                    || self.current == Token::Dot
-                    || self.current == Token::Increment
-                    || self.current == Token::Decrement
-                    || self.current == Token::OptionalChain
-                    || matches!(&self.current, Token::Keyword(Keyword::Of))
-                    || matches!(&self.current, Token::Identifier(n) if n == "instanceof");
+                let is_let_identifier = self.lookahead(|tokens| {
+                    tokens.advance().is_ok()
+                        && (matches!(
+                            tokens.current(),
+                            Token::Keyword(Keyword::In | Keyword::Of)
+                                | Token::Semicolon
+                                | Token::RightParen
+                                | Token::Assign
+                                | Token::Comma
+                                | Token::Dot
+                                | Token::Increment
+                                | Token::Decrement
+                                | Token::OptionalChain
+                        ) || matches!(tokens.current(), Token::Identifier(n) if n == "instanceof"))
+                });
                 if is_let_identifier {
-                    // `for (let in expr)` — `let` is an identifier
-                    self.push_back(self.current.clone(), self.prev_line_terminator);
+                    // Reclassify sloppy-mode `let`; the lexer is already
+                    // positioned after the current token.
                     self.current = Token::Identifier("let".to_string());
-                    self.prev_line_terminator = saved_lt;
                     // Fall through to expression path below
                     self.no_in = true;
                     let expr = self.parse_expression()?;
@@ -991,11 +907,7 @@ impl<'a> Parser<'a> {
                     }
                     Some(ForInit::Expression(expr))
                 } else {
-                    // It's a let declaration
-                    self.push_back(self.current.clone(), self.prev_line_terminator);
-                    self.current = saved;
-                    self.prev_line_terminator = saved_lt;
-                    // Re-enter the let/const path properly
+                    // It's a let declaration.
                     let kind = VarKind::Let;
                     self.advance()?;
                     self.no_in = true;
@@ -1534,98 +1446,40 @@ impl<'a> Parser<'a> {
         Ok(Statement::Expression(expr))
     }
 
-    fn is_using_declaration(&mut self) -> bool {
-        // `using` followed by an identifier on the same line (no line terminator)
-        let saved_lt = self.prev_line_terminator;
-        let saved = match self.advance() {
-            Ok(t) => t,
-            Err(_) => return false,
-        };
-        let lt = self.prev_line_terminator;
-        let is_using = !lt
-            && (matches!(&self.current, Token::Identifier(_))
-                || matches!(
-                    &self.current,
-                    Token::Keyword(
-                        Keyword::Await
-                            | Keyword::Yield
-                            | Keyword::Let
-                            | Keyword::Static
-                            | Keyword::Async
-                    )
-                ));
-        self.push_back(self.current.clone(), self.prev_line_terminator);
-        self.current = saved;
-        self.prev_line_terminator = saved_lt;
-        is_using
+    fn is_using_binding(token: &Token) -> bool {
+        matches!(token, Token::Identifier(_))
+            || matches!(
+                token,
+                Token::Keyword(
+                    Keyword::Await
+                        | Keyword::Yield
+                        | Keyword::Let
+                        | Keyword::Static
+                        | Keyword::Async
+                )
+            )
     }
 
-    fn is_await_using_declaration(&mut self) -> bool {
+    fn is_using_declaration(&self) -> bool {
+        // `using` followed by an identifier on the same line (no line terminator)
+        self.lookahead(|tokens| {
+            tokens.advance().is_ok()
+                && !tokens.line_terminator_before()
+                && Self::is_using_binding(tokens.current())
+        })
+    }
+
+    fn is_await_using_declaration(&self) -> bool {
         // `await` is current. Peek: next should be `using` (no line terminator),
         // then a valid binding identifier (no line terminator).
-        // Save full parser+lexer state so we can peek two tokens ahead.
-        let saved_current = self.current.clone();
-        let saved_lt = self.prev_line_terminator;
-        let saved_start = self.current_token_start;
-        let saved_end = self.current_token_end;
-        let saved_pushback = self.pushback.take();
-        let saved_lexer = self.lexer.save_state();
-
-        // Advance past `await`
-        if self.advance().is_err() {
-            self.current = saved_current;
-            self.prev_line_terminator = saved_lt;
-            self.current_token_start = saved_start;
-            self.current_token_end = saved_end;
-            self.pushback = saved_pushback;
-            self.lexer.restore_state(saved_lexer);
-            return false;
-        }
-        let lt1 = self.prev_line_terminator;
-        let is_using_kw = !lt1 && matches!(&self.current, Token::Identifier(n) if n == "using");
-
-        if !is_using_kw {
-            self.current = saved_current;
-            self.prev_line_terminator = saved_lt;
-            self.current_token_start = saved_start;
-            self.current_token_end = saved_end;
-            self.pushback = saved_pushback;
-            self.lexer.restore_state(saved_lexer);
-            return false;
-        }
-
-        // Advance past `using` to check the next token
-        if self.advance().is_err() {
-            self.current = saved_current;
-            self.prev_line_terminator = saved_lt;
-            self.current_token_start = saved_start;
-            self.current_token_end = saved_end;
-            self.pushback = saved_pushback;
-            self.lexer.restore_state(saved_lexer);
-            return false;
-        }
-        let lt2 = self.prev_line_terminator;
-        let next_is_binding = !lt2
-            && (matches!(&self.current, Token::Identifier(_))
-                || matches!(
-                    &self.current,
-                    Token::Keyword(
-                        Keyword::Await
-                            | Keyword::Yield
-                            | Keyword::Let
-                            | Keyword::Static
-                            | Keyword::Async
-                    )
-                ));
-
-        // Restore full parser+lexer state
-        self.current = saved_current;
-        self.prev_line_terminator = saved_lt;
-        self.current_token_start = saved_start;
-        self.current_token_end = saved_end;
-        self.pushback = saved_pushback;
-        self.lexer.restore_state(saved_lexer);
-        next_is_binding
+        self.lookahead(|tokens| {
+            tokens.advance().is_ok()
+                && !tokens.line_terminator_before()
+                && matches!(tokens.current(), Token::Identifier(n) if n == "using")
+                && tokens.advance().is_ok()
+                && !tokens.line_terminator_before()
+                && Self::is_using_binding(tokens.current())
+        })
     }
 
     fn parse_using_declaration(&mut self) -> Result<Statement, ParseError> {
