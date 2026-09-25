@@ -2281,6 +2281,50 @@ impl JsObjectData {
         self.array_data_mut().map(|data| &mut data.elements)
     }
 
+    /// Create a default data property at the end of a dense Array without
+    /// storing the same index in the ordinary property map. Undefined values
+    /// need a descriptor there because the element vector uses undefined as
+    /// its hole marker.
+    pub(crate) fn try_append_dense_array_data_property(
+        &mut self,
+        key: &JsPropertyKey,
+        value: &JsValue,
+    ) -> bool {
+        if value.is_undefined()
+            || !self.extensible
+            || !is_array_index_property_key(key)
+            || self.properties.contains_key(key)
+        {
+            return false;
+        }
+        let index = parse_array_index(key).unwrap() as usize;
+        if self
+            .array_elements()
+            .is_none_or(|elements| elements.len() != index)
+        {
+            return false;
+        }
+        let Some(length_desc) = self.properties.get("length") else {
+            return false;
+        };
+        let length = length_desc
+            .value
+            .as_ref()
+            .and_then(JsValue::as_number)
+            .unwrap_or(0.0);
+        if index as f64 >= length && length_desc.writable == Some(false) {
+            return false;
+        }
+
+        self.array_elements_mut().unwrap().push(value.clone());
+        if index as f64 >= length {
+            self.properties.get_mut("length").unwrap().value =
+                Some(JsValue::number((index + 1) as f64));
+        }
+        self.shape_id = fresh_shape_id();
+        true
+    }
+
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
         self.array_data()
             .map(|data| data.extra_string_property_order.as_slice())
@@ -2947,10 +2991,12 @@ impl JsObjectData {
 
             // Intern once; the same backing bytes are shared between property_order and
             // the property map so the two stored copies share one allocation.
-            // Compare by value (not pointer): integer-index keys are not interned
-            // and get fresh storage each time, so pointer equality would miss existing entries.
+            // The map and property_order are kept in sync. An Array element can
+            // be current without a map entry, in which case this descriptor
+            // needs a new order entry; a map lookup avoids scanning the order
+            // list for every element created by Array builtins.
             let ikey = key.clone();
-            if !self.property_order.iter().any(|k| k == &ikey) {
+            if !self.properties.contains_key(&ikey) {
                 self.record_property_creation(&ikey);
             }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
