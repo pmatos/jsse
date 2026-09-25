@@ -267,6 +267,7 @@ fn analyze_statement(
                             &mut analysis.local_vars,
                             ctx,
                         );
+                        analyze_pattern_expressions(&declarator.pattern, analysis, ctx);
                     }
                 }
                 ForInOfLeft::Pattern(_) => {
@@ -309,6 +310,7 @@ fn analyze_statement(
                             &mut analysis.local_vars,
                             ctx,
                         );
+                        analyze_pattern_expressions(&declarator.pattern, analysis, ctx);
                     }
                 }
                 ForInOfLeft::Pattern(_) => {
@@ -740,8 +742,16 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
                 || f.update.as_ref().is_some_and(expr_contains_yield)
                 || contains_yield(&f.body)
         }
-        Statement::ForIn(f) => expr_contains_yield(&f.right) || contains_yield(&f.body),
-        Statement::ForOf(f) => expr_contains_yield(&f.right) || contains_yield(&f.body),
+        Statement::ForIn(f) => {
+            for_in_of_variable_head_contains_yield(&f.left)
+                || expr_contains_yield(&f.right)
+                || contains_yield(&f.body)
+        }
+        Statement::ForOf(f) => {
+            for_in_of_variable_head_contains_yield(&f.left)
+                || expr_contains_yield(&f.right)
+                || contains_yield(&f.body)
+        }
         Statement::Return(e) => e.as_ref().is_some_and(expr_contains_yield),
         Statement::Throw(e) => expr_contains_yield(e),
         Statement::Try(t) => {
@@ -834,6 +844,18 @@ pub(crate) fn for_in_of_left_contains_suspension(left: &ForInOfLeft) -> bool {
             .any(|d| pattern_contains_suspension(&d.pattern)),
         ForInOfLeft::Pattern(p) => pattern_contains_suspension(p),
         ForInOfLeft::Expression(e) => expr_contains_suspension(e),
+    }
+}
+
+fn for_in_of_variable_head_contains_yield(left: &ForInOfLeft) -> bool {
+    match left {
+        // The transform moves these bindings into the loop body before it
+        // lowers the loop. Assignment heads still need their own lowering.
+        ForInOfLeft::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| pattern_contains_yield(&d.pattern)),
+        ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => false,
     }
 }
 
@@ -1237,8 +1259,16 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
                 || f.update.as_ref().is_some_and(expr_contains_suspension)
                 || contains_suspension(&f.body)
         }
-        Statement::ForIn(f) => expr_contains_suspension(&f.right) || contains_suspension(&f.body),
-        Statement::ForOf(f) => expr_contains_suspension(&f.right) || contains_suspension(&f.body),
+        Statement::ForIn(f) => {
+            for_in_of_variable_head_contains_yield(&f.left)
+                || expr_contains_suspension(&f.right)
+                || contains_suspension(&f.body)
+        }
+        Statement::ForOf(f) => {
+            for_in_of_variable_head_contains_yield(&f.left)
+                || expr_contains_suspension(&f.right)
+                || contains_suspension(&f.body)
+        }
         Statement::Return(e) => e.as_ref().is_some_and(expr_contains_suspension),
         Statement::Throw(e) => expr_contains_suspension(e),
         Statement::Try(t) => {
