@@ -57,11 +57,22 @@ async function run() {
   var r4 = await it2.next(6);
   var r5 = await it2.next();
 
-  return [r1, r2, s0, r3, r4, r5];
+  var values = [];
+  async function* soleMultiElementForOf() {
+    for (const { a = yield 'head' } of [{}, {}]) {
+      values.push(a);
+    }
+  }
+  var it3 = soleMultiElementForOf();
+  var m1 = await it3.next();
+  var m2 = await it3.next('first');
+  var m3 = await it3.next('second');
+
+  return [r1, r2, s0, r3, r4, r5, m1, m2, m3, values];
 }
 
 run()
-  .then(function ([r1, r2, s0, r3, r4, r5]) {
+  .then(function ([r1, r2, s0, r3, r4, r5, m1, m2, m3, values]) {
     assert.sameValue(r1.value, 1, 'sole for-of: head pattern default yield suspends');
     assert.sameValue(r1.done, false, 'sole for-of: has not completed after first yield');
     assert.sameValue(r2.value[0], 6, 'sole for-of: default-bearing name resumes with sent value');
@@ -73,5 +84,12 @@ run()
     assert.sameValue(r4.value, 'tick', 'state-machine for-of: resumes into the loop body');
     assert.sameValue(r5.value[0], 6, 'state-machine for-of: default-bearing name resumes with sent value');
     assert.sameValue(r5.value[1], 9, 'state-machine for-of: sibling non-default property is preserved');
+
+    assert.sameValue(m1.value, 'head', 'multi-element loop suspends in first head');
+    assert.sameValue(m2.value, 'head', 'multi-element loop suspends in second head');
+    assert.sameValue(m3.done, true, 'multi-element loop completes after second head');
+    assert.sameValue(values.length, 2, 'multi-element loop body is not replayed');
+    assert.sameValue(values[0], 'first');
+    assert.sameValue(values[1], 'second');
   })
   .then($DONE, $DONE);
