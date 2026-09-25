@@ -78,6 +78,46 @@ struct SavedFunctionContext {
     allow_super_call: bool,
     labels: Vec<(String, bool)>,
 }
+enum LookaheadToken<'parser> {
+    Parser(&'parser Token),
+    Scanned(Token),
+}
+
+/// A read-only fork of the token stream for grammar disambiguation.
+///
+/// Probes advance only the cloned lexer, so every exit path leaves the parser's
+/// token, source span, and line-terminator state unchanged.
+struct Lookahead<'parser, 'source> {
+    lexer: Lexer<'source>,
+    current: LookaheadToken<'parser>,
+    line_terminator_before: bool,
+}
+
+impl Lookahead<'_, '_> {
+    fn current(&self) -> &Token {
+        match &self.current {
+            LookaheadToken::Parser(token) => token,
+            LookaheadToken::Scanned(token) => token,
+        }
+    }
+
+    fn line_terminator_before(&self) -> bool {
+        self.line_terminator_before
+    }
+
+    fn advance(&mut self) -> Result<(), ParseError> {
+        self.line_terminator_before = false;
+        loop {
+            let token = self.lexer.next_token()?;
+            if token == Token::LineTerminator {
+                self.line_terminator_before = true;
+                continue;
+            }
+            self.current = LookaheadToken::Scanned(token);
+            return Ok(());
+        }
+    }
+}
 
 pub(crate) struct Parser<'a> {
     source: &'a str,
@@ -88,7 +128,6 @@ pub(crate) struct Parser<'a> {
     current_token_end: usize,
     prev_token_end: usize,
     prev_line_terminator: bool,
-    pushback: Option<(Token, bool, usize, usize)>, // (token, had_line_terminator_before, token_start, token_end)
     strict: bool,
     is_module: bool,
     /// Context depth counters. A construct that re-scopes one of these must
@@ -183,7 +222,6 @@ impl<'a> Parser<'a> {
             current_token_end: token_end,
             prev_token_end: 0,
             prev_line_terminator: had_lt,
-            pushback: None,
             strict: false,
             is_module: false,
             in_function: 0,
@@ -229,37 +267,31 @@ impl<'a> Parser<'a> {
         self.parse_depth -= 1;
     }
 
+    fn lookahead<R>(&self, inspect: impl FnOnce(&mut Lookahead<'_, 'a>) -> R) -> R {
+        let mut tokens = Lookahead {
+            lexer: self.lexer.clone(),
+            current: LookaheadToken::Parser(&self.current),
+            line_terminator_before: self.prev_line_terminator,
+        };
+        inspect(&mut tokens)
+    }
+
     fn advance(&mut self) -> Result<Token, ParseError> {
         self.prev_token_end = self.current_token_end;
         let old = std::mem::replace(&mut self.current, Token::Eof);
-        if let Some((tok, lt, ts, te)) = self.pushback.take() {
-            self.current = tok;
-            self.prev_line_terminator = lt;
-            self.current_token_start = ts;
-            self.current_token_end = te;
-        } else {
-            self.prev_line_terminator = false;
-            loop {
-                let tok = self.lexer.next_token()?;
-                if tok == Token::LineTerminator {
-                    self.prev_line_terminator = true;
-                    continue;
-                }
-                self.current_token_start = self.lexer.token_start();
-                self.current_token_end = self.lexer.offset();
-                self.current = tok;
-                break;
+        self.prev_line_terminator = false;
+        loop {
+            let tok = self.lexer.next_token()?;
+            if tok == Token::LineTerminator {
+                self.prev_line_terminator = true;
+                continue;
             }
+            self.current_token_start = self.lexer.token_start();
+            self.current_token_end = self.lexer.offset();
+            self.current = tok;
+            break;
         }
         Ok(old)
-    }
-
-    fn push_back(&mut self, token: Token, had_lt: bool) {
-        let old_current = std::mem::replace(&mut self.current, token);
-        let old_lt = std::mem::replace(&mut self.prev_line_terminator, had_lt);
-        let old_ts = self.current_token_start;
-        let old_te = self.current_token_end;
-        self.pushback = Some((old_current, old_lt, old_ts, old_te));
     }
 
     fn eat(&mut self, expected: &Token) -> Result<(), ParseError> {
@@ -554,40 +586,31 @@ impl<'a> Parser<'a> {
             ))
     }
 
-    fn current_identifier_name(&self) -> Option<String> {
-        match &self.current {
+    fn identifier_name<'token>(&self, token: &'token Token) -> Option<&'token str> {
+        match token {
             Token::Identifier(name) => {
-                if Self::is_reserved_identifier(name, self.strict) {
-                    None
-                } else {
-                    Some(name.clone())
-                }
+                (!Self::is_reserved_identifier(name, self.strict)).then_some(name)
             }
-            Token::IdentifierWithEscape(name) => {
-                if Self::is_reserved_identifier(name, self.strict)
-                    || (name == "yield" && (self.in_generator || self.strict))
-                    || (name == "await"
-                        && (self.in_async || self.in_static_block || self.is_module))
-                {
-                    None
-                } else {
-                    Some(name.clone())
-                }
-            }
-            Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
-                Some("yield".to_string())
-            }
+            Token::IdentifierWithEscape(name) => (!Self::is_reserved_identifier(name, self.strict)
+                && !(name == "yield" && (self.in_generator || self.strict))
+                && !(name == "await" && (self.in_async || self.in_static_block || self.is_module)))
+                .then_some(name),
+            Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => Some("yield"),
             Token::Keyword(Keyword::Await)
                 if !self.in_async && !self.in_static_block && !self.is_module =>
             {
-                Some("await".to_string())
+                Some("await")
             }
-            Token::Keyword(Keyword::Let) if !self.strict => Some("let".to_string()),
-            Token::Keyword(Keyword::Static) if !self.strict => Some("static".to_string()),
-            Token::Keyword(Keyword::Async) => Some("async".to_string()),
-            Token::Keyword(Keyword::Of) => Some("of".to_string()),
+            Token::Keyword(Keyword::Let) if !self.strict => Some("let"),
+            Token::Keyword(Keyword::Static) if !self.strict => Some("static"),
+            Token::Keyword(Keyword::Async) => Some("async"),
+            Token::Keyword(Keyword::Of) => Some("of"),
             _ => None,
         }
+    }
+
+    fn current_identifier_name(&self) -> Option<String> {
+        self.identifier_name(&self.current).map(str::to_owned)
     }
 
     fn is_simple_parameter_list(params: &[Pattern]) -> bool {
@@ -1402,23 +1425,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn is_import_expression(&mut self) -> bool {
-        // Peek ahead to see if this is `import(` or `import.meta`
-        let saved_lt = self.prev_line_terminator;
-        let saved_ts = self.current_token_start;
-        let saved_te = self.current_token_end;
-        let saved = match self.advance() {
-            Ok(t) => t,
-            Err(_) => return false,
-        };
-        let is_expr = self.current == Token::LeftParen || self.current == Token::Dot;
-        // Restore
-        self.push_back(self.current.clone(), self.prev_line_terminator);
-        self.current = saved;
-        self.prev_line_terminator = saved_lt;
-        self.current_token_start = saved_ts;
-        self.current_token_end = saved_te;
-        is_expr
+    fn is_import_expression(&self) -> bool {
+        self.lookahead(|tokens| {
+            tokens.advance().is_ok() && matches!(tokens.current(), Token::LeftParen | Token::Dot)
+        })
     }
 }
 
@@ -1609,6 +1619,34 @@ mod tests {
     fn parse_empty() {
         let prog = parse("");
         assert!(prog.body.as_slice().is_empty());
+    }
+
+    #[test]
+    fn lookahead_reads_tokens_without_advancing_the_parser() {
+        let mut parser = Parser::new("await\nusing value").expect("parser init");
+
+        let observed = parser
+            .lookahead(|tokens| -> Result<(bool, bool, bool), ParseError> {
+                tokens.advance()?;
+                let saw_using =
+                    matches!(tokens.current(), Token::Identifier(name) if name == "using");
+                let saw_line_terminator = tokens.line_terminator_before();
+                tokens.advance()?;
+                let saw_value =
+                    matches!(tokens.current(), Token::Identifier(name) if name == "value");
+                Ok((saw_using, saw_line_terminator, saw_value))
+            })
+            .expect("lookahead");
+
+        assert_eq!(observed, (true, true, true));
+        assert_eq!(parser.current, Token::Keyword(Keyword::Await));
+
+        parser.advance().expect("advance to using");
+        assert_eq!(parser.current, Token::Identifier("using".to_string()));
+        assert!(parser.prev_line_terminator);
+
+        parser.advance().expect("advance to value");
+        assert_eq!(parser.current, Token::Identifier("value".to_string()));
     }
 
     #[test]

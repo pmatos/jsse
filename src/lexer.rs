@@ -254,6 +254,7 @@ impl fmt::Display for LexError {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Lexer<'a> {
     source: &'a str,
     chars: Chars<'a>,
@@ -1087,29 +1088,6 @@ impl<'a> Lexer<'a> {
 
     pub(crate) fn offset(&self) -> usize {
         self.offset
-    }
-
-    pub(crate) fn save_state(&self) -> (usize, Option<char>, u32, u32, usize, bool) {
-        (
-            self.offset,
-            self.current,
-            self.line,
-            self.column,
-            self.token_start,
-            self.had_line_terminator,
-        )
-    }
-
-    pub(crate) fn restore_state(&mut self, state: (usize, Option<char>, u32, u32, usize, bool)) {
-        self.offset = state.0;
-        self.current = state.1;
-        self.line = state.2;
-        self.column = state.3;
-        self.token_start = state.4;
-        self.had_line_terminator = state.5;
-        // self.current holds the char at self.offset, so chars must start AFTER it
-        let skip = self.current.map_or(0, |c| c.len_utf8());
-        self.chars = self.source[self.offset + skip..].chars();
     }
 
     pub(crate) fn next_token(&mut self) -> Result<Token, LexError> {

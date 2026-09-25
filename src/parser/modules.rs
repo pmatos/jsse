@@ -20,90 +20,90 @@ impl<'a> Parser<'a> {
         let mut specifiers = Vec::new();
 
         // import defer * as ns from "module"
-        if self.current_identifier_name().as_deref() == Some("defer") {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?; // defer
-            if self.current == Token::Star {
-                self.advance()?; // *
-                self.eat_as()?;
-                let local = self
-                    .current_identifier_name()
-                    .ok_or_else(|| self.error("Expected identifier after 'as'"))?;
-                self.advance()?;
-                specifiers.push(ImportSpecifier::DeferredNamespace(local));
+        let is_deferred_namespace = self.current_identifier_name().as_deref() == Some("defer")
+            && self.lookahead(|tokens| -> Result<bool, ParseError> {
+                tokens.advance()?;
+                Ok(tokens.current() == &Token::Star)
+            })?;
+        if is_deferred_namespace {
+            self.advance()?; // defer
+            self.advance()?; // *
+            self.eat_as()?;
+            let local = self
+                .current_identifier_name()
+                .ok_or_else(|| self.error("Expected identifier after 'as'"))?;
+            self.advance()?;
+            specifiers.push(ImportSpecifier::DeferredNamespace(local));
 
-                self.eat_from()?;
-                let source = self.parse_module_specifier()?;
-                let attributes = self.parse_import_attributes()?;
-                self.eat_semicolon()?;
-                return Ok(ImportDeclaration {
-                    specifiers,
-                    source,
-                    attributes,
-                });
-            }
-            // Not `defer *`, restore and fall through to default import
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+            self.eat_from()?;
+            let source = self.parse_module_specifier()?;
+            let attributes = self.parse_import_attributes()?;
+            self.eat_semicolon()?;
+            return Ok(ImportDeclaration {
+                specifiers,
+                source,
+                attributes,
+            });
+        }
+
+        enum SourceImportKind {
+            Default,
+            PhaseNamed,
+            PhaseFrom,
         }
 
         // import source X from "module" (source-phase import)
-        if self.current_identifier_name().as_deref() == Some("source") {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?; // consume `source`
-            if self.is_from_keyword() {
-                // Could be `import source from "..."` (default) or
-                // `import source from from "..."` (source-phase, binding=from)
-                let _saved2_lt = self.prev_line_terminator;
-                let _saved2 = self.advance()?; // consume first `from`
-                if self.is_from_keyword() {
-                    // `import source from from "..."` — source-phase, binding = "from"
-                    let local = "from".to_string();
-                    self.advance()?; // consume second `from`
-                    specifiers.push(ImportSpecifier::SourcePhase(local));
-                    let source = self.parse_module_specifier()?;
-                    let attributes = self.parse_import_attributes()?;
-                    self.eat_semicolon()?;
-                    return Ok(ImportDeclaration {
-                        specifiers,
-                        source,
-                        attributes,
-                    });
+        let source_import = if self.current_identifier_name().as_deref() == Some("source") {
+            self.lookahead(|tokens| -> Result<Option<SourceImportKind>, ParseError> {
+                tokens.advance()?;
+                if matches!(tokens.current(), Token::Identifier(name) if name == "from") {
+                    tokens.advance()?;
+                    return Ok(Some(
+                        if matches!(tokens.current(), Token::Identifier(name) if name == "from") {
+                            SourceImportKind::PhaseFrom
+                        } else {
+                            SourceImportKind::Default
+                        },
+                    ));
                 }
-                // `import source from "..."` — default import, binding = "source"
-                // current is the string literal, saved2 was `from`
-                // We already consumed `source` and `from`, current is the string
-                specifiers.push(ImportSpecifier::Default("source".to_string()));
-                let source = self.parse_module_specifier()?;
-                let attributes = self.parse_import_attributes()?;
-                self.eat_semicolon()?;
-                return Ok(ImportDeclaration {
-                    specifiers,
-                    source,
-                    attributes,
-                });
-            } else if self.current_identifier_name().is_some() {
-                // `import source X from "..."` — source-phase, binding = X
-                let local = self
-                    .current_identifier_name()
-                    .ok_or_else(|| self.error("Expected identifier after 'source'"))?;
-                self.advance()?;
-                specifiers.push(ImportSpecifier::SourcePhase(local));
-                self.eat_from()?;
-                let source = self.parse_module_specifier()?;
-                let attributes = self.parse_import_attributes()?;
-                self.eat_semicolon()?;
-                return Ok(ImportDeclaration {
-                    specifiers,
-                    source,
-                    attributes,
-                });
+                Ok(self
+                    .identifier_name(tokens.current())
+                    .is_some()
+                    .then_some(SourceImportKind::PhaseNamed))
+            })?
+        } else {
+            None
+        };
+
+        if let Some(source_import) = source_import {
+            self.advance()?; // source
+            match source_import {
+                SourceImportKind::Default => {
+                    self.advance()?; // from
+                    specifiers.push(ImportSpecifier::Default("source".to_string()));
+                }
+                SourceImportKind::PhaseNamed => {
+                    let local = self
+                        .current_identifier_name()
+                        .ok_or_else(|| self.error("Expected identifier after 'source'"))?;
+                    self.advance()?;
+                    specifiers.push(ImportSpecifier::SourcePhase(local));
+                    self.eat_from()?;
+                }
+                SourceImportKind::PhaseFrom => {
+                    self.advance()?; // first from
+                    self.advance()?; // second from
+                    specifiers.push(ImportSpecifier::SourcePhase("from".to_string()));
+                }
             }
-            // Not source-phase and not followed by from/ident, restore
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+            let source = self.parse_module_specifier()?;
+            let attributes = self.parse_import_attributes()?;
+            self.eat_semicolon()?;
+            return Ok(ImportDeclaration {
+                specifiers,
+                source,
+                attributes,
+            });
         }
 
         // import defaultExport from "module"
@@ -321,16 +321,10 @@ impl<'a> Parser<'a> {
 
         // export default async function name() {}
         // export default async function() {}
-        if matches!(&self.current, Token::Keyword(Keyword::Async)) {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            if self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator {
-                let func = self.parse_async_function_for_export()?;
-                return Ok(ExportDeclaration::DefaultFunction(func));
-            }
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
+            self.advance()?; // async
+            let func = self.parse_async_function_for_export()?;
+            return Ok(ExportDeclaration::DefaultFunction(func));
         }
 
         // export default class Name {}

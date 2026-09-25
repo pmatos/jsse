@@ -44,6 +44,12 @@ _Avoid_: boundary, layer.
 How the `differential` fuzz target (`fuzz/fuzz_targets/differential.rs`) classifies a jsse-vs-node run. Tier 1: jsse crashed (signal or the interpreter-panic exit code) while node didn't — an engine bug by definition. Tier 2: exactly one side rejects the source as a syntax error — a real coverage gap. Tier 3: both sides threw (possibly a different error class) or both timed out — expected noise (usually an unimplemented feature), recorded but not a fuzzer finding. See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`.
 _Avoid_: divergence class, mismatch level.
 
+## Parsing
+
+**Lookahead Cursor**:
+A read-only fork of the parser's token stream used to classify ambiguous grammar prefixes. `Parser::lookahead` exposes only the current token, the line-terminator boundary before it, and forward advancement on a cloned `Lexer`; the live parser's token, source spans, and lexer position never change during a probe. Once a branch is selected, the parser consumes that branch normally.
+_Avoid_: parser checkpoint, pushback token, parser transaction.
+
 ## Control flow
 
 **Completion Propagation**:
