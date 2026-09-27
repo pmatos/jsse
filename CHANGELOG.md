@@ -1,3 +1,15 @@
+## [0.9.1](https://github.com/pmatos/jsse/compare/v0.9.0...v0.9.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **ci:** align CodeQL analyze action with init and autobuild ([#759](https://github.com/pmatos/jsse/issues/759)) ([58a25c5](https://github.com/pmatos/jsse/commit/58a25c5aebc772fe60e641543e86aa145a37088b))
+
+
+### Performance Improvements
+
+* **array:** make result property creation linear ([#758](https://github.com/pmatos/jsse/issues/758)) ([09bc891](https://github.com/pmatos/jsse/commit/09bc891521be78cbbe2f2738e0fdfe67ed794351))
+
 # [0.9.0](https://github.com/pmatos/jsse/compare/v0.8.2...v0.9.0) (2026-09-23)
 
 
