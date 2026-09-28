@@ -1,4 +1,5 @@
 use super::*;
+use crate::interpreter::generator_transform::LoopControlTarget;
 
 /// What a [`DisposeCursor`] needs from its driver next.
 pub(crate) enum DisposeStep {
@@ -201,8 +202,20 @@ pub(crate) struct PendingDispose {
     pub(crate) then: DisposeThen,
 }
 
-/// What an async generator does with the request at its front once the
-/// disposal of its function-level resources finishes.
+/// What the async-generator driver resumes after a parked disposal finishes.
+///
+/// The pending [`GeneratorDisposal`] owns the cursor, request capability, and
+/// this continuation together. A `Return` or `Throw` needs no explicit action:
+/// its [`Completion`] is carried by the cursor and re-enters `State`.
+#[derive(Clone, Copy)]
+pub(crate) enum GeneratorReentry {
+    State,
+    LoopControl(LoopControlTarget),
+    Goto(usize),
+}
+
+/// What an async generator does with the request at its front once a parked
+/// DisposeResources cursor finishes.
 #[derive(Clone, Copy)]
 pub(crate) enum GeneratorDisposeThen {
     /// Settle the request with the disposal's completion: reject with the
@@ -214,27 +227,18 @@ pub(crate) enum GeneratorDisposeThen {
     /// for a generator without resources. (A `.return(v)` at a yield awaits `v`
     /// before the generator sees the return, so it settles with `Settle`.)
     ReturnAwait,
-    /// A block scope left by a state transition finished disposing: the
-    /// driver re-enters at the state it was about to run (a disposer's throw
-    /// becomes an exception raised there).
-    Reenter,
-}
-
-pub(crate) enum GeneratorDisposeState {
-    /// Suspended at the `Await` of a `return` operand; the resources are still
-    /// on the generator's function environment.
-    ReturnOperand,
-    Disposing {
-        cursor: DisposeCursor,
-        then: GeneratorDisposeThen,
-    },
+    /// Re-enter the suspended driver with the cursor's finished completion,
+    /// optionally retrying the control transfer that had no Completion carrier.
+    Reenter(GeneratorReentry),
 }
 
 /// An async generator request parked at one of the `Await`s of its body's
 /// DisposeResources. The request stays at the front of the generator's queue,
-/// so a later request cannot start the generator early.
+/// so a later request cannot start the generator early. The cursor and its
+/// post-disposal continuation are one ownership unit.
 pub(crate) struct GeneratorDisposal {
-    pub(crate) state: GeneratorDisposeState,
+    pub(crate) cursor: DisposeCursor,
+    pub(crate) then: GeneratorDisposeThen,
     pub(crate) promise: JsValue,
     pub(crate) resolve: JsValue,
     pub(crate) reject: JsValue,
@@ -242,11 +246,13 @@ pub(crate) struct GeneratorDisposal {
 
 impl GeneratorDisposal {
     pub(crate) fn new(
-        state: GeneratorDisposeState,
+        cursor: DisposeCursor,
+        then: GeneratorDisposeThen,
         (promise, resolve, reject): (&JsValue, &JsValue, &JsValue),
     ) -> Self {
         Self {
-            state,
+            cursor,
+            then,
             promise: promise.clone(),
             resolve: resolve.clone(),
             reject: reject.clone(),
@@ -258,9 +264,7 @@ impl GeneratorDisposal {
     }
 
     pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
-        if let GeneratorDisposeState::Disposing { cursor, .. } = &self.state {
-            cursor.for_each_value(&mut f);
-        }
+        self.cursor.for_each_value(&mut f);
         f(&self.promise);
         f(&self.resolve);
         f(&self.reject);

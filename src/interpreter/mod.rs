@@ -25,7 +25,7 @@ mod bytecode;
 mod dispose;
 pub(crate) use dispose::{
     AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
-    GeneratorDisposeStart, GeneratorDisposeState, GeneratorDisposeThen, PendingDispose,
+    GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
 };
 mod env_helpers;
 mod eval;

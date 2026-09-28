@@ -4,6 +4,7 @@
 //! `AsyncGenerator` prototype methods wired up in `builtins/iterators.rs`.
 
 use super::*;
+use crate::interpreter::dispose::GeneratorReentry;
 use crate::interpreter::generator_transform::LoopControlTarget;
 
 /// Whether a jump to `target` stays inside the innermost running finally body
@@ -40,8 +41,8 @@ enum ForOfUnwindOutcome {
     /// The unwind (or the disposal step that produced it) finished without
     /// needing to suspend.
     Done(Completion),
-    /// A disposal is mid-`Await`; the caller must park the request (via
-    /// `GeneratorDisposeThen::Reenter`) and return without settling it.
+    /// A disposal is mid-`Await`; the caller must park the request with a
+    /// `GeneratorDisposeThen::Reenter` continuation and not settle it.
     Parked {
         cursor: DisposeCursor,
         value: JsValue,
@@ -58,6 +59,16 @@ impl ForOfUnwindOutcome {
             }
         }
     }
+}
+/// Outcome of routing a control transfer that does not have a natural
+/// [`Completion`] carrier through a possibly-suspending for-of unwind.
+enum ForOfTransitionOutcome<T> {
+    Done(T),
+    Abrupt(Completion),
+    Parked {
+        cursor: DisposeCursor,
+        value: JsValue,
+    },
 }
 
 /// Outcome of routing an in-flight exception through `try`/`for-of` unwinding
@@ -912,19 +923,25 @@ impl Interpreter {
                     &mut current_try_stack,
                     &func_env,
                     $target,
+                    false,
                 ) {
-                    Ok(next_state) => next_state,
-                    Err(Completion::Throw(error)) => {
+                    ForOfTransitionOutcome::Done(next_state) => next_state,
+                    ForOfTransitionOutcome::Abrupt(Completion::Throw(error)) => {
                         let error = route_exception!(error);
                         let disp = self.dispose_resources(&func_env, Completion::Throw(error));
                         self.retire_generator(o.id);
                         return disp;
                     }
-                    Err(Completion::Exit(code)) => {
+                    ForOfTransitionOutcome::Abrupt(Completion::Exit(code)) => {
                         self.retire_generator(o.id);
                         return Completion::Exit(code);
                     }
-                    Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
+                    ForOfTransitionOutcome::Abrupt(_) => {
+                        unreachable!("loop-control routing returned a non-abrupt error")
+                    }
+                    ForOfTransitionOutcome::Parked { .. } => {
+                        unreachable!("sync generator dispose never parks")
+                    }
                 }
             }};
         }
@@ -1405,48 +1422,54 @@ impl Interpreter {
                 }
 
                 StateTerminator::Goto(next_state) => {
-                    if let Err(completion) = self.align_generator_for_of_stack(
+                    match self.align_generator_for_of_stack(
                         o.id,
                         &mut for_of_stack,
                         &mut current_try_stack,
                         &func_env,
                         *next_state,
+                        false,
                     ) {
-                        match completion {
-                            Completion::Throw(error) => {
-                                // The driver marked the generator Executing at
-                                // entry. Restore a resumable snapshot before
-                                // handing the close failure to the ordinary
-                                // throw-resume path, which owns catch/finally
-                                // routing and terminal state transitions.
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedAtState {
-                                                    state_id: current_id,
-                                                },
-                                            _sent_value: JsValue::UNDEFINED,
-                                            try_stack: current_try_stack,
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return self.generator_throw_state_machine(this, error);
-                            }
-                            Completion::Exit(code) => {
-                                self.retire_generator(o.id);
-                                return Completion::Exit(code);
-                            }
-                            _ => unreachable!("for-of unwind returned a non-abrupt completion"),
+                        ForOfTransitionOutcome::Done(()) => {
+                            current_id = *next_state;
+                        }
+                        ForOfTransitionOutcome::Abrupt(Completion::Throw(error)) => {
+                            // The driver marked the generator Executing at
+                            // entry. Restore a resumable snapshot before
+                            // handing the close failure to the ordinary
+                            // throw-resume path, which owns catch/finally
+                            // routing and terminal state transitions.
+                            obj_rc.borrow_mut().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state:
+                                            StateMachineExecutionState::SuspendedAtState {
+                                                state_id: current_id,
+                                            },
+                                        _sent_value: JsValue::UNDEFINED,
+                                        try_stack: current_try_stack,
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                        pending_return: None,
+                                    },
+                                );
+                            return self.generator_throw_state_machine(this, error);
+                        }
+                        ForOfTransitionOutcome::Abrupt(Completion::Exit(code)) => {
+                            self.retire_generator(o.id);
+                            return Completion::Exit(code);
+                        }
+                        ForOfTransitionOutcome::Abrupt(_) => {
+                            unreachable!("for-of unwind returned a non-abrupt completion")
+                        }
+                        ForOfTransitionOutcome::Parked { .. } => {
+                            unreachable!("sync generator dispose never parks")
                         }
                     }
-                    current_id = *next_state;
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -3187,6 +3210,25 @@ impl Interpreter {
         resolve_fn: JsValue,
         reject_fn: JsValue,
     ) -> Completion {
+        self.async_generator_next_state_machine_with_promise_and_reentry(
+            this,
+            sent_value,
+            promise,
+            resolve_fn,
+            reject_fn,
+            GeneratorReentry::State,
+        )
+    }
+
+    fn async_generator_next_state_machine_with_promise_and_reentry(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+        promise: JsValue,
+        resolve_fn: JsValue,
+        reject_fn: JsValue,
+        reentry: GeneratorReentry,
+    ) -> Completion {
         let caller_realm = self.current_realm_id;
         if let Some(o) = (this)
             .as_object_id()
@@ -3198,7 +3240,7 @@ impl Interpreter {
         }
         let result = self.with_iter_close_scope(|s| {
             s.async_generator_next_state_machine_impl(
-                this, sent_value, promise, resolve_fn, reject_fn,
+                this, sent_value, promise, resolve_fn, reject_fn, reentry,
             )
         });
         self.current_realm_id = caller_realm;
@@ -3212,6 +3254,7 @@ impl Interpreter {
         promise: JsValue,
         resolve_fn: JsValue,
         reject_fn: JsValue,
+        initial_reentry: GeneratorReentry,
     ) -> Completion {
         use crate::interpreter::generator_transform::StateTerminator;
 
@@ -3448,14 +3491,14 @@ impl Interpreter {
         self.in_state_machine = true;
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
-        let check_abrupt_on_resume =
-            stored_pending_exception.is_some() || stored_pending_return.is_some();
+        let mut reentry = initial_reentry;
+        let mut check_abrupt_on_resume = matches!(reentry, GeneratorReentry::State)
+            && (stored_pending_exception.is_some() || stored_pending_return.is_some());
         let mut pending_exception: Option<JsValue> = stored_pending_exception;
         let mut pending_return: Option<JsValue> = stored_pending_return;
         let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
-        let mut check_abrupt_on_resume = check_abrupt_on_resume;
         // Set when routing just selected a handler for the in-flight completion
         // and no state has run since: the completion is being unwound, not
         // carried through a running `finally` body.
@@ -3514,7 +3557,7 @@ impl Interpreter {
                         return Completion::Exit(code);
                     }
                     RouteExceptionOutcome::Parked { cursor, value } => {
-                        return self.park_for_of_unwind_exception(
+                        return self.park_for_of_unwind(
                             o.id,
                             &obj_rc,
                             &state_machine,
@@ -3522,12 +3565,15 @@ impl Interpreter {
                             is_strict,
                             current_id,
                             current_try_stack,
+                            None,
+                            None,
                             saved_in_state_machine,
                             promise,
                             &resolve_fn,
                             &reject_fn,
                             cursor,
                             value,
+                            GeneratorReentry::State,
                         );
                     }
                 }
@@ -3562,17 +3608,19 @@ impl Interpreter {
 
         macro_rules! route_loop_control_result {
             ($target:expr) => {{
+                let target = $target;
                 match self.route_generator_loop_control(
                     o.id,
                     &mut for_of_stack,
                     &mut current_try_stack,
                     &func_env,
-                    $target,
+                    target,
+                    true,
                 ) {
-                    Ok(next_state) => next_state,
-                    Err(Completion::Throw(error)) => {
+                    ForOfTransitionOutcome::Done(next_state) => next_state,
+                    ForOfTransitionOutcome::Abrupt(Completion::Throw(error)) => {
                         let error = route_exception!(error);
-                        let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                        let disp = dispose_or_park!(Completion::Throw(error));
                         let error = match disp {
                             Completion::Throw(error) => error,
                             Completion::Exit(code) => return Completion::Exit(code),
@@ -3581,16 +3629,104 @@ impl Interpreter {
                         return self
                             .reject_async_generator_request(o.id, promise, &reject_fn, error);
                     }
-                    Err(Completion::Exit(code)) => {
+                    ForOfTransitionOutcome::Abrupt(Completion::Exit(code)) => {
                         self.retire_generator(o.id);
                         return Completion::Exit(code);
                     }
-                    Err(_) => unreachable!("loop-control routing returned a non-abrupt error"),
+                    ForOfTransitionOutcome::Abrupt(_) => {
+                        unreachable!("loop-control routing returned a non-abrupt error")
+                    }
+                    ForOfTransitionOutcome::Parked { cursor, value } => {
+                        return self.park_for_of_unwind(
+                            o.id,
+                            &obj_rc,
+                            &state_machine,
+                            &func_env,
+                            is_strict,
+                            current_id,
+                            current_try_stack,
+                            pending_exception.take(),
+                            pending_return.take(),
+                            saved_in_state_machine,
+                            promise,
+                            &resolve_fn,
+                            &reject_fn,
+                            cursor,
+                            value,
+                            GeneratorReentry::LoopControl(target),
+                        );
+                    }
+                }
+            }};
+        }
+
+        macro_rules! align_for_of_result {
+            ($target:expr) => {{
+                let target = $target;
+                match self.align_generator_for_of_stack(
+                    o.id,
+                    &mut for_of_stack,
+                    &mut current_try_stack,
+                    &func_env,
+                    target,
+                    true,
+                ) {
+                    ForOfTransitionOutcome::Done(()) => target,
+                    ForOfTransitionOutcome::Abrupt(Completion::Throw(error)) => {
+                        let error = route_exception!(error);
+                        let disp = dispose_or_park!(Completion::Throw(error));
+                        let error = match disp {
+                            Completion::Throw(error) => error,
+                            Completion::Exit(code) => return Completion::Exit(code),
+                            _ => unreachable!("disposing a throw must stay abrupt"),
+                        };
+                        return self
+                            .reject_async_generator_request(o.id, promise, &reject_fn, error);
+                    }
+                    ForOfTransitionOutcome::Abrupt(Completion::Exit(code)) => {
+                        self.retire_generator(o.id);
+                        return Completion::Exit(code);
+                    }
+                    ForOfTransitionOutcome::Abrupt(_) => {
+                        unreachable!("for-of alignment returned a non-abrupt error")
+                    }
+                    ForOfTransitionOutcome::Parked { cursor, value } => {
+                        return self.park_for_of_unwind(
+                            o.id,
+                            &obj_rc,
+                            &state_machine,
+                            &func_env,
+                            is_strict,
+                            current_id,
+                            current_try_stack,
+                            pending_exception.take(),
+                            pending_return.take(),
+                            saved_in_state_machine,
+                            promise,
+                            &resolve_fn,
+                            &reject_fn,
+                            cursor,
+                            value,
+                            GeneratorReentry::Goto(target),
+                        );
+                    }
                 }
             }};
         }
 
         loop {
+            match std::mem::replace(&mut reentry, GeneratorReentry::State) {
+                GeneratorReentry::State => {}
+                GeneratorReentry::LoopControl(target) => {
+                    current_id = route_loop_control_result!(target);
+                    continue;
+                }
+                GeneratorReentry::Goto(target) => {
+                    current_id = align_for_of_result!(target);
+                    continue;
+                }
+            }
+
             if check_abrupt_on_resume {
                 check_abrupt_on_resume = false;
                 // Check pending_exception before executing state (handles .throw() with no try/catch)
@@ -3660,17 +3796,37 @@ impl Interpreter {
                             .position(|loop_state| loop_state.try_depth > handler_depth)
                             .unwrap_or(for_of_stack.len())
                     });
-                    let return_completion = self
-                        .unwind_generator_for_of_loops(
-                            o.id,
-                            &mut for_of_stack,
-                            &mut current_try_stack,
-                            &func_env,
-                            unwind_from,
-                            Completion::Return(ret_val),
-                            false,
-                        )
-                        .expect_done();
+                    let return_completion = match self.unwind_generator_for_of_loops(
+                        o.id,
+                        &mut for_of_stack,
+                        &mut current_try_stack,
+                        &func_env,
+                        unwind_from,
+                        Completion::Return(ret_val),
+                        true,
+                    ) {
+                        ForOfUnwindOutcome::Done(completion) => completion,
+                        ForOfUnwindOutcome::Parked { cursor, value } => {
+                            return self.park_for_of_unwind(
+                                o.id,
+                                &obj_rc,
+                                &state_machine,
+                                &func_env,
+                                is_strict,
+                                current_id,
+                                current_try_stack,
+                                None,
+                                None,
+                                saved_in_state_machine,
+                                promise,
+                                &resolve_fn,
+                                &reject_fn,
+                                cursor,
+                                value,
+                                GeneratorReentry::State,
+                            );
+                        }
+                    };
                     let return_value = match return_completion {
                         Completion::Return(value) => value,
                         Completion::Throw(error) => {
@@ -3790,10 +3946,8 @@ impl Interpreter {
                                 );
                             self.in_state_machine = saved_in_state_machine;
                             let disposal = GeneratorDisposal::new(
-                                GeneratorDisposeState::Disposing {
-                                    cursor,
-                                    then: GeneratorDisposeThen::Reenter,
-                                },
+                                cursor,
+                                GeneratorDisposeThen::Reenter(GeneratorReentry::State),
                                 (&promise, &resolve_fn, &reject_fn),
                             );
                             self.park_async_gen_disposal(o.id, disposal, &value);
@@ -4237,7 +4391,8 @@ impl Interpreter {
 
                 StateTerminator::Return(expr) => {
                     if let Some(e) = expr {
-                        // return expr; — §13.10.1 step 3: Await(exprValue)
+                        // §13.10.1: evaluate the operand, then Await it before
+                        // creating the return Completion that starts unwind.
                         let ret_val = match self.eval_operand(e, &term_env) {
                             Operand::Value(v) => v,
                             Operand::Throw(err) => {
@@ -4257,233 +4412,37 @@ impl Interpreter {
                             Operand::Other(_) => JsValue::UNDEFINED,
                         };
 
-                        if current_try_stack.iter().any(|try_info| {
-                            !try_info.entered_finally && try_info.finally_state.is_some()
-                        }) {
-                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                            obj_rc.borrow_mut().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::StateMachineAsyncGenerator {
-                                        state_machine,
-                                        func_env,
-                                        is_strict,
-                                        execution_state:
-                                            StateMachineExecutionState::SuspendedAtState {
-                                                state_id: current_id,
-                                            },
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack: current_try_stack,
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: pending_exception.take(),
-                                        pending_return: pending_return.take(),
-                                    },
-                                );
-                            return self.async_generator_return_state_machine_with_promise(
-                                this, ret_val, promise, resolve_fn, reject_fn,
-                            );
-                        }
-
-                        let return_completion = self
-                            .unwind_generator_for_of_loops(
-                                o.id,
-                                &mut for_of_stack,
-                                &mut current_try_stack,
-                                &func_env,
-                                0,
-                                Completion::Return(ret_val),
-                                false,
-                            )
-                            .expect_done();
-                        let ret_val = match return_completion {
-                            Completion::Return(value) => value,
-                            Completion::Throw(error) => {
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedAtState {
-                                                    state_id: current_id,
-                                                },
-                                            _sent_value: JsValue::UNDEFINED,
-                                            try_stack: current_try_stack,
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return self.async_generator_throw_state_machine_with_promise(
-                                    this, error, promise, resolve_fn, reject_fn,
-                                );
-                            }
-                            Completion::Exit(code) => {
-                                self.retire_generator(o.id);
-                                return Completion::Exit(code);
-                            }
-                            _ => JsValue::UNDEFINED,
-                        };
-
-                        // Await(exprValue) precedes DisposeResources; a
-                        // generator with pending resources parks at it and
-                        // disposes once it settles.
-                        if self.generator_has_pending_dispose(o.id, &func_env) {
-                            let disposal = GeneratorDisposal::new(
-                                GeneratorDisposeState::ReturnOperand,
-                                (&promise, &resolve_fn, &reject_fn),
-                            );
-                            self.park_async_gen_disposal(o.id, disposal, &ret_val);
-                            self.scheduler.set_async_gen_yield_pending(true);
-                            return Completion::Normal(promise);
-                        }
-
-                        // Microtask-based Await: wrap in PromiseResolve, schedule via PerformPromiseThen
-                        let wrapper = self.promise_resolve_value(&ret_val);
-
-                        self.retire_generator(o.id);
-
-                        let gen_id = o.id;
-                        let gen_this_f = this.clone();
-                        let gen_this_r = this.clone();
-                        let resolve_fn_c = resolve_fn.clone();
-                        let reject_fn_c = reject_fn.clone();
-
-                        let on_fulfilled =
-                            self.create_function(JsFunction::native("".to_string(), 1, {
-                                move |interp, _this, args| {
-                                    let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                                    let iter_result = interp.create_iter_result_object(v, true);
-                                    let _ = interp.call_function(
-                                        &resolve_fn_c,
-                                        &JsValue::UNDEFINED,
-                                        &[iter_result],
-                                    );
-                                    if let Some(queue) =
-                                        interp.scheduler.async_gen_queue_mut(gen_id)
-                                    {
-                                        queue.pop_front();
-                                    }
-                                    interp.async_gen_process_queue(&gen_this_f);
-                                    Completion::Normal(JsValue::UNDEFINED)
-                                }
-                            }));
-
-                        let on_rejected =
-                            self.create_function(JsFunction::native("".to_string(), 1, {
-                                let gen_id2 = gen_id;
-                                move |interp, _this, args| {
-                                    let e = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                                    let _ = interp.call_function(
-                                        &reject_fn_c,
-                                        &JsValue::UNDEFINED,
-                                        &[e],
-                                    );
-                                    if let Some(queue) =
-                                        interp.scheduler.async_gen_queue_mut(gen_id2)
-                                    {
-                                        queue.pop_front();
-                                    }
-                                    interp.async_gen_process_queue(&gen_this_r);
-                                    Completion::Normal(JsValue::UNDEFINED)
-                                }
-                            }));
-
-                        let chain_promise = self.create_promise_object();
-                        let cp_id = if let Some(po) = (chain_promise)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            po.id
-                        } else {
-                            0
-                        };
-                        let (cp_resolve, cp_reject) = self.create_resolving_functions(cp_id);
-                        let _ = self.perform_promise_then(
-                            &wrapper,
-                            &on_fulfilled,
-                            &on_rejected,
-                            chain_promise,
-                            cp_resolve,
-                            cp_reject,
+                        // The return helper owns AsyncGeneratorUnwrapYieldResumption.
+                        // Re-entry installs the already-Awaited value as
+                        // `pending_return`; only then may for-of disposal begin.
+                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: current_id,
+                                },
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: current_try_stack,
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
                         );
-
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    } else {
-                        // return; — no expression, no Await per §13.10.1
-                        if current_try_stack.iter().any(|try_info| {
-                            !try_info.entered_finally && try_info.finally_state.is_some()
-                        }) {
-                            pending_exception = None;
-                            pending_return = Some(JsValue::UNDEFINED);
-                            check_abrupt_on_resume = true;
-                            continue;
-                        }
-                        let return_completion = self
-                            .unwind_generator_for_of_loops(
-                                o.id,
-                                &mut for_of_stack,
-                                &mut current_try_stack,
-                                &func_env,
-                                0,
-                                Completion::Return(JsValue::UNDEFINED),
-                                false,
-                            )
-                            .expect_done();
-                        let return_value = match return_completion {
-                            Completion::Return(value) => value,
-                            Completion::Throw(error) => {
-                                obj_rc.borrow_mut().kind =
-                                    crate::interpreter::types::ObjectKind::Iterator(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env,
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedAtState {
-                                                    state_id: current_id,
-                                                },
-                                            _sent_value: JsValue::UNDEFINED,
-                                            try_stack: current_try_stack,
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
-                                return self.async_generator_throw_state_machine_with_promise(
-                                    this, error, promise, resolve_fn, reject_fn,
-                                );
-                            }
-                            Completion::Exit(code) => {
-                                self.retire_generator(o.id);
-                                return Completion::Exit(code);
-                            }
-                            _ => JsValue::UNDEFINED,
-                        };
-                        let disp = dispose_or_park!(Completion::Return(return_value.clone()));
-                        match disp {
-                            Completion::Return(_) => {}
-                            Completion::Exit(code) => {
-                                abort_async_generator!(Completion::Exit(code))
-                            }
-                            Completion::Throw(e) => {
-                                self.retire_generator(o.id);
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => {}
-                        }
-
-                        self.retire_generator(o.id);
-                        let iter_result = self.create_iter_result_object(return_value, true);
-                        let _ =
-                            self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[iter_result]);
-                        return Completion::Normal(promise);
+                        return self.async_generator_return_state_machine_with_promise(
+                            this, ret_val, promise, resolve_fn, reject_fn,
+                        );
                     }
+
+                    // `return;` has no operand Await. Its Return completion uses
+                    // the same park-aware unwind path as an injected `.return()`.
+                    pending_exception = None;
+                    pending_return = Some(JsValue::UNDEFINED);
+                    check_abrupt_on_resume = true;
+                    continue;
                 }
 
                 StateTerminator::Throw(expr) => {
@@ -4526,25 +4485,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::Goto(next_state) => {
-                    if let Err(completion) = self.align_generator_for_of_stack(
-                        o.id,
-                        &mut for_of_stack,
-                        &mut current_try_stack,
-                        &func_env,
-                        *next_state,
-                    ) {
-                        self.retire_generator(o.id);
-                        return match completion {
-                            Completion::Throw(error) => {
-                                let _ =
-                                    self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                                Completion::Normal(promise)
-                            }
-                            Completion::Exit(code) => Completion::Exit(code),
-                            _ => unreachable!("for-of unwind returned a non-abrupt completion"),
-                        };
-                    }
-                    current_id = *next_state;
+                    current_id = align_for_of_result!(*next_state);
                 }
 
                 StateTerminator::ConditionalGoto {
@@ -4841,10 +4782,8 @@ impl Interpreter {
                                             },
                                         );
                                     let disposal = GeneratorDisposal::new(
-                                        GeneratorDisposeState::Disposing {
-                                            cursor,
-                                            then: GeneratorDisposeThen::Reenter,
-                                        },
+                                        cursor,
+                                        GeneratorDisposeThen::Reenter(GeneratorReentry::State),
                                         (&promise, &resolve_fn, &reject_fn),
                                     );
                                     self.park_async_gen_disposal(o.id, disposal, &value);
@@ -5263,18 +5202,6 @@ impl Interpreter {
         (!combined.is_empty()).then_some(combined)
     }
 
-    fn generator_has_pending_dispose(&self, gen_id: u64, func_env: &EnvRef) -> bool {
-        env_has_pending_dispose(func_env)
-            || self
-                .generator_scope_stacks
-                .get(&gen_id)
-                .is_some_and(|frames| {
-                    frames
-                        .iter()
-                        .any(|frame| env_has_pending_dispose(&frame.env))
-                })
-    }
-
     /// Park `disposal` until the `Await` of `value` settles, then continue it
     /// through [`Self::async_gen_dispose_resume`].
     fn park_async_gen_disposal(
@@ -5289,15 +5216,12 @@ impl Interpreter {
         });
     }
 
-    /// Suspend the driver at a `for-of` unwind's disposal `Await` while
-    /// routing an in-flight exception: snapshot the throw-routing state so
-    /// `GeneratorDisposeThen::Reenter` restarts
-    /// `async_generator_next_state_machine_impl` from the top on resume, then
-    /// park via [`Self::park_async_gen_disposal`]. `route_exception!`'s
-    /// `RouteExceptionOutcome::Parked` arm is a `macro_rules!` expanded at
-    /// every throw site in that function, so this body lives here once
-    /// rather than once per expansion.
-    fn park_for_of_unwind_exception(
+    /// Suspend the driver at a `for-of` unwind's disposal `Await`: snapshot
+    /// the post-unwind stacks and any completion carried through a running
+    /// `finally`, then keep the cursor, request, and retry action together in
+    /// `generator_pending_dispose`.
+    #[allow(clippy::too_many_arguments)]
+    fn park_for_of_unwind(
         &mut self,
         gen_id: u64,
         obj_rc: &ObjectHandle,
@@ -5306,12 +5230,15 @@ impl Interpreter {
         is_strict: bool,
         current_id: usize,
         try_stack: Vec<TryContextInfo>,
+        pending_exception: Option<JsValue>,
+        pending_return: Option<JsValue>,
         saved_in_state_machine: bool,
         promise: JsValue,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         cursor: DisposeCursor,
         value: JsValue,
+        reentry: GeneratorReentry,
     ) -> Completion {
         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
             IteratorState::StateMachineAsyncGenerator {
@@ -5325,16 +5252,14 @@ impl Interpreter {
                 try_stack,
                 pending_binding: None,
                 delegated_iterator: None,
-                pending_exception: None,
-                pending_return: None,
+                pending_exception,
+                pending_return,
             },
         );
         self.in_state_machine = saved_in_state_machine;
         let disposal = GeneratorDisposal::new(
-            GeneratorDisposeState::Disposing {
-                cursor,
-                then: GeneratorDisposeThen::Reenter,
-            },
+            cursor,
+            GeneratorDisposeThen::Reenter(reentry),
             (&promise, resolve_fn, reject_fn),
         );
         self.park_async_gen_disposal(gen_id, disposal, &value);
@@ -5357,13 +5282,7 @@ impl Interpreter {
         let Some(stack) = self.take_generator_dispose_stack(gen_id, env) else {
             return GeneratorDisposeStart::Done(completion);
         };
-        let disposal = GeneratorDisposal::new(
-            GeneratorDisposeState::Disposing {
-                cursor: DisposeCursor::new(stack, completion),
-                then,
-            },
-            request,
-        );
+        let disposal = GeneratorDisposal::new(DisposeCursor::new(stack, completion), then, request);
         match self.async_gen_step_disposal(gen_id, disposal, None) {
             None => GeneratorDisposeStart::Parked,
             Some((completion, _, _)) => GeneratorDisposeStart::Done(completion),
@@ -5378,11 +5297,8 @@ impl Interpreter {
         mut disposal: GeneratorDisposal,
         awaited: Option<Result<JsValue, JsValue>>,
     ) -> Option<(Completion, GeneratorDisposeThen, GeneratorDisposal)> {
-        let GeneratorDisposeState::Disposing { cursor, then } = &mut disposal.state else {
-            unreachable!("only a disposing request is stepped");
-        };
-        let then = *then;
-        match cursor.step(self, awaited) {
+        let then = disposal.then;
+        match disposal.cursor.step(self, awaited) {
             DisposeStep::Await(value) => {
                 self.park_async_gen_disposal(gen_id, disposal, &value);
                 None
@@ -5392,45 +5308,16 @@ impl Interpreter {
     }
 
     /// The `Await` a parked request was suspended at settled: continue its
-    /// disposal, or (for a `return` operand) start it.
+    /// disposal cursor.
     fn async_gen_dispose_resume(
         &mut self,
         gen_id: u64,
         outcome: Result<JsValue, JsValue>,
     ) -> Completion {
-        let Some(mut disposal) = self.generator_pending_dispose.remove(&gen_id) else {
+        let Some(disposal) = self.generator_pending_dispose.remove(&gen_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
         };
         self.scheduler.set_async_gen_yield_pending(false);
-        if matches!(disposal.state, GeneratorDisposeState::ReturnOperand) {
-            let func_env =
-                self.get_object_cell(gen_id)
-                    .and_then(|obj| match obj.borrow().iterator_state() {
-                        Some(IteratorState::StateMachineAsyncGenerator { func_env, .. }) => {
-                            Some(func_env.clone())
-                        }
-                        _ => None,
-                    });
-            let completion = match outcome {
-                Ok(value) => Completion::Return(value),
-                Err(error) => Completion::Throw(error),
-            };
-            let then = GeneratorDisposeThen::Settle;
-            let stack = func_env.and_then(|env| self.take_generator_dispose_stack(gen_id, &env));
-            let Some(stack) = stack else {
-                return self.async_gen_finish_disposal(
-                    gen_id,
-                    then,
-                    completion,
-                    disposal.request(),
-                );
-            };
-            disposal.state = GeneratorDisposeState::Disposing {
-                cursor: DisposeCursor::new(stack, completion),
-                then,
-            };
-            return self.async_gen_continue_disposal(gen_id, disposal, None);
-        }
         self.async_gen_continue_disposal(gen_id, disposal, Some(outcome))
     }
 
@@ -5458,8 +5345,8 @@ impl Interpreter {
         request: (&JsValue, &JsValue, &JsValue),
     ) -> Completion {
         let (_, resolve, reject) = request;
-        if matches!(then, GeneratorDisposeThen::Reenter) {
-            return self.async_gen_reenter(gen_id, completion, request);
+        if let GeneratorDisposeThen::Reenter(reentry) = then {
+            return self.async_gen_reenter_with_reentry(gen_id, completion, request, reentry);
         }
         self.retire_generator(gen_id);
         match completion {
@@ -5498,13 +5385,29 @@ impl Interpreter {
         &mut self,
         gen_id: u64,
         completion: Completion,
+        request: (&JsValue, &JsValue, &JsValue),
+    ) -> Completion {
+        self.async_gen_reenter_with_reentry(gen_id, completion, request, GeneratorReentry::State)
+    }
+
+    fn async_gen_reenter_with_reentry(
+        &mut self,
+        gen_id: u64,
+        completion: Completion,
         (promise, resolve, reject): (&JsValue, &JsValue, &JsValue),
+        reentry: GeneratorReentry,
     ) -> Completion {
         let this = JsValue::object(gen_id);
-        if let Completion::Exit(code) = completion {
-            return Completion::Exit(code);
+        if let Completion::Exit(code) = &completion {
+            return Completion::Exit(*code);
         }
-        if matches!(completion, Completion::Throw(_) | Completion::Return(_))
+        let reentry = if matches!(&completion, Completion::Throw(_) | Completion::Return(_)) {
+            // A disposer's abrupt completion replaces LoopControl/Goto.
+            GeneratorReentry::State
+        } else {
+            reentry
+        };
+        if matches!(&completion, Completion::Throw(_) | Completion::Return(_))
             && let Some(obj) = self.get_object_cell(gen_id)
             && let Some(IteratorState::StateMachineAsyncGenerator {
                 pending_exception,
@@ -5519,12 +5422,13 @@ impl Interpreter {
             }
         }
         self.scheduler.set_async_gen_yield_pending(false);
-        let result = self.async_generator_next_state_machine_with_promise(
+        let result = self.async_generator_next_state_machine_with_promise_and_reentry(
             &this,
             JsValue::UNDEFINED,
             promise.clone(),
             resolve.clone(),
             reject.clone(),
+            reentry,
         );
         if let Completion::Exit(code) = result {
             return Completion::Exit(code);
@@ -5978,7 +5882,8 @@ impl Interpreter {
         try_stack: &mut Vec<TryContextInfo>,
         func_env: &EnvRef,
         target_state: usize,
-    ) -> Result<(), Completion> {
+        can_park: bool,
+    ) -> ForOfTransitionOutcome<()> {
         // Jumping to a loop's `after_state` leaves that loop, so it closes;
         // jumping to its `head_state` is the next iteration, so it stays.
         let keep_len = if let Some(pos) = for_of_stack
@@ -5995,20 +5900,22 @@ impl Interpreter {
             for_of_stack.len()
         };
 
-        match self
-            .unwind_generator_for_of_loops(
-                generator_id,
-                for_of_stack,
-                try_stack,
-                func_env,
-                keep_len,
-                Completion::Empty,
-                false,
-            )
-            .expect_done()
-        {
-            completion @ (Completion::Throw(_) | Completion::Exit(_)) => Err(completion),
-            _ => Ok(()),
+        match self.unwind_generator_for_of_loops(
+            generator_id,
+            for_of_stack,
+            try_stack,
+            func_env,
+            keep_len,
+            Completion::Empty,
+            can_park,
+        ) {
+            ForOfUnwindOutcome::Parked { cursor, value } => {
+                ForOfTransitionOutcome::Parked { cursor, value }
+            }
+            ForOfUnwindOutcome::Done(completion @ (Completion::Throw(_) | Completion::Exit(_))) => {
+                ForOfTransitionOutcome::Abrupt(completion)
+            }
+            ForOfUnwindOutcome::Done(_) => ForOfTransitionOutcome::Done(()),
         }
     }
 
@@ -6135,7 +6042,8 @@ impl Interpreter {
         try_stack: &mut Vec<TryContextInfo>,
         func_env: &EnvRef,
         target: LoopControlTarget,
-    ) -> Result<usize, Completion> {
+        can_park: bool,
+    ) -> ForOfTransitionOutcome<usize> {
         let routed_to = (target.try_depth..try_stack.len()).rev().find_map(|depth| {
             let try_info = &try_stack[depth];
             if try_info.entered_finally {
@@ -6153,19 +6061,22 @@ impl Interpreter {
         });
         debug_assert!(keep_len <= for_of_stack.len());
 
-        let closed = self
-            .unwind_generator_for_of_loops(
-                generator_id,
-                for_of_stack,
-                try_stack,
-                func_env,
-                keep_len.min(for_of_stack.len()),
-                Completion::Empty,
-                false,
-            )
-            .expect_done();
-        if matches!(closed, Completion::Throw(_) | Completion::Exit(_)) {
-            return Err(closed);
+        match self.unwind_generator_for_of_loops(
+            generator_id,
+            for_of_stack,
+            try_stack,
+            func_env,
+            keep_len.min(for_of_stack.len()),
+            Completion::Empty,
+            can_park,
+        ) {
+            ForOfUnwindOutcome::Parked { cursor, value } => {
+                return ForOfTransitionOutcome::Parked { cursor, value };
+            }
+            ForOfUnwindOutcome::Done(completion @ (Completion::Throw(_) | Completion::Exit(_))) => {
+                return ForOfTransitionOutcome::Abrupt(completion);
+            }
+            ForOfUnwindOutcome::Done(_) => {}
         }
 
         match routed_to {
@@ -6174,11 +6085,11 @@ impl Interpreter {
                 // EnterFinally must mark this one.
                 try_stack.truncate(depth + 1);
                 try_stack[depth].pending_completion = Some(PendingCompletion::LoopControl(target));
-                Ok(finally_state)
+                ForOfTransitionOutcome::Done(finally_state)
             }
             None => {
                 try_stack.truncate(target.try_depth);
-                Ok(target.target_state)
+                ForOfTransitionOutcome::Done(target.target_state)
             }
         }
     }
@@ -6196,11 +6107,9 @@ impl Interpreter {
     /// idempotently proceeds to IteratorClose. `try_stack` is truncated to
     /// the closing loop's `try_depth` *before* any `Await`, so a caller that
     /// snapshots it while parked saves the post-truncation stack. When
-    /// `can_park` is `false` (the sync generator driver, and async-generator
-    /// call sites not yet converted), every disposal blocks as before — a
-    /// sync generator's dispose stacks only ever hold `using`, never
-    /// `await using`, so `DisposeStep::Await` is unreachable there in
-    /// practice, not merely assumed.
+    /// `can_park` is `false` (the sync generator driver), every disposal
+    /// blocks. Its stacks only ever hold `using`, never `await using`, so
+    /// `DisposeStep::Await` is unreachable there in practice, not assumed.
     fn unwind_generator_for_of_loops(
         &mut self,
         generator_id: u64,
@@ -6299,7 +6208,7 @@ impl Interpreter {
     /// Blocks (drains the job queue inline) when `can_park` is `false` or
     /// disposal needs no `Await`; otherwise steps the cursor once and, on
     /// `DisposeStep::Await`, returns `ForOfUnwindOutcome::Parked` for the
-    /// caller to save and resume via `GeneratorDisposeThen::Reenter`.
+    /// caller to save with its `GeneratorDisposeThen::Reenter` continuation.
     fn dispose_env_for_for_of_unwind(
         &mut self,
         env: &EnvRef,
