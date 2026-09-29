@@ -4062,6 +4062,58 @@ impl Interpreter {
         }
     }
 
+    /// Keep a captured destructuring Reference alive while `body` computes its
+    /// value, then perform the matching PutValue operation.
+    fn with_destruct_lref(
+        &mut self,
+        lref: Option<DestructLRef>,
+        fallback_target: &Expression,
+        env: &EnvRef,
+        body: impl FnOnce(&mut Self) -> Completion,
+    ) -> Completion {
+        self.with_gc_root_scope(|interp| {
+            if let Some(lref) = &lref {
+                interp.gc_root_destruct_lref(lref);
+            }
+
+            let value = match body(interp) {
+                Completion::Normal(value) => value,
+                other => return other,
+            };
+            interp.gc_root_value(&value);
+
+            match lref {
+                Some(DestructLRef::Member(base, raw_key)) => {
+                    let key = match interp.to_property_key(&raw_key) {
+                        Ok(key) => key,
+                        Err(error) => return Completion::Throw(error),
+                    };
+                    let strict = env.borrow().strict;
+                    match interp.set_object_with_key(base, &key, value, strict) {
+                        Ok(()) => Completion::Empty,
+                        Err(error) => Completion::Throw(error),
+                    }
+                }
+                Some(DestructLRef::Private(base, name)) => {
+                    match interp.set_private_field(&base, &name, value, env) {
+                        Ok(()) => Completion::Empty,
+                        Err(error) => Completion::Throw(error),
+                    }
+                }
+                Some(DestructLRef::Super(base_id, key, this_val, strict)) => {
+                    match interp.super_set_property(base_id, &key, value, &this_val, strict) {
+                        Completion::Normal(_) | Completion::Empty => Completion::Empty,
+                        other => other,
+                    }
+                }
+                None => match interp.put_value_to_target(fallback_target, value, env) {
+                    Completion::Normal(_) | Completion::Empty => Completion::Empty,
+                    other => other,
+                },
+            }
+        })
+    }
+
     /// Evaluate a member expression as an lref (Reference) for destructuring.
     /// Returns base + key info or suspension explicitly; ToPropertyKey is
     /// deferred to PutValue time per spec.
@@ -4191,24 +4243,17 @@ impl Interpreter {
                         }
                     };
 
-                    // Keep the lRef's base, pending key, and receiver alive
-                    // through iterator collection and the eventual PutValue.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &precomp {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
+                    let result = self.with_destruct_lref(precomp, inner, env, |interp| {
                         // Collect remaining iterator values into rest array
                         let mut rest = Vec::new();
                         if !done {
                             loop {
-                                match self.iterator_step(&iterator) {
-                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                match interp.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match interp.iterator_value(&result) {
                                         Ok(v) => {
                                             // Later steps run user code; the
                                             // Vec is invisible to the GC.
-                                            self.gc_root_value(&v);
+                                            interp.gc_root_value(&v);
                                             rest.push(v);
                                         }
                                         Err(e) => {
@@ -4228,51 +4273,8 @@ impl Interpreter {
                             }
                         }
 
-                        let arr = self.create_array(rest);
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&arr);
-                        match precomp {
-                            Some(DestructLRef::Member(base, raw_key)) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base, &key, arr, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                            Some(DestructLRef::Private(base, ref name)) => {
-                                if let Err(e) = self.set_private_field(&base, name, arr, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, arr, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            None => match self.put_value_to_target(inner, arr, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                Completion::Throw(e) => {
-                                    return Completion::Throw(e);
-                                }
-                                Completion::Yield(v) => {
-                                    return Completion::Yield(v);
-                                }
-                                _ => {}
-                            },
-                        }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
+                        Completion::Normal(interp.create_array(rest))
+                    });
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4304,19 +4306,12 @@ impl Interpreter {
                         }
                     };
 
-                    // The target was evaluated before iterator/default user
-                    // code; its lRef must survive until PutValue.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &precomp {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
+                    let result = self.with_destruct_lref(precomp, target, env, |interp| {
                         let item = if done {
                             JsValue::UNDEFINED
                         } else {
-                            match self.iterator_step(&iterator) {
-                                Ok(Some(result)) => match self.iterator_value(&result) {
+                            match interp.iterator_step(&iterator) {
+                                Ok(Some(result)) => match interp.iterator_value(&result) {
                                     Ok(v) => v,
                                     Err(e) => {
                                         done = true;
@@ -4336,12 +4331,12 @@ impl Interpreter {
 
                         let val = if item.is_undefined() {
                             if let Some(default) = default_expr {
-                                match self.eval_expr(default, env) {
+                                match interp.eval_expr(default, env) {
                                     Completion::Normal(v) => {
                                         if let Expression::Identifier(name) = target
                                             && default.is_anonymous_function_definition()
                                         {
-                                            self.set_function_name(&v, name);
+                                            interp.set_function_name(&v, name);
                                         }
                                         v
                                     }
@@ -4356,46 +4351,8 @@ impl Interpreter {
                             item
                         };
 
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&val);
-                        match precomp {
-                            Some(DestructLRef::Member(base, raw_key)) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base, &key, val, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                            Some(DestructLRef::Private(base, ref name)) => {
-                                if let Err(e) = self.set_private_field(&base, name, val, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, val, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            None => match self.put_value_to_target(target, val, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                Completion::Yield(v) => return Completion::Yield(v),
-                                _ => {}
-                            },
-                        }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
+                        Completion::Normal(val)
+                    });
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4553,20 +4510,13 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
 
-                        // GetV and an initializer can run user code after the
-                        // target is evaluated, so retain the whole lRef.
-                        let gc_frame = self.gc_root_frame();
-                        if let Some(lref) = &pre_ref {
-                            self.gc_root_destruct_lref(lref);
-                        }
-
-                        let result = (|| {
+                        let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
                             // Get property via get_object_property (invokes getters/Proxy)
                             let val = if let Some(o) = obj_val
                                 .as_object_id()
                                 .map(|id| crate::types::JsObject { id })
                             {
-                                match self.get_object_property(o.id, &key, &obj_val) {
+                                match interp.get_object_property(o.id, &key, &obj_val) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     Completion::Yield(v) => return Completion::Yield(v),
@@ -4578,17 +4528,21 @@ impl Interpreter {
 
                             let val = if val.is_undefined() {
                                 if let Some(default) = default_expr {
-                                    match self.eval_expr(default, env) {
+                                    match interp.eval_expr(default, env) {
                                         Completion::Normal(v) => {
                                             if let Expression::Identifier(name) = target
                                                 && default.is_anonymous_function_definition()
                                             {
-                                                self.set_function_name(&v, name);
+                                                interp.set_function_name(&v, name);
                                             }
                                             v
                                         }
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        Completion::Yield(v) => return Completion::Yield(v),
+                                        Completion::Throw(e) => {
+                                            return Completion::Throw(e);
+                                        }
+                                        Completion::Yield(v) => {
+                                            return Completion::Yield(v);
+                                        }
                                         other => return other,
                                     }
                                 } else {
@@ -4598,47 +4552,8 @@ impl Interpreter {
                                 val
                             };
 
-                            // ToPropertyKey and the write itself can run user code.
-                            self.gc_root_value(&val);
-                            if let Some(lref) = pre_ref {
-                                match lref {
-                                    DestructLRef::Member(base_val, raw_key) => {
-                                        match self.to_property_key(&raw_key) {
-                                            Ok(key) => {
-                                                let strict = env.borrow().strict;
-                                                if let Err(e) = self.set_object_with_key(
-                                                    base_val, &key, val, strict,
-                                                ) {
-                                                    return Completion::Throw(e);
-                                                }
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    DestructLRef::Private(base_val, ref name) => {
-                                        if let Err(e) =
-                                            self.set_private_field(&base_val, name, val, env)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                        if let Completion::Throw(e) = self
-                                            .super_set_property(base_id, key, val, this_val, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                }
-                            } else {
-                                match self.put_value_to_target(target, val, env) {
-                                    Completion::Normal(_) | Completion::Empty => {}
-                                    other => return other,
-                                }
-                            }
-                            Completion::Empty
-                        })();
-                        self.gc_unroot_frame(gc_frame);
+                            Completion::Normal(val)
+                        });
 
                         match result {
                             Completion::Normal(_) | Completion::Empty => {}
@@ -10141,6 +10056,48 @@ fn compare_bigint_number(
                 number < trunc
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod destructuring_reference_scope_tests {
+    use super::*;
+
+    #[test]
+    fn roots_and_finalizes_a_captured_member_reference() {
+        let mut interp = Interpreter::new();
+        let object_id = interp.create_object_id();
+        let env = Environment::new(None);
+        let baseline = interp.gc_root_frame();
+        let reference = DestructLRef::Member(
+            JsValue::object(object_id),
+            JsValue::string(JsString::from_str("answer")),
+        );
+
+        let completion =
+            interp.with_destruct_lref(Some(reference), &Expression::This, &env, |interp| {
+                assert!(
+                    interp.gc_temp_roots.contains(&object_id),
+                    "captured member base must stay rooted while the body runs"
+                );
+                Completion::Normal(JsValue::number(42.0))
+            });
+
+        assert!(matches!(completion, Completion::Empty));
+        assert_eq!(
+            interp.gc_root_frame(),
+            baseline,
+            "reference roots must be released after finalization"
+        );
+        let descriptor = interp
+            .get_object_cell_expect(object_id)
+            .borrow()
+            .get_own_property_full("answer")
+            .expect("captured reference must receive the body value");
+        assert_eq!(
+            descriptor.value.and_then(|value| value.as_number()),
+            Some(42.0)
+        );
     }
 }
 
