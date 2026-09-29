@@ -5024,6 +5024,61 @@ fn with_gc_root_scope_truncates_on_every_exit() {
     assert!(interp.gc_temp_roots.contains(&9_001));
 }
 
+/// Pins the RegExp `@@replace` slow path's GC Root Scope: collected custom
+/// `exec` results stay alive across later user code and every exit releases
+/// the temporary roots. Behaviour-preserving: green before and after the
+/// migration, red if result rooting or an abrupt-path cleanup is omitted.
+#[test]
+fn regexp_replace_results_survive_gc_and_leave_no_temp_root_leak() {
+    let interp = run_script(
+        r#"
+        var calls = 0;
+        var rx = /a/g;
+        rx.exec = function () {
+            if (calls++ === 0) {
+                return { 0: "a", length: 1, index: 0, groups: undefined };
+            }
+            // The first result is now reachable only from the native result
+            // batch retained by RegExp.prototype[@@replace].
+            $262.gc();
+            return null;
+        };
+        globalThis.replaceResult = rx[Symbol.replace]("a", function (match) {
+            $262.gc();
+            return match.toUpperCase();
+        });
+        globalThis.replaceCalls = calls;
+
+        var abruptCalls = 0;
+        var throwing = /a/g;
+        throwing.exec = function () {
+            if (abruptCalls++ === 0) {
+                return {
+                    0: "a",
+                    get length() { throw "length-sentinel"; },
+                    index: 0,
+                    groups: undefined
+                };
+            }
+            return null;
+        };
+        try {
+            throwing[Symbol.replace]("a", "b");
+        } catch (error) {
+            globalThis.replaceError = error;
+        }
+        "#,
+    );
+
+    assert_eq!(global_string(&interp, "replaceResult"), "A");
+    assert_eq!(global_number(&interp, "replaceCalls"), 2.0);
+    assert_eq!(global_string(&interp, "replaceError"), "length-sentinel");
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "RegExp replacement result roots must be released after normal and abrupt exits"
+    );
+}
+
 /// Pins the observable contract of the `eval.rs` temp-root sites that adopt
 /// `with_gc_root_scope` (the `gc-root-scope-guard-eval` firing): an earlier
 /// tagged-template substitution (site `eval.rs:1385`) must stay reachable while
