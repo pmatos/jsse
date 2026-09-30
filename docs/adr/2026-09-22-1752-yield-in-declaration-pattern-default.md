@@ -164,9 +164,11 @@ pattern suspends per iteration — no restart, unlike the pre-existing #725
 gap for array patterns in a plain declaration.
 
 **Left as residual, not attempted here:**
-- `ForInOfLeft::Pattern` (destructuring-*assignment* form, `for ({a=yield 1}
+- ~~`ForInOfLeft::Pattern` (destructuring-*assignment* form, `for ({a=yield 1}
   of x)` with no `var`/`let`/`const`) — uses a different lowering pipeline
-  (`lower_pattern_assignment`) this follow-up didn't touch.
+  (`lower_pattern_assignment`) this follow-up didn't touch.~~ **Closed under
+  issue #687**: see
+  `docs/adr/2026-09-30-2230-yield-in-assignment-pattern-for-of-head.md`.
 - ~~A loop whose iterable expression self-references the head binding under
   TDZ (`for (let {a=yield 1} of [a]) {}` should `ReferenceError`) — the
   desugar's synthesized `let` no longer contributes the *original* name to
