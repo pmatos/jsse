@@ -74,7 +74,7 @@ same lowering this ADR gives declaration patterns._
 ## What this change does not cover
 
 Each of these is unchanged behavior, tracked as a follow-up (#724 assignment forms,
-#725 array patterns and object rest, #726 catch/for heads):
+#725 array patterns and object rest):
 
 - **Array patterns** (`var [a = await 1] = []`): iterator steps are observable
   and the `await` must land *between* steps, which needs the iterator record
@@ -89,17 +89,22 @@ Each of these is unchanged behavior, tracked as a follow-up (#724 assignment for
 - **An object rest beside a suspending sibling** (`{a = await 1, ...rest}`):
   `CopyDataProperties` needs the consumed-key exclusion list without re-reading
   the source.
-- **Catch parameters and for-in/of heads** (`catch ({a = await 5})`,
-  `for (var {a = await 1} of …)`): the driver binds these in
-  `EnterCatch`/`ForOfHead` where no state boundary exists.
 - **Destructuring *assignment* forms** (`[a = await 1] = []`,
   `({a = await 1} = {})`): fixed by ADR-2026-09-22-1815 — object patterns now
   get the same lowering, array patterns fall back to the blocking-tree-walker
   path below instead of hanging.
-- **`for (var {a = await 1} = …;;)` initializers.**
 
 Function *parameter* patterns are not lowering sites: `await` in async
 formals and `yield` in generator formals are early SyntaxErrors.
+
+Catch parameters, for-in/of heads, and C-style for-init patterns (`catch
+({a = await 5})`, `for (var {a = await 1} of …)`, `for (var {a = await 1} =
+…;;)`) *are* covered, by #726 for `await` (this list was stale on the point
+that #744/#760 had already covered `yield` at the catch/for-head sites
+before #726 landed — only the C-style for-init `yield` gap, and `await`
+everywhere, were still open). See ADR-2026-09-22-1752's "Left as residual"
+section for the strip-to-temp rewrite these three sites share, and its note
+on the `ForOfInit`/`ForOfHead` `left`-split #726 added.
 
 Accepted imprecision: a `let`/`const` binding created mid-machine gets the same
 TDZ precision `SentValueBindingKind::Pattern` already gives `let {a} = await p`.
