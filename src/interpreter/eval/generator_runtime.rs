@@ -656,7 +656,7 @@ impl Interpreter {
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
-        use crate::interpreter::generator_transform::StateTerminator;
+        use crate::interpreter::generator_transform::{ArrayPatternIterOp, StateTerminator};
 
         let Some(o) = (this)
             .as_object_id()
@@ -1882,6 +1882,191 @@ impl Interpreter {
                             let e = route_exception!(e);
                             self.retire_generator(o.id);
                             return Completion::Throw(e);
+                        }
+                    }
+                }
+
+                StateTerminator::ArrayPatternIter {
+                    op,
+                    iter_var,
+                    next_state,
+                } => {
+                    let next_state = *next_state;
+                    match op {
+                        ArrayPatternIterOp::Init { iterable } => {
+                            let iterable_val = match self.eval_operand(iterable, &term_env) {
+                                Operand::Value(v) => v,
+                                Operand::Throw(e) => {
+                                    let e = route_exception!(e);
+                                    self.retire_generator(o.id);
+                                    return Completion::Throw(e);
+                                }
+                                Operand::Abort(c) | Operand::Other(c) => return c,
+                                Operand::Suspend(v) => return Completion::Yield(v),
+                            };
+                            let iterator = match self.for_of_init_iterator(&iterable_val, false) {
+                                Ok(it) => it,
+                                Err(e) => {
+                                    let e = route_exception!(e);
+                                    self.retire_generator(o.id);
+                                    return Completion::Throw(e);
+                                }
+                            };
+                            self.gc_root_value(&iterator);
+                            func_env.borrow_mut().bindings.insert(
+                                iter_var.clone(),
+                                crate::interpreter::types::Binding {
+                                    value: iterator,
+                                    kind: crate::interpreter::types::BindingKind::Let,
+                                    initialized: true,
+                                    deletable: false,
+                                },
+                            );
+                            for_of_stack.push(ForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                label_set: vec![],
+                                head_state: next_state,
+                                after_state: next_state,
+                                try_depth: current_try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                            current_id = next_state;
+                        }
+                        ArrayPatternIterOp::Step { dest_var } => {
+                            let loop_pos = for_of_stack
+                                .iter()
+                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                            let value = match loop_pos {
+                                None => JsValue::UNDEFINED,
+                                Some(pos) => {
+                                    let iterator = func_env
+                                        .borrow()
+                                        .bindings
+                                        .get(iter_var)
+                                        .map(|b| b.value.clone())
+                                        .unwrap_or(JsValue::UNDEFINED);
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => match self.iterator_value(&result) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                self.discard_failed_generator_for_of_loop(
+                                                    o.id,
+                                                    &mut for_of_stack,
+                                                    pos,
+                                                    &iterator,
+                                                );
+                                                let e = route_exception!(e);
+                                                self.retire_generator(o.id);
+                                                return Completion::Throw(e);
+                                            }
+                                        },
+                                        Ok(None) => {
+                                            self.unroot_for_of_iterator(&iterator);
+                                            for_of_stack.remove(pos);
+                                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                            JsValue::UNDEFINED
+                                        }
+                                        Err(e) => {
+                                            self.discard_failed_generator_for_of_loop(
+                                                o.id,
+                                                &mut for_of_stack,
+                                                pos,
+                                                &iterator,
+                                            );
+                                            let e = route_exception!(e);
+                                            self.retire_generator(o.id);
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                }
+                            };
+                            if let Some(dest) = dest_var {
+                                self.env_set(&func_env, dest, value).ok();
+                            }
+                            current_id = next_state;
+                        }
+                        ArrayPatternIterOp::Drain { dest_var } => {
+                            let loop_pos = for_of_stack
+                                .iter()
+                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                            let rest = match loop_pos {
+                                None => Vec::new(),
+                                Some(pos) => {
+                                    let iterator = func_env
+                                        .borrow()
+                                        .bindings
+                                        .get(iter_var)
+                                        .map(|b| b.value.clone())
+                                        .unwrap_or(JsValue::UNDEFINED);
+                                    let mut rest = Vec::new();
+                                    let mut drain_err = None;
+                                    loop {
+                                        match self.iterator_step(&iterator) {
+                                            Ok(Some(result)) => {
+                                                match self.iterator_value(&result) {
+                                                    Ok(v) => rest.push(v),
+                                                    Err(e) => {
+                                                        drain_err = Some(e);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => break,
+                                            Err(e) => {
+                                                drain_err = Some(e);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if let Some(e) = drain_err {
+                                        self.discard_failed_generator_for_of_loop(
+                                            o.id,
+                                            &mut for_of_stack,
+                                            pos,
+                                            &iterator,
+                                        );
+                                        let e = route_exception!(e);
+                                        self.retire_generator(o.id);
+                                        return Completion::Throw(e);
+                                    }
+                                    self.unroot_for_of_iterator(&iterator);
+                                    for_of_stack.remove(pos);
+                                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                    rest
+                                }
+                            };
+                            let arr = self.create_array(rest);
+                            self.env_set(&func_env, dest_var, arr).ok();
+                            current_id = next_state;
+                        }
+                        ArrayPatternIterOp::Finish => {
+                            if let Some(pos) = for_of_stack
+                                .iter()
+                                .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                            {
+                                let loop_state = for_of_stack.remove(pos);
+                                self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                match self.close_for_of_loop(
+                                    loop_state,
+                                    &func_env,
+                                    Completion::Normal(JsValue::UNDEFINED),
+                                    Some(o.id),
+                                ) {
+                                    Completion::Throw(e) => {
+                                        let e = route_exception!(e);
+                                        self.retire_generator(o.id);
+                                        return Completion::Throw(e);
+                                    }
+                                    Completion::Exit(code) => {
+                                        self.retire_generator(o.id);
+                                        return Completion::Exit(code);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            current_id = next_state;
                         }
                     }
                 }
@@ -3256,7 +3441,7 @@ impl Interpreter {
         reject_fn: JsValue,
         initial_reentry: GeneratorReentry,
     ) -> Completion {
-        use crate::interpreter::generator_transform::StateTerminator;
+        use crate::interpreter::generator_transform::{ArrayPatternIterOp, StateTerminator};
 
         let Some(o) = (this)
             .as_object_id()
@@ -5009,6 +5194,197 @@ impl Interpreter {
                             let e = route_exception!(e);
                             return self
                                 .reject_async_generator_request(o.id, promise, &reject_fn, e);
+                        }
+                    }
+                }
+
+                StateTerminator::ArrayPatternIter {
+                    op,
+                    iter_var,
+                    next_state,
+                } => {
+                    let next_state = *next_state;
+                    match op {
+                        ArrayPatternIterOp::Init { iterable } => {
+                            let iterable_val = match self.eval_operand(iterable, &term_env) {
+                                Operand::Value(v) => v,
+                                Operand::Throw(e) => {
+                                    let e = route_exception!(e);
+                                    return self.reject_async_generator_request(
+                                        o.id, promise, &reject_fn, e,
+                                    );
+                                }
+                                Operand::Abort(exit) => abort_async_generator!(exit),
+                                Operand::Suspend(yv) => yv,
+                                Operand::Other(_) => JsValue::UNDEFINED,
+                            };
+                            let iterator = match self.for_of_init_iterator(&iterable_val, false) {
+                                Ok(it) => it,
+                                Err(e) => {
+                                    let e = route_exception!(e);
+                                    return self.reject_async_generator_request(
+                                        o.id, promise, &reject_fn, e,
+                                    );
+                                }
+                            };
+                            self.gc_root_value(&iterator);
+                            func_env.borrow_mut().bindings.insert(
+                                iter_var.clone(),
+                                crate::interpreter::types::Binding {
+                                    value: iterator,
+                                    kind: crate::interpreter::types::BindingKind::Let,
+                                    initialized: true,
+                                    deletable: false,
+                                },
+                            );
+                            for_of_stack.push(ForOfLoopState {
+                                iter_var: iter_var.clone(),
+                                label_set: vec![],
+                                head_state: next_state,
+                                after_state: next_state,
+                                try_depth: current_try_stack.len(),
+                                outer_env: term_env.clone(),
+                                iteration_env: None,
+                            });
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                            current_id = next_state;
+                        }
+                        ArrayPatternIterOp::Step { dest_var } => {
+                            let loop_pos = for_of_stack
+                                .iter()
+                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                            let value = match loop_pos {
+                                None => JsValue::UNDEFINED,
+                                Some(pos) => {
+                                    let iterator = func_env
+                                        .borrow()
+                                        .bindings
+                                        .get(iter_var)
+                                        .map(|b| b.value.clone())
+                                        .unwrap_or(JsValue::UNDEFINED);
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => match self.iterator_value(&result) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                self.discard_failed_generator_for_of_loop(
+                                                    o.id,
+                                                    &mut for_of_stack,
+                                                    pos,
+                                                    &iterator,
+                                                );
+                                                let e = route_exception!(e);
+                                                return self.reject_async_generator_request(
+                                                    o.id, promise, &reject_fn, e,
+                                                );
+                                            }
+                                        },
+                                        Ok(None) => {
+                                            self.unroot_for_of_iterator(&iterator);
+                                            for_of_stack.remove(pos);
+                                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                            JsValue::UNDEFINED
+                                        }
+                                        Err(e) => {
+                                            self.discard_failed_generator_for_of_loop(
+                                                o.id,
+                                                &mut for_of_stack,
+                                                pos,
+                                                &iterator,
+                                            );
+                                            let e = route_exception!(e);
+                                            return self.reject_async_generator_request(
+                                                o.id, promise, &reject_fn, e,
+                                            );
+                                        }
+                                    }
+                                }
+                            };
+                            if let Some(dest) = dest_var {
+                                self.env_set(&func_env, dest, value).ok();
+                            }
+                            current_id = next_state;
+                        }
+                        ArrayPatternIterOp::Drain { dest_var } => {
+                            let loop_pos = for_of_stack
+                                .iter()
+                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                            let rest = match loop_pos {
+                                None => Vec::new(),
+                                Some(pos) => {
+                                    let iterator = func_env
+                                        .borrow()
+                                        .bindings
+                                        .get(iter_var)
+                                        .map(|b| b.value.clone())
+                                        .unwrap_or(JsValue::UNDEFINED);
+                                    let mut rest = Vec::new();
+                                    let mut drain_err = None;
+                                    loop {
+                                        match self.iterator_step(&iterator) {
+                                            Ok(Some(result)) => {
+                                                match self.iterator_value(&result) {
+                                                    Ok(v) => rest.push(v),
+                                                    Err(e) => {
+                                                        drain_err = Some(e);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => break,
+                                            Err(e) => {
+                                                drain_err = Some(e);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if let Some(e) = drain_err {
+                                        self.discard_failed_generator_for_of_loop(
+                                            o.id,
+                                            &mut for_of_stack,
+                                            pos,
+                                            &iterator,
+                                        );
+                                        let e = route_exception!(e);
+                                        return self.reject_async_generator_request(
+                                            o.id, promise, &reject_fn, e,
+                                        );
+                                    }
+                                    self.unroot_for_of_iterator(&iterator);
+                                    for_of_stack.remove(pos);
+                                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                    rest
+                                }
+                            };
+                            let arr = self.create_array(rest);
+                            self.env_set(&func_env, dest_var, arr).ok();
+                            current_id = next_state;
+                        }
+                        ArrayPatternIterOp::Finish => {
+                            if let Some(pos) = for_of_stack
+                                .iter()
+                                .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                            {
+                                let loop_state = for_of_stack.remove(pos);
+                                self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                                match self.close_for_of_loop(
+                                    loop_state,
+                                    &func_env,
+                                    Completion::Normal(JsValue::UNDEFINED),
+                                    Some(o.id),
+                                ) {
+                                    Completion::Throw(e) => {
+                                        let e = route_exception!(e);
+                                        return self.reject_async_generator_request(
+                                            o.id, promise, &reject_fn, e,
+                                        );
+                                    }
+                                    Completion::Exit(code) => {
+                                        abort_async_generator!(Completion::Exit(code))
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            current_id = next_state;
                         }
                     }
                 }

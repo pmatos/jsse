@@ -8119,7 +8119,7 @@ impl Interpreter {
         is_error: bool,
     ) -> Completion {
         use crate::interpreter::generator_transform::{
-            LoopControlTarget, SentValueBindingKind, StateTerminator,
+            ArrayPatternIterOp, LoopControlTarget, SentValueBindingKind, StateTerminator,
         };
 
         let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
@@ -9474,6 +9474,143 @@ impl Interpreter {
                         current_id = body_state;
                     }
                 }
+
+                StateTerminator::ArrayPatternIter {
+                    ref op,
+                    ref iter_var,
+                    next_state,
+                } => match op {
+                    ArrayPatternIterOp::Init { iterable } => {
+                        let iterable_val = operand!(iterable, &term_env);
+                        let iterator = match self.for_of_init_iterator(&iterable_val, false) {
+                            Ok(it) => it,
+                            Err(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                        };
+                        self.gc_root_value(&iterator);
+                        self.env_set(&func_env, iter_var, iterator).ok();
+                        for_of_stack.push(ForOfLoopState {
+                            iter_var: iter_var.clone(),
+                            label_set: vec![],
+                            head_state: next_state,
+                            after_state: next_state,
+                            try_depth: try_stack.len(),
+                            outer_env: term_env.clone(),
+                            iteration_env: None,
+                        });
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Step { dest_var } => {
+                        let loop_pos = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                        let value = match loop_pos {
+                            None => JsValue::UNDEFINED,
+                            Some(pos) => {
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                match self.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            for_of_protocol_failure = Some(iter_var.clone());
+                                            pending_exception = Some(e);
+                                            continue;
+                                        }
+                                    },
+                                    Ok(None) => {
+                                        self.unroot_for_of_iterator(&iterator);
+                                        for_of_stack.remove(pos);
+                                        JsValue::UNDEFINED
+                                    }
+                                    Err(e) => {
+                                        for_of_protocol_failure = Some(iter_var.clone());
+                                        pending_exception = Some(e);
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        if let Some(dest) = dest_var {
+                            self.env_set(&func_env, dest, value).ok();
+                        }
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Drain { dest_var } => {
+                        let loop_pos = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                        let rest = match loop_pos {
+                            None => Vec::new(),
+                            Some(pos) => {
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                let mut rest = Vec::new();
+                                let mut drain_failed = false;
+                                loop {
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => match self.iterator_value(&result) {
+                                            Ok(v) => rest.push(v),
+                                            Err(e) => {
+                                                for_of_protocol_failure = Some(iter_var.clone());
+                                                pending_exception = Some(e);
+                                                drain_failed = true;
+                                                break;
+                                            }
+                                        },
+                                        Ok(None) => break,
+                                        Err(e) => {
+                                            for_of_protocol_failure = Some(iter_var.clone());
+                                            pending_exception = Some(e);
+                                            drain_failed = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if drain_failed {
+                                    continue;
+                                }
+                                self.unroot_for_of_iterator(&iterator);
+                                for_of_stack.remove(pos);
+                                rest
+                            }
+                        };
+                        let arr = self.create_array(rest);
+                        self.env_set(&func_env, dest_var, arr).ok();
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Finish => {
+                        if let Some(pos) = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                        {
+                            let loop_state = for_of_stack.remove(pos);
+                            match self.close_for_of_loop(
+                                loop_state,
+                                &func_env,
+                                Completion::Normal(JsValue::UNDEFINED),
+                                None,
+                            ) {
+                                Completion::Throw(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                                Completion::Exit(code) => {
+                                    self.scheduler.remove_async_function_state(async_id);
+                                    return Completion::Exit(code);
+                                }
+                                _ => {}
+                            }
+                        }
+                        current_id = next_state;
+                    }
+                },
 
                 StateTerminator::Completed => {
                     complete_function!();
