@@ -2008,10 +2008,24 @@ impl Interpreter {
             scope_stack.truncate(target_depth);
         }
         match &state.scope_action {
-            Some(ScopeAction::OpenBlock) if scope_stack.len() < target_depth => {
+            Some(ScopeAction::OpenBlock(decls)) if scope_stack.len() < target_depth => {
                 let parent = innermost(scope_stack, for_of_env);
+                let env = Environment::new(Some(parent));
+                // `BlockDeclarationInstantiation`: every lexical name of the
+                // block enters TDZ together, before any of its statements
+                // run — not just the ones textually in this first fragment.
+                // Never `initialize_binding` here; the state whose body
+                // contains the actual declaration does that when it runs.
+                for (name, is_const) in decls {
+                    let kind = if *is_const {
+                        BindingKind::Const
+                    } else {
+                        BindingKind::Let
+                    };
+                    env.borrow_mut().declare(name, kind);
+                }
                 scope_stack.push(ScopeFrame {
-                    env: Environment::new(Some(parent)),
+                    env,
                     try_depth,
                     for_of_depth,
                 });

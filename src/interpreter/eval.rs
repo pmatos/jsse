@@ -9121,6 +9121,7 @@ impl Interpreter {
                 StateTerminator::EnterCatch {
                     body_state,
                     ref param,
+                    ref lexical_decls,
                 } => {
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_catch = true;
@@ -9133,6 +9134,19 @@ impl Interpreter {
                     let catch_env = Environment::new(Some(term_env.clone()));
                     if let Some(pattern) = param {
                         let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &catch_env);
+                    }
+                    // `BlockDeclarationInstantiation` for the catch body's own
+                    // Block (see the `OpenBlock` fix this mirrors, #738): its
+                    // lexical names enter TDZ here, into the same environment
+                    // as `param`, rather than the spec's separate nested one
+                    // (see the `EnterCatch` doc comment).
+                    for (name, is_const) in lexical_decls {
+                        let kind = if *is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        catch_env.borrow_mut().declare(name, kind);
                     }
                     scope_stack.push(ScopeFrame {
                         env: catch_env,
