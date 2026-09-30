@@ -2529,6 +2529,7 @@ fn transform_for_statement(
                     d.init
                         .as_ref()
                         .is_some_and(|e| expr_has_suspension(e, ctx.is_async))
+                        || pattern_needs_await_lowering(&d.pattern)
                 }) {
                     transform_variable_declaration(decl, ctx, usize::MAX);
                 } else {

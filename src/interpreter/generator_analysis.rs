@@ -1063,6 +1063,16 @@ pub(crate) fn pattern_needs_assignment_lowering(pattern: &Pattern) -> bool {
     pattern_contains_await(pattern) && pattern_lowering_supported(pattern, true)
 }
 
+/// Like `pattern_needs_lowering`, but `await`-only: true for a declaration
+/// pattern whose `await` the transform can lower into states, ignoring any
+/// `yield` it may also contain. Used at the catch-parameter, for-in/of-head,
+/// and C-style for-init sites, whose `yield` handling (already correct via
+/// the replay path or #744/#760's own lowering) must stay untouched by this
+/// `await`-specific widening.
+pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
+    pattern_contains_await(pattern) && pattern_lowering_supported(pattern, false)
+}
+
 /// Checks if a statement is, or is reached through `if`/labeled statements from,
 /// a Block that directly declares `await using`. It does not look through
 /// loops, `try` or `switch`; `has_suspendable_await_using_block` extends the
@@ -1250,10 +1260,10 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         Statement::DoWhile(d) => contains_suspension(&d.body) || expr_contains_suspension(&d.test),
         Statement::For(f) => {
             f.init.as_ref().is_some_and(|i| match i {
-                ForInit::Variable(v) => v
-                    .declarations
-                    .iter()
-                    .any(|d| d.init.as_ref().is_some_and(expr_contains_suspension)),
+                ForInit::Variable(v) => v.declarations.iter().any(|d| {
+                    d.init.as_ref().is_some_and(expr_contains_suspension)
+                        || pattern_needs_await_lowering(&d.pattern)
+                }),
                 ForInit::Expression(e) => expr_contains_suspension(e),
             }) || f.test.as_ref().is_some_and(expr_contains_suspension)
                 || f.update.as_ref().is_some_and(expr_contains_suspension)
@@ -1787,5 +1797,41 @@ mod tests {
         assert!(!contains_suspension(&first_statement(
             "var [a = await 1] = [];"
         )));
+    }
+
+    #[test]
+    fn contains_suspension_sees_awaiting_for_init_head_pattern() {
+        assert!(contains_suspension(&first_statement(
+            "for (var { a = await 1 } = {};;) { break; }"
+        )));
+        assert!(contains_suspension(&first_statement(
+            "for (let { a = await 1 } = {};;) { break; }"
+        )));
+        assert!(!contains_suspension(&first_statement(
+            "for (var { a = 1 } = {};;) { break; }"
+        )));
+    }
+
+    #[test]
+    fn contains_suspension_ignores_unsupported_await_for_init_shape() {
+        assert!(!contains_suspension(&first_statement(
+            "for (var [a = await 1] = [];;) { break; }"
+        )));
+    }
+
+    #[test]
+    fn pattern_needs_await_lowering_is_shape_gated() {
+        assert!(pattern_needs_await_lowering(&declared_pattern(
+            "var { a = await 1 } = {};"
+        )));
+        assert!(!pattern_needs_await_lowering(&declared_pattern(
+            "var [a = await 1] = [];"
+        )));
+        assert!(!pattern_needs_await_lowering(&declared_pattern(
+            "var { a = 1 } = {};"
+        )));
+        // `yield`-only defaults never trigger the await-only predicate.
+        let yield_only = declared_pattern_in("async function*", "var { a = yield 1 } = {};");
+        assert!(!pattern_needs_await_lowering(&yield_only));
     }
 }
