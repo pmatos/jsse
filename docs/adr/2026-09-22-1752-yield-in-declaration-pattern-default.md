@@ -167,25 +167,34 @@ gap for array patterns in a plain declaration.
 - `ForInOfLeft::Pattern` (destructuring-*assignment* form, `for ({a=yield 1}
   of x)` with no `var`/`let`/`const`) — uses a different lowering pipeline
   (`lower_pattern_assignment`) this follow-up didn't touch.
-- A loop whose iterable expression self-references the head binding under
+- ~~A loop whose iterable expression self-references the head binding under
   TDZ (`for (let {a=yield 1} of [a]) {}` should `ReferenceError`) — the
   desugar's synthesized `let` no longer contributes the *original* name to
   the transform-time TDZ pre-declaration (`ForOfInit`'s `left` field, read by
-  `for_of_head_tdz_env`), which now only knows about `$tmp`. Exceedingly
-  narrow (self-reference *and* a yield-only pattern default in the same
-  head), not covered by any test.
+  `for_of_head_tdz_env`), which now only knows about `$tmp`.~~ **Fixed by
+  #726**: `transform_for_in_of_loop` now splits `left` between the two
+  terminators — `ForOfInit`'s `left` always keeps the original,
+  un-rewritten pattern (so the TDZ walk keeps seeing the real names), and
+  only `ForOfHead`'s `left` gets the rewritten `$tmp`. #726 needed this for
+  its own `await`-triggered rewrite, and since both triggers share the same
+  code path, it closes the `yield` gap described here too — see
+  ADR-2026-09-21-2143.
 - Multi-element loops whose head pattern default suspends and whose pattern
   shape is *not* lowerable (array patterns) still hit the pre-existing #725
   replay-restarts-the-iterator gap — now reachable via `yield` in a loop
   head too, not just via a plain declaration. Not new: same root cause,
   same tracking issue.
-- `for (var {a = await 1} = ...)` and `catch ({a = await 1})` /
+- ~~`for (var {a = await 1} = ...)` and `catch ({a = await 1})` /
   `for (var {a = await 1} of x)`: issue #726 tracks the equivalent `await`
   gap, predating this PR. The desugar above is gated on
   `pattern_contains_yield` specifically and leaves `await`-only patterns
-  untouched — #726 remains open, though its own proposed fix (a
-  strip-to-temp rewrite) is essentially what this follow-up implemented for
-  `yield`.
+  untouched.~~ **Closed by #726**: the desugar (renamed
+  `hoist_suspending_pattern`) now also triggers on
+  `pattern_needs_await_lowering`, and `contains_suspension`'s
+  `Statement::Try`/`ForIn`/`ForOf` arms gained a matching `await`-only
+  check — essentially the strip-to-temp rewrite this follow-up implemented
+  for `yield`, widened to `await` additively, without touching the `yield`
+  handling documented above.
 
 ## What this still does not cover
 
@@ -200,8 +209,12 @@ gap for array patterns in a plain declaration.
   introduced here.
 - **`for (var {a = yield 1} = {};;)` initializers**: `contains_yield`'s and
   `analyze_statement`'s `Statement::For` arms still only look at a `var`
-  init's own `init` expression, not its pattern, matching the equivalent gap
-  ADR-2026-09-21-2143 already documents for `await`. Not touched here.
+  init's own `init` expression, not its pattern. #726 closed the equivalent
+  `await` gap (`contains_suspension`'s `Statement::For` arm now also checks
+  `pattern_needs_await_lowering` per declarator), deliberately `await`-only —
+  widening it to `yield` too would lower a `yield` the yield-point collector
+  (`analyze_generator_body`) never counted, desyncing a compiled generator's
+  resume bookkeeping. The `yield` side of this gap is still open.
 - **Object rest beside a suspending sibling** (`{a = yield 1, ...rest}`):
   `pattern_lowering_supported` still declines it (a `Rest` property always
   fails its per-property check), so it stays on the InlineYield replay
