@@ -89,9 +89,12 @@ shares no machinery with array-iterator stepping and is explicitly deferred
         Init { iterable: Expression },
         Step { dest_var: Option<String> },  // None = elision: step and discard
         Drain { dest_var: String },          // rest: loop-to-exhaustion, no await inside
-        CloseIfNotDone,
+        Finish,
     }
     ```
+    (`Finish` replaces an earlier `CloseIfNotDone` name from draft review —
+    same position in the pattern, see below for why it must do more than a
+    conditional close.)
     `Init` performs `GetIterator(iterable, sync)` (reuse the same helper the
     tree-walker's `bind_pattern` already calls — `get_iterator`/
     `for_of_init_iterator`), stores the iterator record under a fresh
@@ -121,28 +124,74 @@ shares no machinery with array-iterator stepping and is explicitly deferred
     printer) than one more `StateTerminator` arm, which only touches
     `clear_terminator_ic_sites` and the three drivers already listed below —
     the same shape `ForOfInit`/`ForOfHead` chose for exactly this reason.
-    `Drain` runs its collection loop to completion inside one terminator
-    dispatch (rest elements have no `Initializer`, hence no `await` can occur
-    mid-drain) and always ends with `[[Done]] = true`, so a pattern that ends
-    in a rest element never needs `CloseIfNotDone`. `CloseIfNotDone` is only
-    emitted at the end of a pattern *without* a trailing rest, and must run
-    even on the fully-normal path (see §2's `BindingPattern :
-    ArrayBindingPattern` clause) — this is the one place this plan diverges
-    from "abrupt exits reuse `for_of_stack`" per the issue body: normal
-    completion needs it too, or `var [a] = [1,2,3]` silently regresses.
+
+    **The `for_of_stack` entry's lifetime must track `[[Done]]`, not just
+    "pushed at `Init`, popped at `Finish`."** `StateTerminator::ForOfHead`'s own
+    existing done-handling is the precedent to copy exactly (`eval.rs`, the
+    `if done { ...; for_of_stack.remove(loop_pos); }` branch a few lines after
+    the arm cited above): the moment a `Step` or `Drain` observes
+    `IteratorStepValue`'s result as done (or `IteratorStepValue` itself fails,
+    which the spec — §2's `sec-iteratorstepvalue` citation — has already set
+    `[[Done]] = true` for before the failure propagates), that call must
+    locate this pattern's own entry in `for_of_stack` by `iter_var` (`rposition`,
+    same as `ForOfHead`) and remove it immediately, in the same step that
+    records `{iter_var}__done = true`. Skipping this leaves a stale entry on
+    the stack in two observable ways: (a) a pattern ending in `...rest` never
+    reaches `Finish` at all (see below), so without an explicit pop inside
+    `Drain` its entry leaks for the rest of the function's lifetime, corrupting
+    every later `break`/`continue`/`throw` depth computation the §6 risk below
+    already flags; (b) `var [a, b = await Promise.reject()] = [1]` — iterator
+    exhausted after stepping `a`, then `b`'s default rejects — would otherwise
+    have `unwind_for_of!` find the entry still on the stack and call
+    `.return()` on an already-exhausted iterator, which `sec-iteratorclose`
+    forbids calling at all once `[[Done]]` is true qualifies as done. `Drain`
+    always ends with `[[Done]] = true` by construction (it loops
+    `IteratorStepValue` to exhaustion), so it always performs this pop itself
+    and a pattern ending in a rest element never reaches `Finish`.
+    `Finish` is emitted exactly once, at the end of a pattern *without* a
+    trailing rest, and runs on the fully-normal path too (see §2's
+    `BindingPattern : ArrayBindingPattern` clause — this is the one place this
+    plan diverges from "abrupt exits reuse `for_of_stack`" per the issue body).
+    Its job: if this pattern's entry is still on `for_of_stack` (i.e. `Step`
+    never observed done — the pattern under-consumed the iterator), pop it
+    first, then run the same normal-completion `IteratorClose` the driver
+    already has for a `break`/`return` crossing a real `for-of` loop
+    (`close_for_of_loop` with `Completion::Normal(...)`, *not* the
+    `unwind_for_of!` macro — that macro is for completions that are already
+    abrupt and is reached separately, per the abrupt-exit slice below). If the
+    entry is already gone (pattern fully drained or hit done during its last
+    `Step`), `Finish` is a no-op. Get the "pop, *then* close" ordering from a
+    real test (slice 6), not by inspection — reversing the order re-closes an
+    already-popped/already-done iterator.
   - `clear_terminator_ic_sites` — add the new variant (`Init`'s `iterable`
     needs `clear_expr_ic_sites`; the rest carry no cleared expressions).
   - A new `lower_array_pattern_binding(kind, elements, source, ctx)` alongside
     the existing `lower_pattern_binding`/`lower_pattern_property`, following
     the same per-element "only break up what reaches a suspension" rule: an
     element whose sub-pattern doesn't contain a suspension is still bound
-    through one `Step` into a temp and one ordinary tree-walked
-    `<kind> [<elem>] = $tmp`-shaped sub-statement (parallel to
-    `emit_pattern_binding`), so naming/TDZ/anonymous-function-naming stay the
-    tree-walker's; only elements that do reach a suspension get the full
-    `Step` → `ConditionalGoto` → default-states → recurse-into-inner-pattern
-    treatment (the same shape `lower_pattern_property` already uses for object
-    defaults).
+    through one `Step` into a temp, then **`emit_pattern_binding(kind,
+    element_pattern, step_tmp, ctx)` directly on the element's own
+    (sub-)pattern** — *not* `<kind> [<elem>] = $tmp`. `step_tmp` already holds
+    the single value `IteratorStepValue` produced for this element (or
+    `undefined` past exhaustion); re-wrapping it as `[<elem>]` would make the
+    tree-walker call `GetIterator` on `step_tmp` itself and open a *second*,
+    spurious iterator on a bare value instead of binding the element against
+    it directly. This mirrors how `lower_pattern_property`'s own
+    non-suspending branch (`generator_transform.rs:1850-1857`) binds a whole
+    property in one call rather than pre-extracting and re-wrapping — the
+    array case differs only in that the value is already a plain temp
+    (`step_tmp`, from `Step`) rather than something `emit_pattern_binding`
+    re-derives via a property read, since a destructuring source has no
+    stable "key" to re-read the way an object property does. Naming, TDZ, and
+    anonymous-function-naming for the element's own sub-pattern stay the
+    tree-walker's, exactly as for the object case. Only elements that do reach
+    a suspension get the full `Step` → `ConditionalGoto` → default-states →
+    recurse-into-inner-pattern treatment (the same shape `lower_pattern_property`
+    already uses for object defaults) — and that recursion, too, must bind the
+    inner target from the already-stepped temp via `emit_pattern_binding`
+    (or, when the target itself contains a further suspension, via a nested
+    `lower_pattern_binding`/`lower_array_pattern_binding` call keyed to that
+    temp), never by re-wrapping the temp in another pattern shape.
   - **`lower_pattern_binding`'s top-level dispatch must change.** Today it is
     `let Pattern::Object(props) = pattern.clone() else { emit_pattern_binding(...); return; }`
     — any non-`Object` pattern (including `Pattern::Array`) falls straight to
@@ -168,7 +217,7 @@ shares no machinery with array-iterator stepping and is explicitly deferred
     elements, and the nested-in-object case.
 - `src/interpreter/eval.rs` — async-function driver: one new `match` arm for
   `StateTerminator::ArrayPatternIter` (near the existing `ForOfInit`/`ForOfHead`
-  arms around line 9275-9440), implementing `Init`/`Step`/`Drain`/`CloseIfNotDone`
+  arms around line 9275-9440), implementing `Init`/`Step`/`Drain`/`Finish`
   against `for_of_stack` as described above. This is the only driver that can
   actually receive this terminator in an *async function* body.
 - `src/interpreter/eval/generator_runtime.rs` — async-generator driver (the
@@ -244,9 +293,20 @@ shares no machinery with array-iterator stepping and is explicitly deferred
    customIterable` when `customIterable` yields more than one value (default
    not taken) and the array pattern only consumes one, and is **not** called
    when the pattern ends in a rest element or fully drains the iterator. This
-   is the `CloseIfNotDone` terminator; per §2, get this from a real green test,
+   is the `Finish` terminator; per §2, get this from a real green test,
    not by inspection, since it's easy to build only the abrupt-path close and
-   silently miss the normal-completion path.
+   silently miss the normal-completion path. Also assert the two negative
+   cases that must *skip* `Finish`'s close because `[[Done]]` already flipped
+   before `Finish` runs, mirroring the sync precedents
+   `test262/test/language/statements/variable/dstr/ary-ptrn-elem-id-iter-step-err.js`
+   and `ary-ptrn-elem-id-iter-val-err.js`: a `next()` call that throws, and a
+   `next()` result whose `.value` getter throws, each with a following
+   awaiting element (`var [a = await 1, b = await 2] = it` where `it`'s second
+   `next()`/`.value` throws before `b`'s `Step`) — in both, `.return()` must
+   **not** be called, since §2's `sec-iteratorstepvalue` citation already set
+   `[[Done]] = true` before the throw reached this code, so the `Step`/`Drain`
+   pop (see §3) must have already removed the entry by the time the throw
+   propagates to `Finish` or to an enclosing `unwind_for_of!`.
 7. **Abrupt exit closes exactly once.** Red: a case where the default's
    `await`ed promise rejects (`var [a = await Promise.reject(new Error())] =
    customIterable`) or the pattern is inside a `try`/`finally` that itself
@@ -255,7 +315,7 @@ shares no machinery with array-iterator stepping and is explicitly deferred
 8. **Rest element.** Red/green pair for `var [a, ...rest] = [1, 2, 3]` and
    `var [a = await 1, ...rest] = it` (rest itself never contains an `await`,
    but a preceding element does, so the pattern is still lowered) — asserts
-   `rest` collects the remaining values and no `CloseIfNotDone` fires (spec:
+   `rest` collects the remaining values and no `Finish` fires (spec:
    `[[Done]]` is already `true` after a rest drain).
 9. **Nested array-in-object composes for free.** Red:
    `async_machine("var { x: [a = await 1] } = {x: []}; return a;")` currently
@@ -294,7 +354,14 @@ shares no machinery with array-iterator stepping and is explicitly deferred
     proving the second step happens after resume, not before.
   - `async-function-array-destructuring-iterator-close-on-underconsumption.js`
     — normal-completion `IteratorClose` when the pattern doesn't drain the
-    iterator (slice 6).
+    iterator (slice 6), matching the sibling pair
+    `test262/test/language/statements/variable/dstr/ary-init-iter-close.js` /
+    `ary-init-iter-no-close.js` for the sync case.
+  - `async-function-array-destructuring-iterator-step-err-no-close.js` /
+    `async-function-array-destructuring-iterator-val-err-no-close.js` — the
+    two negative cases from slice 6 (`next()` throws / `.value` getter
+    throws), matching `ary-ptrn-elem-id-iter-step-err.js` /
+    `ary-ptrn-elem-id-iter-val-err.js`.
   - `async-function-array-destructuring-iterator-close-on-throw.js` — abrupt
     exit closes exactly once (slice 7).
   - `async-function-array-destructuring-rest-after-await.js` — slice 8.
@@ -348,7 +415,13 @@ shares no machinery with array-iterator stepping and is explicitly deferred
   incorrectly). This is exactly the kind of thing slice 7's abrupt-exit test
   should catch if it's wrong, but call it out explicitly since it's easy to
   get subtly wrong without a test exercising a `break`/`continue` crossing an
-  in-flight array-pattern default's `await`.
+  in-flight array-pattern default's `await`. This risk is also why §3 requires
+  `Step`/`Drain` to pop this pattern's own entry the instant `[[Done]]`
+  becomes true, rather than leaving the pop to `Finish` alone — an entry that
+  outlives its pattern's own execution (e.g. a `...rest` drain that never
+  reaches `Finish`) is exactly the kind of stale frame that would corrupt this
+  depth counting for an unrelated, later `break`/`continue` in the same
+  function.
 - **GC rooting.** No `gc.rs` changes are planned (§3) — verify this holds once
   slice 2 is implemented; if the iterator temp needs anything
   `collect_for_of_stack_roots` doesn't already provide (it roots
