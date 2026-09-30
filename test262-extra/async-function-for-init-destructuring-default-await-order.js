@@ -34,7 +34,7 @@ info: |
       iii. Perform thisIterationEnv.InitializeBinding(bn, lastValue).
 flags: [async]
 includes: [compareArray.js]
-features: [async-functions, destructuring-binding]
+features: [async-functions, async-iteration, destructuring-binding]
 ---*/
 
 function run(makeFn) {
@@ -64,14 +64,30 @@ async function viaConst(L) {
     break;
   }
 }
+async function viaAsyncGenerator(L) {
+  async function* g() {
+    for (var { a = await 1 } = {}; ; ) {
+      L('a' + a);
+      break;
+    }
+  }
+  var r = g().next();
+  L('called-next');
+  await r;
+}
 
 var expected = ['sync-end', 'w1', 'a1', 'w2', 'w3'];
 
-Promise.all([run(viaVar), run(viaLet), run(viaConst)])
+Promise.all([run(viaVar), run(viaLet), run(viaConst), run(viaAsyncGenerator)])
   .then(function (logs) {
     assert.compareArray(logs[0], expected, 'var');
     assert.compareArray(logs[1], expected, 'let');
     assert.compareArray(logs[2], expected, 'const');
+    assert.compareArray(
+      logs[3],
+      ['called-next', 'sync-end', 'w1', 'a1', 'w2', 'w3'],
+      'async generator'
+    );
 
     return (async function () {
       var fns = [];
