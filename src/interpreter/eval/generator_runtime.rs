@@ -4553,26 +4553,40 @@ impl Interpreter {
 
                 StateTerminator::TryExit { after_state } => {
                     let finished = current_try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        // Re-throw pending exception after finally completes
-                        let exc = route_exception!(exc);
-                        return self.reject_async_generator_request(o.id, promise, &reject_fn, exc);
+                    match finished.and_then(|ctx| ctx.pending_completion) {
+                        Some(PendingCompletion::Throw(exc)) => {
+                            // Re-throw pending exception after finally completes
+                            let exc = route_exception!(exc);
+                            return self
+                                .reject_async_generator_request(o.id, promise, &reject_fn, exc);
+                        }
+                        Some(PendingCompletion::Return(ret_val)) => {
+                            pending_return = Some(ret_val);
+                            check_abrupt_on_resume = true;
+                            current_id = *after_state;
+                            continue;
+                        }
+                        Some(PendingCompletion::LoopControl(target)) => {
+                            // The finalizer ran on behalf of a break/continue:
+                            // resume it, through any finalizer still in the way.
+                            current_id = route_loop_control_result!(target);
+                            continue;
+                        }
+                        None => {
+                            // A return not yet owned by any context (the
+                            // interception sites still park it on the
+                            // driver-local `pending_return` rather than on
+                            // `pending_completion`) keeps threading through
+                            // via `check_abrupt_on_resume` until it is.
+                            if let Some(ret_val) = pending_return.take() {
+                                pending_return = Some(ret_val);
+                                check_abrupt_on_resume = true;
+                                current_id = *after_state;
+                                continue;
+                            }
+                            current_id = *after_state;
+                        }
                     }
-                    if let Some(ret_val) = pending_return.take() {
-                        pending_return = Some(ret_val);
-                        check_abrupt_on_resume = true;
-                        current_id = *after_state;
-                        continue;
-                    }
-                    if let Some(PendingCompletion::LoopControl(target)) =
-                        finished.and_then(|ctx| ctx.pending_completion)
-                    {
-                        // The finalizer ran on behalf of a break/continue:
-                        // resume it, through any finalizer still in the way.
-                        current_id = route_loop_control_result!(target);
-                        continue;
-                    }
-                    current_id = *after_state;
                 }
 
                 StateTerminator::EnterCatch { body_state, param } => {
@@ -4599,6 +4613,14 @@ impl Interpreter {
                 StateTerminator::EnterFinally { body_state } => {
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_finally = true;
+                        // A throw routed here by `route_generator_exception`
+                        // (which only knows to jump to this finally, not that
+                        // this is the context that must restore it) is now
+                        // owned by this context: a nested try/finally's own
+                        // `TryExit` must not see it (issue #719).
+                        if let Some(exc) = pending_exception.take() {
+                            ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                        }
                     }
                     current_id = *body_state;
                 }
