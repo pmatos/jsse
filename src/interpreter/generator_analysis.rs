@@ -1283,9 +1283,10 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         Statement::Throw(e) => expr_contains_suspension(e),
         Statement::Try(t) => {
             t.block.iter().any(contains_suspension)
-                || t.handler
-                    .as_ref()
-                    .is_some_and(|h| h.body.iter().any(contains_suspension))
+                || t.handler.as_ref().is_some_and(|h| {
+                    h.body.iter().any(contains_suspension)
+                        || h.param.as_ref().is_some_and(pattern_needs_await_lowering)
+                })
                 || t.finalizer
                     .as_ref()
                     .is_some_and(|f| f.iter().any(contains_suspension))
@@ -1816,6 +1817,27 @@ mod tests {
     fn contains_suspension_ignores_unsupported_await_for_init_shape() {
         assert!(!contains_suspension(&first_statement(
             "for (var [a = await 1] = [];;) { break; }"
+        )));
+    }
+
+    #[test]
+    fn contains_suspension_sees_awaiting_catch_param_pattern() {
+        assert!(contains_suspension(&first_statement(
+            "try {} catch ({ a = await 1 }) {}"
+        )));
+        assert!(!contains_suspension(&first_statement(
+            "try {} catch ({ a = 1 }) {}"
+        )));
+        assert!(!contains_suspension(&first_statement(
+            "try {} catch ({ a }) {}"
+        )));
+        assert!(!contains_suspension(&first_statement("try {} catch {}")));
+    }
+
+    #[test]
+    fn contains_suspension_ignores_unsupported_await_catch_param_shape() {
+        assert!(!contains_suspension(&first_statement(
+            "try {} catch ([a = await 1]) {}"
         )));
     }
 
