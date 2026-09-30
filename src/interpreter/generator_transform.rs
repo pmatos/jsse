@@ -1789,21 +1789,22 @@ fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut
     ctx.emit_statement(synth_pattern_let_decl(kind, pattern, source));
 }
 
-/// If `pattern` contains a yield-only default, computed key, or
-/// member-expression target, returns a trivial `Pattern::Identifier(temp)`
-/// to bind in its place plus a synthesized `let <pattern> = <temp>;` that
-/// re-homes the real binding -- for call sites (`EnterCatch`/`ForOfHead`)
-/// that bind their pattern via a single non-suspending runtime call and so
-/// can't run a yield-containing pattern through it directly (see #727).
-/// Returns `None` when `pattern` has no yield, so the caller can skip the
-/// rewrite (and its clones) entirely in the common case.
-fn hoist_yield_pattern(
+/// If `pattern` contains a yield or an (unlowered-default-shape) await,
+/// computed key, or member-expression target, returns a trivial
+/// `Pattern::Identifier(temp)` to bind in its place plus a synthesized
+/// `let <pattern> = <temp>;` that re-homes the real binding -- for call sites
+/// (`EnterCatch`/`ForOfHead`) that bind their pattern via a single
+/// non-suspending runtime call and so can't run a suspending pattern through
+/// it directly (see #727, #726). Returns `None` when `pattern` has neither,
+/// so the caller can skip the rewrite (and its clones) entirely in the
+/// common case.
+fn hoist_suspending_pattern(
     pattern: &Pattern,
     kind: VarKind,
     prefix: &str,
     ctx: &mut TransformContext,
 ) -> Option<(Pattern, Statement)> {
-    if !pattern_contains_yield(pattern) {
+    if !pattern_contains_yield(pattern) && !pattern_needs_await_lowering(pattern) {
         return None;
     }
     let temp = ctx.new_temp_var(prefix);
@@ -2529,6 +2530,7 @@ fn transform_for_statement(
                     d.init
                         .as_ref()
                         .is_some_and(|e| expr_has_suspension(e, ctx.is_async))
+                        || pattern_needs_await_lowering(&d.pattern)
                 }) {
                     transform_variable_declaration(decl, ctx, usize::MAX);
                 } else {
@@ -2700,18 +2702,22 @@ fn transform_for_in_of_loop(
     // `ForOfHead` binds its per-iteration `left` with a single, non-suspending
     // runtime call, the same constraint `EnterCatch` has on its `param` (see
     // the comment there). A `Variable` head whose pattern's default contains
-    // `yield` desugars the same way: `ForOfInit`/`ForOfHead` see a trivial
+    // `yield` or `await` desugars the same way: `ForOfHead` sees a trivial
     // `Pattern::Identifier`, and the real pattern becomes a synthesized
     // `let <pattern> = <temp>;` prepended to the loop body, where the
-    // ordinary `Statement::Variable` lowering picks it up. Left as a residual
-    // for the (destructuring-assignment) `ForInOfLeft::Pattern` head, and for
-    // the head's own `for (let x of [x])`-style self-referential TDZ check
-    // against the *original* names, both out of scope for #727.
+    // ordinary `Statement::Variable` lowering picks it up. `ForOfInit`'s own
+    // `left` is deliberately *not* rewritten -- it exists solely to supply
+    // `BoundNames` for the head's TDZ environment (`for_of_head_tdz_env`),
+    // evaluated before the iterable expression, so it must keep seeing the
+    // real pattern for a self-referential head (`for (let x of [x])`) to
+    // still throw from TDZ. Left as a residual for the
+    // (destructuring-assignment) `ForInOfLeft::Pattern` head, out of scope
+    // for #727/#726.
     let mut left_param_synth: Option<Statement> = None;
     let rewritten_left = if let ForInOfLeft::Variable(decl) = left
         && let Some(d) = decl.declarations.first()
         && let Some((new_pattern, synth)) =
-            hoist_yield_pattern(&d.pattern, decl.kind, "for_head_param", ctx)
+            hoist_suspending_pattern(&d.pattern, decl.kind, "for_head_param", ctx)
     {
         let mut decl = decl.clone();
         decl.declarations[0].pattern = new_pattern;
@@ -2720,7 +2726,7 @@ fn transform_for_in_of_loop(
     } else {
         None
     };
-    let left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
+    let head_left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
 
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
@@ -2759,7 +2765,7 @@ fn transform_for_in_of_loop(
     ctx.finalize_current_state(StateTerminator::ForOfHead {
         iter_var: iter_var.clone(),
         next_var: next_var.clone(),
-        left: left.clone(),
+        left: head_left.clone(),
         body_state,
         after_state: after_loop,
         is_await,
@@ -2832,18 +2838,19 @@ fn transform_try_statement(
     // `EnterCatch` binds its `param` with a single, non-suspending runtime
     // call (it needs the not-yet-known thrown value, so it can't go through
     // the ordinary per-statement transform pipeline). A pattern whose default
-    // contains `yield` can't run through that call: desugar to a trivial
-    // `Pattern::Identifier` for `EnterCatch` itself, and re-home the real
-    // pattern as a synthesized `let <param> = <temp>;` prepended to the catch
-    // body, where the ordinary `Statement::Variable` lowering (already tested
-    // for #727) picks it up — `lower_pattern_binding` for a supported shape,
-    // native replay confined to `catch_body_state` for one that isn't.
+    // contains `yield` or `await` can't run through that call: desugar to a
+    // trivial `Pattern::Identifier` for `EnterCatch` itself, and re-home the
+    // real pattern as a synthesized `let <param> = <temp>;` prepended to the
+    // catch body, where the ordinary `Statement::Variable` lowering (already
+    // tested for #727/#726) picks it up — `lower_pattern_binding` for a
+    // supported shape, native replay confined to `catch_body_state` for one
+    // that isn't.
     let mut catch_param_synth: Option<Statement> = None;
     let catch_info = try_stmt.handler.as_ref().map(|h| {
         let catch_entry_state = ctx.new_state();
         let param = if let Some(p) = &h.param
             && let Some((new_pattern, synth)) =
-                hoist_yield_pattern(p, VarKind::Let, "catch_param", ctx)
+                hoist_suspending_pattern(p, VarKind::Let, "catch_param", ctx)
         {
             catch_param_synth = Some(synth);
             Some(new_pattern)
