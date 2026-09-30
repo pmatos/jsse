@@ -912,21 +912,9 @@ impl Interpreter {
                     } else {
                         JsValue::UNDEFINED
                     };
-                    let is_async_gen = self
-                        .generator_context
-                        .as_ref()
-                        .map(|c| c.is_async)
-                        .unwrap_or(false);
-                    let iterator = if is_async_gen {
-                        match self.get_async_iterator(&iterable) {
-                            Ok(it) => it,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        match self.get_iterator(&iterable) {
-                            Ok(it) => it,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    let iterator = match self.get_iterator(&iterable) {
+                        Ok(it) => it,
+                        Err(e) => return Completion::Throw(e),
                     };
                     self.with_gc_root_scope(|this| {
                         this.gc_root_value(&iterator);
@@ -934,15 +922,6 @@ impl Interpreter {
                             let next_result = match this.iterator_next(&iterator) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
-                            };
-                            let next_result = if is_async_gen {
-                                match this.await_value(&next_result) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                next_result
                             };
                             let done = match this.iterator_complete(&next_result) {
                                 Ok(d) => d,
