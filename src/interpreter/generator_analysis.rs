@@ -859,6 +859,19 @@ fn for_in_of_variable_head_contains_yield(left: &ForInOfLeft) -> bool {
     }
 }
 
+/// Like `for_in_of_variable_head_contains_yield`, but `await`-only and
+/// shape-gated via `pattern_needs_await_lowering` -- an unsupported shape
+/// (array pattern, object rest) must not force the compiled state machine.
+fn for_in_of_variable_head_contains_await(left: &ForInOfLeft) -> bool {
+    match left {
+        ForInOfLeft::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| pattern_needs_await_lowering(&d.pattern)),
+        ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => false,
+    }
+}
+
 pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
     match expr {
         Expression::Yield(_, _) | Expression::Await(_) => true,
@@ -1271,11 +1284,13 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         }
         Statement::ForIn(f) => {
             for_in_of_variable_head_contains_yield(&f.left)
+                || for_in_of_variable_head_contains_await(&f.left)
                 || expr_contains_suspension(&f.right)
                 || contains_suspension(&f.body)
         }
         Statement::ForOf(f) => {
             for_in_of_variable_head_contains_yield(&f.left)
+                || for_in_of_variable_head_contains_await(&f.left)
                 || expr_contains_suspension(&f.right)
                 || contains_suspension(&f.body)
         }
@@ -1810,6 +1825,36 @@ mod tests {
         )));
         assert!(!contains_suspension(&first_statement(
             "for (var { a = 1 } = {};;) { break; }"
+        )));
+    }
+
+    #[test]
+    fn contains_suspension_sees_awaiting_for_of_head_pattern() {
+        assert!(contains_suspension(&first_statement(
+            "for (var { b = await 1 } of [{}]) {}"
+        )));
+        assert!(contains_suspension(&first_statement(
+            "for (let { b = await 1 } of [{}]) {}"
+        )));
+        assert!(!contains_suspension(&first_statement(
+            "for (var { b = 1 } of [{}]) {}"
+        )));
+    }
+
+    #[test]
+    fn contains_suspension_sees_awaiting_for_in_head_pattern() {
+        assert!(contains_suspension(&first_statement(
+            "for (var { b = await 1 } in { x: 1 }) {}"
+        )));
+        assert!(!contains_suspension(&first_statement(
+            "for (var { b = 1 } in { x: 1 }) {}"
+        )));
+    }
+
+    #[test]
+    fn contains_suspension_ignores_unsupported_await_for_of_head_shape() {
+        assert!(!contains_suspension(&first_statement(
+            "for (var [b = await 1] of [[]]) {}"
         )));
     }
 

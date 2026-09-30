@@ -2702,13 +2702,17 @@ fn transform_for_in_of_loop(
     // `ForOfHead` binds its per-iteration `left` with a single, non-suspending
     // runtime call, the same constraint `EnterCatch` has on its `param` (see
     // the comment there). A `Variable` head whose pattern's default contains
-    // `yield` desugars the same way: `ForOfInit`/`ForOfHead` see a trivial
+    // `yield` or `await` desugars the same way: `ForOfHead` sees a trivial
     // `Pattern::Identifier`, and the real pattern becomes a synthesized
     // `let <pattern> = <temp>;` prepended to the loop body, where the
-    // ordinary `Statement::Variable` lowering picks it up. Left as a residual
-    // for the (destructuring-assignment) `ForInOfLeft::Pattern` head, and for
-    // the head's own `for (let x of [x])`-style self-referential TDZ check
-    // against the *original* names, both out of scope for #727.
+    // ordinary `Statement::Variable` lowering picks it up. `ForOfInit`'s own
+    // `left` is deliberately *not* rewritten -- it exists solely to supply
+    // `BoundNames` for the head's TDZ environment (`for_of_head_tdz_env`),
+    // evaluated before the iterable expression, so it must keep seeing the
+    // real pattern for a self-referential head (`for (let x of [x])`) to
+    // still throw from TDZ. Left as a residual for the
+    // (destructuring-assignment) `ForInOfLeft::Pattern` head, out of scope
+    // for #727/#726.
     let mut left_param_synth: Option<Statement> = None;
     let rewritten_left = if let ForInOfLeft::Variable(decl) = left
         && let Some(d) = decl.declarations.first()
@@ -2722,7 +2726,7 @@ fn transform_for_in_of_loop(
     } else {
         None
     };
-    let left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
+    let head_left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
 
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
@@ -2761,7 +2765,7 @@ fn transform_for_in_of_loop(
     ctx.finalize_current_state(StateTerminator::ForOfHead {
         iter_var: iter_var.clone(),
         next_var: next_var.clone(),
-        left: left.clone(),
+        left: head_left.clone(),
         body_state,
         after_state: after_loop,
         is_await,
