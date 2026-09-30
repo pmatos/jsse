@@ -1022,11 +1022,13 @@ pub(crate) fn pattern_contains_suspension(pattern: &Pattern) -> bool {
 }
 
 /// True when the state-machine transform can lower every part of the pattern
-/// that reaches a suspension into suspension states. Object patterns can; the
-/// rest of the shapes (array patterns, an object rest beside a suspending
-/// sibling) are still evaluated by the tree-walker. A member-expression
-/// target is only supported for the assignment form (`allow_member_expression`)
-/// — a declaration can never bind into one.
+/// that reaches a suspension into suspension states. Object and array
+/// patterns can (an array pattern's own suspending elements/rest are lowered
+/// via `lower_array_pattern_binding`, provided every element and rest
+/// sub-pattern is itself supported); an object rest beside a suspending
+/// sibling is still evaluated by the tree-walker. A member-expression target
+/// is only supported for the assignment form (`allow_member_expression`) — a
+/// declaration can never bind into one.
 fn pattern_lowering_supported(pattern: &Pattern, allow_member_expression: bool) -> bool {
     if !pattern_contains_suspension(pattern) {
         return true;
@@ -1039,10 +1041,16 @@ fn pattern_lowering_supported(pattern: &Pattern, allow_member_expression: bool) 
             ObjectPatternProperty::Shorthand(_) => true,
             ObjectPatternProperty::Rest(_) => false,
         }),
+        Pattern::Array(elements) => elements.iter().all(|elem| match elem {
+            None => true,
+            Some(ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p)) => {
+                pattern_lowering_supported(p, allow_member_expression)
+            }
+        }),
         Pattern::Assign(inner, _) => pattern_lowering_supported(inner, allow_member_expression),
         Pattern::Identifier(_) => true,
         Pattern::MemberExpression(_) => allow_member_expression,
-        Pattern::Array(_) | Pattern::Rest(_) => false,
+        Pattern::Rest(_) => false,
     }
 }
 
@@ -1761,12 +1769,15 @@ mod tests {
     }
 
     #[test]
-    fn only_object_patterns_are_lowered() {
+    fn object_and_array_patterns_are_lowered_but_not_object_rest() {
         assert!(pattern_needs_lowering(&declared_pattern(
             "var { a = await 1, b: { c = await 2 } } = {};"
         )));
-        assert!(!pattern_needs_lowering(&declared_pattern(
+        assert!(pattern_needs_lowering(&declared_pattern(
             "var [a = await 1] = [];"
+        )));
+        assert!(pattern_needs_lowering(&declared_pattern(
+            "var { x: [a = await 1] } = {};"
         )));
         assert!(!pattern_needs_lowering(&declared_pattern(
             "var { a = await 1, ...r } = {};"
@@ -1784,7 +1795,7 @@ mod tests {
         assert!(!contains_suspension(&first_statement(
             "var { a = 1 } = {};"
         )));
-        assert!(!contains_suspension(&first_statement(
+        assert!(contains_suspension(&first_statement(
             "var [a = await 1] = [];"
         )));
     }

@@ -92,6 +92,27 @@ impl GeneratorState {
     }
 }
 
+/// The `IteratorBindingInitialization` primitive an `ArrayPatternIter`
+/// terminator performs. See `StateTerminator::ArrayPatternIter`.
+#[derive(Debug, Clone)]
+pub(crate) enum ArrayPatternIterOp {
+    /// `GetIterator(iterable, sync)`, opening the iterator this pattern steps.
+    Init { iterable: Expression },
+    /// `IteratorStepValue` for one element. `None` is an elision: step and
+    /// discard. Once the iterator has been observed done (by an earlier
+    /// `Step`/`Drain` in the same pattern), this binds `dest_var` to
+    /// `undefined` without calling the iterator again, per spec.
+    Step { dest_var: Option<String> },
+    /// `IteratorStepValue` looped to exhaustion for a `BindingRestElement`,
+    /// collecting into a fresh array bound to `dest_var`.
+    Drain { dest_var: String },
+    /// Normal-completion `IteratorClose` when the pattern didn't fully drain
+    /// the iterator (`sec-runtime-semantics-bindinginitialization`'s `If
+    /// iteratorRecord.[[Done]] is false, return ? IteratorClose(...)`). A
+    /// no-op if the iterator was already observed done.
+    Finish,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum StateTerminator {
     Yield {
@@ -158,6 +179,23 @@ pub(crate) enum StateTerminator {
         value: Expression,
         resume_state: usize,
         sent_value_binding: Option<SentValueBinding>,
+    },
+    /// One primitive of `IteratorBindingInitialization` for a lowered array
+    /// binding pattern (`lower_array_pattern_binding`): opening the iterator,
+    /// stepping it once for an element (or eliding one), draining it for a
+    /// rest element, or closing it on normal completion when the pattern
+    /// under-consumed it. Always synchronous — `GetIterator` for a binding
+    /// pattern is never `for await`, even inside an async function — so
+    /// unlike `Await` this terminator never suspends by itself; only an
+    /// element's own default (lowered separately via `Await`/`Yield`) can.
+    /// Reuses `for_of_stack`/`ForOfLoopState` purely so the driver's existing
+    /// abrupt-unwind path closes the iterator for free on a `throw` crossing
+    /// this point, not because this is a real loop (nothing can `break`/
+    /// `continue` into a binding pattern).
+    ArrayPatternIter {
+        op: ArrayPatternIterOp,
+        iter_var: String,
+        next_state: usize,
     },
     /// Opens a block scope: creates the block's own `Environment` (a child of
     /// whatever env is active), pushes it onto the driver's `scope_stack`, and
@@ -231,6 +269,13 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         StateTerminator::ForOfHead { left, .. } => clear_for_in_of_left(left),
         StateTerminator::Await { value, .. } => {
             clear_expr_ic_sites(value);
+        }
+        // `Step`/`Drain`/`Finish` carry no expressions of their own; only
+        // `Init`'s `iterable` needs clearing.
+        StateTerminator::ArrayPatternIter { op, .. } => {
+            if let ArrayPatternIterOp::Init { iterable } = op {
+                clear_expr_ic_sites(iterable);
+            }
         }
         StateTerminator::TryEnter { catch_state, .. } => {
             if let Some(ci) = catch_state
@@ -1854,22 +1899,118 @@ fn lower_pattern_binding(
     source: &str,
     ctx: &mut TransformContext,
 ) {
-    let Pattern::Object(props) = pattern.clone() else {
-        emit_pattern_binding(kind, pattern.clone(), source, ctx);
-        return;
-    };
     if !pattern_contains_suspension(pattern) {
         emit_pattern_binding(kind, pattern.clone(), source, ctx);
         return;
     }
-    emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
-    for prop in props {
-        match prop {
-            ObjectPatternProperty::KeyValue(key, value) => {
-                lower_pattern_property(kind, key, value, source, ctx);
+    match pattern {
+        Pattern::Object(props) => {
+            emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
+            for prop in props.clone() {
+                match prop {
+                    ObjectPatternProperty::KeyValue(key, value) => {
+                        lower_pattern_property(kind, key, value, source, ctx);
+                    }
+                    other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
+                }
             }
-            other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
         }
+        Pattern::Array(elements) => lower_array_pattern_binding(kind, elements, source, ctx),
+        _ => emit_pattern_binding(kind, pattern.clone(), source, ctx),
+    }
+}
+
+/// Binds an array pattern from the iterator opened on `source`, suspending at
+/// every `await`/`yield` an element's default reaches. `IteratorStepValue`
+/// order is itself observable (#725), so every element costs exactly one
+/// `Step` regardless of whether it suspends — only an element whose own
+/// sub-pattern needs a suspension is broken up further via a recursive
+/// `lower_pattern_binding`/`lower_conditional_default`; everything else binds
+/// through the tree-walker in one call, exactly as `lower_pattern_property`
+/// does for a non-suspending object property. Callers only pass patterns
+/// `pattern_needs_lowering` accepts.
+fn lower_array_pattern_binding(
+    kind: VarKind,
+    elements: &[Option<ArrayPatternElement>],
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let iter_var = ctx.new_temp_var("dstr_iter");
+    let after_init = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+        op: ArrayPatternIterOp::Init {
+            iterable: Expression::Identifier(source.to_string()),
+        },
+        iter_var: iter_var.clone(),
+        next_state: after_init,
+    });
+    ctx.current_state_id = after_init;
+
+    let mut ends_in_rest = false;
+    for elem in elements {
+        match elem {
+            None => {
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Step { dest_var: None },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+            }
+            Some(ArrayPatternElement::Pattern(pattern)) => {
+                let step_tmp = ctx.new_temp_var("dstr_elem");
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Step {
+                        dest_var: Some(step_tmp.clone()),
+                    },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+
+                if !pattern_contains_suspension(pattern) {
+                    emit_pattern_binding(kind, pattern.clone(), &step_tmp, ctx);
+                } else if let Pattern::Assign(target, default) = pattern {
+                    lower_conditional_default(&step_tmp, default, ctx);
+                    lower_pattern_binding(kind, target, &step_tmp, ctx);
+                } else {
+                    lower_pattern_binding(kind, pattern, &step_tmp, ctx);
+                }
+            }
+            Some(ArrayPatternElement::Rest(pattern)) => {
+                let rest_tmp = ctx.new_temp_var("dstr_rest");
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Drain {
+                        dest_var: rest_tmp.clone(),
+                    },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+                if !pattern_contains_suspension(pattern) {
+                    emit_pattern_binding(kind, pattern.clone(), &rest_tmp, ctx);
+                } else {
+                    lower_pattern_binding(kind, pattern, &rest_tmp, ctx);
+                }
+                ends_in_rest = true;
+            }
+        }
+    }
+
+    // A rest element always drains the iterator to exhaustion itself
+    // ([[Done]] is already true by construction), so the pattern never
+    // reaches `Finish` when it ends in one.
+    if !ends_in_rest {
+        let next_state = ctx.new_state();
+        ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+            op: ArrayPatternIterOp::Finish,
+            iter_var: iter_var.clone(),
+            next_state,
+        });
+        ctx.current_state_id = next_state;
     }
 }
 
@@ -4083,14 +4224,141 @@ mod tests {
 
     #[test]
     fn test_unsupported_pattern_shapes_stay_on_the_tree_walker() {
-        for src in [
-            "var [a = await 1] = [];",
-            "var { a = await 1, ...rest } = {};",
-            "var { x: [a = await 1] } = {};",
-        ] {
-            let sm = async_machine(src);
-            assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
-        }
+        let src = "var { a = await 1, ...rest } = {};";
+        let sm = async_machine(src);
+        assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
+    }
+
+    #[test]
+    fn test_awaiting_array_element_lowers_to_conditional_await_state() {
+        let sm = async_machine("var [a = await 1] = []; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1,
+            "the default's await is a real Await state"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ConditionalGoto { .. }
+            )),
+            1,
+            "the default only runs when the stepped value is undefined"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Init { .. },
+                    ..
+                }
+            )),
+            1,
+            "opens exactly one iterator"
+        );
+        let step_pos = sm
+            .states
+            .iter()
+            .position(|s| {
+                matches!(
+                    s.terminator,
+                    StateTerminator::ArrayPatternIter {
+                        op: ArrayPatternIterOp::Step { .. },
+                        ..
+                    }
+                )
+            })
+            .expect("a Step state");
+        let await_pos = sm
+            .states
+            .iter()
+            .position(|s| matches!(s.terminator, StateTerminator::Await { .. }))
+            .expect("an Await state");
+        assert!(
+            step_pos < await_pos,
+            "the element is stepped before its default suspends"
+        );
+    }
+
+    #[test]
+    fn test_present_and_elided_array_elements_take_no_conditional_default() {
+        // Every element still costs one `Step` (iterator order is observable),
+        // but only `b`'s default reaches an `Await` — `a`'s present value and
+        // the elision short-circuit without their own `ConditionalGoto`.
+        let sm = async_machine("var [a = 5, , b = await 1] = []; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Step { .. },
+                    ..
+                }
+            )),
+            3,
+            "one Step per element, including the elision"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ConditionalGoto { .. }
+            )),
+            1,
+            "only b's default is conditional"
+        );
+    }
+
+    #[test]
+    fn test_array_pattern_nested_in_object_is_lowered() {
+        let sm = async_machine("var { x: [a = await 1] } = {x: []}; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Init { .. },
+                    ..
+                }
+            )),
+            1,
+            "the nested array pattern opens its own iterator"
+        );
+    }
+
+    #[test]
+    fn test_array_pattern_rest_never_reaches_finish() {
+        let sm = async_machine("var [a = await 1, ...rest] = []; return rest;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Drain { .. },
+                    ..
+                }
+            )),
+            1
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Finish,
+                    ..
+                }
+            )),
+            0,
+            "a pattern ending in rest drains to exhaustion itself"
+        );
     }
 
     #[test]
