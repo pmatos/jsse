@@ -244,7 +244,6 @@ impl Interpreter {
             target_yield,
             current_yield: 0,
             prev_sent_values: new_prev_sent.clone(),
-            is_async: false,
             resume_kind: GeneratorResumeKind::Next,
         });
 
@@ -410,7 +409,6 @@ impl Interpreter {
                     target_yield: inject_at,
                     current_yield: 0,
                     prev_sent_values: prev_sent.clone(),
-                    is_async: false,
                     resume_kind: GeneratorResumeKind::Return(value.clone()),
                 });
 
@@ -545,7 +543,6 @@ impl Interpreter {
                     target_yield: inject_at,
                     current_yield: 0,
                     prev_sent_values: prev_sent.clone(),
-                    is_async: false,
                     resume_kind: GeneratorResumeKind::Throw(exception),
                 });
 
@@ -957,7 +954,6 @@ impl Interpreter {
                     target_yield: target,
                     current_yield: 0,
                     prev_sent_values: prev,
-                    is_async: false,
                     resume_kind: GeneratorResumeKind::Next,
                 });
             }
@@ -4068,7 +4064,6 @@ impl Interpreter {
                     target_yield: target,
                     current_yield: 0,
                     prev_sent_values: prev,
-                    is_async: true,
                     resume_kind: GeneratorResumeKind::Next,
                 });
             }

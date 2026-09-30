@@ -270,8 +270,8 @@ fn analyze_statement(
                         analyze_pattern_expressions(&declarator.pattern, analysis, ctx);
                     }
                 }
-                ForInOfLeft::Pattern(_) => {
-                    // Pattern LHS is an assignment target, not a declaration
+                ForInOfLeft::Pattern(pattern) => {
+                    analyze_pattern_expressions(pattern, analysis, ctx);
                 }
                 ForInOfLeft::Expression(expr) => {
                     analyze_expression(expr, analysis, ctx, true);
@@ -313,8 +313,8 @@ fn analyze_statement(
                         analyze_pattern_expressions(&declarator.pattern, analysis, ctx);
                     }
                 }
-                ForInOfLeft::Pattern(_) => {
-                    // Pattern LHS is an assignment target, not a declaration
+                ForInOfLeft::Pattern(pattern) => {
+                    analyze_pattern_expressions(pattern, analysis, ctx);
                 }
                 ForInOfLeft::Expression(expr) => {
                     analyze_expression(expr, analysis, ctx, true);
@@ -743,12 +743,12 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
                 || contains_yield(&f.body)
         }
         Statement::ForIn(f) => {
-            for_in_of_variable_head_contains_yield(&f.left)
+            for_in_of_head_contains_yield(&f.left)
                 || expr_contains_yield(&f.right)
                 || contains_yield(&f.body)
         }
         Statement::ForOf(f) => {
-            for_in_of_variable_head_contains_yield(&f.left)
+            for_in_of_head_contains_yield(&f.left)
                 || expr_contains_yield(&f.right)
                 || contains_yield(&f.body)
         }
@@ -847,19 +847,20 @@ pub(crate) fn for_in_of_left_contains_suspension(left: &ForInOfLeft) -> bool {
     }
 }
 
-fn for_in_of_variable_head_contains_yield(left: &ForInOfLeft) -> bool {
+fn for_in_of_head_contains_yield(left: &ForInOfLeft) -> bool {
     match left {
         // The transform moves these bindings into the loop body before it
-        // lowers the loop. Assignment heads still need their own lowering.
+        // lowers the loop.
         ForInOfLeft::Variable(decl) => decl
             .declarations
             .iter()
             .any(|d| pattern_contains_yield(&d.pattern)),
-        ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => false,
+        ForInOfLeft::Pattern(pattern) => pattern_contains_yield(pattern),
+        ForInOfLeft::Expression(_) => false,
     }
 }
 
-/// Like `for_in_of_variable_head_contains_yield`, but `await`-only and
+/// Like `for_in_of_head_contains_yield`, but `await`-only and
 /// shape-gated via `pattern_needs_await_lowering` -- an unsupported shape
 /// (array pattern, object rest) must not force the compiled state machine.
 fn for_in_of_variable_head_contains_await(left: &ForInOfLeft) -> bool {
@@ -1322,13 +1323,13 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
                 || contains_suspension(&f.body)
         }
         Statement::ForIn(f) => {
-            for_in_of_variable_head_contains_yield(&f.left)
+            for_in_of_head_contains_yield(&f.left)
                 || for_in_of_variable_head_contains_await(&f.left)
                 || expr_contains_suspension(&f.right)
                 || contains_suspension(&f.body)
         }
         Statement::ForOf(f) => {
-            for_in_of_variable_head_contains_yield(&f.left)
+            for_in_of_head_contains_yield(&f.left)
                 || for_in_of_variable_head_contains_await(&f.left)
                 || expr_contains_suspension(&f.right)
                 || contains_suspension(&f.body)

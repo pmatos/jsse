@@ -331,7 +331,6 @@ pub(crate) struct GeneratorContext {
     pub(crate) current_yield: usize,
     /// Values sent to previous yields (index k = value passed to next() after yield k)
     pub(crate) prev_sent_values: Vec<JsValue>,
-    pub(crate) is_async: bool,
     pub(crate) resume_kind: GeneratorResumeKind,
 }
 

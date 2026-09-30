@@ -1857,6 +1857,36 @@ fn hoist_suspending_pattern(
     Some((Pattern::Identifier(temp), synth))
 }
 
+/// Like `hoist_suspending_pattern`, but for a `for`/`for-in`/`for-of` head's
+/// *assignment*-form pattern (`ForInOfLeft::Pattern`, e.g.
+/// `for await ([a = yield] of it)`): the synthesized statement re-homing the
+/// real pattern is a plain `<pattern> = <temp>;` (`DestructuringAssignmentEvaluation`),
+/// not a declaration -- the head is an assignment target, not a binding.
+/// `await`-only defaults are left alone here (see
+/// `for_in_of_variable_head_contains_await`'s own `Pattern` arm, deliberately
+/// unchanged): only a `yield` forces the hoist, so an unsupported shape (an
+/// array pattern, which `pattern_needs_assignment_lowering` never accepts)
+/// still moves out of `ForOfHead`'s single non-suspending bind call and into
+/// the body, where the ordinary per-statement transform handles it -- fully
+/// decomposed into states when the shape allows, replayed via the InlineYield
+/// backstop otherwise.
+fn hoist_suspending_pattern_assignment(
+    pattern: &Pattern,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> Option<(Pattern, Statement)> {
+    if !pattern_contains_yield(pattern) {
+        return None;
+    }
+    let temp = ctx.new_temp_var(prefix);
+    let synth = Statement::Expression(Expression::Assign(
+        AssignOp::Assign,
+        ExprBox::new(pattern_to_expr(pattern.clone())),
+        ExprBox::new(Expression::Identifier(temp.clone())),
+    ));
+    Some((Pattern::Identifier(temp), synth))
+}
+
 fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContext) {
     ctx.emit_statement(Statement::Expression(Expression::Assign(
         AssignOp::Assign,
@@ -2851,14 +2881,19 @@ fn transform_for_in_of_loop(
     // `yield` or `await` desugars the same way: `ForOfHead` sees a trivial
     // `Pattern::Identifier`, and the real pattern becomes a synthesized
     // `let <pattern> = <temp>;` prepended to the loop body, where the
-    // ordinary `Statement::Variable` lowering picks it up. `ForOfInit`'s own
-    // `left` is deliberately *not* rewritten -- it exists solely to supply
-    // `BoundNames` for the head's TDZ environment (`for_of_head_tdz_env`),
-    // evaluated before the iterable expression, so it must keep seeing the
-    // real pattern for a self-referential head (`for (let x of [x])`) to
-    // still throw from TDZ. Left as a residual for the
-    // (destructuring-assignment) `ForInOfLeft::Pattern` head, out of scope
-    // for #727/#726.
+    // ordinary `Statement::Variable` lowering picks it up. A `Pattern`
+    // (assignment-form) head whose pattern contains a `yield` mirrors this
+    // with a synthesized `<pattern> = <temp>;` instead, picked up by the
+    // ordinary destructuring-assignment lowering (`ForInOfLeft::Pattern` is
+    // an assignment target, not a declaration, so it has no `await`
+    // counterpart here -- see `for_in_of_variable_head_contains_await`'s own
+    // `Pattern` arm). `ForOfInit`'s own `left` is deliberately *not*
+    // rewritten -- it exists solely to supply `BoundNames` for the head's TDZ
+    // environment (`for_of_head_tdz_env`), evaluated before the iterable
+    // expression, so it must keep seeing the real pattern for a
+    // self-referential head (`for (let x of [x])`) to still throw from TDZ;
+    // `for_of_head_lexical` returns `None` for a `Pattern` head regardless,
+    // so this is a no-op for the assignment-form case.
     let mut left_param_synth: Option<Statement> = None;
     let rewritten_left = if let ForInOfLeft::Variable(decl) = left
         && let Some(d) = decl.declarations.first()
@@ -2869,6 +2904,12 @@ fn transform_for_in_of_loop(
         decl.declarations[0].pattern = new_pattern;
         left_param_synth = Some(synth);
         Some(ForInOfLeft::Variable(decl))
+    } else if let ForInOfLeft::Pattern(pattern) = left
+        && let Some((new_pattern, synth)) =
+            hoist_suspending_pattern_assignment(pattern, "for_head_param", ctx)
+    {
+        left_param_synth = Some(synth);
+        Some(ForInOfLeft::Pattern(new_pattern))
     } else {
         None
     };

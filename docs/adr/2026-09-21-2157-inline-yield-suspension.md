@@ -60,10 +60,18 @@ suspension points.
 - **A replay does not re-evaluate the `yield*` operand** — unless the operand
   contains a yield of its own, whose slot must be numbered first — so the
   iterable is evaluated, and the delegate started, once.
-- The `yield*` loop in `eval.rs` keeps its `is_async_gen` branch only for the
+- ~~The `yield*` loop in `eval.rs` keeps its `is_async_gen` branch only for the
   legacy `IteratorState::Generator`/`AsyncGenerator` paths. Those variants are
   never constructed any more (they are only matched and re-stored), so the branch
-  is dead code left for #711 rather than a live blocking await.
+  is dead code left for #711 rather than a live blocking await.~~ **Correction
+  (issue #687):** #711's own scope only removed the legacy driver *functions*
+  in `generator_runtime.rs`, not this branch in `eval.rs` — it was never
+  actually deleted. Confirmed unreachable (the `in_async_generator_body` guard
+  immediately above it, not a separate `is_async` flag, is the one that
+  actually gates every live async-generator `yield*` step) by planting an
+  `unreachable!()` in its place and running the full
+  generators/yield/async-generator/for-await-of test262 corpus (4,005
+  scenarios) with zero panics, then deleted under #687.
 
 ## Known boundaries (unchanged, not fixed here)
 
