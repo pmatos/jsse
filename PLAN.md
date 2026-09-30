@@ -43,9 +43,12 @@ attempt as "Irreversible Local Destruction" with no human available to
 approve in this headless run, so the *actual* revert+merge was only verified
 in the disposable worktree above, never applied to this branch — that is
 deliberate: this stage commits `PLAN.md` only. If the implementation stage
-hits the same classifier block on the revert+merge, it must escalate/request
-the permission explicitly rather than attempting further code changes on the
-stale tree: building on the stale branch would silently resurrect the 3
+hits the same classifier block on the revert+merge: do not attempt to work
+around it with a different destructive git incantation, and do not proceed
+to make code changes on the stale, unsynced tree. Instead, post
+`gh issue comment 687` naming the exact command that was blocked and why
+(quoting the classifier's denial), and stop without making any source
+changes — building on the stale branch would silently resurrect the 3
 already-upstream drain-removal fixes as a *second*, redundant copy, and
 would evaluate the rest of this plan's file/line references against code
 that no longer matches `main`.)
@@ -204,72 +207,111 @@ them a `for await ([pattern = yield ...] of iterable)` (or object-pattern
 equivalent) **inside an async generator**, i.e. a `for await` whose *own
 left-hand binding pattern* contains a bare `yield`.
 
-Root cause (corrected after review caught an initial misreading — see below):
-`generator_transform.rs::stmt_has_suspension` (line 653-661) and
-`transform_generator_inner_opts` (line 504-512) both *already* and
-*deliberately* recognize a `for await` whose head pattern contains a
-suspension (`f.is_await && !for_in_of_left_contains_suspension(&f.left)`) as
-a statement that must keep the whole enclosing function on the
-compiled-state-machine path — the exclusion is intentional, documented
-in-line ("A `yield` or `await` inside the head's own binding target still
-needs the tree-walker's inline replay, so such a loop is left native"), and
-covered by dedicated unit tests (`generator_transform.rs:3655-3679`). So this
-is not a detection gap in `contains_suspension` (an earlier draft of this
-plan mis-attributed it there); the *containing function* is correctly
-compiled. What's missing is narrower and already has two precedents in-tree:
+Root cause has two layers — an earlier draft of this plan found only the
+second and had the causality backwards (assumed detection was already
+correct and the gap was purely in the transform):
 
-- **#727/#753 (ADR-2026-09-21-1752, ADR for #753)** already solved the
-  identical problem for a *declaration* head
-  (`for (var {a = yield 1} of x)`/`ForInOfLeft::Variable`): when the pattern
-  contains a `yield`, `transform_for_in_of_loop`
-  (`generator_transform.rs:2682`) calls `hoist_yield_pattern` to rewrite the
-  loop to `for (var $tmp of x) { let {a = yield 1} = $tmp; body }` —
-  `ForOfInit`/`ForOfHead` get a trivial, non-suspending `$tmp` binding (so
-  the loop head suspends correctly through the *existing*, already-fixed
-  `ForOfHead` machinery, #707/#720/#732/#734), and the real pattern becomes
-  an ordinary `Statement::Variable` in the body, which the *existing*
-  declaration-pattern lowering (#709/#728) or InlineYield fallback handles
-  correctly — confirmed by #753's own counting-iterator test that the
-  iterator is stepped exactly once per element, not replayed.
-- **The exact spot that desugar is applied**
-  (`transform_for_in_of_loop:2707-2719`) has an explicit code comment: "Left
-  as a residual for the (destructuring-*assignment*) `ForInOfLeft::Pattern`
-  head... out of scope for #727" — `hoist_yield_pattern` is only invoked
-  `if let ForInOfLeft::Variable(decl) = left`, never for
-  `ForInOfLeft::Pattern`. ADR-2026-09-22-1752's own "What this still does
-  not cover" section repeats this explicitly. **This is exactly the shape
-  all 13 confirmed-live test262 files use** (`for await ([x = yield] of
-  ...)` with *no* `var`/`let`/`const` — `ForInOfLeft::Pattern`, the
-  destructuring-*assignment* form) and is the actual, confirmed, still-open
-  gap: `hoist_yield_pattern`'s declaration-only desugar was never extended
-  to the assignment form, so `ForInOfLeft::Pattern` heads with an embedded
-  `yield` still reach `exec_for_of_loop`'s tree-walked, blocking
-  `fo.is_await` path with no suspend-awareness at all.
+**Layer 1 — per-statement detection never sees a `ForInOfLeft::Pattern`
+head's `yield` at all, so the statement never reaches the transform
+function where any desugar could live.** `generator_analysis.rs`'s
+`for_in_of_variable_head_contains_yield` (line 850-860; its name says
+"variable" for a reason) is the single helper `contains_yield`'s and
+`contains_suspension`'s `Statement::ForIn`/`Statement::ForOf` arms both call
+to decide whether *this specific loop* needs lowering — and it is hard-coded
+`ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => false`, with the
+comment "Assignment heads still need their own lowering" (i.e. a
+self-documented, not-yet-done TODO). Separately, `analyze_statement`'s own
+`ForInOfLeft::Pattern(_) => { /* Pattern LHS is an assignment target, not a
+declaration */ }` arms (both `ForIn` and `ForOf`, `generator_analysis.rs`
+~line 270 and ~310) are literal no-ops — unlike the `Variable` arm right
+above each one, which calls `analyze_pattern_expressions` to register the
+pattern's embedded `yield` as a counted yield point. Net effect: a for-of
+statement whose *only* suspension is a `yield` inside its assignment-form
+head pattern is invisible to every one of these checks, so the per-statement
+dispatch never routes it through `transform_for_in_of_loop` at all — it
+stays a raw `Statement::ForOf`, tree-walked whenever the containing state
+executes it, which is exactly why `exec_for_of_loop` fires (confirmed by the
+`in_async_generator_body == true` instrumentation: the containing *function*
+still got a compiled state machine — via *other* content in those test262
+templates registering real yield points — but *this specific statement*
+never got compiled, and runs raw inside the InlineYield backstop's replay).
 
-No open issue tracks this specific residual: searched for
+**Layer 2 — even once detection is fixed, the transform still needs a
+desugar**, because `ForOfHead`/`ForOfInit` bind their `left` via a single,
+non-suspending runtime call (the same constraint documented on
+`hoist_yield_pattern`, `generator_transform.rs:1795-1798`) and cannot run a
+yield-containing pattern through it directly — per ADR-2026-09-21-1752, doing
+so would silently drop the `Completion::Yield` and bind the wrong value.
+**Both layers must land together**: shipping layer 1 alone would make
+`ForOfHead` bind a yield-containing pattern directly and silently corrupt the
+value; shipping layer 2 alone is simply never reached.
+
+This exact two-layer shape was already solved once, for the sibling
+*declaration* head (`for (var {a = yield 1} of x)`/`ForInOfLeft::Variable`):
+- **Layer 2 (desugar) shipped first**, under #727/ADR-2026-09-21-1752:
+  `transform_for_in_of_loop` (`generator_transform.rs:2682`) calls
+  `hoist_yield_pattern` when the `Variable` head's pattern contains a
+  `yield`, rewriting the loop to
+  `for (var $tmp of x) { let {a = yield 1} = $tmp; body }` — the trivial
+  `$tmp` binding flows through the unchanged, already-correct
+  `ForOfInit`/`ForOfHead` states (#707/#720/#732/#734), and the real pattern
+  becomes an ordinary `Statement::Variable` in the body.
+- **Layer 1 (detection) shipped later**, under #753/PR #760 (`git show
+  1227c8c8`, commit message "preserve iteration across head-pattern yield"):
+  before this landed, a `Variable` head whose *only* suspension was its
+  pattern's `yield` had the identical "never reaches
+  `transform_for_in_of_loop`, stays tree-walked, replays and re-fetches the
+  iterator on every resume" bug #753's own repro describes — PR #760's
+  *entire* diff is 4 additions to `generator_analysis.rs`: the two
+  `analyze_pattern_expressions` calls in `analyze_statement`'s `Variable`
+  arms (already shown above, present today), and widening `contains_yield`/
+  `contains_suspension`'s `ForIn`/`ForOf` arms to call the new
+  `for_in_of_variable_head_contains_yield` helper. It touched *no* file
+  under `generator_transform.rs` — layer 2 was already in place from #727.
+
+**This plan's fix is the mirror image of #753/PR #760, for `ForInOfLeft::Pattern`
+instead of `ForInOfLeft::Variable`, landing both layers in one slice since
+neither is safe alone**:
+- Layer 1: widen `for_in_of_variable_head_contains_yield`'s
+  `ForInOfLeft::Pattern(pattern)` arm from `false` to
+  `pattern_contains_yield(pattern)` (likely also renaming the function, since
+  it's no longer variable-only) — `contains_yield`/`contains_suspension`'s
+  4 call sites need no further change, they already delegate to this one
+  helper. And fill in `analyze_statement`'s two no-op
+  `ForInOfLeft::Pattern(_) => {}` arms with
+  `analyze_pattern_expressions(pattern, analysis, ctx)` — confirmed reusable
+  as-is: it takes a bare `&Pattern`, with no declaration-specific parameter
+  (`generator_analysis.rs:675-679`).
+- Layer 2: extend `transform_for_in_of_loop`'s existing desugar (see §4) to
+  also cover `ForInOfLeft::Pattern` — synthesizing an assignment statement
+  (`<pattern> = $tmp;`) prepended to the loop body instead of
+  `hoist_yield_pattern`'s `let`-declaration form, routing through the
+  *existing*, already-correct destructuring-*assignment* yield handling
+  ADR-2157 already documents as working (`x[yield 1] = yield 2`).
+
+**No open issue tracks this specific residual**: searched for
 `ForInOfLeft::Pattern`, `lower_pattern_assignment`, and
 `dstr-assignment-for-await` across all issues (open and closed) and found
 none; #724 (closed) is the equivalent *await*-in-assignment-pattern gap
 (unrelated construct), #725 (open) is *await* in *array*-pattern
 *declaration* defaults, #753 (closed) is *yield* in *declaration* heads —
-none is *yield* in an *assignment* head.
+none is *yield* in an *assignment* head. ADR-2026-09-22-1752's "What this
+still does not cover" section explicitly names
+`ForInOfLeft::Pattern`/"uses a different lowering pipeline (`lower_pattern_assignment`)
+this follow-up didn't touch" as left open.
 
-**Corrected fix direction**: extend `transform_for_in_of_loop`'s existing
-desugar to also cover `ForInOfLeft::Pattern` when `pattern_contains_yield`,
-synthesizing an assignment statement (`<pattern> = $tmp;`) prepended to the
-loop body instead of `hoist_yield_pattern`'s `let`-declaration form — routing
-through the *existing*, already-correct destructuring-*assignment* yield
-handling ADR-2157 already documents as working (`x[yield 1] = yield 2`). This
-is a **transform-time fix, not a runtime one**: no change to `exec.rs`/
-`exec_for_of_loop`/`await_value` is needed at all, since the loop head
-becomes suspension-free and gets handled entirely by the already-correct
+This is a **transform/analysis-time fix, not a runtime one**: no change to
+`exec.rs`/`exec_for_of_loop`/`await_value` is needed at all, since once both
+layers land, the loop head becomes suspension-free (from the compiled
+state machine's point of view) and is handled entirely by the already-correct
 `ForOfInit`/`ForOfHead` states. An earlier draft of this plan proposed a
-runtime fast-forward mechanism in `exec_for_of_loop` itself, modeled on
+runtime fast-forward mechanism inside `exec_for_of_loop` itself, modeled on
 `eval_inline_async_yield_star`; that was reviewed and rejected — it fights
-the codebase's own established pattern (desugar out of the head, don't teach
-the head's runtime driver to suspend) and, per the review, rests on an
-untested premise about what a "fast-forward" would even mean for a loop
-*iteration count* rather than a single expression value.
+the codebase's own established two-layer pattern (detect at analysis time,
+desugar at transform time, never teach the tree-walker's own runtime driver
+to suspend) and rested on an untested premise about what "fast-forward"
+would even mean for a loop *iteration count* rather than a single expression
+value.
 
 **Confirmed observable divergence** (new repro, not in any existing test):
 
@@ -307,6 +349,23 @@ is 100% green today despite the bug (2,431/2,431 passing) — this is why a
 new `test262-extra` witness-chain test is needed (§6), following the same
 pattern already used for #707's/#709's sibling fixes.
 
+**Caveat on this specific repro, per review**: its per-iteration value is
+`[++n]` (never `undefined`), so `[x = yield]`'s default is never actually
+evaluated and the `yield` never fires — this repro demonstrates the ordering
+violation (`await_value` blocking) but *not* #753's sibling "replay restarts
+the loop and re-fetches the iterator" concern, since no replay is triggered
+here at all. A second scenario is needed to exercise that: a value of
+`undefined` at least once (so the default's `yield` does fire and a real
+`.next(sentValue)` resume/replay happens), with call counters on
+`[Symbol.asyncIterator]` and `next` checked across the resume — mirroring
+#753's own counting-iterator test (`async-generator-for-in-of-head-yield-keeps-iteration.js`).
+Today, this should show the iterator being re-acquired and/or re-stepped on
+resume (the same bug class #753 fixed for `Variable` heads, now confirmed
+reachable via a `Pattern` head too); after the fix, exactly one
+`GetIterator` and one `next()` call per element. Slice 3's red step should
+add this second scenario alongside the ordering repro above, rather than
+relying on the ordering repro alone.
+
 ## 3. Spec basis
 
 - **Await** (`sec-await`, spec.html:51047-51081): `Await(value)` resolves
@@ -314,11 +373,22 @@ pattern already used for #707's/#709's sibling fixes.
   *resumes* the asyncContext when run), calls `PerformPromiseThen`, pops
   `asyncContext`, and resumes the *caller's* context. It never loops on the
   job queue itself — whoever calls `Await` gets control back immediately.
-- **ForIn/OfBodyEvaluation** (spec.html:~22412): "If iteratorKind is ~async~,
-  set nextResult to ? Await(nextResult)" — the per-iteration step
-  `exec_for_of_loop` implements. This `Await` is subject to the same
-  suspend/resume contract as any other; nothing about being a loop head
-  exempts it.
+- **ForIn/OfBodyEvaluation** (spec.html:22401-22420): within the per-iteration
+  `Repeat` loop, "Let nextResult be ? Call(...). If iteratorKind is ~async~,
+  set nextResult to ? Await(nextResult)... Let nextValue be ?
+  IteratorValue(nextResult)" happens *before*, and as a separate step from,
+  "Let status be Completion(DestructuringAssignmentEvaluation of
+  assignmentPattern with argument nextValue)" (for an assignment-form head,
+  `lhsKind` ~assignment~). The spec itself already treats "obtain the
+  (possibly-awaited) next value" and "destructure it into the head pattern"
+  as two sequential steps against an implicit intermediate value — this is
+  the exact grounding for `for await ($t of it) { <pattern> = $t; body }`
+  being a meaning-preserving rewrite of `for await (<pattern> of it)`: it
+  just makes the spec's own implicit two-step sequence into two explicit
+  statements, in the same order. `exec_for_of_loop` implements this same
+  `Await(nextResult)` step for the tree-walked path; this `Await` is subject
+  to the same suspend/resume contract as any other, and nothing about being
+  a loop head exempts it.
 - **Jobs** (`sec-jobs`, spec.html:11957-11997): "Once evaluation of a Job
   starts, it must run to completion before evaluation of any other Job
   starts in an agent." `await_value`'s inline drain launches new Jobs while
@@ -358,7 +428,21 @@ produced. §2b is deliberately left untouched (owned elsewhere).
   to always call `get_iterator`, and drop the
   `let next_result = if is_async_gen { await_value(...) } else { next_result }`
   indirection entirely (sync yield* never awaits).
-- `src/interpreter/generator_transform.rs` — `transform_for_in_of_loop`
+- `src/interpreter/generator_analysis.rs` — **layer 1 (detection), must land
+  together with the layer-2 desugar below, not separately**:
+  `for_in_of_variable_head_contains_yield` (line 850-860): widen the
+  `ForInOfLeft::Pattern(_) => false` arm to
+  `ForInOfLeft::Pattern(pattern) => pattern_contains_yield(pattern)` (the
+  function likely wants renaming once it covers both head kinds —
+  `contains_yield`/`contains_suspension`'s `ForIn`/`ForOf` arms already
+  delegate to it uniformly, so no other call site needs touching). Also fill
+  in `analyze_statement`'s two no-op `ForInOfLeft::Pattern(_) => {}` arms
+  (`ForIn` around line 270, `ForOf` around line 310) with
+  `analyze_pattern_expressions(pattern, analysis, ctx)` — same call the
+  adjacent `Variable` arm already makes, confirmed reusable since the
+  function takes a bare `&Pattern` with no declaration-specific parameter.
+- `src/interpreter/generator_transform.rs` — **layer 2 (desugar)**,
+  `transform_for_in_of_loop`
   (line 2682 on `b887b68b`), specifically the `rewritten_left` block at
   lines 2707-2719: extend the `if let ForInOfLeft::Variable(decl) = left`
   condition that calls `hoist_yield_pattern` to also cover
@@ -376,11 +460,11 @@ produced. §2b is deliberately left untouched (owned elsewhere).
   `ForOfInit`/`ForOfHead` terminator construction immediately below (lines
   2732-2755ish) exactly as the `Variable` case already does — no change
   needed there. **No change to `exec.rs`/`exec_for_of_loop`/`await_value`
-  is needed**: once the head pattern is no longer where the `yield` lives,
-  `contains_suspension`'s existing `for_in_of_variable_head_contains_yield`/
-  `for_in_of_left_contains_suspension` checks (already correct for detecting
-  *whether* the enclosing function needs the state machine — see §2c) simply
-  no longer see a head-pattern yield, and the loop lowers normally.
+  is needed**: once layer 1 (above) recognizes the pattern's `yield` and
+  routes the statement into `transform_for_in_of_loop`, and this layer-2
+  desugar moves the `yield` out of the head, `exec_for_of_loop` is never
+  reached for this statement at all — the loop lowers normally through the
+  already-correct `ForOfInit`/`ForOfHead` states.
 - `docs/adr/2026-09-21-2157-inline-yield-suspension.md` — add a short dated
   addendum: the `is_async_gen` branch it flagged as "dead code left for
   #711" was not actually covered by #711's scope and was deleted under #687
@@ -427,19 +511,28 @@ produced. §2b is deliberately left untouched (owned elsewhere).
      behavior to pin — the change is removal of unreachable code, and the
      existing sync-generator `yield*` test262 coverage (§6) already pins the
      surviving path's behavior.
-3. **Desugar a `yield`-containing assignment-form head pattern out of `for
-   await`'s head** (§2c/§4) — the one real bug in this cycle's scope.
-   - **Red**: add the new `test262-extra` witness-chain test from §2c's
-     repro (adapted to the project's existing `asyncHelpers.js`/`compareArray.js`
-     convention; cover both the array-pattern head shown in §2c and an
-     object-pattern assignment head, e.g. `for await ({a = yield} of
-     iterable)`, since both are `ForInOfLeft::Pattern`). Confirm it fails
-     against current `origin/main` (order diverges from Node exactly as
-     shown in §2c).
-   - **Green**: implement the `transform_for_in_of_loop` extension described
-     in §4 (new `hoist_yield_pattern_assignment`-style helper, gated on
-     `ForInOfLeft::Pattern` + `pattern_contains_yield`). Re-run the new test;
-     it must match the Node-observed order.
+3. **Recognize and desugar a `yield`-containing assignment-form head pattern
+   in `for await`'s head** (§2c/§4) — the one real bug in this cycle's scope.
+   Both layers land in this one slice; neither is independently safe (§2c).
+   - **Red**: add the new `test262-extra` witness-chain test(s). Cover both
+     the ordering repro from §2c (array-pattern head, value that never
+     triggers the default, catching the `await_value` inline-drain) and the
+     replay/double-iteration scenario §2c's caveat describes (a value of
+     `undefined` at least once, so the pattern's `yield` actually fires, with
+     call counters on `[Symbol.asyncIterator]`/`next` checked across
+     `.next(sentValue)` — mirroring #753's own
+     `async-generator-for-in-of-head-yield-keeps-iteration.js`). Also cover
+     an object-pattern assignment head (`for await ({a = yield} of
+     iterable)`), since both array- and object-pattern heads are
+     `ForInOfLeft::Pattern`. Confirm all fail against current `origin/main`.
+   - **Green**: implement both layers from §4 — widen
+     `for_in_of_variable_head_contains_yield` and fill in
+     `analyze_statement`'s two `ForInOfLeft::Pattern` no-ops
+     (`generator_analysis.rs`), then add the `transform_for_in_of_loop`
+     assignment-form desugar (`generator_transform.rs`, new
+     `hoist_yield_pattern_assignment`-style helper gated on
+     `ForInOfLeft::Pattern` + `pattern_contains_yield`). Re-run the new
+     tests; all must match Node/expected behavior.
    - **Refactor** (same slice, small): once both the `Variable` and
      `Pattern` desugars exist side by side in `transform_for_in_of_loop`,
      check whether they share enough (temp-var naming, the synthesized
@@ -489,9 +582,20 @@ produced. §2b is deliberately left untouched (owned elsewhere).
     plausibly break their values (they exercise exactly the destructuring +
     `for await` + inline-yield interaction the fix touches, just via the
     `ForInOfLeft::Variable` desugar already fixed by #727/#753 rather than
-    the `ForInOfLeft::Pattern` one this slice adds).
-  - Re-run the full `for-await-of/` directory after the fix; it must stay at
-    100%.
+    the `ForInOfLeft::Pattern` one this slice adds). Re-run the full
+    `for-await-of/` directory after the fix; it must stay at 100%.
+  - `test262/test/language/statements/for-of/` and
+    `test262/test/language/statements/for-in/` — the widened
+    `for_in_of_variable_head_contains_yield`/`analyze_statement` changes
+    (§4) are shared by *sync* `for-of`/`for-in` too (not just `for await`),
+    since `contains_yield`'s `ForIn`/`ForOf` arms call the same helper; a
+    sync generator with a `yield`-containing assignment-form head
+    (`for ([a = yield] of x)`) is a plausible second live reacher of the
+    exact same gap and should be checked, even though it wasn't part of the
+    original instrumentation sweep (which only covered `for-await-of`). Both
+    directories must stay at whatever their current baseline is (no
+    regression), and either may pick up new passes the fix incidentally
+    produces.
 - **New `test262-extra` test** (§2c, §4): the witness-chain repro is not
   test262-coverable (test262 doesn't have a "generic microtask witness
   chain" convention beyond what individual tests hand-roll for their own
@@ -554,5 +658,5 @@ produced. §2b is deliberately left untouched (owned elsewhere).
   preemptively build unwind machinery this cycle doesn't need.
 - **A generalized/shared declare-vs-assign hoist helper** beyond what slice
   3's own refactor step finds warranted — see §5's note not to force one.
-- **Formatting/unrelated cleanup** in `eval.rs`/`generator_transform.rs`
-  beyond the two changes in §4 — no drive-by refactors.
+- **Formatting/unrelated cleanup** in `eval.rs`/`generator_analysis.rs`/
+  `generator_transform.rs` beyond the changes in §4 — no drive-by refactors.
