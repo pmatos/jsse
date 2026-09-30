@@ -480,6 +480,14 @@ impl Interpreter {
             if let Some(ref v) = afs.saved_finally_exception {
                 Self::collect_value_roots(v, &mut roots);
             }
+            for try_info in &afs.try_stack {
+                match &try_info.pending_completion {
+                    Some(PendingCompletion::Return(v) | PendingCompletion::Throw(v)) => {
+                        Self::collect_value_roots(v, &mut roots);
+                    }
+                    Some(PendingCompletion::LoopControl(_)) | None => {}
+                }
+            }
             Self::collect_for_of_stack_roots(&afs.for_of_stack, &mut roots, &mut seen_envs);
             Self::collect_scope_stack_roots(&afs.scope_stack, &mut roots, &mut seen_envs);
         }
