@@ -1562,7 +1562,11 @@ impl Interpreter {
                     }
                 }
 
-                StateTerminator::EnterCatch { body_state, param } => {
+                StateTerminator::EnterCatch {
+                    body_state,
+                    param,
+                    lexical_decls,
+                } => {
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
@@ -1573,6 +1577,19 @@ impl Interpreter {
                     if let Some(pattern) = param {
                         let _ =
                             self.bind_pattern(pattern, exception_val, BindingKind::Let, &catch_env);
+                    }
+                    // `BlockDeclarationInstantiation` for the catch body's own
+                    // Block (see the `OpenBlock` fix this mirrors, #738): its
+                    // lexical names enter TDZ here, into the same environment
+                    // as `param`, rather than the spec's separate nested one
+                    // (see the `EnterCatch` doc comment).
+                    for (name, is_const) in lexical_decls {
+                        let kind = if *is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        catch_env.borrow_mut().declare(name, kind);
                     }
                     scope_stack.push(ScopeFrame {
                         env: catch_env,
@@ -4744,7 +4761,11 @@ impl Interpreter {
                     current_id = *after_state;
                 }
 
-                StateTerminator::EnterCatch { body_state, param } => {
+                StateTerminator::EnterCatch {
+                    body_state,
+                    param,
+                    lexical_decls,
+                } => {
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
@@ -4755,6 +4776,19 @@ impl Interpreter {
                     if let Some(pattern) = param {
                         let _ =
                             self.bind_pattern(pattern, exception_val, BindingKind::Let, &catch_env);
+                    }
+                    // `BlockDeclarationInstantiation` for the catch body's own
+                    // Block (see the `OpenBlock` fix this mirrors, #738): its
+                    // lexical names enter TDZ here, into the same environment
+                    // as `param`, rather than the spec's separate nested one
+                    // (see the `EnterCatch` doc comment).
+                    for (name, is_const) in lexical_decls {
+                        let kind = if *is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        catch_env.borrow_mut().declare(name, kind);
                     }
                     scope_stack.push(ScopeFrame {
                         env: catch_env,

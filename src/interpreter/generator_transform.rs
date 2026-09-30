@@ -147,6 +147,14 @@ pub(crate) enum StateTerminator {
     EnterCatch {
         body_state: usize,
         param: Option<Pattern>,
+        /// The catch body's own lexical names (`collect_block_lexical_decls`
+        /// over its `Block`), declared as TDZ into the same environment as
+        /// `param` once the driver binds the thrown value — see the
+        /// `OpenBlock` fix this mirrors (#738). The catch body's own,
+        /// second, nested Environment Record (`sec-runtime-semantics-
+        /// catchclauseevaluation` + `sec-block-runtime-semantics-
+        /// evaluation`) isn't created separately here; see the driver sites.
+        lexical_decls: Vec<(String, bool)>,
     },
     EnterFinally {
         body_state: usize,
@@ -921,14 +929,34 @@ fn hoist_class_suspensions(
     }
 }
 
+/// False for a declarator that `transform_variable_declaration` reroutes to a
+/// function-level temp var instead of a genuine binding in the enclosing
+/// block's Environment: a plain identifier (no destructuring) whose
+/// initializer suspends is declared as a temp var and assigned via
+/// `SentValueBinding` once the suspension resumes ("the original let/const/
+/// var decl is replaced by a plain assignment") — its real storage is
+/// `func_env`, not this block. Pre-declaring that same name as TDZ in the
+/// block would shadow the temp var, so `collect_block_lexical_decls` must
+/// skip it: a destructuring pattern's own suspending default is lowered
+/// through a different path (`lower_pattern_binding`/`emit_pattern_binding`)
+/// that *does* bind into the block normally, so only the bare-identifier
+/// shortcut needs excluding.
+fn declarator_enters_block_env(d: &VariableDeclarator, is_async: bool) -> bool {
+    !(matches!(d.pattern, Pattern::Identifier(_))
+        && d.init
+            .as_ref()
+            .is_some_and(|init| expr_has_suspension(init, is_async)))
+}
+
 /// `sec-static-semantics-lexicallyscopeddeclarations`: a block's own lexical
 /// declarations are exactly its *directly nested* `let`/`const`/`using`/
 /// `await using`/class declarations (not those of nested blocks, loops, or
 /// function bodies) -- a shallow, non-recursive scan over the whole,
 /// unsplit block. Mirrors `Interpreter::hoist_lexical_declarations`
 /// (`exec.rs`), which performs the same scan directly against an
-/// `Environment` rather than collecting it for later use.
-fn collect_block_lexical_decls(stmts: &[Statement]) -> Vec<(String, bool)> {
+/// `Environment` rather than collecting it for later use. Declarators that
+/// `declarator_enters_block_env` excludes are left out entirely.
+fn collect_block_lexical_decls(stmts: &[Statement], is_async: bool) -> Vec<(String, bool)> {
     let mut decls = Vec::new();
     for stmt in stmts {
         match stmt {
@@ -940,6 +968,9 @@ fn collect_block_lexical_decls(stmts: &[Statement]) -> Vec<(String, bool)> {
             {
                 let is_const = decl.kind != VarKind::Let;
                 for d in &decl.declarations {
+                    if !declarator_enters_block_env(d, is_async) {
+                        continue;
+                    }
                     let mut names = Vec::new();
                     d.pattern.bound_names(&mut names);
                     decls.extend(names.into_iter().map(|name| (name, is_const)));
@@ -1014,8 +1045,9 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.finalize_current_state(StateTerminator::Goto(entry_state));
                 ctx.current_state_id = entry_state;
                 ctx.scope_depth += 1;
-                ctx.states[entry_state].scope_action =
-                    Some(ScopeAction::OpenBlock(collect_block_lexical_decls(stmts)));
+                ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
+                    collect_block_lexical_decls(stmts, ctx.is_async),
+                ));
 
                 let inner_after = ctx.new_state();
                 transform_statements(stmts, ctx, inner_after);
@@ -2705,8 +2737,31 @@ fn transform_for_statement(
         ctx.finalize_current_state(StateTerminator::Goto(init_state));
         ctx.current_state_id = init_state;
         ctx.scope_depth += 1;
+        // Unlike `per_iteration_bindings` above (which `CopyForward` uses to
+        // copy a name's *current* value forward regardless of where it lives),
+        // this initial TDZ pre-declare must exclude any name
+        // `declarator_enters_block_env` rejects: such a name's real storage is
+        // a function-level temp var (see that function's doc comment), and
+        // pre-declaring it here would shadow the temp var with an
+        // uninitialized binding that never gets the suspended initializer's
+        // value.
+        let initial_lexical_bindings: Vec<(String, bool)> =
+            if let Some(ForInit::Variable(decl)) = &for_stmt.init {
+                decl.declarations
+                    .iter()
+                    .filter(|d| declarator_enters_block_env(d, ctx.is_async))
+                    .flat_map(|d| {
+                        let is_const = decl.kind == VarKind::Const;
+                        let mut names = Vec::new();
+                        d.pattern.bound_names(&mut names);
+                        names.into_iter().map(move |n| (n, is_const))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
         ctx.states[init_state].scope_action =
-            Some(ScopeAction::OpenBlock(per_iteration_bindings.clone()));
+            Some(ScopeAction::OpenBlock(initial_lexical_bindings));
     }
 
     if let Some(init) = &for_stmt.init {
@@ -3090,7 +3145,7 @@ fn transform_try_statement(
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
         ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
-            collect_block_lexical_decls(&try_stmt.block),
+            collect_block_lexical_decls(&try_stmt.block, ctx.is_async),
         ));
         ctx.scope_depth += 1;
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
@@ -3106,6 +3161,11 @@ fn transform_try_statement(
         ctx.finalize_current_state(StateTerminator::EnterCatch {
             body_state: catch_body_state,
             param: info.param.clone(),
+            lexical_decls: try_stmt
+                .handler
+                .as_ref()
+                .map(|h| collect_block_lexical_decls(&h.body, ctx.is_async))
+                .unwrap_or_default(),
         });
 
         // The catch parameter gets its own environment
@@ -3146,7 +3206,7 @@ fn transform_try_statement(
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(finalizer),
+                    collect_block_lexical_decls(finalizer, ctx.is_async),
                 ));
                 ctx.scope_depth += 1;
                 transform_statements(finalizer, ctx, finally_exit_state);
