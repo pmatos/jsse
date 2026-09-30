@@ -9185,7 +9185,16 @@ impl Interpreter {
                 }
 
                 StateTerminator::TryExit { after_state } => {
-                    try_stack.pop();
+                    let finished = try_stack.pop();
+                    if let Some(PendingCompletion::Throw(exc)) =
+                        finished.and_then(|ctx| ctx.pending_completion)
+                    {
+                        pending_exception = Some(exc);
+                        continue;
+                    }
+                    // A fresh, not-yet-routed exception (the one-shot resume
+                    // input, not a completion owned by the context just
+                    // popped) still threads through here unchanged.
                     if let Some(exc) = pending_exception.take() {
                         pending_exception = Some(exc);
                         continue;
@@ -9239,9 +9248,16 @@ impl Interpreter {
                 StateTerminator::EnterFinally { body_state } => {
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_finally = true;
+                        // A throw routed here is now owned by this context: a
+                        // nested try/finally's own TryExit must not see it
+                        // (issue #719). Previously this unconditionally
+                        // overwrote `saved_finally_exception`, even on a
+                        // normal-completion entry, silently losing whatever
+                        // an enclosing finally had parked there.
+                        if let Some(exc) = pending_exception.take() {
+                            ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                        }
                     }
-                    // Park any pending exception so the finally body runs normally
-                    saved_finally_exception = pending_exception.take();
                     current_id = body_state;
                 }
 
