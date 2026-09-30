@@ -9591,14 +9591,21 @@ impl Interpreter {
                             .rposition(|loop_state| loop_state.iter_var == *iter_var)
                         {
                             let loop_state = for_of_stack.remove(pos);
-                            if let Completion::Throw(e) = self.close_for_of_loop(
+                            match self.close_for_of_loop(
                                 loop_state,
                                 &func_env,
                                 Completion::Normal(JsValue::UNDEFINED),
                                 None,
                             ) {
-                                pending_exception = Some(e);
-                                continue;
+                                Completion::Throw(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                                Completion::Exit(code) => {
+                                    self.scheduler.remove_async_function_state(async_id);
+                                    return Completion::Exit(code);
+                                }
+                                _ => {}
                             }
                         }
                         current_id = next_state;

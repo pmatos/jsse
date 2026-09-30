@@ -2048,15 +2048,22 @@ impl Interpreter {
                             {
                                 let loop_state = for_of_stack.remove(pos);
                                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                                let iterator = func_env.borrow().get(&loop_state.iter_var);
-                                if let Some(iterator) = iterator {
-                                    let close_result = self.iterator_close_result(&iterator);
-                                    self.unroot_for_of_iterator(&iterator);
-                                    if let Err(e) = close_result {
+                                match self.close_for_of_loop(
+                                    loop_state,
+                                    &func_env,
+                                    Completion::Normal(JsValue::UNDEFINED),
+                                    Some(o.id),
+                                ) {
+                                    Completion::Throw(e) => {
                                         let e = route_exception!(e);
                                         self.retire_generator(o.id);
                                         return Completion::Throw(e);
                                     }
+                                    Completion::Exit(code) => {
+                                        self.retire_generator(o.id);
+                                        return Completion::Exit(code);
+                                    }
+                                    _ => {}
                                 }
                             }
                             current_id = next_state;
@@ -5359,16 +5366,22 @@ impl Interpreter {
                             {
                                 let loop_state = for_of_stack.remove(pos);
                                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
-                                let iterator = func_env.borrow().get(&loop_state.iter_var);
-                                if let Some(iterator) = iterator {
-                                    let close_result = self.iterator_close_result(&iterator);
-                                    self.unroot_for_of_iterator(&iterator);
-                                    if let Err(e) = close_result {
+                                match self.close_for_of_loop(
+                                    loop_state,
+                                    &func_env,
+                                    Completion::Normal(JsValue::UNDEFINED),
+                                    Some(o.id),
+                                ) {
+                                    Completion::Throw(e) => {
                                         let e = route_exception!(e);
                                         return self.reject_async_generator_request(
                                             o.id, promise, &reject_fn, e,
                                         );
                                     }
+                                    Completion::Exit(code) => {
+                                        abort_async_generator!(Completion::Exit(code))
+                                    }
+                                    _ => {}
                                 }
                             }
                             current_id = next_state;

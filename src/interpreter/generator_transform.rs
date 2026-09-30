@@ -1946,7 +1946,10 @@ fn lower_array_pattern_binding(
     });
     ctx.current_state_id = after_init;
 
-    let mut ends_in_rest = false;
+    // The parser rejects a rest element anywhere but last (`"Rest element
+    // must be last element"`), so checking the final slot is equivalent to
+    // tracking it through the loop.
+    let ends_in_rest = matches!(elements.last(), Some(Some(ArrayPatternElement::Rest(_))));
     for elem in elements {
         match elem {
             None => {
@@ -1995,7 +1998,6 @@ fn lower_array_pattern_binding(
                 } else {
                     lower_pattern_binding(kind, pattern, &rest_tmp, ctx);
                 }
-                ends_in_rest = true;
             }
         }
     }

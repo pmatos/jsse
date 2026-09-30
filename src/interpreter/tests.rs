@@ -4539,6 +4539,78 @@ mod node_host_tests {
         assert_eq!(global_string(&interp, "aran"), "no");
     }
 
+    // An array-binding pattern's `ArrayPatternIter::Finish` op runs
+    // `IteratorClose` when the pattern under-consumes its iterator. The
+    // iterator's `return()` calling `__host_exit` must stop execution right
+    // there, not fall through to the statement after the binding
+    // (issue #725 lowering, regression guard for the swallowed-Exit bug).
+    #[test]
+    fn host_exit_from_async_function_array_pattern_finish_is_not_swallowed() {
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.ran = "no";
+            const it = {
+              [Symbol.iterator]() {
+                return {
+                  next() { return { value: 1, done: false }; },
+                  return() { __host_exit(6); return { done: true }; },
+                };
+              },
+            };
+            async function f() { var [a = await 1] = it; globalThis.ran = "yes"; }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(6));
+        assert_eq!(global_string(&interp, "ran"), "no");
+        assert!(matches!(c, Completion::Exit(6)));
+    }
+
+    #[test]
+    fn host_exit_from_generator_array_pattern_finish_is_not_swallowed() {
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.ran = "no";
+            const it = {
+              [Symbol.iterator]() {
+                return {
+                  next() { return { value: 1, done: false }; },
+                  return() { __host_exit(7); return { done: true }; },
+                };
+              },
+            };
+            function* g() { var [a = (yield 1)] = it; globalThis.ran = "yes"; }
+            const gi = g();
+            gi.next();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "ran"), "no");
+        assert!(matches!(c, Completion::Exit(7)));
+    }
+
+    #[test]
+    fn host_exit_from_async_generator_array_pattern_finish_is_not_swallowed() {
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.ran = "no";
+            const it = {
+              [Symbol.iterator]() {
+                return {
+                  next() { return { value: 1, done: false }; },
+                  return() { __host_exit(8); return { done: true }; },
+                };
+              },
+            };
+            async function* ag() { var [a = await 1] = it; globalThis.ran = "yes"; }
+            const agi = ag();
+            agi.next();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(8));
+        assert_eq!(global_string(&interp, "ran"), "no");
+    }
+
     #[test]
     fn host_exit_from_disposer_stops_remaining_disposers() {
         // Disposal runs in reverse order: `b` disposes first and calls exit,
