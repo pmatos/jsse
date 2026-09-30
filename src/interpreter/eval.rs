@@ -8531,11 +8531,10 @@ impl Interpreter {
 
                 // A loop-control completion produced by a finalizer replaces
                 // the return, throw, or earlier loop-control completion that
-                // originally entered it.
-                pending_return = None;
-                saved_finally_exception = None;
+                // originally entered it — via the unconditional truncation to
+                // the routed depth below, not by explicitly clearing
+                // driver-global state (issue #719).
                 pending_for_of_unwind = None;
-                pending_loop_control = Some(target);
 
                 let mut routed_to = None;
                 for i in (target.try_depth..try_stack.len()).rev() {
@@ -8582,13 +8581,17 @@ impl Interpreter {
                 );
 
                 if let Some((depth, finally_state)) = routed_to {
-                    // Contexts nested inside the selected finally are left, so
-                    // EnterFinally must mark this one.
+                    // Own this jump on the context whose finally is about to
+                    // run it, not the driver: a nested try/finally's own
+                    // TryExit must not see it (issue #719). Contexts nested
+                    // inside the selected finally are left, so EnterFinally
+                    // must mark this one.
+                    try_stack[depth].pending_completion =
+                        Some(PendingCompletion::LoopControl(target));
                     try_stack.truncate(depth + 1);
                     current_id = finally_state;
                 } else {
                     try_stack.truncate(target.try_depth);
-                    pending_loop_control = None;
                     current_id = target.target_state;
                 }
             }};
