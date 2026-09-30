@@ -1950,6 +1950,10 @@ fn lower_array_pattern_binding(
     // must be last element"`), so checking the final slot is equivalent to
     // tracking it through the loop.
     let ends_in_rest = matches!(elements.last(), Some(Some(ArrayPatternElement::Rest(_))));
+    // One temp reused for every non-elided element: each `step_tmp` is
+    // consumed immediately by the binding that follows its own `Step`, so no
+    // two elements ever have it live at once.
+    let step_tmp = ctx.new_temp_var("dstr_elem");
     for elem in elements {
         match elem {
             None => {
@@ -1962,7 +1966,6 @@ fn lower_array_pattern_binding(
                 ctx.current_state_id = next_state;
             }
             Some(ArrayPatternElement::Pattern(pattern)) => {
-                let step_tmp = ctx.new_temp_var("dstr_elem");
                 let next_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
                     op: ArrayPatternIterOp::Step {

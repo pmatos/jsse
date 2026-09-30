@@ -1021,41 +1021,47 @@ pub(crate) fn pattern_contains_suspension(pattern: &Pattern) -> bool {
     pattern_any_expr(pattern, &expr_contains_suspension)
 }
 
+/// Which construct `pattern_lowering_supported` is checking: a declaration
+/// (`let [a] = ..`) or a destructuring assignment (`[a] = ..`). The two forms
+/// support different leaf shapes, so this is threaded through explicitly
+/// instead of overloading a single flag for both.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatternLoweringForm {
+    Declaration,
+    Assignment,
+}
+
 /// True when the state-machine transform can lower every part of the pattern
 /// that reaches a suspension into suspension states. Object patterns can, for
 /// both the declaration and assignment forms. Array patterns can too, but
 /// only for the declaration form (`lower_array_pattern_binding`) — the
 /// assignment-form transform (`lower_pattern_assignment`) has no array arm
-/// yet, so `allow_member_expression` (true only for the assignment form)
-/// doubles as the array-pattern gate here; a suspending array-assignment
-/// pattern still falls back to the tree-walker, exactly as before this
-/// terminator existed. An object rest beside a suspending sibling is also
-/// still evaluated by the tree-walker. A bare member-expression target is
-/// only supported for the assignment form — a declaration can never bind
-/// into one.
-fn pattern_lowering_supported(pattern: &Pattern, allow_member_expression: bool) -> bool {
+/// yet, so a suspending array-assignment pattern still falls back to the
+/// tree-walker, exactly as before this terminator existed. An object rest
+/// beside a suspending sibling is also still evaluated by the tree-walker. A
+/// bare member-expression target is only supported for the assignment form —
+/// a declaration can never bind into one.
+fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> bool {
     if !pattern_contains_suspension(pattern) {
         return true;
     }
     match pattern {
         Pattern::Object(props) => props.iter().all(|prop| match prop {
-            ObjectPatternProperty::KeyValue(_, value) => {
-                pattern_lowering_supported(value, allow_member_expression)
-            }
+            ObjectPatternProperty::KeyValue(_, value) => pattern_lowering_supported(value, form),
             ObjectPatternProperty::Shorthand(_) => true,
             ObjectPatternProperty::Rest(_) => false,
         }),
-        Pattern::Array(elements) if !allow_member_expression => {
+        Pattern::Array(elements) if form == PatternLoweringForm::Declaration => {
             elements.iter().all(|elem| match elem {
                 None => true,
                 Some(ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p)) => {
-                    pattern_lowering_supported(p, allow_member_expression)
+                    pattern_lowering_supported(p, form)
                 }
             })
         }
-        Pattern::Assign(inner, _) => pattern_lowering_supported(inner, allow_member_expression),
+        Pattern::Assign(inner, _) => pattern_lowering_supported(inner, form),
         Pattern::Identifier(_) => true,
-        Pattern::MemberExpression(_) => allow_member_expression,
+        Pattern::MemberExpression(_) => form == PatternLoweringForm::Assignment,
         Pattern::Array(_) | Pattern::Rest(_) => false,
     }
 }
@@ -1066,7 +1072,8 @@ fn pattern_lowering_supported(pattern: &Pattern, allow_member_expression: bool) 
 /// can't lower (an object rest beside a suspending sibling) stays on the
 /// replay path regardless.
 pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
-    pattern_contains_suspension(pattern) && pattern_lowering_supported(pattern, false)
+    pattern_contains_suspension(pattern)
+        && pattern_lowering_supported(pattern, PatternLoweringForm::Declaration)
 }
 
 /// True for a destructuring-assignment pattern (`{..} = ..`) whose
@@ -1075,11 +1082,12 @@ pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
 /// `lower_pattern_assignment` has no array arm — so a suspending
 /// array-assignment pattern always stays on the tree-walker's replay path
 /// regardless of what this returns for its nested shapes; see
-/// `pattern_lowering_supported`'s `allow_member_expression` gate. Unlike the
+/// `pattern_lowering_supported`'s `PatternLoweringForm` gate. Unlike the
 /// declaration form, a member-expression target (`o[await k]`) is supported: assignment can
 /// target one, a declaration cannot.
 pub(crate) fn pattern_needs_assignment_lowering(pattern: &Pattern) -> bool {
-    pattern_contains_await(pattern) && pattern_lowering_supported(pattern, true)
+    pattern_contains_await(pattern)
+        && pattern_lowering_supported(pattern, PatternLoweringForm::Assignment)
 }
 
 /// Checks if a statement is, or is reached through `if`/labeled statements from,
