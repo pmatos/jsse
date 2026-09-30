@@ -8507,6 +8507,8 @@ impl Interpreter {
                     // on the correct context next.
                     try_stack[idx].pending_completion = Some(PendingCompletion::Return(ret_val));
                     try_stack.truncate(idx + 1);
+                    self.scheduler
+                        .sync_async_function_try_stack(async_id, &try_stack);
                     current_id = finally_state;
                 } else if let Some(stack) = self.take_dispose_stack(&func_env) {
                     pending_dispose = Some(PendingDispose {
@@ -8589,6 +8591,8 @@ impl Interpreter {
                     try_stack[depth].pending_completion =
                         Some(PendingCompletion::LoopControl(target));
                     try_stack.truncate(depth + 1);
+                    self.scheduler
+                        .sync_async_function_try_stack(async_id, &try_stack);
                     current_id = finally_state;
                 } else {
                     try_stack.truncate(target.try_depth);
@@ -9260,6 +9264,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_finally = true;
                         // A throw routed here is now owned by this context: a
@@ -9270,7 +9275,12 @@ impl Interpreter {
                         // an enclosing finally had parked there.
                         if let Some(exc) = pending_exception.take() {
                             ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
                         }
+                    }
+                    if parked {
+                        self.scheduler
+                            .sync_async_function_try_stack(async_id, &try_stack);
                     }
                     current_id = body_state;
                 }

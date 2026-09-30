@@ -1535,6 +1535,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_finally = true;
                         // A throw routed here by `route_generator_exception`
@@ -1544,7 +1545,11 @@ impl Interpreter {
                         // `TryExit` must not see it (issue #719).
                         if let Some(exc) = pending_exception.take() {
                             ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
                         }
+                    }
+                    if parked {
+                        self.sync_generator_try_stack_for_gc(o.id, &current_try_stack);
                     }
                     current_id = *body_state;
                 }
@@ -3656,6 +3661,7 @@ impl Interpreter {
                         current_try_stack[idx].pending_completion =
                             Some(PendingCompletion::Return(return_value));
                         current_try_stack.truncate(idx + 1);
+                        self.sync_generator_try_stack_for_gc(o.id, &current_try_stack);
                         current_id = finally_state;
                         just_routed = true;
                         continue;
@@ -4615,6 +4621,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_finally = true;
                         // A throw routed here by `route_generator_exception`
@@ -4624,7 +4631,11 @@ impl Interpreter {
                         // `TryExit` must not see it (issue #719).
                         if let Some(exc) = pending_exception.take() {
                             ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
                         }
+                    }
+                    if parked {
+                        self.sync_generator_try_stack_for_gc(o.id, &current_try_stack);
                     }
                     current_id = *body_state;
                 }
@@ -6198,6 +6209,31 @@ impl Interpreter {
             let slot = self.generator_scope_stacks.entry(generator_id).or_default();
             slot.clear();
             slot.extend_from_slice(scope_stack);
+        }
+    }
+
+    /// Write a completion just parked on `try_stack` (issue #719) into the
+    /// live generator object in place, so it is GC-rooted immediately rather
+    /// than only once the driver's next suspension serializes it — in case
+    /// the finally that owns it runs `$262.gc()` (or otherwise triggers a
+    /// collection) before then. `collect_iterator_state_roots` already
+    /// traces `try_stack` unconditionally on the object's own state, so
+    /// keeping that field current is enough; no side table is needed.
+    fn sync_generator_try_stack_for_gc(&mut self, generator_id: u64, try_stack: &[TryContextInfo]) {
+        if let Some(obj) = self.get_object_cell(generator_id)
+            && let Some(state) = obj.borrow_mut().iterator_state_mut()
+        {
+            match state {
+                IteratorState::StateMachineGenerator {
+                    try_stack: slot, ..
+                }
+                | IteratorState::StateMachineAsyncGenerator {
+                    try_stack: slot, ..
+                } => {
+                    *slot = try_stack.to_vec();
+                }
+                _ => {}
+            }
         }
     }
 }
