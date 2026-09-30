@@ -280,20 +280,33 @@ impl BodyIcStore {
 }
 
 impl Interpreter {
-    /// Install `body`'s IC store and return the still-active parent handle.
-    pub(crate) fn enter_ic_body(&mut self, body: &Body) -> Option<BodyStoreHandle> {
-        let handle = self.ic_store.enter_body(body);
-        self.current_ic_handle.replace(handle)
-    }
-
-    /// Release the current Body and restore its still-active parent handle.
-    pub(crate) fn leave_ic_body(&mut self, previous: Option<BodyStoreHandle>) {
-        let handle = self
+    /// Run `execute` with `body`'s IC store installed, then restore the
+    /// previously active Body store.
+    ///
+    /// The Body must already have had its IC sites assigned. JavaScript abrupt
+    /// completions are ordinary return values, so they restore the parent just
+    /// like successful execution. A Rust panic leaves the interpreter unusable,
+    /// matching the other internal Interpreter scope combinators.
+    #[inline]
+    pub(crate) fn with_ic_body<T>(
+        &mut self,
+        body: &Body,
+        execute: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let active = self.ic_store.enter_body(body);
+        let previous = self.current_ic_handle.replace(active);
+        let result = execute(self);
+        let current = self
             .current_ic_handle
             .take()
             .expect("left an IC Body without entering one");
-        self.ic_store.exit_body(handle);
+        assert_eq!(
+            current, active,
+            "IC Body scope exited with a different active Body"
+        );
+        self.ic_store.exit_body(current);
         self.current_ic_handle = previous;
+        result
     }
 
     /// Return a mutable reference to the current body's call slot for `id`.
@@ -376,22 +389,33 @@ mod tests {
     }
 
     #[test]
-    fn interpreter_call_slot_uses_current_handle() {
+    fn with_ic_body_restores_the_active_parent_store() {
         let mut interp = Interpreter::new();
-        let body = body_with_calls_props(1, 1);
-        let prev = interp.enter_ic_body(&body);
-        let handle = interp.current_ic_handle.unwrap();
-        *interp.call_slot(CallSiteId(0)) = CallIcSlot::Megamorphic;
-        *interp.prop_slot(PropSiteId(0)) = PropIcSlot::Megamorphic;
-        assert!(matches!(
-            *interp.ic_store.store_mut(handle).call_slot(CallSiteId(0)),
-            CallIcSlot::Megamorphic
-        ));
-        assert!(matches!(
-            &*interp.ic_store.store_mut(handle).prop_slot(PropSiteId(0)),
-            PropIcSlot::Megamorphic
-        ));
-        interp.leave_ic_body(prev);
+        let parent = body_with_calls_props(1, 0);
+        let child = body_with_calls_props(1, 0);
+
+        interp.with_ic_body(&parent, |interp| {
+            *interp.call_slot(CallSiteId(0)) = CallIcSlot::Megamorphic;
+
+            interp.with_ic_body(&child, |interp| {
+                assert!(matches!(
+                    *interp.call_slot(CallSiteId(0)),
+                    CallIcSlot::Empty
+                ));
+            });
+
+            assert!(matches!(
+                *interp.call_slot(CallSiteId(0)),
+                CallIcSlot::Megamorphic
+            ));
+        });
+
+        interp.with_ic_body(&child, |interp| {
+            assert!(matches!(
+                *interp.call_slot(CallSiteId(0)),
+                CallIcSlot::Empty
+            ));
+        });
     }
 
     #[test]

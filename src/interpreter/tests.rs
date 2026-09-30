@@ -31,6 +31,23 @@ fn run_script(source: &str) -> Interpreter {
     interp
 }
 
+/// Runs `source` as a script on the engine stack — the stack the
+/// `CALL_DEPTH_*`/`EVAL_DEPTH_LIMIT` guards are calibrated against — returning
+/// a `Send`-safe verdict. `Interpreter` and `Completion` are `Rc`-based and not
+/// `Send`, so a thrown error's message is captured via `format_value` before
+/// both are dropped inside the closure, mirroring the parser's
+/// `parse_on_engine_stack` (`src/parser/mod.rs`).
+fn run_source_on_engine_stack(source: &str) -> Result<(), String> {
+    crate::run_on_engine_stack(move || {
+        let program = parse_program(source);
+        let mut interp = Interpreter::new();
+        match interp.run(&program) {
+            Completion::Throw(err) => Err(interp.format_value(&err)),
+            _ => Ok(()),
+        }
+    })
+}
+
 fn run_script_as_blocking_agent(source: &str) -> Interpreter {
     let program = parse_program(source);
     let mut interp = Interpreter::new();
@@ -3866,6 +3883,26 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_in_async_generator_disposer_stops_parked_request() {
+        // The disposer's exit arrives from a job the parked request resumed
+        // in, so it must propagate as an exit rather than settle the request.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            const it = (async function* () {
+              await using a = { async [Symbol.asyncDispose]() { await null; __host_exit(7); } };
+              yield 1;
+            })();
+            it.next().then(() => {
+              it.next().then(() => { globalThis.log += "settled;"; });
+            });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "log"), "");
+    }
+
+    #[test]
     fn host_exit_skips_iterator_return_cleanup() {
         // A pending exit must not run the iterator's user-defined return()
         // during for-of unwinding — it could re-enter __host_exit and overwrite
@@ -4987,6 +5024,61 @@ fn with_gc_root_scope_truncates_on_every_exit() {
     assert!(interp.gc_temp_roots.contains(&9_001));
 }
 
+/// Pins the RegExp `@@replace` slow path's GC Root Scope: collected custom
+/// `exec` results stay alive across later user code and every exit releases
+/// the temporary roots. Behaviour-preserving: green before and after the
+/// migration, red if result rooting or an abrupt-path cleanup is omitted.
+#[test]
+fn regexp_replace_results_survive_gc_and_leave_no_temp_root_leak() {
+    let interp = run_script(
+        r#"
+        var calls = 0;
+        var rx = /a/g;
+        rx.exec = function () {
+            if (calls++ === 0) {
+                return { 0: "a", length: 1, index: 0, groups: undefined };
+            }
+            // The first result is now reachable only from the native result
+            // batch retained by RegExp.prototype[@@replace].
+            $262.gc();
+            return null;
+        };
+        globalThis.replaceResult = rx[Symbol.replace]("a", function (match) {
+            $262.gc();
+            return match.toUpperCase();
+        });
+        globalThis.replaceCalls = calls;
+
+        var abruptCalls = 0;
+        var throwing = /a/g;
+        throwing.exec = function () {
+            if (abruptCalls++ === 0) {
+                return {
+                    0: "a",
+                    get length() { throw "length-sentinel"; },
+                    index: 0,
+                    groups: undefined
+                };
+            }
+            return null;
+        };
+        try {
+            throwing[Symbol.replace]("a", "b");
+        } catch (error) {
+            globalThis.replaceError = error;
+        }
+        "#,
+    );
+
+    assert_eq!(global_string(&interp, "replaceResult"), "A");
+    assert_eq!(global_number(&interp, "replaceCalls"), 2.0);
+    assert_eq!(global_string(&interp, "replaceError"), "length-sentinel");
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "RegExp replacement result roots must be released after normal and abrupt exits"
+    );
+}
+
 /// Pins the observable contract of the `eval.rs` temp-root sites that adopt
 /// `with_gc_root_scope` (the `gc-root-scope-guard-eval` firing): an earlier
 /// tagged-template substitution (site `eval.rs:1385`) must stay reachable while
@@ -5100,4 +5192,165 @@ fn module_with_a_for_await_of_head_is_top_level_await() {
 fn module_with_a_plain_for_of_head_and_no_await_is_not_top_level_await() {
     let program = parse_module_program("for (x of []) {}");
     assert!(!Interpreter::module_has_tla(&program));
+}
+
+/// The completion transition — "this generator is finished, tear it down" —
+/// behind `retire_generator`. These pin its post-conditions as an invariant
+/// over *all three* per-generator side tables, rather than per call site.
+mod generator_retirement_tests {
+    use super::*;
+
+    fn assert_retired(interp: &Interpreter, gen_id: u64) {
+        assert!(
+            !interp.generator_inline_iters.contains_key(&gen_id),
+            "generator_inline_iters still holds the finished generator"
+        );
+        assert!(
+            !interp.generator_for_of_stacks.contains_key(&gen_id),
+            "generator_for_of_stacks still holds the finished generator"
+        );
+        assert!(
+            !interp.generator_scope_stacks.contains_key(&gen_id),
+            "generator_scope_stacks still holds the finished generator"
+        );
+    }
+
+    #[test]
+    fn completed_sync_generator_releases_every_side_table() {
+        let interp = run_script(
+            r#"
+            globalThis.gen = (function* () {
+              { let a = 1; yield a; throw new Error("boom"); }
+            })();
+            gen.next();
+            try { gen.next(); } catch (e) { globalThis.err = e.message; }
+            "#,
+        );
+        assert_eq!(global_string(&interp, "err"), "boom");
+        let gen_id = global_object_id(&interp, "gen");
+        let generator = interp.get_object(gen_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert_retired(&interp, gen_id);
+    }
+
+    #[test]
+    fn rejected_async_generator_releases_every_side_table() {
+        let interp = run_script(
+            r#"
+            globalThis.gen = (async function* () {
+              for (const x of [1, 2, 3]) { yield x; throw new Error("boom"); }
+            })();
+            gen.next()
+              .then(function () { return gen.next(); })
+              .then(function () {}, function (e) { globalThis.err = e.message; });
+            "#,
+        );
+        assert_eq!(global_string(&interp, "err"), "boom");
+        let gen_id = global_object_id(&interp, "gen");
+        let generator = interp.get_object(gen_id).unwrap();
+        assert!(matches!(
+            generator.borrow().iterator_state(),
+            Some(IteratorState::StateMachineAsyncGenerator {
+                execution_state: StateMachineExecutionState::Completed,
+                ..
+            })
+        ));
+        assert_retired(&interp, gen_id);
+    }
+}
+
+/// JS call recursion nested past `CALL_DEPTH_HARD_LIMIT` must raise the
+/// catchable stack-overflow `RangeError` rather than exhausting the native
+/// stack first (jsse#607, sibling of jsse#599/#606 for the parser's
+/// `MAX_PARSE_DEPTH`). The `Proxy` apply-trap-forwarding shape is the
+/// stack-hungriest call shape measured while calibrating this constant, so it
+/// bounds every other call shape the guard covers — but only call shapes:
+/// source that eats native stack without going through `call_function_inner`
+/// (a flat expression, a member-access chain) is outside this guard, covered
+/// instead by `eval_depth` below.
+///
+/// `tests/recursion-limit-interpreter.js` covers the plain-recursion shape
+/// from JS against a release binary; keep the two lists in step.
+///
+/// This cannot fail politely: if `CALL_DEPTH_HARD_LIMIT` is ever raised above
+/// what the running profile's native stack holds, the process aborts
+/// (SIGABRT) instead of reporting a failed assertion. Runs on the engine
+/// stack because that is the stack the limit is calibrated against — the
+/// default test-harness stack is far smaller.
+#[test]
+fn deep_call_recursion_raises_error_before_native_overflow() {
+    // Twice the limit, so even the shape advancing the counter slowest (one
+    // unit per JS call) is guaranteed to cross it.
+    let reps = CALL_DEPTH_HARD_LIMIT * 2;
+    for (label, source) in [
+        (
+            "plain call recursion",
+            format!("function f(n) {{ if (n <= 0) return 0; return 1 + f(n - 1); }} f({reps});"),
+        ),
+        (
+            "Proxy apply-trap forwarding",
+            format!(
+                "function f(n) {{ if (n <= 0) return 0; return 1 + pf(n - 1); }}
+                 var pf = new Proxy(f, {{
+                     apply(target, thisArg, args) {{ return target.apply(thisArg, args); }}
+                 }});
+                 pf({reps});"
+            ),
+        ),
+    ] {
+        let err = run_source_on_engine_stack(&source).expect_err(&format!(
+            "{label} nested {reps} deep should hit the call-depth guard"
+        ));
+        assert!(
+            err.contains("RangeError") && err.to_lowercase().contains("stack"),
+            "{label} should raise a catchable stack RangeError, got: {err}"
+        );
+    }
+}
+
+/// Expression nesting past `EVAL_DEPTH_LIMIT` must raise the catchable
+/// stack-overflow `RangeError` rather than exhausting the native stack first
+/// (jsse#607). Both shapes here bypass `call_depth` entirely — a flat
+/// left-nested binary expression and a self-referential member-access chain
+/// recurse only through `eval_expr`, never `call_function_inner` — and the
+/// member chain was the stack-hungriest pure-`eval_depth` shape measured
+/// while calibrating this constant.
+///
+/// `tests/recursion-limit-interpreter.js` covers the flat-additive shape from
+/// JS against a release binary; keep the two lists in step.
+///
+/// This cannot fail politely: if `EVAL_DEPTH_LIMIT` is ever raised above what
+/// the running profile's native stack holds, the process aborts (SIGABRT)
+/// instead of reporting a failed assertion. Runs on the engine stack because
+/// that is the stack the limit is calibrated against — the default
+/// test-harness stack is far smaller.
+#[test]
+fn deep_expression_nesting_raises_error_before_native_overflow() {
+    // Twice the limit, so even the shape advancing the counter slowest is
+    // guaranteed to cross it.
+    let reps = EVAL_DEPTH_LIMIT * 2;
+    for (label, source) in [
+        (
+            "flat additive expression",
+            format!("1{}", "+1".repeat(reps)),
+        ),
+        (
+            "self-referential member chain",
+            format!("var a = {{}}; a.b = a; a{};", ".b".repeat(reps)),
+        ),
+    ] {
+        let err = run_source_on_engine_stack(&source).expect_err(&format!(
+            "{label} nested {reps} deep should hit the eval-depth guard"
+        ));
+        assert!(
+            err.contains("RangeError") && err.to_lowercase().contains("stack"),
+            "{label} should raise a catchable stack RangeError, got: {err}"
+        );
+    }
 }

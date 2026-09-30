@@ -635,6 +635,38 @@ pub(crate) enum AssignOp {
     NullishAssign,
 }
 
+impl AssignOp {
+    pub(crate) fn binary_op(self) -> Option<BinaryOp> {
+        match self {
+            AssignOp::AddAssign => Some(BinaryOp::Add),
+            AssignOp::SubAssign => Some(BinaryOp::Sub),
+            AssignOp::MulAssign => Some(BinaryOp::Mul),
+            AssignOp::DivAssign => Some(BinaryOp::Div),
+            AssignOp::ModAssign => Some(BinaryOp::Mod),
+            AssignOp::ExpAssign => Some(BinaryOp::Exp),
+            AssignOp::LShiftAssign => Some(BinaryOp::LShift),
+            AssignOp::RShiftAssign => Some(BinaryOp::RShift),
+            AssignOp::URShiftAssign => Some(BinaryOp::URShift),
+            AssignOp::BitAndAssign => Some(BinaryOp::BitAnd),
+            AssignOp::BitOrAssign => Some(BinaryOp::BitOr),
+            AssignOp::BitXorAssign => Some(BinaryOp::BitXor),
+            AssignOp::Assign
+            | AssignOp::LogicalAndAssign
+            | AssignOp::LogicalOrAssign
+            | AssignOp::NullishAssign => None,
+        }
+    }
+
+    pub(crate) fn logical_op(self) -> Option<LogicalOp> {
+        match self {
+            AssignOp::LogicalAndAssign => Some(LogicalOp::And),
+            AssignOp::LogicalOrAssign => Some(LogicalOp::Or),
+            AssignOp::NullishAssign => Some(LogicalOp::NullishCoalescing),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Property {
     pub key: PropertyKey,
@@ -728,11 +760,16 @@ impl ForOfStatement {
     /// either through the async iteration protocol (`is_await`) or through an `await using`
     /// ForDeclaration's per-iteration DisposeResources `Await`.
     pub(crate) fn awaits_at_head(&self) -> bool {
-        self.is_await
-            || matches!(
-                &self.left,
-                ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing
-            )
+        self.is_await || self.disposes_at_head()
+    }
+
+    /// Whether the ForDeclaration is `await using`, so each iteration's
+    /// DisposeResources may `Await`.
+    pub(crate) fn disposes_at_head(&self) -> bool {
+        matches!(
+            &self.left,
+            ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing
+        )
     }
 }
 
