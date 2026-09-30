@@ -33,16 +33,28 @@ parameter or a `for`/`for-of`/`for-await-of` `Variable`-kind head pattern into a
 trivial `Pattern::Identifier($tmp)` for the driver's single-call binding sites
 (`EnterCatch`/`ForOfHead`), re-homing the real pattern as a synthesized
 `let <pattern> = $tmp;` prepended to the catch/loop body — but only when the
-pattern contains a `yield`. `contains_suspension`'s `Statement::Try`/`ForIn`/
-`ForOf` arms deliberately do **not** flag a catch-param or for-head pattern's own
-suspension either, and for `yield` that is *correct*: when such a pattern is a
-generator's *only* suspension, it is documented
+pattern contains a `yield`. The top-level `contains_suspension` gate that
+decides whether a `yield`-only pattern's *container* needs the compiled state
+machine at all is **not symmetric between the two binding sites**:
+`contains_suspension`'s `Statement::ForIn`/`ForOf` arms already flag a
+`yield`-containing head pattern (`for_in_of_variable_head_contains_yield`,
+added by #760, alongside a matching `analyze_statement`/
+`analyze_pattern_expressions` update so the generator's yield-point count
+agrees — see §3), so a for-in/of head's `yield` already forces the compiled
+path and is already correctly lowered today. The `Statement::Try` arm, by
+contrast, still does **not** check the catch parameter's pattern at all —
+documented as a *deliberate* choice
 (`docs/adr/2026-09-22-1752-yield-in-declaration-pattern-default.md`,
-"Post-review follow-up") to stay on the tree-walker's single-state "simple
-machine" path, where `bind_pattern`'s now-correct `Completion::Yield`
-propagation reaches the generator runtime's `InlineYield` fallback and
-suspends/resumes correctly — routing it onto the compiled state machine instead
-would be pure overhead, not a fix.
+"Post-review follow-up"): when a catch-param pattern's `yield` is a
+generator's *only* suspension, it correctly stays on the tree-walker's
+single-state "simple machine" path, where `bind_pattern`'s now-correct
+`Completion::Yield` propagation reaches the generator runtime's `InlineYield`
+fallback and suspends/resumes correctly — routing it onto the compiled state
+machine instead would be pure overhead, not a fix. This plan's `await`-specific
+widening (§3) touches all three arms (`Try`, `ForIn`, `ForOf`) uniformly —
+additively, beside whatever each already does for `yield` — because `await`'s
+tree-walker fallback is broken (blocking, not suspending) at every one of
+these sites, unlike `yield`'s at the for-in/of-head site.
 
 `await` has no such fallback: the tree-walker's `bind_pattern` reaches an
 `await` default via `eval_expr` → `Expression::Await` → the blocking
@@ -132,6 +144,24 @@ code path.
   blocker — see §7.
 
 ## 3. Files to touch
+
+**Verified: no third detector (`analyze_generator_body`/`analyze_statement`/
+`analyze_pattern_expressions`) needs touching for `await`.** #744's ADR gap #3
+and #760 both had to widen `analyze_generator_body`'s yield-point collector
+because `transform_generator_inner_opts`'s simple-machine shortcut
+(`generator_transform.rs` ~lines 497–510) gates on `analysis.yield_points.is_empty()`
+for the sync-generator case, and on `is_async && analysis.yield_points.is_empty()
+&& !contains_suspension(body) && …` for the async case — i.e. `yield_points`
+and `contains_suspension` are two independent, OR'd conditions for taking the
+shortcut. Reading `analyze_expression`'s `Expression::Await` arm confirms it
+pushes nothing to `analysis.yield_points` (unlike `Expression::Yield`, which
+does) — it only recurses into its operand to find a *nested* `yield`. So
+`yield_points` exists purely for generator `.next()`-resumption bookkeeping,
+which `await` never participates in; for the async case, `!contains_suspension(body)`
+alone gates the shortcut. Widening `contains_suspension` (below) is therefore
+sufficient for `await` at all three sites — no change to
+`analyze_generator_body`/`analyze_statement`/`analyze_pattern_expressions` is
+needed or planned.
 
 - `src/interpreter/generator_analysis.rs`:
   - New `pattern_needs_await_lowering`, mirroring the shape of the existing
@@ -293,7 +323,10 @@ commands per CLAUDE.md: `cargo fmt --check`, `cargo clippy -- -D warnings`,
      *not* visible after the `try`/`catch` (leak check into function scope),
      with a suspending default in the mix.
    - A rejecting default (`catch ({a = await Promise.reject(new Error("x"))})`)
-     propagates as an uncaught rejection rather than being silently swallowed.
+     rejects the enclosing async function's own promise — assert via
+     `f().then(() => { throw new Error('should have rejected') }, e => log.push('rejected:' + e.message))`,
+     not by asserting an uncaught rejection — and a `finally` block after the
+     `try`/`catch` still runs before that rejection propagates.
    Code: widen `hoist_yield_pattern`'s trigger (rename to
    `hoist_suspending_pattern`) to `pattern_contains_yield(pattern) ||
    pattern_needs_await_lowering(pattern)`; add the `Statement::Try` arm's
@@ -337,6 +370,14 @@ commands per CLAUDE.md: `cargo fmt --check`, `cargo clippy -- -D warnings`,
      pre-rebase-target's baseline for `await` specifically, since `await`
      never triggers the rewrite before this plan lands.) Run it both as the
      function's only suspension and alongside an unrelated `await` elsewhere.
+     Also add a **generator** variant covering the `yield`-side fix the
+     `left`-split incidentally makes (§0/§1): `let a = 'outer'; function* g() {
+     for (let {a = yield 1} of [a]) {} } var it = g(); it.next()` must throw
+     `ReferenceError` on the first `.next()` call — today this silently reads
+     the outer `'outer'` instead, since `yield`'s rewrite already shares the
+     un-split `left`. This is the one place this plan's `await`-focused fix
+     changes already-shipped `yield` behavior, so it earns its own explicit
+     test rather than relying on the `await` test alone to cover it.
    Code: widen `hoist_suspending_pattern`'s trigger (shared with slice 2,
    already done there), add the `Statement::ForIn`/`Statement::ForOf` arms'
    `await`-only check to `contains_suspension`, and apply the `left`-split
@@ -400,10 +441,14 @@ Targeted regression runs (must not move `test262-pass.txt`, read from
 - `uv run python scripts/run-custom-tests.py` (test262-extra + tests/) — **must
   include re-running `generator-yield-in-catch-param-default.js`,
   `generator-yield-in-for-in-of-head-default.js`, and their async-generator
-  counterparts** (already on `main`, not yet on this branch pre-rebase) to
-  confirm the `await`-only widening in §3 does not change their "sole
-  construct stays on the tree-walker" behavior, and that the `left`-split
-  (§3) doesn't regress whatever TDZ behavior those files already assume — see
+  counterparts** (already on `main`, not yet on this branch pre-rebase). Two
+  different things to confirm, not one: `generator-yield-in-catch-param-default.js`'s
+  "sole construct stays on the tree-walker" case (only the `Try` arm has this
+  property, per §1) must still take the single-state path after this plan's
+  `await`-only `Try`-arm widening; `generator-yield-in-for-in-of-head-default.js`
+  (already on the compiled path for `yield` via #760, not a "sole construct
+  stays on tree-walker" case at all) must keep behaving the same way it does
+  today, and additionally must not regress from the `left`-split (§3) — see
   §6.
 - Full suite: `uv run python scripts/run-test262.py`, after the targeted runs
   are clean.
@@ -426,12 +471,15 @@ Targeted regression runs (must not move `test262-pass.txt`, read from
   was the one place this plan considered (and rejected) using the general
   `pattern_needs_lowering`.
 - **The `ForOfInit`/`ForOfHead` `left`-split (§3) touches shared code that both
-  `yield`- and `await`-triggered rewrites flow through.** Verified safe by
-  reading both consumers directly: `for_of_head_tdz_env` only calls
-  `left.bound_names()` (never anything IC- or binding-related), and
-  `clear_terminator_ic_sites` explicitly does *not* clear `ForOfInit.left`'s
-  IC sites (only `ForOfHead.left`'s), confirming `ForOfInit.left` has exactly
-  one consumer. The risk is entirely in slice 3's TDZ test (§4) catching a
+  `yield`- and `await`-triggered rewrites flow through, across all three
+  state-machine drivers** (async function in `eval.rs`, sync generator and
+  async generator in `eval/generator_runtime.rs` — `git grep -n "ForOfInit"`
+  finds three `match` arms total). Verified safe by reading all three
+  directly: every one calls `Self::for_of_head_tdz_env(left, &term_env)` and
+  nothing else on `left`, and `clear_terminator_ic_sites` explicitly does
+  *not* clear `ForOfInit.left`'s IC sites (only `ForOfHead.left`'s),
+  confirming `ForOfInit.left` has exactly one consumer everywhere it's
+  handled. The risk is entirely in slice 3's TDZ test (§4) catching a
   transcription mistake (e.g. swapping which terminator gets which `left`),
   not in an unknown second consumer.
 - **Shared machinery.** `contains_suspension` and `stmt_has_suspension`/
@@ -484,6 +532,15 @@ Targeted regression runs (must not move `test262-pass.txt`, read from
   plan does not risk an untested behavior change to sync/async-generator
   `yield` handling here (see §6's bookkeeping-mismatch risk). Track
   separately if wanted.
+- **A C-style for-init pattern containing *both* `await` and `yield`** (e.g.
+  an async generator's `for (var {a = await 1, b = yield 2} = {};;)`) passes
+  the `await`-only `pattern_needs_await_lowering` gate (since it does contain
+  an `await`) and, once routed through `transform_variable_declaration`,
+  lowers the `yield` half too — reintroducing the exact yield-point-bookkeeping
+  mismatch §6 flags as the reason this gate is `await`-only in the first
+  place, just for a narrower input (a pattern that mixes both keywords in the
+  same for-init, not a pure-`yield` one). Not tested or fixed by this plan;
+  flagged here so a future fix doesn't have to rediscover it.
 - **`using`/`await using` for-of heads** — grammar restricts these to a
   single `BindingIdentifier`; nothing for `pattern_contains_await` to ever
   match.
