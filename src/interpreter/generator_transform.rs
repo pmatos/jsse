@@ -4521,4 +4521,49 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn open_block_carries_post_yield_shadowing_declaration() {
+        // Regression for issue #738: the block's `const x` declared *after*
+        // the `yield` must still show up in the entry state's `OpenBlock`
+        // scope_action, not just names appearing before the yield.
+        let body = parse_fn_body(
+            "function* g() { var x = 1; { const y = x; yield; const x = 2; return y; } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let found = sm.states.iter().any(|s| {
+            matches!(
+                &s.scope_action,
+                Some(ScopeAction::OpenBlock(decls))
+                    if decls.iter().any(|(name, is_const)| name == "x" && *is_const)
+            )
+        });
+        assert!(
+            found,
+            "expected an OpenBlock scope_action carrying the post-yield `const x`, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
+    fn enter_catch_carries_post_yield_shadowing_declaration() {
+        // Regression for issue #738: a catch body's own `const x`, declared
+        // after the `yield`, must show up in `EnterCatch`'s `lexical_decls`.
+        let body = parse_fn_body(
+            "function* g() { var x = 1; try { throw 0; } catch (e) { const y = x; yield; const x = 2; return y; } }",
+        );
+        let sm = transform_generator(&body, &[]);
+        let found = sm.states.iter().any(|s| {
+            matches!(
+                &s.terminator,
+                StateTerminator::EnterCatch { lexical_decls, .. }
+                    if lexical_decls.iter().any(|(name, is_const)| name == "x" && *is_const)
+            )
+        });
+        assert!(
+            found,
+            "expected an EnterCatch terminator carrying the post-yield `const x`, got {:#?}",
+            sm.states
+        );
+    }
 }
