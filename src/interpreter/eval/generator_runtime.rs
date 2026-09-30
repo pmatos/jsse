@@ -3650,8 +3650,12 @@ impl Interpreter {
 
                     if let Some(idx) = finally_idx {
                         let finally_state = current_try_stack[idx].finally_state.unwrap();
-                        current_try_stack = current_try_stack[..=idx].to_vec();
-                        pending_return = Some(return_value);
+                        // Own this return on the context whose finally is
+                        // about to run it, not the driver: a nested
+                        // try/finally's own TryExit must not see it (#719).
+                        current_try_stack[idx].pending_completion =
+                            Some(PendingCompletion::Return(return_value));
+                        current_try_stack.truncate(idx + 1);
                         current_id = finally_state;
                         just_routed = true;
                         continue;
