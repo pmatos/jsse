@@ -43,13 +43,18 @@ pub(crate) struct GeneratorState {
 /// See [`GeneratorState::scope_action`].
 #[derive(Debug, Clone)]
 pub(crate) enum ScopeAction {
-    /// Push a fresh empty declarative environment (`NewDeclarativeEnvironment`)
-    /// when this state's `scope_depth` is deeper than the stack's current
-    /// size. Used for plain blocks, `try`/`finally` blocks, and loop bodies —
-    /// every one of them is a `Block` per grammar, and a block always starts
-    /// empty; its own `let`/`const`/`class` names are hoisted into it the
-    /// ordinary way once the state's statements run.
-    OpenBlock,
+    /// Push a fresh declarative environment (`NewDeclarativeEnvironment`) when
+    /// this state's `scope_depth` is deeper than the stack's current size,
+    /// then perform `BlockDeclarationInstantiation` against it: every name in
+    /// the `Vec<(String, bool)>` (from `collect_block_lexical_decls`, `bool`
+    /// is whether the binding is `const`) is declared uninitialized (TDZ),
+    /// all at once, before the state's own statements run. Used for plain
+    /// blocks, `try`/`finally` blocks, and loop bodies — every one of them is
+    /// a `Block` per grammar, and per `sec-blockdeclarationinstantiation` a
+    /// block's *entire* set of lexical names must enter TDZ together at
+    /// block entry, not just the subset appearing in whichever fragment a
+    /// suspension point happens to split off first.
+    OpenBlock(Vec<(String, bool)>),
     /// `CreatePerIterationEnvironment` (`sec-createperiterationenvironment`):
     /// push a fresh frame copying the named bindings' current values forward,
     /// replacing the frame already at this depth if one is there (the `for`
@@ -916,6 +921,39 @@ fn hoist_class_suspensions(
     }
 }
 
+/// `sec-static-semantics-lexicallyscopeddeclarations`: a block's own lexical
+/// declarations are exactly its *directly nested* `let`/`const`/`using`/
+/// `await using`/class declarations (not those of nested blocks, loops, or
+/// function bodies) -- a shallow, non-recursive scan over the whole,
+/// unsplit block. Mirrors `Interpreter::hoist_lexical_declarations`
+/// (`exec.rs`), which performs the same scan directly against an
+/// `Environment` rather than collecting it for later use.
+fn collect_block_lexical_decls(stmts: &[Statement]) -> Vec<(String, bool)> {
+    let mut decls = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            Statement::Variable(decl)
+                if matches!(
+                    decl.kind,
+                    VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+                ) =>
+            {
+                let is_const = decl.kind != VarKind::Let;
+                for d in &decl.declarations {
+                    let mut names = Vec::new();
+                    d.pattern.bound_names(&mut names);
+                    decls.extend(names.into_iter().map(|name| (name, is_const)));
+                }
+            }
+            Statement::ClassDeclaration(c) if !c.name.is_empty() => {
+                decls.push((c.name.clone(), true));
+            }
+            _ => {}
+        }
+    }
+    decls
+}
+
 /// Lowers a block scope (a block, or a try/catch/finally clause body, that
 /// directly declares `await using`) through `EnterScope`/`ExitScope`: the
 /// interior is lowered by the ordinary per-statement pipeline, split across
@@ -976,7 +1014,8 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.finalize_current_state(StateTerminator::Goto(entry_state));
                 ctx.current_state_id = entry_state;
                 ctx.scope_depth += 1;
-                ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock);
+                ctx.states[entry_state].scope_action =
+                    Some(ScopeAction::OpenBlock(collect_block_lexical_decls(stmts)));
 
                 let inner_after = ctx.new_state();
                 transform_statements(stmts, ctx, inner_after);
@@ -2666,7 +2705,8 @@ fn transform_for_statement(
         ctx.finalize_current_state(StateTerminator::Goto(init_state));
         ctx.current_state_id = init_state;
         ctx.scope_depth += 1;
-        ctx.states[init_state].scope_action = Some(ScopeAction::OpenBlock);
+        ctx.states[init_state].scope_action =
+            Some(ScopeAction::OpenBlock(per_iteration_bindings.clone()));
     }
 
     if let Some(init) = &for_stmt.init {
@@ -3049,7 +3089,9 @@ fn transform_try_statement(
     if ctx.is_async && ctx.detect_for_await && block_has_await_using(&try_stmt.block) {
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
-        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock);
+        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
+            collect_block_lexical_decls(&try_stmt.block),
+        ));
         ctx.scope_depth += 1;
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
         if ctx.current_state_id != clause_completion_state {
@@ -3103,7 +3145,9 @@ fn transform_try_statement(
             if ctx.is_async && ctx.detect_for_await && block_has_await_using(finalizer) {
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
-                ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock);
+                ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
+                    collect_block_lexical_decls(finalizer),
+                ));
                 ctx.scope_depth += 1;
                 transform_statements(finalizer, ctx, finally_exit_state);
                 if ctx.current_state_id != finally_exit_state {
