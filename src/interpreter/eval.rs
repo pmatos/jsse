@@ -4420,24 +4420,8 @@ impl Interpreter {
             for prop in props {
                 // Handle rest: {...rest} = obj
                 if let Expression::Spread(inner) = &prop.value {
-                    let rest_obj_id = self.create_object_id();
-                    if let Some(o) = obj_val
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys)
-                        {
-                            Ok(p) => p,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        for (k, v) in pairs {
-                            self.get_object_cell_expect(rest_obj_id)
-                                .borrow_mut()
-                                .insert_value(k, v);
-                        }
-                    }
-                    let rest_id = rest_obj_id;
-                    let rest_val = JsValue::object(rest_id);
+                    let rest_val =
+                        propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
                     match self.put_value_to_target(inner, rest_val, env) {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
@@ -9681,6 +9665,60 @@ impl Interpreter {
                         current_id = next_state;
                     }
                 },
+
+                StateTerminator::ToPropertyKey {
+                    ref source,
+                    ref dest,
+                    next_state,
+                } => {
+                    let raw = term_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    match self.to_property_key_value(&raw) {
+                        Ok(v) => {
+                            self.env_set(&func_env, dest, v).ok();
+                            current_id = next_state;
+                        }
+                        Err(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                    }
+                }
+
+                StateTerminator::ObjectRestCopy {
+                    ref source,
+                    ref excluded,
+                    ref dest_var,
+                    next_state,
+                } => {
+                    let source_val = term_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    let mut excluded_vals = Vec::with_capacity(excluded.len());
+                    let mut eval_failed = false;
+                    for expr in excluded {
+                        let v = operand!(expr, &term_env, throw(e) => {
+                            pending_exception = Some(e);
+                            eval_failed = true;
+                            break;
+                        });
+                        excluded_vals.push(v);
+                    }
+                    if eval_failed {
+                        continue;
+                    }
+                    let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        _ => JsValue::UNDEFINED,
+                    };
+                    self.env_set(&func_env, dest_var, rest_val).ok();
+                    current_id = next_state;
+                }
 
                 StateTerminator::Completed => {
                     complete_function!();

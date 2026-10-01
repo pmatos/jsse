@@ -1364,6 +1364,55 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
+    /// RestBindingInitialization's object-construction step (§14.3.3.3 /
+    /// §7.3.26 `CopyDataProperties`): builds a fresh plain object from the
+    /// own enumerable properties of `source_val` that aren't in `excluded`.
+    /// Shared by the tree-walker `Pattern::Object` rest arm and the
+    /// state-machine `ObjectRestCopy` terminator dispatch so both inherit
+    /// the same implementation. Note: `rest_obj_id` is allocated before
+    /// `copy_data_properties` runs, which can invoke arbitrary user code
+    /// (getters, proxy traps) that may reach a GC safepoint — the two share
+    /// no explicit rooting of the not-yet-populated rest object across that
+    /// window.
+    pub(crate) fn bind_object_rest_values(
+        &mut self,
+        source_val: &JsValue,
+        excluded: &[JsPropertyKey],
+    ) -> Completion {
+        let rest_obj_id = self.create_object_id();
+        if let Some(o) = source_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
+            let pairs = propagate!(self.copy_data_properties(o.id, source_val, excluded));
+            for (k, v) in pairs {
+                self.get_object_cell_expect(rest_obj_id)
+                    .borrow_mut()
+                    .insert_value(k, v);
+            }
+        }
+        Completion::Normal(JsValue::object(rest_obj_id))
+    }
+
+    /// Runtime half of the `ObjectRestCopy` state-machine terminator
+    /// (generator_transform.rs): `ToObject(source_val)`, then
+    /// `ToPropertyKey` each already-evaluated exclusion value, then
+    /// `bind_object_rest_values`. Driver-specific operand evaluation
+    /// (`excluded`'s expressions) happens before this is called; this is the
+    /// part shared by all three state-machine drivers.
+    pub(crate) fn object_rest_copy(
+        &mut self,
+        source_val: JsValue,
+        excluded_vals: &[JsValue],
+    ) -> Completion {
+        let obj_val = propagate!(self.to_object(&source_val));
+        let mut excluded_keys = Vec::with_capacity(excluded_vals.len());
+        for v in excluded_vals {
+            excluded_keys.push(propagate!(self.to_property_key(v)));
+        }
+        self.bind_object_rest_values(&obj_val, &excluded_keys)
+    }
+
     /// Binds `val` to `pat`, declaring/initializing names in `env` per `kind`.
     ///
     /// Returns `Completion` rather than `Result<(), JsValue>` so a `yield`
@@ -1729,24 +1778,8 @@ impl Interpreter {
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
-                            let rest_obj_id = self.create_object_id();
-                            if let Some(o) = obj_val
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let pairs = propagate!(self.copy_data_properties(
-                                    o.id,
-                                    &obj_val,
-                                    &excluded_keys
-                                ));
-                                for (k, v) in pairs {
-                                    self.get_object_cell_expect(rest_obj_id)
-                                        .borrow_mut()
-                                        .insert_value(k, v);
-                                }
-                            }
-                            let rest_id = rest_obj_id;
-                            let rest_val = JsValue::object(rest_id);
+                            let rest_val =
+                                propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
                             propagate!(self.bind_pattern(pat, rest_val, kind, env));
                         }
                     }

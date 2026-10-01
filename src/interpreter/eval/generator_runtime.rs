@@ -2083,6 +2083,76 @@ impl Interpreter {
                     }
                 }
 
+                StateTerminator::ToPropertyKey {
+                    source,
+                    dest,
+                    next_state,
+                } => {
+                    let next_state = *next_state;
+                    let raw = func_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    match self.to_property_key_value(&raw) {
+                        Ok(v) => {
+                            self.env_set(&func_env, dest, v).ok();
+                            current_id = next_state;
+                        }
+                        Err(e) => {
+                            let e = route_exception!(e);
+                            // §27.5.3.3: DisposeResources when generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            self.retire_generator(o.id);
+                            return disp;
+                        }
+                    }
+                }
+
+                StateTerminator::ObjectRestCopy {
+                    source,
+                    excluded,
+                    dest_var,
+                    next_state,
+                } => {
+                    let next_state = *next_state;
+                    let source_val = func_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    let mut excluded_vals = Vec::with_capacity(excluded.len());
+                    let mut eval_err = None;
+                    for expr in excluded {
+                        let v = match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => {
+                                eval_err = Some(e);
+                                break;
+                            }
+                            Operand::Abort(c) | Operand::Other(c) => return c,
+                            Operand::Suspend(v) => return Completion::Yield(v),
+                        };
+                        excluded_vals.push(v);
+                    }
+                    if let Some(e) = eval_err {
+                        let e = route_exception!(e);
+                        // §27.5.3.3: DisposeResources when generator throws
+                        let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                        self.retire_generator(o.id);
+                        return disp;
+                    }
+                    let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            let e = route_exception!(e);
+                            // §27.5.3.3: DisposeResources when generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            self.retire_generator(o.id);
+                            return disp;
+                        }
+                        Completion::Exit(code) => {
+                            self.retire_generator(o.id);
+                            return Completion::Exit(code);
+                        }
+                        _ => JsValue::UNDEFINED,
+                    };
+                    self.env_set(&func_env, dest_var, rest_val).ok();
+                    current_id = next_state;
+                }
+
                 StateTerminator::Completed => {
                     let has_pending_return = pending_return.is_some();
                     let ret_val = pending_return.take().unwrap_or(JsValue::UNDEFINED);
@@ -5506,6 +5576,87 @@ impl Interpreter {
                             current_id = next_state;
                         }
                     }
+                }
+
+                StateTerminator::ToPropertyKey {
+                    source,
+                    dest,
+                    next_state,
+                } => {
+                    let next_state = *next_state;
+                    let raw = func_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    match self.to_property_key_value(&raw) {
+                        Ok(v) => {
+                            self.env_set(&func_env, dest, v).ok();
+                            current_id = next_state;
+                        }
+                        Err(e) => {
+                            let e = route_exception!(e);
+                            let disp = dispose_or_park!(Completion::Throw(e));
+                            let e = match disp {
+                                Completion::Throw(e) => e,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
+                            return self
+                                .reject_async_generator_request(o.id, promise, &reject_fn, e);
+                        }
+                    }
+                }
+
+                StateTerminator::ObjectRestCopy {
+                    source,
+                    excluded,
+                    dest_var,
+                    next_state,
+                } => {
+                    let next_state = *next_state;
+                    let source_val = func_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    let mut excluded_vals = Vec::with_capacity(excluded.len());
+                    let mut eval_err = None;
+                    for expr in excluded {
+                        let v = match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => {
+                                eval_err = Some(e);
+                                break;
+                            }
+                            Operand::Abort(exit) => abort_async_generator!(exit),
+                            Operand::Suspend(yv) => yv,
+                            Operand::Other(_) => JsValue::UNDEFINED,
+                        };
+                        excluded_vals.push(v);
+                    }
+                    if let Some(e) = eval_err {
+                        let e = route_exception!(e);
+                        let disp = dispose_or_park!(Completion::Throw(e));
+                        let e = match disp {
+                            Completion::Throw(e) => e,
+                            Completion::Exit(code) => return Completion::Exit(code),
+                            _ => unreachable!("disposing a throw must stay abrupt"),
+                        };
+                        return self.reject_async_generator_request(o.id, promise, &reject_fn, e);
+                    }
+                    let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            let e = route_exception!(e);
+                            let disp = dispose_or_park!(Completion::Throw(e));
+                            let e = match disp {
+                                Completion::Throw(e) => e,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
+                            return self
+                                .reject_async_generator_request(o.id, promise, &reject_fn, e);
+                        }
+                        Completion::Exit(code) => {
+                            abort_async_generator!(Completion::Exit(code))
+                        }
+                        _ => JsValue::UNDEFINED,
+                    };
+                    self.env_set(&func_env, dest_var, rest_val).ok();
+                    current_id = next_state;
                 }
 
                 StateTerminator::Completed => {
