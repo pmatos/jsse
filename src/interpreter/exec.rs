@@ -1364,20 +1364,16 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
-    /// Binds `val` to `pat`, declaring/initializing names in `env` per `kind`.
-    ///
-    /// Returns `Completion` rather than `Result<(), JsValue>` so a `yield`
-    /// reached while evaluating a default or computed key (`var {a = yield 1} = {}`,
-    /// `var [a = yield 1] = []`) propagates as `Completion::Yield` instead of
-    /// being silently discarded — see issue #727. `Throw` and (for array
-    /// patterns) the iterator-close bookkeeping are otherwise unchanged from
-    /// the pre-#727 `Result`-returning version.
     /// RestBindingInitialization's object-construction step (§14.3.3.3 /
     /// §7.3.26 `CopyDataProperties`): builds a fresh plain object from the
     /// own enumerable properties of `source_val` that aren't in `excluded`.
     /// Shared by the tree-walker `Pattern::Object` rest arm and the
     /// state-machine `ObjectRestCopy` terminator dispatch so both inherit
-    /// the same GC-rooting discipline for one implementation.
+    /// the same implementation. Note: `rest_obj_id` is allocated before
+    /// `copy_data_properties` runs, which can invoke arbitrary user code
+    /// (getters, proxy traps) that may reach a GC safepoint — the two share
+    /// no explicit rooting of the not-yet-populated rest object across that
+    /// window.
     pub(crate) fn bind_object_rest_values(
         &mut self,
         source_val: &JsValue,
@@ -1417,6 +1413,14 @@ impl Interpreter {
         self.bind_object_rest_values(&obj_val, &excluded_keys)
     }
 
+    /// Binds `val` to `pat`, declaring/initializing names in `env` per `kind`.
+    ///
+    /// Returns `Completion` rather than `Result<(), JsValue>` so a `yield`
+    /// reached while evaluating a default or computed key (`var {a = yield 1} = {}`,
+    /// `var [a = yield 1] = []`) propagates as `Completion::Yield` instead of
+    /// being silently discarded — see issue #727. `Throw` and (for array
+    /// patterns) the iterator-close bookkeeping are otherwise unchanged from
+    /// the pre-#727 `Result`-returning version.
     pub(crate) fn bind_pattern(
         &mut self,
         pat: &Pattern,

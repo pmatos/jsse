@@ -16,7 +16,7 @@ info: |
   3. Perform ? CopyDataProperties(restObj, value, excludedNames).
   4. Return ? InitializeReferencedBinding(lhs, restObj).
 flags: [async]
-features: [async-iteration, destructuring-binding]
+features: [async-iteration, destructuring-binding, object-rest]
 ---*/
 
 async function run() {

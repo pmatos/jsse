@@ -29,7 +29,7 @@ info: |
   -- so a correct implementation calls the getter exactly once per
   property, regardless of how many times the enclosing generator suspends
   and resumes while evaluating that property's Initializer.
-features: [generators, destructuring-binding]
+features: [generators, destructuring-binding, object-rest]
 ---*/
 
 var calls = 0;

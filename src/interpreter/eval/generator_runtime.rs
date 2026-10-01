@@ -2093,8 +2093,10 @@ impl Interpreter {
                         }
                         Err(e) => {
                             let e = route_exception!(e);
+                            // §27.5.3.3: DisposeResources when generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                             self.retire_generator(o.id);
-                            return Completion::Throw(e);
+                            return disp;
                         }
                     }
                 }
@@ -2123,15 +2125,19 @@ impl Interpreter {
                     }
                     if let Some(e) = eval_err {
                         let e = route_exception!(e);
+                        // §27.5.3.3: DisposeResources when generator throws
+                        let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                         self.retire_generator(o.id);
-                        return Completion::Throw(e);
+                        return disp;
                     }
                     let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             let e = route_exception!(e);
+                            // §27.5.3.3: DisposeResources when generator throws
+                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                             self.retire_generator(o.id);
-                            return Completion::Throw(e);
+                            return disp;
                         }
                         Completion::Exit(code) => {
                             self.retire_generator(o.id);
@@ -5582,6 +5588,12 @@ impl Interpreter {
                         }
                         Err(e) => {
                             let e = route_exception!(e);
+                            let disp = dispose_or_park!(Completion::Throw(e));
+                            let e = match disp {
+                                Completion::Throw(e) => e,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
                             return self
                                 .reject_async_generator_request(o.id, promise, &reject_fn, e);
                         }
@@ -5613,12 +5625,24 @@ impl Interpreter {
                     }
                     if let Some(e) = eval_err {
                         let e = route_exception!(e);
+                        let disp = dispose_or_park!(Completion::Throw(e));
+                        let e = match disp {
+                            Completion::Throw(e) => e,
+                            Completion::Exit(code) => return Completion::Exit(code),
+                            _ => unreachable!("disposing a throw must stay abrupt"),
+                        };
                         return self.reject_async_generator_request(o.id, promise, &reject_fn, e);
                     }
                     let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             let e = route_exception!(e);
+                            let disp = dispose_or_park!(Completion::Throw(e));
+                            let e = match disp {
+                                Completion::Throw(e) => e,
+                                Completion::Exit(code) => return Completion::Exit(code),
+                                _ => unreachable!("disposing a throw must stay abrupt"),
+                            };
                             return self
                                 .reject_async_generator_request(o.id, promise, &reject_fn, e);
                         }

@@ -25,7 +25,7 @@ info: |
   4. Return ? InitializeReferencedBinding(lhs, restObj).
 flags: [async]
 includes: [compareArray.js]
-features: [async-functions, destructuring-binding]
+features: [async-functions, destructuring-binding, object-rest]
 ---*/
 
 function run(makeFn) {

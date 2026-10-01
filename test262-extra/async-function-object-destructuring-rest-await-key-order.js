@@ -20,7 +20,7 @@ info: |
   2. Perform ? RestBindingInitialization of BindingRestProperty with
      excludedNames.
 flags: [async]
-features: [async-functions, destructuring-binding, computed-property-names]
+features: [async-functions, destructuring-binding, computed-property-names, object-rest]
 ---*/
 
 async function run() {

@@ -4419,24 +4419,8 @@ impl Interpreter {
             for prop in props {
                 // Handle rest: {...rest} = obj
                 if let Expression::Spread(inner) = &prop.value {
-                    let rest_obj_id = self.create_object_id();
-                    if let Some(o) = obj_val
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys)
-                        {
-                            Ok(p) => p,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        for (k, v) in pairs {
-                            self.get_object_cell_expect(rest_obj_id)
-                                .borrow_mut()
-                                .insert_value(k, v);
-                        }
-                    }
-                    let rest_id = rest_obj_id;
-                    let rest_val = JsValue::object(rest_id);
+                    let rest_val =
+                        propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
                     match self.put_value_to_target(inner, rest_val, env) {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
@@ -9622,19 +9606,11 @@ impl Interpreter {
                     let mut excluded_vals = Vec::with_capacity(excluded.len());
                     let mut eval_failed = false;
                     for expr in excluded {
-                        let v = match self.eval_operand(expr, &term_env) {
-                            Operand::Value(v) => v,
-                            Operand::Throw(e) => {
-                                pending_exception = Some(e);
-                                eval_failed = true;
-                                break;
-                            }
-                            Operand::Abort(exit) => {
-                                self.scheduler.remove_async_function_state(async_id);
-                                return exit;
-                            }
-                            Operand::Suspend(_) | Operand::Other(_) => JsValue::UNDEFINED,
-                        };
+                        let v = operand!(expr, &term_env, throw(e) => {
+                            pending_exception = Some(e);
+                            eval_failed = true;
+                            break;
+                        });
                         excluded_vals.push(v);
                     }
                     if eval_failed {

@@ -19,7 +19,7 @@ info: |
   appearing in a property default, so a generator must suspend at it on
   every iteration, binding the per-iteration rest object independently each
   time.
-features: [generators, destructuring-binding]
+features: [generators, destructuring-binding, object-rest]
 ---*/
 
 function* g() {
