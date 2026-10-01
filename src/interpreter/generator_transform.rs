@@ -2091,11 +2091,7 @@ fn lower_pattern_binding(
                             next_state,
                         });
                         ctx.current_state_id = next_state;
-                        if !pattern_contains_suspension(&rest_pattern) {
-                            emit_pattern_binding(kind, rest_pattern, &dest_var, ctx);
-                        } else {
-                            lower_pattern_binding(kind, &rest_pattern, &dest_var, ctx);
-                        }
+                        lower_pattern_binding(kind, &rest_pattern, &dest_var, ctx);
                     }
                 }
             }
