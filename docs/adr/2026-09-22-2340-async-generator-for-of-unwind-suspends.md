@@ -110,6 +110,16 @@ change (verified against a pre-change binary snapshot), green after.
   block**, despite having a natural carrier (unlike loop-control), simply for
   scope: this ADR converts one caller end-to-end as the minimal vertical
   slice, and defers the rest.
+  **Update (issue #761):** all four remaining callers are now resumable.
+  `route_loop_control_result!` and `align_for_of_result!` park via the same
+  `can_park`/`ForOfUnwindOutcome` primitives, carrying `GeneratorReentry::
+  LoopControl`/`GeneratorReentry::Goto` through the existing
+  `GeneratorDisposal`/`Interpreter::generator_pending_dispose` machinery
+  instead of a new side table; the `pending_return` block (and bare
+  `return;`, which routes through it) parks the same way; `return expr;`
+  Awaits its operand before forming the `Return` completion, so for-of
+  unwind only ever starts after that Await resolves. Item 1 of issue #742 is
+  fully resolved; only item 2 (inline-yield replay) remains open there.
 - **Async functions' `close_for_of_loop` `iteration_env` dispose is still
   blocking** (`eval.rs`'s `unwind_for_of!`/`unwind_async_for_of_loops`); out
   of scope — `PendingForOfUnwind` solves a different problem (sequencing an
