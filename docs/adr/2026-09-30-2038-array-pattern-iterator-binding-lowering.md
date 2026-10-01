@@ -126,10 +126,12 @@ resumes.
 
 ## Out of scope
 
-**Object rest beside an awaiting/yielding sibling** (`{a = await 1, ...rest}`)
+~~**Object rest beside an awaiting/yielding sibling** (`{a = await 1, ...rest}`)
 remains unsupported: `pattern_lowering_supported`'s
 `ObjectPatternProperty::Rest => false` arm is untouched by this change. It
 needs `CopyDataProperties` with a consumed-key exclusion list (some excluded
 keys may themselves live in `$dstr_key` temps from a lowered computed key) —
 a different problem shape than array-iterator stepping, shares no machinery
-with this ADR's change, and is tracked as a follow-up (issue #771).
+with this ADR's change, and is tracked as a follow-up (issue #771).~~
+**Closed by #771**: see
+`docs/adr/2026-10-01-0233-object-rest-beside-suspending-sibling-lowering.md`.

@@ -217,7 +217,7 @@ gap for array patterns in a plain declaration.
   widening it to `yield` too would lower a `yield` the yield-point collector
   (`analyze_generator_body`) never counted, desyncing a compiled generator's
   resume bookkeeping. The `yield` side of this gap is still open.
-- **Object rest beside a suspending sibling** (`{a = yield 1, ...rest}`):
+- ~~**Object rest beside a suspending sibling** (`{a = yield 1, ...rest}`):
   `pattern_lowering_supported` still declines it (a `Rest` property always
   fails its per-property check), so it stays on the InlineYield replay
   fallback. Confirmed by an automated review pass to be worse than a
@@ -228,4 +228,11 @@ gap for array patterns in a plain declaration.
   generator resumes bound to the getter's second-call result, silently
   discarding the value sent to `.next()`. Root cause is the same "replay
   isn't safe for non-idempotent code" class as #725, one property-access
-  layer deeper; not attempted here.
+  layer deeper; not attempted here.~~ **Closed by #771**: see
+  `docs/adr/2026-10-01-0233-object-rest-beside-suspending-sibling-lowering.md`,
+  which also found and fixed a second, independent gap this same
+  investigation surfaced — a catch-parameter-only yield (no rest at all)
+  exhibited the identical non-idempotent-getter discard, because
+  `analyze_generator_body`/`contains_yield`/`contains_suspension` never
+  looked at `h.param`'s pattern at all (superseding the "Post-review
+  follow-up" section's claim below that this needed no widening).
