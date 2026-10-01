@@ -82,6 +82,15 @@ bindings, and delegation state are a different category entirely — unwind
 cursors and obligations, not completions — and remain separate fields
 untouched by this change.
 
+One site still writes a context-owned value back into a driver-local: the
+async-generator driver's `TryExit` `Return` arm re-publishes the popped
+context's return value into `pending_return` and sets
+`check_abrupt_on_resume`, deliberately reusing that block's existing
+for-of-unwind and next-finally-lookup logic rather than duplicating it.
+That round trip is momentary — the very next loop iteration re-intercepts
+and re-parks it on whichever context it routes to next — not a second place
+the value can be observed from outside the driver.
+
 **Non-unification.** The three drivers' own routing mechanics —
 `route_generator_exception`/`route_generator_loop_control` (shared only
 between the two generator drivers), `route_return!`/`route_loop_control!`

@@ -4725,17 +4725,6 @@ impl Interpreter {
                             continue;
                         }
                         None => {
-                            // Every return-interception site now parks on
-                            // `pending_completion` instead (issue #719), so
-                            // this should never find anything — defensive
-                            // only, in case some path still threads a return
-                            // through the driver-local `pending_return`.
-                            if let Some(ret_val) = pending_return.take() {
-                                pending_return = Some(ret_val);
-                                check_abrupt_on_resume = true;
-                                current_id = *after_state;
-                                continue;
-                            }
                             current_id = *after_state;
                         }
                     }
