@@ -3173,13 +3173,22 @@ impl Interpreter {
 
         if done {
             if step == DelegateStep::Return {
-                // yield* return step: ReturnCompletion(? IteratorValue(innerReturnResult))
-                self.yield_star_complete_with_return(
+                // yield* return step: ReturnCompletion(? IteratorValue(innerReturnResult)).
+                // `value` is already fully processed (Await(innerReturnResult),
+                // IteratorComplete, IteratorValue): no further Await is owed
+                // before forming the completion.
+                if let Completion::Exit(code) = self.deliver_yield_star_completion(
                     gen_id,
-                    &func_env,
-                    value,
+                    state_machine,
+                    func_env,
+                    is_strict,
+                    try_stack,
+                    &deleg_info,
+                    Completion::Return(value),
                     (promise, resolve_fn, reject_fn),
-                );
+                ) {
+                    self.pending_exit = Some(code);
+                }
                 return;
             }
             // §15.5.5 step 8.a.v: return IteratorValue(innerResult)
@@ -3345,39 +3354,6 @@ impl Interpreter {
         }
     }
 
-    /// A `yield*` delegation ended with a return completion carrying `value`.
-    /// The completion propagates out of the body, so its resources are
-    /// disposed before the request settles. Job-context only: the request is
-    /// settled and popped, and the queue advanced, exactly once, either here
-    /// or when a parked disposal finishes.
-    fn yield_star_complete_with_return(
-        &mut self,
-        gen_id: u64,
-        func_env: &EnvRef,
-        value: JsValue,
-        request: (&JsValue, &JsValue, &JsValue),
-    ) {
-        match self.async_gen_dispose(
-            gen_id,
-            func_env,
-            Completion::Return(value),
-            GeneratorDisposeThen::ReturnAwait,
-            request,
-        ) {
-            GeneratorDisposeStart::Parked => {}
-            GeneratorDisposeStart::Done(completion) => {
-                if let Completion::Exit(code) = self.async_gen_finish_disposal(
-                    gen_id,
-                    GeneratorDisposeThen::ReturnAwait,
-                    completion,
-                    request,
-                ) {
-                    self.pending_exit = Some(code);
-                }
-            }
-        }
-    }
-
     /// Called when the Await in AsyncGeneratorUnwrapYieldResumption for a return
     /// completion resolves during yield* delegation.
     fn yield_star_return_after_unwrap(
@@ -3431,13 +3407,30 @@ impl Interpreter {
                 );
             }
             Ok(None) => {
-                // No .return() method — §15.5.5 step 8.c.iii: Await(received.[[Value]])
-                self.yield_star_complete_with_return(
-                    gen_id,
-                    &func_env,
-                    awaited_val,
-                    (ret_promise, ret_resolve, ret_reject),
-                );
+                // No .return() method — §15.5.5 step 8.c.iii: Await(received.[[Value]]).
+                // `awaited_val` was already awaited once by
+                // AsyncGeneratorUnwrapYieldResumption's own
+                // Await(resumptionValue.[[Value]]); this step owes it
+                // exactly one more Await before forming ReturnCompletion.
+                let ret_promise = ret_promise.clone();
+                let ret_resolve = ret_resolve.clone();
+                let ret_reject = ret_reject.clone();
+                self.await_then(&awaited_val, move |interp, outcome| {
+                    let completion = match outcome {
+                        Ok(v) => Completion::Return(v),
+                        Err(e) => Completion::Throw(e),
+                    };
+                    interp.deliver_yield_star_completion(
+                        gen_id,
+                        state_machine.clone(),
+                        func_env.clone(),
+                        is_strict,
+                        try_stack.clone(),
+                        &deleg_info,
+                        completion,
+                        (&ret_promise, &ret_resolve, &ret_reject),
+                    )
+                });
             }
             Err(e) => {
                 // Step 8.c.ii's own GetMethod(iterator, "return") failed.
@@ -3564,41 +3557,36 @@ impl Interpreter {
                             return Completion::Normal(promise);
                         }
                         Ok(None) => {
-                            // No .return() method — complete the generator
-                            // §15.5.5 step 7.c.iii.1: Await(received.[[Value]])
-                            let completion = match self.async_gen_dispose(
-                                o.id,
-                                &func_env,
-                                Completion::Return(ret_val),
-                                GeneratorDisposeThen::ReturnAwait,
-                                (&promise, &resolve_fn, &reject_fn),
-                            ) {
-                                GeneratorDisposeStart::Parked => {
-                                    self.scheduler.set_async_gen_yield_pending(true);
-                                    return Completion::Normal(promise);
-                                }
-                                GeneratorDisposeStart::Done(completion) => completion,
-                            };
-                            self.sync_generator_scope_stack(o.id, &[]);
-                            self.retire_generator(o.id);
-                            return match completion {
-                                Completion::Return(value) => self.async_gen_await_return_in_driver(
+                            // No .return() method — §15.5.5 step 7.c.iii.1:
+                            // Await(received.[[Value]]). `ret_val` was
+                            // already awaited once by
+                            // AsyncGeneratorUnwrapYieldResumption's own
+                            // Await(resumptionValue.[[Value]]) (the request's
+                            // own initial Await before this driver call ever
+                            // ran); this step owes it exactly one more Await
+                            // before forming ReturnCompletion.
+                            let deleg_info = deleg_info.clone();
+                            let promise_c = promise.clone();
+                            let resolve_c = resolve_fn.clone();
+                            let reject_c = reject_fn.clone();
+                            self.await_then(&ret_val, move |interp, outcome| {
+                                let completion = match outcome {
+                                    Ok(v) => Completion::Return(v),
+                                    Err(e) => Completion::Throw(e),
+                                };
+                                interp.deliver_yield_star_completion(
                                     o.id,
-                                    value,
-                                    promise,
-                                    &resolve_fn,
-                                    &reject_fn,
-                                ),
-                                Completion::Throw(error) => {
-                                    let _ = self.call_function(
-                                        &reject_fn,
-                                        &JsValue::UNDEFINED,
-                                        &[error],
-                                    );
-                                    Completion::Normal(promise)
-                                }
-                                other => other,
-                            };
+                                    state_machine.clone(),
+                                    func_env.clone(),
+                                    is_strict,
+                                    try_stack.clone(),
+                                    &deleg_info,
+                                    completion,
+                                    (&promise_c, &resolve_c, &reject_c),
+                                )
+                            });
+                            self.scheduler.set_async_gen_yield_pending(true);
+                            return Completion::Normal(promise);
                         }
                         Err(e) => {
                             // Step 7.c.ii's own GetMethod(iterator, "return")
@@ -5837,13 +5825,6 @@ impl Interpreter {
             Completion::Exit(code) => return Completion::Exit(code),
             Completion::Throw(error) => {
                 let _ = self.call_function(reject, &JsValue::UNDEFINED, &[error]);
-            }
-            Completion::Return(value) if matches!(then, GeneratorDisposeThen::ReturnAwait) => {
-                if self.async_gen_await_return(gen_id, value, resolve, reject)
-                    == AwaitReturnStart::Parked
-                {
-                    return Completion::Normal(JsValue::UNDEFINED);
-                }
             }
             Completion::Return(value) | Completion::Normal(value) => {
                 let iter_result = self.create_iter_result_object(value, true);

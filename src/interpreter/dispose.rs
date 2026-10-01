@@ -222,11 +222,6 @@ pub(crate) enum GeneratorDisposeThen {
     /// (possibly chained) error on a throw, otherwise resolve
     /// `{ value, done: true }` (`undefined` when the body ran to its end).
     Settle,
-    /// A `yield*` delegation that ended with a return completion whose value
-    /// has not been Awaited by the unwinding: it is awaited after disposal, as
-    /// for a generator without resources. (A `.return(v)` at a yield awaits `v`
-    /// before the generator sees the return, so it settles with `Settle`.)
-    ReturnAwait,
     /// Re-enter the suspended driver with the cursor's finished completion,
     /// optionally retrying the control transfer that had no Completion carrier.
     Reenter(GeneratorReentry),
