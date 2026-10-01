@@ -2950,7 +2950,6 @@ impl Interpreter {
         }
     }
 
-    /// Suspend an async generator parked at a `yield*` on `Await(innerResult)`
     /// A `yield*` delegation step failed in a way the delegate is never
     /// notified of (a malformed/rejected inner result, or a `GetMethod`
     /// failure fetching the delegate's own `return`/`throw`). Per
@@ -3042,10 +3041,20 @@ impl Interpreter {
         match self.call_function(&return_val, iterator, &[]) {
             Completion::Normal(v) => Ok(Some(v)),
             Completion::Throw(e) => Err(e),
+            // A `__host_exit` (issue #242) inside `return()` returns a
+            // `JsValue`-typed `Result` here and so cannot carry the exit
+            // directly: latch the terminal sink, matching `iterator_close`'s
+            // own handling of this same call. The caller must check
+            // `self.pending_exit` before acting on `Ok(None)`.
+            Completion::Exit(code) => {
+                self.pending_exit = Some(code);
+                Ok(None)
+            }
             _ => Err(self.create_type_error("Iterator return failed")),
         }
     }
 
+    /// Suspend an async generator parked at a `yield*` on `Await(innerResult)`
     /// for `step`. The generator must already be stored as
     /// `SuspendedAtState { resume_state }` with `delegated_iterator: Some(..)`
     /// and the front request in the queue: the continuation owns that request
@@ -3659,10 +3668,15 @@ impl Interpreter {
                             // (spec.html:7220-7245), the completion passed in here
                             // is always normal, never throw, so any abrupt result
                             // from the close overrides the TypeError outright.
-                            let type_err = self
-                                .create_type_error("The iterator does not provide a throw method");
-                            match self.async_iterator_close_return_call(&iterator) {
+                            let close_result = self.async_iterator_close_return_call(&iterator);
+                            if let Some(code) = self.pending_exit {
+                                return Completion::Exit(code);
+                            }
+                            match close_result {
                                 Ok(None) => {
+                                    let type_err = self.create_type_error(
+                                        "The iterator does not provide a throw method",
+                                    );
                                     stored_pending_exception = Some(type_err);
                                     pending_binding = None;
                                     break 'delegation;
@@ -3679,8 +3693,16 @@ impl Interpreter {
                                     let reject_c = reject_fn.clone();
                                     self.await_then(&call_result, move |interp, outcome| {
                                         let completion = match outcome {
+                                            // `AsyncIteratorClose` step 8: the close
+                                            // completed normally, so the original
+                                            // "no throw method" TypeError (constructed
+                                            // here, not before the Await, so there is
+                                            // no JsValue to keep GC-rooted across the
+                                            // suspension) fires.
                                             Ok(v) if v.is_object() => {
-                                                Completion::Throw(type_err.clone())
+                                                Completion::Throw(interp.create_type_error(
+                                                    "The iterator does not provide a throw method",
+                                                ))
                                             }
                                             Ok(_) => Completion::Throw(interp.create_type_error(
                                                 "Iterator result is not an object",
