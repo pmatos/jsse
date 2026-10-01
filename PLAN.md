@@ -134,8 +134,8 @@ unrelated earlier resume.
   delivers its completion into the body via `deleg_info.resume_state`
   instead of settling the request directly, and the no-`return`-method
   branch Awaits *before* forming the completion. States explicitly that it
-  supersedes ADR-2026-09-21-2246/2026-09-22-2326's `ReturnAwait`
-  characterization ("awaited after disposal") for the `yield*`-return case.
+  supersedes ADR-2026-09-22-2326's `ReturnAwait` characterization ("awaited
+  after disposal") for the `yield*`-return case.
 - `test262-extra/` — new regression files per slice below (exact names
   chosen by the implementation stage to match existing conventions, e.g.
   `async-generator-yield-star-*`).
@@ -149,7 +149,42 @@ unrelated earlier resume.
 
 ### Item 3 — delegated `yield*` abrupt exits
 
-1. **Generalize the `has_catch` special case.** In
+**Rule for every slice below: which delivery mechanism depends on which
+context the arm runs in.** `yield_star_await_inner_result_resume`,
+`yield_star_return_after_unwrap`, and `yield_star_complete_with_return` run
+in **job context** (invoked from an `await_then` callback, outside the
+synchronous driver call) — these deliver via `async_gen_reenter`, which
+re-invokes the driver *and* pops/processes the request queue itself. The
+delegation prelude inside `async_generator_next_state_machine_impl` (roughly
+`generator_runtime.rs:3471-3593`) runs in **driver context** — it is already
+inside the one driver call that will pop/process the queue when it finishes
+normally. Calling `async_gen_reenter` from there would pop the queue twice
+and drop the next queued request. The driver-context fix is instead to *fall
+through* instead of returning: set `stored_pending_exception = Some(e)`
+(clearing `stored_pending_return`) and leave the `if let Some(ref deleg_info)
+= delegated_iterator { ... }` block without an early `return`. The object's
+stored `execution_state` while delegating is already
+`SuspendedAtState { state_id: deleg_info.resume_state }` (every path that
+leaves a generator mid-delegation saves it that way), so falling through
+reaches `current_state_id` (`generator_runtime.rs:3595`) already pointed at
+the resume state, and `check_abrupt_on_resume` (`:3676-3677`) picks up
+`stored_pending_exception` from there — no extra plumbing needed, just
+`mut` bindings where the destructure currently binds them immutably.
+
+1a. **Driver-context arms (fall-through, not reenter).** Three arms in the
+   delegation prelude reject directly on the same class of failure as the
+   job-context arms below: `self.iterator_return(...)`'s `Err(e)`
+   (`:3525`, a poisoned `.return` accessor while a `.return()` call arrives
+   mid-delegation), `self.iterator_throw(...)`'s `Err(e)` (`:3555`, same for
+   `.throw()`), and the plain `next()` continuation's `Err(e)` (`:3589`,
+   step 8.a's `? Call(nextMethod, ...)` failing or returning a non-object).
+   Convert each to the fall-through shape above.
+   - Red test: delegate with a poisoned `return`/`throw` accessor, and a
+     delegate whose `next()` throws or resolves to a non-object — each
+     reached by calling `.return()`/`.throw()`/`.next()` while already
+     delegating, inside `try { yield* X; } finally { log.push('f'); }`.
+
+1b. **Generalize the `has_catch` special case.** In
    `yield_star_await_inner_result_resume`'s `IteratorValue` error arm
    (`generator_runtime.rs:3058-3107`), delete the `has_catch` branch
    entirely and always deliver the error into the body: snapshot
@@ -171,7 +206,7 @@ unrelated earlier resume.
    `yield_star_await_inner_result_resume`: the rejected `Await(innerResult)`
    arm, the "not an Object" arm, and the `IteratorComplete` error arm
    (currently all `self.retire_generator(gen_id); reject_fn(...)` directly).
-   - Red test: extend the slice-1 file (or a sibling file) with delegates
+   - Red test: extend slice 1b's file (or a sibling file) with delegates
      whose `next()`/`throw()` resolves to a rejected thenable, a non-object,
      or an object whose `done` getter throws — each inside
      `try { yield* X; } finally { log.push('f'); }`.
@@ -189,7 +224,7 @@ unrelated earlier resume.
      `AsyncGeneratorUnwrapYieldResumption`, or from `Await(innerReturnResult)`
      at the inner-`return`-done step). Stop routing it through
      `GeneratorDisposeThen::ReturnAwait`; deliver it directly as
-     `pending_return` via the slice-1 helper and let the ordinary resumable
+     `pending_return` via slice 1b's helper and let the ordinary resumable
      `pending_return` path (item 1) dispose it during unwind.
    - The two "no `.return()` method" arms (driver's delegation prelude
      `Ok(None)` arm, and `yield_star_return_after_unwrap`'s `Ok(None)` arm)
@@ -204,17 +239,54 @@ unrelated earlier resume.
      and `AwaitReturnStart`/`async_gen_await_return` if nothing else calls
      them, once all three call sites are converted (clippy `-D warnings`
      will catch anything left dangling).
+   - **Delegate `return()` call-count hazard.** The `pending_return` block
+     closes any iterators still tracked in `generator_inline_iters`
+     (`generator_runtime.rs:3953-3963`) before unwinding. An inline `yield*`
+     registers its delegate there via `stash_pending_iter_close`
+     (`:4242`). If an inner-done return delivers through `pending_return`
+     without first removing the delegate from that table, the generic
+     inline-close step calls the delegate's `.return()` a **second** time
+     (the yield* protocol already called it once to get the done result).
+     Remove the delegate iterator from `generator_inline_iters` as part of
+     delivering the completion, before `pending_return` is set.
+   - Red test: both shapes, with `return`/`throw` methods on the delegate
+     instrumented to count calls — assert exactly one `.return()` call for
+     the inner-done-return path, and zero for the reject/malformed-result
+     paths (slices 1a/1b/2/3).
    - Red test: `try { yield* X; } finally { log.push('f'); }` for both the
      inner-done-return and no-return-method shapes, asserting `'f'` runs
-     before the request settles. Also a tick-counting witness-chain test
-     (ADR-2026-09-22-2340's style: pre-queued `Promise.resolve().then()`
-     reactions) distinguishing the no-return-method case's *two* Awaits from
-     the inner-done case's *one*.
+     before the request settles.
+   - **Witness-chain test, derived step by step, not by a one-line
+     heuristic.** Both paths perform two Awaits counted from the original
+     operand (Unwrap via `AsyncGeneratorUnwrapYieldResumption`, then the
+     yield*-internal one), so "count the Awaits" is not the discriminator —
+     work out each path's exact sequence from spec lines 24319-24331 plus
+     `AsyncGeneratorStart`'s step 50670, and pin down what's actually wrong
+     today:
+     - *Inner-done path:* today's `GeneratorDisposeThen::ReturnAwait` adds
+       a spurious **third**, post-disposal Await (via
+       `async_gen_finish_disposal` → `async_gen_await_return`) that the
+       spec does not call for — the value was already fully Awaited before
+       `ReturnCompletion` was formed. The fix removes that extra tick, so a
+       pre-queued `Promise.resolve().then()` witness settles one tick
+       *earlier* than today.
+     - *No-return-method path:* today disposes the function-level resource
+       *before* the second Await (`receivedValue`) resolves; the fix must
+       Await first and only then let disposal run during the ordinary
+       unwind. The witness should show the disposer's log entry moving to
+       *after* the second Await's reaction instead of before it — a
+       reordering, not a tick-count change.
+     - Cross-check both sequences against `node` as a debugging aid (not an
+       authority) before trusting the expected log order in the test.
+   - If any existing test262 case goes red after this slice — test262 is
+     99,911/99,911 clean on this branch today — treat that as a signal the
+     spec reading above is wrong and re-derive it; do not special-case the
+     test.
    - Regression check (not a new test): re-run
      `test262-extra/async-generator-yield-star-return-disposes-function-
-     level-resource.js` unmodified — its assertions are ordering-only, not
-     tick-count-sensitive, so they should stay green through this change,
-     but confirm.
+     level-resource.js` unmodified — its assertions are ordering-only
+     between log entries, not raw tick-count-sensitive, so they should stay
+     green through this change, but confirm rather than assume.
 5. **Outer `for-of` closing.** Add a regression test with the `yield*` nested
    inside `for (await using x of outerIter) { yield* X; }` (no `try` at all),
    asserting `outerIter`'s `.return()` runs when the delegation ends
@@ -252,14 +324,36 @@ unrelated earlier resume.
    generator was suspended at can resume with a stale
    `is_inline_replay = true` and a stale `self.generator_context`
    attributed to the wrong state.
-   - Write a regression test: suspend an async generator via the
-     `InlineYield` fallback (e.g. a `yield` inside a destructuring default,
-     per CONTEXT.md's "Inline Yield" entry) inside a `try`, with an
-     `await using` resource scoped to the `catch`/`finally` target, then
-     call `.throw()` with a handler present. Assert (witness-chain style)
-     that disposal at the handler's scope suspends correctly and that
-     `self.generator_context` is not misapplied to the handler's state (no
-     spurious re-yield / wrong fast-forward count / hang).
+   - **Confirm reachability by instrumentation before writing the real
+     test, not by assumption.** #772/#773/#775 (merged after this issue was
+     filed) lowered array-pattern defaults, catch-param and for-in/of-head
+     destructuring defaults, and for-await assignment heads to proper
+     states — exactly the constructs CONTEXT.md's "Inline Yield" entry
+     names as `InlineYield` triggers. Any of them may no longer hit the
+     fallback at all. Use the same method #625 used: a temporary
+     `eprintln!` at `generator_runtime.rs:4101` (removed before the slice's
+     commit) logging `is_inline_replay` and whether the frame-leave loop's
+     `leaves_resources` is true, then try candidate constructs (nested
+     `yield`/`await` shapes not yet covered by #772/#773/#775, e.g. inside
+     a `with`, a labeled `continue` target, or a complex assignment target
+     the transform still doesn't decompose) until one actually reaches that
+     line with `is_inline_replay == true`. Only once a real trigger is
+     confirmed, build the scenario below around it.
+   - The frame-leave loop disposes frames the *current state transition
+     leaves* (`scope_stack.len() > keep_scopes`, where `keep_scopes` is the
+     *target* state's `scope_depth`) — so the `await using` resource must
+     be in a block the routed completion's target state is *outside of*,
+     with the confirmed `InlineYield` trigger construct *inside* that same
+     block: `try { { await using r = …; <confirmed trigger>; } } catch {}`,
+     then `.throw()` with the `catch` present. Scoping the resource to the
+     `catch`/`finally` target itself (rather than to the block the jump
+     leaves) does not exercise the path — it never shows up in
+     `scope_stack.get(keep_scopes..)`.
+   - Once the scenario is confirmed to actually reach line 4101 with
+     `is_inline_replay == true`, assert (witness-chain style) that disposal
+     suspends correctly there and that `self.generator_context` is not
+     misapplied to the routed-to state (no spurious re-yield / wrong
+     fast-forward count / hang).
    - **If red:** fix by clearing `inline_yield_target` (and not re-deriving
      it from a stale `pending_binding`) inside the `check_abrupt_on_resume`
      routing paths before any `continue`, so a routed completion never
@@ -334,7 +428,17 @@ unrelated earlier resume.
   `origin/main` per repo convention); report the before/after pass counts
   from `run-test262.py` in the PR description instead.
 
-## 7. Out of scope
+## 7. Handoff
+
+`main`'s PR convention squash-merges on the PR title and typically closes the
+triggering issue. Before the implementation stage writes a PR body that
+says "Closes #742": if slice 6 (no-`.throw()`-method arm) was cut, or item 4
+was deferred (it always is, by this plan), file their follow-up issues with
+`gh issue create` **first**, referencing #742 the way #742 itself references
+#733. Otherwise the squash-merge closes #742 and the deferred work has no
+tracking issue left pointing at it.
+
+## 8. Out of scope
 
 - **Item 4** (async functions' `close_for_of_loop` dispose in `eval.rs`,
   `unwind_for_of!` macro) — a different driver with its own resumable-dispose
