@@ -4822,6 +4822,39 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_from_yield_star_no_throw_method_return_is_uncatchable() {
+        // Same invariant as `host_exit_from_iterator_return_during_throw_is_uncatchable`,
+        // but for `yield*`'s AsyncIteratorClose path (#780): a `.throw()` in
+        // flight against a delegate with no `throw` method runs the
+        // delegate's `return()`, and if that calls `__host_exit` (issue
+        // #242), the exit must stay uncatchable instead of being delivered
+        // as a catchable "no throw method" TypeError into the body.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.caught = "no";
+            globalThis.cleanup = "no";
+            globalThis.fin = "no";
+            const delegate = {
+              [Symbol.asyncIterator]() { return this; },
+              next() { return Promise.resolve({ value: 1, done: false }); },
+              return() { globalThis.cleanup = "ran"; __host_exit(5); return { done: true }; },
+            };
+            const it = (async function* () {
+              try {
+                yield* delegate;
+              } catch (e) { globalThis.caught = "yes"; }
+              finally { globalThis.fin = "ran"; }
+            })();
+            it.next().then(function () { it.throw(new Error("injected")); });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "cleanup"), "ran");
+        assert_eq!(global_string(&interp, "caught"), "no");
+        assert_eq!(global_string(&interp, "fin"), "no");
+    }
+
+    #[test]
     fn host_exit_from_sync_async_body_stops_expression_position() {
         // The statement-level chokepoint can't stop a sibling expression that
         // evaluates before control returns to the statement loop; the producer

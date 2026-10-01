@@ -3020,7 +3020,6 @@ impl Interpreter {
         }
     }
 
-    /// Suspend an async generator parked at a `yield*` on `Await(innerResult)`
     /// A `yield*` delegation step failed in a way the delegate is never
     /// notified of (a malformed/rejected inner result, or a `GetMethod`
     /// failure fetching the delegate's own `return`/`throw`). Per
@@ -3082,6 +3081,47 @@ impl Interpreter {
         self.async_gen_reenter(gen_id, completion, request)
     }
 
+    /// Await `value`, map its outcome to a `Completion` via `map_outcome`,
+    /// deliver it through `deliver_yield_star_completion`, and mark the
+    /// generator's request queue as yield-pending. Shared by the return- and
+    /// throw-arm "no method" `yield*` delegation paths in
+    /// `async_generator_next_state_machine_with_promise_and_reentry`, which
+    /// differ only in how they turn the awaited outcome into a `Completion`.
+    fn yield_star_await_then_deliver(
+        &mut self,
+        value: &JsValue,
+        gen_id: u64,
+        state_machine: Rc<crate::interpreter::generator_transform::GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+        try_stack: Vec<TryContextInfo>,
+        deleg_info: DelegatedIteratorInfo,
+        promise: JsValue,
+        resolve_fn: JsValue,
+        reject_fn: JsValue,
+        map_outcome: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
+    ) -> Completion {
+        let promise_c = promise.clone();
+        let resolve_c = resolve_fn.clone();
+        let reject_c = reject_fn.clone();
+        self.await_then(value, move |interp, outcome| {
+            let completion = map_outcome(interp, outcome);
+            interp.deliver_yield_star_completion(
+                gen_id,
+                state_machine.clone(),
+                func_env.clone(),
+                is_strict,
+                try_stack.clone(),
+                &deleg_info,
+                completion,
+                (&promise_c, &resolve_c, &reject_c),
+            )
+        });
+        self.scheduler.set_async_gen_yield_pending(true);
+        Completion::Normal(promise)
+    }
+
+    /// Suspend an async generator parked at a `yield*` on `Await(innerResult)`
     /// for `step`. The generator must already be stored as
     /// `SuspendedAtState { resume_state }` with `delegated_iterator: Some(..)`
     /// and the front request in the queue: the continuation owns that request
@@ -3634,28 +3674,22 @@ impl Interpreter {
                             // own initial Await before this driver call ever
                             // ran); this step owes it exactly one more Await
                             // before forming ReturnCompletion.
-                            let deleg_info = deleg_info.clone();
-                            let promise_c = promise.clone();
-                            let resolve_c = resolve_fn.clone();
-                            let reject_c = reject_fn.clone();
-                            self.await_then(&ret_val, move |interp, outcome| {
-                                let completion = match outcome {
+                            return self.yield_star_await_then_deliver(
+                                &ret_val,
+                                o.id,
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                try_stack,
+                                deleg_info.clone(),
+                                promise,
+                                resolve_fn,
+                                reject_fn,
+                                |_interp, outcome| match outcome {
                                     Ok(v) => Completion::Return(v),
                                     Err(e) => Completion::Throw(e),
-                                };
-                                interp.deliver_yield_star_completion(
-                                    o.id,
-                                    state_machine.clone(),
-                                    func_env.clone(),
-                                    is_strict,
-                                    try_stack.clone(),
-                                    &deleg_info,
-                                    completion,
-                                    (&promise_c, &resolve_c, &reject_c),
-                                )
-                            });
-                            self.scheduler.set_async_gen_yield_pending(true);
-                            return Completion::Normal(promise);
+                                },
+                            );
                         }
                         Err(e) => {
                             // Step 7.c.ii's own GetMethod(iterator, "return")
@@ -3687,13 +3721,64 @@ impl Interpreter {
                             return Completion::Normal(promise);
                         }
                         Ok(None) => {
-                            // No .throw() method — close iterator and throw TypeError
-                            let _ = self.iterator_close(&iterator, exc.clone());
-                            let type_err = self
-                                .create_type_error("The iterator does not provide a throw method");
-                            return self.reject_async_generator_request(
-                                o.id, promise, &reject_fn, type_err,
-                            );
+                            // No .throw() method: AsyncIteratorClose(iteratorRecord,
+                            // NormalCompletion(empty)) (spec.html:24310-24316 step
+                            // 8.b.iii.3) must close the delegate -- and Await an
+                            // async .return() -- before the "no throw method"
+                            // TypeError forms. Per AsyncIteratorClose step 5
+                            // (spec.html:7220-7245), the completion passed in here
+                            // is always normal, never throw, so any abrupt result
+                            // from the close overrides the TypeError outright.
+                            let close_result = self.iterator_return_call_raw(&iterator);
+                            if let Some(code) = self.pending_exit {
+                                return Completion::Exit(code);
+                            }
+                            match close_result {
+                                Ok(None) => {
+                                    let type_err = self.create_type_error(
+                                        "The iterator does not provide a throw method",
+                                    );
+                                    stored_pending_exception = Some(type_err);
+                                    pending_binding = None;
+                                    break 'delegation;
+                                }
+                                Err(e) => {
+                                    stored_pending_exception = Some(e);
+                                    pending_binding = None;
+                                    break 'delegation;
+                                }
+                                Ok(Some(call_result)) => {
+                                    return self.yield_star_await_then_deliver(
+                                        &call_result,
+                                        o.id,
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        try_stack,
+                                        deleg_info.clone(),
+                                        promise,
+                                        resolve_fn,
+                                        reject_fn,
+                                        |interp, outcome| match outcome {
+                                            // `AsyncIteratorClose` step 8: the close
+                                            // completed normally, so the original
+                                            // "no throw method" TypeError (constructed
+                                            // here, not before the Await, so there is
+                                            // no JsValue to keep GC-rooted across the
+                                            // suspension) fires.
+                                            Ok(v) if v.is_object() => {
+                                                Completion::Throw(interp.create_type_error(
+                                                    "The iterator does not provide a throw method",
+                                                ))
+                                            }
+                                            Ok(_) => Completion::Throw(interp.create_type_error(
+                                                "Iterator result is not an object",
+                                            )),
+                                            Err(reason) => Completion::Throw(reason),
+                                        },
+                                    );
+                                }
+                            }
                         }
                         Err(e) => {
                             // Step 8.b's own GetMethod(iterator, "throw")
