@@ -67,9 +67,14 @@ generator's disposers.
 - Delegated `yield*` abrupt exits do not run enclosing `finally` blocks or
   close outer `for-of` loops, and a rejected inner result rejects the request
   instead of throwing into the body's `try`/`catch`. The rejected-inner-result
-  and `IteratorValue`-throw arms of the delegated-return step, and the throw
-  arms of a `.throw()` parked in `yield*` (a delegate with no `throw` method,
-  or a failing `throw` call), also still skip DisposeResources.
+  and `IteratorValue`-throw arms of the delegated-return step, and a failing
+  `throw` call, also still skip DisposeResources.
+  **Update (issue #780):** the no-`throw`-method arm now performs
+  `AsyncIteratorClose` on the delegate (closing it, and `Await`ing an async
+  `.return()`, with any abrupt result from the close overriding the "no
+  throw method" `TypeError`) and delivers every outcome into the body like
+  the rest of this list -- the one arm #742/#780 called out as more
+  involved than the others. The remaining items above are unchanged.
 - `AsyncGeneratorAwaitReturn` (`.return(v)` on a suspended-start or completed
   generator) still drains inline and does not keep the request queue blocked
   (#712); the `yield` operand, `yield*` delegated calls and `for await` steps
