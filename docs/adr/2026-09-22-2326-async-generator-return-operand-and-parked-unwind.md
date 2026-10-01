@@ -59,6 +59,11 @@ generator's disposers.
   (`route_generator_exception`) is now resumable; the other four callers
   (`pending_return`, the two `Return` terminator arms, loop-control/`Goto`)
   are tracked in issue #742. Inline yield replay is unchanged.
+  **Update (issue #761):** the other four callers are now resumable too
+  (`pending_return` and the `Return` terminator arms via the same
+  `can_park`/`ForOfUnwindOutcome` primitives, loop-control/`Goto` via
+  `GeneratorReentry::{LoopControl, Goto}`). Only inline yield replay still
+  blocks, tracked as item 2 of issue #742.
 - Delegated `yield*` abrupt exits do not run enclosing `finally` blocks or
   close outer `for-of` loops, and a rejected inner result rejects the request
   instead of throwing into the body's `try`/`catch`. The rejected-inner-result
