@@ -1398,6 +1398,12 @@ impl Interpreter {
                 // finally it crosses, so it is routed rather than jumped.
                 StateTerminator::LoopControl(target) => {
                     let target = *target;
+                    // A jump that leaves the running finally relies on its
+                    // context (not these locals) owning whatever completion
+                    // it replaces (#719); route_generator_exception/the
+                    // return driver must have already consumed a one-shot
+                    // resume input before landing here.
+                    debug_assert!(pending_exception.is_none() && pending_return.is_none());
                     current_id = route_loop_control_result!(target);
                 }
 
@@ -4649,6 +4655,12 @@ impl Interpreter {
                 // finally it crosses, so it is routed rather than jumped.
                 StateTerminator::LoopControl(target) => {
                     let target = *target;
+                    // A jump that leaves the running finally relies on its
+                    // context (not these locals) owning whatever completion
+                    // it replaces (#719); route_generator_exception/the
+                    // return driver must have already consumed a one-shot
+                    // resume input before landing here.
+                    debug_assert!(pending_exception.is_none() && pending_return.is_none());
                     current_id = route_loop_control_result!(target);
                 }
 
@@ -6463,6 +6475,8 @@ impl Interpreter {
                 // EnterFinally must mark this one.
                 try_stack.truncate(depth + 1);
                 try_stack[depth].pending_completion = Some(PendingCompletion::LoopControl(target));
+                // Defensive: keep this park site in sync with every other one (#719).
+                self.sync_generator_try_stack_for_gc(generator_id, try_stack);
                 ForOfTransitionOutcome::Done(finally_state)
             }
             None => {

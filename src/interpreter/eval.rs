@@ -9129,12 +9129,8 @@ impl Interpreter {
                     let mut parked = false;
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_finally = true;
-                        // A throw routed here is now owned by this context: a
-                        // nested try/finally's own TryExit must not see it
-                        // (issue #719). Previously this unconditionally
-                        // overwrote `saved_finally_exception`, even on a
-                        // normal-completion entry, silently losing whatever
-                        // an enclosing finally had parked there.
+                        // A throw routed here belongs to this context, not an
+                        // enclosing one — see issue #719.
                         if let Some(exc) = pending_exception.take() {
                             ctx.pending_completion = Some(PendingCompletion::Throw(exc));
                             parked = true;
