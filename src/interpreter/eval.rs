@@ -9,6 +9,7 @@ mod literals;
 mod modules;
 mod operand;
 
+use generator_runtime::ForOfUnwindOutcome;
 pub(crate) use operand::Operand;
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth
@@ -8208,22 +8209,82 @@ impl Interpreter {
         // obligation across suspension until the handler completes normally.
         let mut pending_for_of_unwind = restored_pending_for_of_unwind;
 
+        // Helper: suspend at a disposer's `Await`, parking `$park` (a
+        // `PendingDispose` or an expression producing one) to resume later.
+        // Shared by every disposal site below that can suspend mid-unwind.
+        macro_rules! park_dispose_at_await {
+            ($cursor:expr, $value:expr, $park:expr) => {{
+                let gc_frame = self.gc_root_frame();
+                $cursor.for_each_value(|v| self.gc_root_value(v));
+                self.gc_root_value(&$value);
+                self.async_fn_suspend_at_await(
+                    async_id,
+                    &state_machine,
+                    &func_env,
+                    is_strict,
+                    current_id,
+                    &try_stack,
+                    None,
+                    pending_for_of_unwind.take(),
+                    &resolve_fn,
+                    &reject_fn,
+                    &$value,
+                    &for_of_stack,
+                    &scope_stack,
+                );
+                self.gc_unroot_frame(gc_frame);
+                self.scheduler.park_async_function_dispose(async_id, $park);
+                return Completion::Normal(JsValue::UNDEFINED);
+            }};
+        }
+
         // Helper: close the for-of loops from `$from` inward, surfacing an
         // abrupt completion from a disposer or an iterator `return` method.
+        // `$seed` is the completion driving the unwind (mirroring
+        // `unwind_scopes_to!`'s own seed/tag signature) rather than always
+        // starting from `Completion::Empty`, so a parked-then-resumed
+        // re-entry (via `$then`) can seed with the value the cursor's own
+        // finished completion carries and continue unwinding from there —
+        // provably equivalent to the original call never having suspended
+        // (see the ADR for this issue). Each level's `iteration_env` dispose
+        // may itself suspend: on `ForOfUnwindOutcome::Parked` this parks the
+        // function with `$then` and returns, leaving the loop being closed
+        // on `for_of_stack` with its `iteration_env` already taken so the
+        // resumed re-entry finds nothing left to dispose for it and
+        // idempotently proceeds straight to `close_for_of_iterator`. The
+        // per-level handler-boundary re-check below re-runs after *every*
+        // level's dispose, synchronous or resumed, because it is part of
+        // this same per-level loop body either way.
         macro_rules! unwind_for_of {
-            ($from:expr) => {
+            ($from:expr, $seed:expr, $then:expr) => {
                 let unwind_from = $from;
-                let mut unwind_completion = Completion::Empty;
+                let mut unwind_completion = $seed;
                 while for_of_stack.len() > unwind_from {
-                    let Some(loop_state) = for_of_stack.pop() else {
-                        break;
-                    };
+                    let loop_pos = for_of_stack.len() - 1;
                     // Handlers entered inside this loop have already completed
                     // before its IteratorClose runs. Handlers surrounding the
                     // loop remain available for a close failure.
-                    try_stack.truncate(loop_state.try_depth);
+                    try_stack.truncate(for_of_stack[loop_pos].try_depth);
+                    if let Some(env) = for_of_stack[loop_pos].iteration_env.take() {
+                        unwind_completion =
+                            match self.dispose_env_for_for_of_unwind(&env, unwind_completion, true)
+                            {
+                                ForOfUnwindOutcome::Done(c) => c,
+                                ForOfUnwindOutcome::Parked { cursor, value } => {
+                                    park_dispose_at_await!(
+                                        cursor,
+                                        value,
+                                        PendingDispose {
+                                            cursor,
+                                            then: $then,
+                                        }
+                                    );
+                                }
+                            };
+                    }
+                    let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
                     unwind_completion =
-                        self.close_for_of_loop(loop_state, &func_env, unwind_completion, None);
+                        self.close_for_of_iterator(loop_state, &func_env, unwind_completion, None);
                     match &unwind_completion {
                         Completion::Exit(code) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -8298,33 +8359,14 @@ impl Interpreter {
                     let mut cursor = DisposeCursor::new(stack, $seed);
                     match cursor.step(self, None) {
                         DisposeStep::Await(value) => {
-                            let gc_frame = self.gc_root_frame();
-                            cursor.for_each_value(|v| self.gc_root_value(v));
-                            self.gc_root_value(&value);
-                            self.async_fn_suspend_at_await(
-                                async_id,
-                                &state_machine,
-                                &func_env,
-                                is_strict,
-                                current_id,
-                                &try_stack,
-                                None,
-                                pending_for_of_unwind.take(),
-                                &resolve_fn,
-                                &reject_fn,
-                                &value,
-                                &for_of_stack,
-                                &scope_stack,
-                            );
-                            self.gc_unroot_frame(gc_frame);
-                            self.scheduler.park_async_function_dispose(
-                                async_id,
+                            park_dispose_at_await!(
+                                cursor,
+                                value,
                                 PendingDispose {
                                     cursor,
                                     then: $then,
-                                },
+                                }
                             );
-                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         DisposeStep::Done(Completion::Exit(code)) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -8383,7 +8425,11 @@ impl Interpreter {
                     Completion::Return(ret_val.clone()),
                     DisposeThen::ScopeCrossReturn
                 );
-                unwind_for_of!(unwind_from);
+                unwind_for_of!(
+                    unwind_from,
+                    Completion::Return(ret_val.clone()),
+                    DisposeThen::ForOfCrossReturn
+                );
                 unwind_scopes_to!(
                     scope_target,
                     Completion::Return(ret_val.clone()),
@@ -8466,7 +8512,11 @@ impl Interpreter {
                     Completion::Empty,
                     DisposeThen::ScopeCrossLoopControl(target)
                 );
-                unwind_for_of!(handler_boundary.min(for_of_stack.len()));
+                unwind_for_of!(
+                    handler_boundary.min(for_of_stack.len()),
+                    Completion::Empty,
+                    DisposeThen::ForOfCrossLoopControl(target)
+                );
                 unwind_scopes_to!(
                     scope_boundary,
                     Completion::Empty,
@@ -8561,28 +8611,7 @@ impl Interpreter {
                         // Suspending reads `value.constructor`, which can run
                         // user code and collect; until the cursor is parked in
                         // the saved state it is reachable only from `disposal`.
-                        let gc_frame = self.gc_root_frame();
-                        disposal.cursor.for_each_value(|v| self.gc_root_value(v));
-                        self.gc_root_value(&value);
-                        self.async_fn_suspend_at_await(
-                            async_id,
-                            &state_machine,
-                            &func_env,
-                            is_strict,
-                            current_id,
-                            &try_stack,
-                            None,
-                            pending_for_of_unwind.take(),
-                            &resolve_fn,
-                            &reject_fn,
-                            &value,
-                            &for_of_stack,
-                            &scope_stack,
-                        );
-                        self.gc_unroot_frame(gc_frame);
-                        self.scheduler
-                            .park_async_function_dispose(async_id, disposal);
-                        return Completion::Normal(JsValue::UNDEFINED);
+                        park_dispose_at_await!(disposal.cursor, value, disposal);
                     }
                     // A disposer that called `__host_exit` (issue #242)
                     // propagates out uncatchably instead of settling.
@@ -8599,27 +8628,44 @@ impl Interpreter {
                         (DisposeThen::ScopeExit(after_state), _) => {
                             current_id = after_state;
                         }
-                        (DisposeThen::ScopeCrossReturn, Completion::Throw(e)) => {
+                        // Scope-crossing and for-of-crossing disposals resume
+                        // identically: `route_return!`/`route_loop_control!`
+                        // re-enter with the value or target carried by the
+                        // cursor's own completion, continuing whatever this
+                        // one level's dispose left (further scopes or loops,
+                        // then the function-level disposal) — provably
+                        // equivalent to the original call never suspending.
+                        (
+                            DisposeThen::ScopeCrossReturn | DisposeThen::ForOfCrossReturn,
+                            Completion::Throw(e),
+                        ) => {
                             pending_exception = Some(e);
                         }
-                        (DisposeThen::ScopeCrossReturn, Completion::Return(v)) => {
+                        (
+                            DisposeThen::ScopeCrossReturn | DisposeThen::ForOfCrossReturn,
+                            Completion::Return(v),
+                        ) => {
                             route_return!(v);
                         }
-                        (DisposeThen::ScopeCrossReturn, _) => unreachable!(
-                            "a scope-cross return cursor is seeded with Completion::Return and only ever finishes as Return or Throw"
-                        ),
-                        (DisposeThen::ScopeCrossLoopControl(_), Completion::Throw(e)) => {
+                        (DisposeThen::ScopeCrossReturn | DisposeThen::ForOfCrossReturn, _) => {
+                            unreachable!(
+                                "a scope/for-of-cross return cursor is seeded with Completion::Return and only ever finishes as Return or Throw"
+                            )
+                        }
+                        (
+                            DisposeThen::ScopeCrossLoopControl(_)
+                            | DisposeThen::ForOfCrossLoopControl(_),
+                            Completion::Throw(e),
+                        ) => {
                             pending_exception = Some(e);
                         }
-                        (DisposeThen::ScopeCrossLoopControl(target), _) => {
+                        (
+                            DisposeThen::ScopeCrossLoopControl(target)
+                            | DisposeThen::ForOfCrossLoopControl(target),
+                            _,
+                        ) => {
                             route_loop_control!(target);
                         }
-                        (DisposeThen::ScopeCrossThrow, Completion::Throw(e)) => {
-                            pending_exception = Some(e);
-                        }
-                        (DisposeThen::ScopeCrossThrow, _) => unreachable!(
-                            "a scope-cross throw cursor is seeded with Completion::Throw and always finishes as Throw"
-                        ),
                         // The head's own error routing (`for_of_protocol_failure`,
                         // pending_exception) mirrors what the blocking call used to
                         // do inline; a non-throw completion just re-enters the head.
@@ -8627,6 +8673,23 @@ impl Interpreter {
                             pending_exception = Some(e);
                         }
                         (DisposeThen::ForOfIteration, _) => {}
+                        // For a for-of-crossing throw, the loop being unwound
+                        // stays on `for_of_stack` with its `iteration_env`
+                        // already taken, so re-entering the top-level throw
+                        // routing below recomputes `needs_for_of_unwind`/
+                        // `pending_for_of_unwind` fresh from that stack
+                        // instead of this arm setting it.
+                        (
+                            DisposeThen::ScopeCrossThrow | DisposeThen::ForOfCrossThrow,
+                            Completion::Throw(e),
+                        ) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ScopeCrossThrow | DisposeThen::ForOfCrossThrow, _) => {
+                            unreachable!(
+                                "a scope/for-of-cross throw cursor is seeded with Completion::Throw and always finishes as Throw"
+                            )
+                        }
                         (_, Completion::Throw(e)) => {
                             self.scheduler.remove_async_function_state(async_id);
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
@@ -8737,12 +8800,24 @@ impl Interpreter {
                         &func_env,
                         Completion::Throw(exc),
                     ) {
-                        Completion::Throw(error) => exc = error,
-                        Completion::Exit(code) => {
+                        ForOfUnwindOutcome::Done(Completion::Throw(error)) => exc = error,
+                        ForOfUnwindOutcome::Done(Completion::Exit(code)) => {
                             self.scheduler.remove_async_function_state(async_id);
                             return Completion::Exit(code);
                         }
-                        _ => unreachable!("unwinding a throw must stay abrupt"),
+                        ForOfUnwindOutcome::Done(_) => {
+                            unreachable!("unwinding a throw must stay abrupt")
+                        }
+                        ForOfUnwindOutcome::Parked { cursor, value } => {
+                            park_dispose_at_await!(
+                                cursor,
+                                value,
+                                PendingDispose {
+                                    cursor,
+                                    then: DisposeThen::ForOfCrossThrow,
+                                }
+                            );
+                        }
                     }
                 }
 
@@ -8886,11 +8961,24 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Break(label, _) => {
-                    // Close iterator for the innermost matching for-of loop
+                    // Close iterator for the innermost matching for-of loop.
+                    // Mirrors the adjacent `Completion::Continue` arm: build a
+                    // `LoopControlTarget` and route it the same way a
+                    // transformed `break` reaches `route_loop_control!` via
+                    // the `LoopControl` terminator, instead of a bespoke
+                    // direct `unwind_for_of!` call.
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let after_state = for_of_stack[pos].after_state;
-                        unwind_for_of!(pos);
-                        current_id = after_state;
+                        let loop_state = &for_of_stack[pos];
+                        let target = LoopControlTarget {
+                            target_state: loop_state.after_state,
+                            try_depth: loop_state.try_depth,
+                            for_of_depth: pos,
+                            // Mirrors the `Continue` arm below: no transform-time
+                            // target to read a scope depth from, so pin the
+                            // floor at the current depth.
+                            scope_depth: scope_stack.len(),
+                        };
+                        route_loop_control!(target);
                         continue;
                     }
                 }
@@ -9761,21 +9849,38 @@ impl Interpreter {
 
     /// Closes every active for-of loop from `from` to the innermost, inner to
     /// outer, carrying each loop's resulting completion into the next outer
-    /// iteration disposal.
+    /// iteration disposal. Mirrors `unwind_generator_for_of_loops`: the loop
+    /// being closed stays on `for_of_stack` with its `iteration_env` already
+    /// taken while that environment's own disposal is in flight, so a
+    /// disposal `Await` can be reported to the caller (`ForOfUnwindOutcome::
+    /// Parked`) instead of draining the job queue inline. The caller parks
+    /// with `DisposeThen::ForOfCrossThrow` and, on resume, re-enters the
+    /// top-level throw routing that calls back in here to finish the rest.
     fn unwind_async_for_of_loops(
         &mut self,
         for_of_stack: &mut Vec<ForOfLoopState>,
         from: usize,
         func_env: &EnvRef,
         mut completion: Completion,
-    ) -> Completion {
-        for loop_state in for_of_stack.drain(from..).rev() {
-            completion = self.close_for_of_loop(loop_state, func_env, completion, None);
+    ) -> ForOfUnwindOutcome {
+        while for_of_stack.len() > from {
+            let loop_pos = for_of_stack.len() - 1;
+            if let Some(env) = for_of_stack[loop_pos].iteration_env.take() {
+                completion = match self.dispose_env_for_for_of_unwind(&env, completion, true) {
+                    ForOfUnwindOutcome::Done(c) => c,
+                    parked @ ForOfUnwindOutcome::Parked { .. } => return parked,
+                };
+                if matches!(completion, Completion::Exit(_)) {
+                    break;
+                }
+            }
+            let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
+            completion = self.close_for_of_iterator(loop_state, func_env, completion, None);
             if matches!(completion, Completion::Exit(_)) {
                 break;
             }
         }
-        completion
+        ForOfUnwindOutcome::Done(completion)
     }
 
     fn async_fn_complete(&mut self, async_id: u64, resolve_fn: &JsValue) -> Completion {

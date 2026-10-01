@@ -24,15 +24,19 @@ enum AwaitReturnStart {
     Settled,
 }
 
-/// Outcome of a step of an async generator's `for-of` unwind
-/// (`unwind_generator_for_of_loops` and the disposal it drives) that may
-/// suspend at a `DisposeResources` `Await`.
-enum ForOfUnwindOutcome {
+/// Outcome of a step of a `for-of` unwind (`unwind_generator_for_of_loops`,
+/// or the async-function driver's own `unwind_for_of!`/
+/// `unwind_async_for_of_loops`) that may suspend at a `DisposeResources`
+/// `Await`. `pub(super)` so `eval.rs` (the parent module) can reuse this
+/// shape instead of duplicating the block-vs-park decision.
+pub(super) enum ForOfUnwindOutcome {
     /// The unwind (or the disposal step that produced it) finished without
     /// needing to suspend.
     Done(Completion),
-    /// A disposal is mid-`Await`; the caller must park the request with a
-    /// `GeneratorDisposeThen::Reenter` continuation and not settle it.
+    /// A disposal is mid-`Await`; the async-generator caller must park the
+    /// request with a `GeneratorDisposeThen::Reenter` continuation (and the
+    /// async-function caller a `PendingDispose` with a `DisposeThen::ForOfCross*`
+    /// tag), in neither case settling anything yet.
     Parked {
         cursor: DisposeCursor,
         value: JsValue,
@@ -6694,8 +6698,12 @@ impl Interpreter {
     /// Blocks (drains the job queue inline) when `can_park` is `false` or
     /// disposal needs no `Await`; otherwise steps the cursor once and, on
     /// `DisposeStep::Await`, returns `ForOfUnwindOutcome::Parked` for the
-    /// caller to save with its `GeneratorDisposeThen::Reenter` continuation.
-    fn dispose_env_for_for_of_unwind(
+    /// caller to save with its own park continuation (a
+    /// `GeneratorDisposeThen::Reenter` for the async-generator driver, a
+    /// `DisposeThen::ForOfCross*`-tagged `PendingDispose` for the
+    /// async-function driver). `pub(super)` so `eval.rs` can call this
+    /// directly instead of duplicating the block-vs-park decision.
+    pub(super) fn dispose_env_for_for_of_unwind(
         &mut self,
         env: &EnvRef,
         completion: Completion,

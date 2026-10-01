@@ -194,6 +194,23 @@ pub(crate) enum DisposeThen {
     /// A `for-of` iteration's environment finished disposing; the `ForOfHead`
     /// state re-enters and finds `iteration_env` already cleared.
     ForOfIteration,
+    /// A `return` crossing one or more open `for-of` loops is disposing the
+    /// innermost one's iteration environment; once done, `route_return!` is
+    /// re-entered with the value carried by the cursor's own completion so
+    /// it can continue unwinding whatever remains (further loops, then the
+    /// function-level disposal).
+    ForOfCrossReturn,
+    /// A `break`/`continue` crossing one or more open `for-of` loops is
+    /// disposing the innermost one's iteration environment; once done,
+    /// `route_loop_control!` is re-entered with the carried target.
+    ForOfCrossLoopControl(super::generator_transform::LoopControlTarget),
+    /// An in-flight throw crossing one or more open `for-of` loops is
+    /// disposing the innermost one's iteration environment; the cursor was
+    /// seeded with `Completion::Throw`, so it always finishes as a throw
+    /// (the original exception, or a disposer's own error chained onto it),
+    /// which becomes `pending_exception` and re-enters the driver's throw
+    /// routing.
+    ForOfCrossThrow,
 }
 
 /// A function-level DisposeResources parked at one of its `Await`s.
