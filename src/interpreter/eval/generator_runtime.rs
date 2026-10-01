@@ -7,16 +7,6 @@ use super::*;
 use crate::interpreter::dispose::GeneratorReentry;
 use crate::interpreter::generator_transform::LoopControlTarget;
 
-/// Whether a jump to `target` stays inside the innermost running finally body
-/// (a loop nested in it) rather than leaving it. A jump that leaves replaces
-/// the throw or return that entered that finally.
-fn stays_inside_running_finally(try_stack: &[TryContextInfo], target: &LoopControlTarget) -> bool {
-    try_stack
-        .iter()
-        .rposition(|try_info| try_info.entered_finally)
-        .is_some_and(|running| target.try_depth > running)
-}
-
 /// Which `yield*` protocol step produced the inner result being awaited.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DelegateStep {
@@ -1408,12 +1398,12 @@ impl Interpreter {
                 // finally it crosses, so it is routed rather than jumped.
                 StateTerminator::LoopControl(target) => {
                     let target = *target;
-                    // A jump that leaves the running finally body replaces the
-                    // throw or return that entered it.
-                    if !stays_inside_running_finally(&current_try_stack, &target) {
-                        pending_exception = None;
-                        pending_return = None;
-                    }
+                    // A jump that leaves the running finally relies on its
+                    // context (not these locals) owning whatever completion
+                    // it replaces (#719); route_generator_exception/the
+                    // return driver must have already consumed a one-shot
+                    // resume input before landing here.
+                    debug_assert!(pending_exception.is_none() && pending_return.is_none());
                     current_id = route_loop_control_result!(target);
                 }
 
@@ -1597,6 +1587,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_finally = true;
                         // A throw routed here by `route_generator_exception`
@@ -1606,7 +1597,11 @@ impl Interpreter {
                         // `TryExit` must not see it (issue #719).
                         if let Some(exc) = pending_exception.take() {
                             ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
                         }
+                    }
+                    if parked {
+                        self.sync_generator_try_stack_for_gc(o.id, &current_try_stack);
                     }
                     current_id = *body_state;
                 }
@@ -4108,8 +4103,13 @@ impl Interpreter {
 
                     if let Some(idx) = finally_idx {
                         let finally_state = current_try_stack[idx].finally_state.unwrap();
-                        current_try_stack = current_try_stack[..=idx].to_vec();
-                        pending_return = Some(return_value);
+                        // Own this return on the context whose finally is
+                        // about to run it, not the driver: a nested
+                        // try/finally's own TryExit must not see it (#719).
+                        current_try_stack[idx].pending_completion =
+                            Some(PendingCompletion::Return(return_value));
+                        current_try_stack.truncate(idx + 1);
+                        self.sync_generator_try_stack_for_gc(o.id, &current_try_stack);
                         current_id = finally_state;
                         just_routed = true;
                         continue;
@@ -4739,12 +4739,12 @@ impl Interpreter {
                 // finally it crosses, so it is routed rather than jumped.
                 StateTerminator::LoopControl(target) => {
                     let target = *target;
-                    // A jump that leaves the running finally body replaces the
-                    // throw or return that entered it.
-                    if !stays_inside_running_finally(&current_try_stack, &target) {
-                        pending_exception = None;
-                        pending_return = None;
-                    }
+                    // A jump that leaves the running finally relies on its
+                    // context (not these locals) owning whatever completion
+                    // it replaces (#719); route_generator_exception/the
+                    // return driver must have already consumed a one-shot
+                    // resume input before landing here.
+                    debug_assert!(pending_exception.is_none() && pending_return.is_none());
                     current_id = route_loop_control_result!(target);
                 }
 
@@ -4801,26 +4801,29 @@ impl Interpreter {
 
                 StateTerminator::TryExit { after_state } => {
                     let finished = current_try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        // Re-throw pending exception after finally completes
-                        let exc = route_exception!(exc);
-                        return self.reject_async_generator_request(o.id, promise, &reject_fn, exc);
+                    match finished.and_then(|ctx| ctx.pending_completion) {
+                        Some(PendingCompletion::Throw(exc)) => {
+                            // Re-throw pending exception after finally completes
+                            let exc = route_exception!(exc);
+                            return self
+                                .reject_async_generator_request(o.id, promise, &reject_fn, exc);
+                        }
+                        Some(PendingCompletion::Return(ret_val)) => {
+                            pending_return = Some(ret_val);
+                            check_abrupt_on_resume = true;
+                            current_id = *after_state;
+                            continue;
+                        }
+                        Some(PendingCompletion::LoopControl(target)) => {
+                            // The finalizer ran on behalf of a break/continue:
+                            // resume it, through any finalizer still in the way.
+                            current_id = route_loop_control_result!(target);
+                            continue;
+                        }
+                        None => {
+                            current_id = *after_state;
+                        }
                     }
-                    if let Some(ret_val) = pending_return.take() {
-                        pending_return = Some(ret_val);
-                        check_abrupt_on_resume = true;
-                        current_id = *after_state;
-                        continue;
-                    }
-                    if let Some(PendingCompletion::LoopControl(target)) =
-                        finished.and_then(|ctx| ctx.pending_completion)
-                    {
-                        // The finalizer ran on behalf of a break/continue:
-                        // resume it, through any finalizer still in the way.
-                        current_id = route_loop_control_result!(target);
-                        continue;
-                    }
-                    current_id = *after_state;
                 }
 
                 StateTerminator::EnterCatch {
@@ -4862,8 +4865,21 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_finally = true;
+                        // A throw routed here by `route_generator_exception`
+                        // (which only knows to jump to this finally, not that
+                        // this is the context that must restore it) is now
+                        // owned by this context: a nested try/finally's own
+                        // `TryExit` must not see it (issue #719).
+                        if let Some(exc) = pending_exception.take() {
+                            ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
+                        }
+                    }
+                    if parked {
+                        self.sync_generator_try_stack_for_gc(o.id, &current_try_stack);
                     }
                     current_id = *body_state;
                 }
@@ -5029,9 +5045,12 @@ impl Interpreter {
                         let cursor = DisposeCursor::new(stack, Completion::Empty);
                         let completion = if pending_exception.is_some() || pending_return.is_some()
                         {
-                            // A `finally` body is running on behalf of a completion
-                            // held in this frame's locals, which a parked request
-                            // cannot carry across the suspension: dispose inline.
+                            // A fresh, not-yet-routed throw or return (the
+                            // one-shot resume input, not a completion parked
+                            // on `pending_completion` — see issue #719) is
+                            // held only in these locals, which a parked
+                            // request cannot carry across the suspension:
+                            // dispose inline instead.
                             self.run_dispose_cursor_holding(
                                 cursor,
                                 &[pending_exception.as_ref(), pending_return.as_ref()],
@@ -6550,6 +6569,8 @@ impl Interpreter {
                 // EnterFinally must mark this one.
                 try_stack.truncate(depth + 1);
                 try_stack[depth].pending_completion = Some(PendingCompletion::LoopControl(target));
+                // Defensive: keep this park site in sync with every other one (#719).
+                self.sync_generator_try_stack_for_gc(generator_id, try_stack);
                 ForOfTransitionOutcome::Done(finally_state)
             }
             None => {
@@ -6723,6 +6744,31 @@ impl Interpreter {
             let slot = self.generator_scope_stacks.entry(generator_id).or_default();
             slot.clear();
             slot.extend_from_slice(scope_stack);
+        }
+    }
+
+    /// Write a completion just parked on `try_stack` (issue #719) into the
+    /// live generator object in place, so it is GC-rooted immediately rather
+    /// than only once the driver's next suspension serializes it — in case
+    /// the finally that owns it runs `$262.gc()` (or otherwise triggers a
+    /// collection) before then. `collect_iterator_state_roots` already
+    /// traces `try_stack` unconditionally on the object's own state, so
+    /// keeping that field current is enough; no side table is needed.
+    fn sync_generator_try_stack_for_gc(&mut self, generator_id: u64, try_stack: &[TryContextInfo]) {
+        if let Some(obj) = self.get_object_cell(generator_id)
+            && let Some(state) = obj.borrow_mut().iterator_state_mut()
+        {
+            match state {
+                IteratorState::StateMachineGenerator {
+                    try_stack: slot, ..
+                }
+                | IteratorState::StateMachineAsyncGenerator {
+                    try_stack: slot, ..
+                } => {
+                    *slot = try_stack.to_vec();
+                }
+                _ => {}
+            }
         }
     }
 }

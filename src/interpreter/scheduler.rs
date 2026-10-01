@@ -14,6 +14,7 @@ use super::AsyncGenRequest;
 use super::Completion;
 use super::Interpreter;
 use super::PendingDispose;
+use super::TryContextInfo;
 
 pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
 
@@ -297,6 +298,17 @@ impl JobScheduler {
     pub(crate) fn park_async_function_dispose(&mut self, id: u64, pending: PendingDispose) {
         if let Some(state) = self.async_function_states.get_mut(&id) {
             state.pending_dispose = Some(pending);
+        }
+    }
+
+    /// Write the driver's in-flight `try_stack` into the re-inserted
+    /// `Executing` state in place, so a completion just parked on it (issue
+    /// #719) is GC-rooted immediately rather than only once the driver's
+    /// next suspension serializes it — in case the finally that owns it
+    /// runs `$262.gc()` (or otherwise triggers a collection) before then.
+    pub(crate) fn sync_async_function_try_stack(&mut self, id: u64, try_stack: &[TryContextInfo]) {
+        if let Some(state) = self.async_function_states.get_mut(&id) {
+            state.try_stack = try_stack.to_vec();
         }
     }
 

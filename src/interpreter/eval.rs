@@ -8061,9 +8061,6 @@ impl Interpreter {
                 current_state: 0,
                 try_stack: vec![],
                 pending_binding: None,
-                pending_return: None,
-                pending_loop_control: None,
-                saved_finally_exception: None,
                 pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
@@ -8112,9 +8109,6 @@ impl Interpreter {
             current_state,
             mut try_stack,
             pending_binding,
-            pending_return: saved_pending_return,
-            pending_loop_control: restored_pending_loop_control,
-            saved_finally_exception: restored_saved_finally_exception,
             pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
             reject_fn,
@@ -8192,9 +8186,6 @@ impl Interpreter {
                 current_state,
                 try_stack: try_stack.clone(),
                 pending_binding: None,
-                pending_return: None,
-                pending_loop_control: restored_pending_loop_control,
-                saved_finally_exception: None,
                 pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
@@ -8208,9 +8199,6 @@ impl Interpreter {
         let saved_in_state_machine = self.in_state_machine;
         self.in_state_machine = true;
         let mut current_id = current_state;
-        let mut pending_return: Option<JsValue> = saved_pending_return;
-        let mut pending_loop_control = restored_pending_loop_control;
-        let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
         // Lowered lexical scopes, including suspendable `await using` blocks.
@@ -8321,9 +8309,6 @@ impl Interpreter {
                                 current_id,
                                 &try_stack,
                                 None,
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -8362,9 +8347,6 @@ impl Interpreter {
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
-                // A return produced by a finalizer replaces any loop-control
-                // completion that originally entered it.
-                pending_loop_control = None;
                 let mut routed_to = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_finally
@@ -8407,8 +8389,17 @@ impl Interpreter {
                     Completion::Return(ret_val.clone()),
                     DisposeThen::ScopeCrossReturn
                 );
-                if let Some((_, finally_state)) = routed_to {
-                    pending_return = Some(ret_val);
+                if let Some((idx, finally_state)) = routed_to {
+                    // Own this return on the context whose finally is about
+                    // to run it, not the driver: a nested try/finally's own
+                    // TryExit must not see it (issue #719). Truncating here
+                    // unconditionally — not only when something is being
+                    // replaced — is what makes EnterFinally and TryExit land
+                    // on the correct context next.
+                    try_stack[idx].pending_completion = Some(PendingCompletion::Return(ret_val));
+                    try_stack.truncate(idx + 1);
+                    self.scheduler
+                        .sync_async_function_try_stack(async_id, &try_stack);
                     current_id = finally_state;
                 } else if let Some(stack) = self.take_dispose_stack(&func_env) {
                     pending_dispose = Some(PendingDispose {
@@ -8433,11 +8424,10 @@ impl Interpreter {
 
                 // A loop-control completion produced by a finalizer replaces
                 // the return, throw, or earlier loop-control completion that
-                // originally entered it.
-                pending_return = None;
-                saved_finally_exception = None;
+                // originally entered it — via the unconditional truncation to
+                // the routed depth below, not by explicitly clearing
+                // driver-global state (issue #719).
                 pending_for_of_unwind = None;
-                pending_loop_control = Some(target);
 
                 let mut routed_to = None;
                 for i in (target.try_depth..try_stack.len()).rev() {
@@ -8484,13 +8474,19 @@ impl Interpreter {
                 );
 
                 if let Some((depth, finally_state)) = routed_to {
-                    // Contexts nested inside the selected finally are left, so
-                    // EnterFinally must mark this one.
+                    // Own this jump on the context whose finally is about to
+                    // run it, not the driver: a nested try/finally's own
+                    // TryExit must not see it (issue #719). Contexts nested
+                    // inside the selected finally are left, so EnterFinally
+                    // must mark this one.
+                    try_stack[depth].pending_completion =
+                        Some(PendingCompletion::LoopControl(target));
                     try_stack.truncate(depth + 1);
+                    self.scheduler
+                        .sync_async_function_try_stack(async_id, &try_stack);
                     current_id = finally_state;
                 } else {
                     try_stack.truncate(target.try_depth);
-                    pending_loop_control = None;
                     current_id = target.target_state;
                 }
             }};
@@ -8576,9 +8572,6 @@ impl Interpreter {
                             current_id,
                             &try_stack,
                             None,
-                            pending_return.take(),
-                            pending_loop_control.take(),
-                            saved_finally_exception.take(),
                             pending_for_of_unwind.take(),
                             &resolve_fn,
                             &reject_fn,
@@ -8687,12 +8680,6 @@ impl Interpreter {
                     }
                 }
 
-                // A throw produced while an intervening finally was handling
-                // another abrupt completion replaces that completion.
-                let pending_return_was_replaced = pending_return.take().is_some();
-                let pending_loop_control_was_replaced = pending_loop_control.take().is_some();
-                let pending_completion_was_replaced =
-                    pending_return_was_replaced || pending_loop_control_was_replaced;
                 // §14.7.5.6: any abrupt body completion leaving a for-of closes
                 // its iterator, so every still-active loop crossed on the way to
                 // the handler unwinds — not just the ones a previous unwind
@@ -8775,21 +8762,19 @@ impl Interpreter {
                     };
                 }
 
-                if let Some((depth, state, is_catch, _)) = handler {
-                    if is_catch {
-                        // Always retain this context, catch-only or not:
-                        // every try/catch now routes its normal-completion
-                        // path through a `TryExit` (see
-                        // `transform_try_statement`), which must still find
-                        // this context on the stack to pop once the catch
-                        // body finishes. EnterCatch marks it entered,
-                        // preventing the catch from handling itself.
-                        try_stack.truncate(depth + 1);
-                    } else if pending_completion_was_replaced {
-                        // Drop the completed inner finally contexts so
-                        // EnterFinally marks the handler selected above.
-                        try_stack.truncate(depth + 1);
-                    }
+                if let Some((depth, state, _is_catch, _)) = handler {
+                    // Always retain exactly this context: for a catch, every
+                    // try/catch now routes its normal-completion path through
+                    // a `TryExit` (see `transform_try_statement`), which must
+                    // still find this context on the stack to pop once the
+                    // catch body finishes — EnterCatch marks it entered,
+                    // preventing the catch from handling itself. For a
+                    // finally, any inner context's own completion this throw
+                    // is escaping past must not survive to confuse a later
+                    // TryExit (issue #719); truncating unconditionally is a
+                    // no-op when nothing was being replaced, since try_stack
+                    // is already exactly this deep in that case.
+                    try_stack.truncate(depth + 1);
                     pending_exception = Some(exc);
                     current_id = state;
                     continue;
@@ -8946,9 +8931,6 @@ impl Interpreter {
                     current_id,
                     &try_stack,
                     None,
-                    pending_return.take(),
-                    pending_loop_control.take(),
-                    saved_finally_exception.take(),
                     pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
@@ -8985,9 +8967,6 @@ impl Interpreter {
                                 current_id,
                                 &try_stack,
                                 sent_value_binding.clone(),
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -9013,9 +8992,6 @@ impl Interpreter {
                         resume_state,
                         &try_stack,
                         sent_value_binding.clone(),
-                        pending_return.take(),
-                        pending_loop_control.take(),
-                        saved_finally_exception.take(),
                         pending_for_of_unwind.take(),
                         &resolve_fn,
                         &reject_fn,
@@ -9091,31 +9067,38 @@ impl Interpreter {
                 }
 
                 StateTerminator::TryExit { after_state } => {
-                    try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        pending_exception = Some(exc);
-                        continue;
+                    let finished = try_stack.pop();
+                    match finished.and_then(|ctx| ctx.pending_completion) {
+                        Some(PendingCompletion::Throw(exc)) => {
+                            pending_exception = Some(exc);
+                            continue;
+                        }
+                        Some(PendingCompletion::Return(ret_val)) => {
+                            route_return!(ret_val);
+                            continue;
+                        }
+                        Some(PendingCompletion::LoopControl(target)) => {
+                            route_loop_control!(target);
+                            continue;
+                        }
+                        None => {
+                            // A fresh, not-yet-routed exception (the one-shot
+                            // resume input, not a completion owned by the
+                            // context just popped) still threads through here
+                            // unchanged.
+                            if let Some(exc) = pending_exception.take() {
+                                pending_exception = Some(exc);
+                                continue;
+                            }
+                            if pending_for_of_unwind
+                                .as_ref()
+                                .is_some_and(|pending| pending.clear_at_state == Some(after_state))
+                            {
+                                pending_for_of_unwind = None;
+                            }
+                            current_id = after_state;
+                        }
                     }
-                    if let Some(ret_val) = pending_return.take() {
-                        route_return!(ret_val);
-                        continue;
-                    }
-                    // Restore any exception saved from before the finally block
-                    if let Some(exc) = saved_finally_exception.take() {
-                        pending_exception = Some(exc);
-                        continue;
-                    }
-                    if let Some(target) = pending_loop_control.take() {
-                        route_loop_control!(target);
-                        continue;
-                    }
-                    if pending_for_of_unwind
-                        .as_ref()
-                        .is_some_and(|pending| pending.clear_at_state == Some(after_state))
-                    {
-                        pending_for_of_unwind = None;
-                    }
-                    current_id = after_state;
                 }
 
                 StateTerminator::EnterCatch {
@@ -9157,11 +9140,20 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_finally = true;
+                        // A throw routed here belongs to this context, not an
+                        // enclosing one — see issue #719.
+                        if let Some(exc) = pending_exception.take() {
+                            ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
+                        }
                     }
-                    // Park any pending exception so the finally body runs normally
-                    saved_finally_exception = pending_exception.take();
+                    if parked {
+                        self.scheduler
+                            .sync_async_function_try_stack(async_id, &try_stack);
+                    }
                     current_id = body_state;
                 }
 
@@ -9349,9 +9341,6 @@ impl Interpreter {
                                 current_id, // resume to same ForOfHead state
                                 &try_stack,
                                 binding,
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -9804,9 +9793,6 @@ impl Interpreter {
         resume_state: usize,
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
-        pending_return: Option<JsValue>,
-        pending_loop_control: Option<crate::interpreter::generator_transform::LoopControlTarget>,
-        saved_finally_exception: Option<JsValue>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
@@ -9835,9 +9821,6 @@ impl Interpreter {
                 current_state: resume_state,
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
-                pending_return,
-                pending_loop_control,
-                saved_finally_exception,
                 pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
