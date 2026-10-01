@@ -266,28 +266,21 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
             let cell = interp.get_object_cell_expect(obj_id);
             interp.gc_write_barrier_value(cell, &value);
             let mut borrow = cell.borrow_mut_untracked();
-            if let Some(elems) = borrow.array_elements_mut()
-                && let Ok(idx) = key.parse::<usize>()
-            {
-                if idx < elems.len() {
-                    elems[idx] = value.clone();
-                } else {
-                    while elems.len() < idx {
-                        elems.push(JsValue::UNDEFINED);
+            if borrow.array_elements().is_some() {
+                if borrow.try_append_dense_array_data_property(&key, &value) {
+                    return Ok(());
+                }
+                drop(borrow);
+                return match interp.array_define_own_property(
+                    obj_id as usize,
+                    &key,
+                    PropertyDescriptor::data_default(value),
+                )? {
+                    true => Ok(()),
+                    false => {
+                        Err(interp.create_type_error(&format!("Cannot define property: {key}")))
                     }
-                    elems.push(value.clone());
-                }
-                // Update length if index >= current length (exotic array behavior)
-                let cur_len = borrow
-                    .properties
-                    .get("length")
-                    .and_then(|d| d.value.as_ref())
-                    .and_then(|v| v.as_number())
-                    .map(|n| n as usize)
-                    .unwrap_or(0);
-                if idx >= cur_len {
-                    borrow.set_property_value("length", JsValue::number((idx + 1) as f64));
-                }
+                };
             }
             borrow.define_own_property(key, PropertyDescriptor::data_default(value));
         }

@@ -1152,54 +1152,71 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Async) => {
                 let source_start = self.current_token_start;
-                self.advance()?;
-                if self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator {
+                let (is_function, is_single_param, is_parenthesized) =
+                    self.lookahead(|tokens| -> Result<_, ParseError> {
+                        tokens.advance()?;
+                        if tokens.line_terminator_before() {
+                            return Ok((false, false, false));
+                        }
+                        if tokens.current() == &Token::Keyword(Keyword::Function) {
+                            return Ok((true, false, false));
+                        }
+                        if tokens.current() == &Token::LeftParen {
+                            return Ok((false, false, true));
+                        }
+                        let is_identifier = self.identifier_name(tokens.current()).is_some();
+                        if !is_identifier {
+                            return Ok((false, false, false));
+                        }
+                        tokens.advance()?;
+                        Ok((
+                            false,
+                            !tokens.line_terminator_before() && tokens.current() == &Token::Arrow,
+                            false,
+                        ))
+                    })?;
+
+                self.advance()?; // async
+                if is_function {
                     return self.parse_async_function_expression(source_start);
                 }
-                if !self.prev_line_terminator {
-                    if let Some(name) = self.current_identifier_name() {
-                        let name = name.clone();
-                        let orig_token = self.current.clone();
-                        let orig_lt = self.prev_line_terminator;
-                        self.advance()?;
-                        if self.current == Token::Arrow && !self.prev_line_terminator {
-                            self.check_strict_binding_identifier(&name)?;
-                            if name == "await" {
-                                return Err(self.error("'await' is not allowed as a parameter name in an async function"));
-                            }
-                            self.advance()?;
-                            let prev_async = self.in_async;
-                            self.in_async = true;
-                            let (body, body_is_strict) = if self.current == Token::LeftBrace {
-                                let (stmts, strict) = self.parse_arrow_function_body(true)?;
-                                (ArrowBody::Block(Body::new(stmts)), strict)
-                            } else {
-                                (
-                                    ArrowBody::Expression(Body::new(vec![Statement::Return(
-                                        Some(self.parse_arrow_expression_body()?),
-                                    )])),
-                                    false,
-                                )
-                            };
-                            self.in_async = prev_async;
-                            let source_text = self.source_since(source_start);
-                            return Ok(Expression::ArrowFunction(ArrowFunction {
-                                params: vec![Pattern::Identifier(name)],
-                                body,
-                                is_async: true,
-                                source_text,
-                                body_is_strict,
-                            }));
-                        }
-                        // Not an arrow — push back and return "async" as identifier
-                        self.push_back(self.current.clone(), self.prev_line_terminator);
-                        self.current = orig_token;
-                        self.prev_line_terminator = orig_lt;
-                        return Ok(Expression::Identifier("async".to_string()));
+                if is_parenthesized {
+                    return self.parse_async_arrow_params(source_start);
+                }
+                if is_single_param {
+                    let name = self
+                        .current_identifier_name()
+                        .expect("lookahead classified an identifier");
+                    self.advance()?; // parameter
+                    self.check_strict_binding_identifier(&name)?;
+                    if name == "await" {
+                        return Err(self.error(
+                            "'await' is not allowed as a parameter name in an async function",
+                        ));
                     }
-                    if self.current == Token::LeftParen {
-                        return self.parse_async_arrow_params(source_start);
-                    }
+                    self.advance()?; // arrow
+                    let prev_async = self.in_async;
+                    self.in_async = true;
+                    let (body, body_is_strict) = if self.current == Token::LeftBrace {
+                        let (stmts, strict) = self.parse_arrow_function_body(true)?;
+                        (ArrowBody::Block(Body::new(stmts)), strict)
+                    } else {
+                        (
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
+                            false,
+                        )
+                    };
+                    self.in_async = prev_async;
+                    let source_text = self.source_since(source_start);
+                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                        params: vec![Pattern::Identifier(name)],
+                        body,
+                        is_async: true,
+                        source_text,
+                        body_is_strict,
+                    }));
                 }
                 Ok(Expression::Identifier("async".to_string()))
             }
@@ -1640,112 +1657,112 @@ impl<'a> Parser<'a> {
         Ok(Expression::Object(props, trailing_comma_after_spread))
     }
 
+    fn is_method_name_start(token: &Token) -> bool {
+        matches!(
+            token,
+            Token::Identifier(_)
+                | Token::IdentifierWithEscape(_)
+                | Token::StringLiteral(_)
+                | Token::NumericLiteral(_)
+                | Token::LegacyOctalLiteral(_)
+                | Token::NonOctalDecimalLiteral(_)
+                | Token::BigIntLiteral(_)
+                | Token::LeftBracket
+                | Token::Keyword(_)
+                | Token::PrivateName(_)
+        )
+    }
+
+    fn is_accessor_name_start(token: &Token) -> bool {
+        Self::is_method_name_start(token)
+            || matches!(token, Token::NullLiteral | Token::BooleanLiteral(_))
+    }
+
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {
         let method_source_start = self.current_token_start;
         // Check for async method: { async method() {} } or { async *method() {} }
-        // Escaped identifiers like \u0061sync don't count as async keyword
+        // Escaped identifiers like \u0061sync don't count as async keyword.
         let is_async_prop = matches!(&self.current, Token::Identifier(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
-        if is_async_prop {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            if !self.prev_line_terminator {
-                let is_generator = self.eat_star()?;
-                let is_method = matches!(
-                    &self.current,
-                    Token::Identifier(_)
-                        | Token::IdentifierWithEscape(_)
-                        | Token::StringLiteral(_)
-                        | Token::NumericLiteral(_)
-                        | Token::LegacyOctalLiteral(_)
-                        | Token::NonOctalDecimalLiteral(_)
-                        | Token::BigIntLiteral(_)
-                        | Token::LeftBracket
-                        | Token::Keyword(_)
-                        | Token::PrivateName(_)
-                );
-                if is_method || is_generator {
-                    let (key, computed) = self.parse_property_name()?;
-                    if matches!(&key, PropertyKey::Private(_)) {
-                        return Err(self.error("Private fields are not allowed in object literals"));
-                    }
-                    let prev_async = self.in_async;
-                    let prev_generator = self.in_generator;
-                    let prev_static_block = self.in_static_block;
-                    let prev_super_property = self.allow_super_property;
-                    self.in_async = true;
-                    if is_generator {
-                        self.in_generator = true;
-                    }
-                    self.in_static_block = false;
-                    self.allow_super_property = true;
-                    self.in_non_arrow_function += 1;
-                    let params = self.parse_formal_parameters()?;
-                    self.in_async = prev_async;
-                    self.in_generator = prev_generator;
-                    self.in_static_block = prev_static_block;
-                    self.allow_super_property = prev_super_property;
-                    self.set_function_param_names(&params);
-                    let (body, body_strict) =
-                        self.parse_function_body_inner(is_generator, true, true, false)?;
-                    self.in_non_arrow_function -= 1;
-                    if body_strict && !Self::is_simple_parameter_list(&params) {
-                        return Err(self.error(
-                            "Illegal 'use strict' directive in function with non-simple parameter list",
-                        ));
-                    }
-                    self.check_duplicate_params_strict(&params)?;
-                    let source_text = self.source_since(method_source_start);
-                    return Ok(Property {
-                        key,
-                        value: Expression::Function(FunctionExpr {
-                            name: None,
-                            params,
-                            body: Body::new(body),
-                            is_async: true,
-                            is_generator,
-                            source_text,
-                            body_is_strict: body_strict,
-                        }),
-                        kind: PropertyKind::Init,
-                        computed,
-                        shorthand: false,
-                        method: true,
-                    });
+        let async_method = if is_async_prop {
+            self.lookahead(|tokens| -> Result<Option<bool>, ParseError> {
+                tokens.advance()?;
+                if tokens.line_terminator_before() {
+                    return Ok(None);
                 }
+                if tokens.current() == &Token::Star {
+                    return Ok(Some(true));
+                }
+                Ok(Self::is_method_name_start(tokens.current()).then_some(false))
+            })?
+        } else {
+            None
+        };
+        if let Some(is_generator) = async_method {
+            self.advance()?; // async
+            if is_generator {
+                self.eat(&Token::Star)?;
             }
-            // Not an async method — push back and restore
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+            let (key, computed) = self.parse_property_name()?;
+            if matches!(&key, PropertyKey::Private(_)) {
+                return Err(self.error("Private fields are not allowed in object literals"));
+            }
+            let prev_async = self.in_async;
+            let prev_generator = self.in_generator;
+            let prev_static_block = self.in_static_block;
+            let prev_super_property = self.allow_super_property;
+            self.in_async = true;
+            if is_generator {
+                self.in_generator = true;
+            }
+            self.in_static_block = false;
+            self.allow_super_property = true;
+            self.in_non_arrow_function += 1;
+            let params = self.parse_formal_parameters()?;
+            self.in_async = prev_async;
+            self.in_generator = prev_generator;
+            self.in_static_block = prev_static_block;
+            self.allow_super_property = prev_super_property;
+            self.set_function_param_names(&params);
+            let (body, body_strict) =
+                self.parse_function_body_inner(is_generator, true, true, false)?;
+            self.in_non_arrow_function -= 1;
+            if body_strict && !Self::is_simple_parameter_list(&params) {
+                return Err(self.error(
+                    "Illegal 'use strict' directive in function with non-simple parameter list",
+                ));
+            }
+            self.check_duplicate_params_strict(&params)?;
+            let source_text = self.source_since(method_source_start);
+            return Ok(Property {
+                key,
+                value: Expression::Function(FunctionExpr {
+                    name: None,
+                    params,
+                    body: Body::new(body),
+                    is_async: true,
+                    is_generator,
+                    source_text,
+                    body_is_strict: body_strict,
+                }),
+                kind: PropertyKind::Init,
+                computed,
+                shorthand: false,
+                method: true,
+            });
         }
 
-        // Escaped \u0061sync followed by * or method name is a SyntaxError
-        if matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async") {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            if !self.prev_line_terminator {
-                let looks_like_async_method = self.current == Token::Star
-                    || matches!(
-                        &self.current,
-                        Token::Identifier(_)
-                            | Token::IdentifierWithEscape(_)
-                            | Token::StringLiteral(_)
-                            | Token::NumericLiteral(_)
-                            | Token::LegacyOctalLiteral(_)
-                            | Token::NonOctalDecimalLiteral(_)
-                            | Token::BigIntLiteral(_)
-                            | Token::LeftBracket
-                            | Token::Keyword(_)
-                            | Token::PrivateName(_)
-                    );
-                if looks_like_async_method {
-                    return Err(self.error("Keyword must not contain escaped characters"));
-                }
-            }
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+        // Escaped \u0061sync followed by * or method name is a SyntaxError.
+        if matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async")
+            && self.lookahead(|tokens| -> Result<bool, ParseError> {
+                tokens.advance()?;
+                Ok(!tokens.line_terminator_before()
+                    && (tokens.current() == &Token::Star
+                        || Self::is_method_name_start(tokens.current())))
+            })?
+        {
+            self.advance()?;
+            return Err(self.error("Keyword must not contain escaped characters"));
         }
 
         // Check for generator method: { *method() {} }
@@ -1808,24 +1825,12 @@ impl<'a> Parser<'a> {
             } else {
                 PropertyKind::Set
             };
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?; // consume get/set, current is now next token
-            let is_accessor = matches!(
-                &self.current,
-                Token::Identifier(_)
-                    | Token::IdentifierWithEscape(_)
-                    | Token::StringLiteral(_)
-                    | Token::NumericLiteral(_)
-                    | Token::LegacyOctalLiteral(_)
-                    | Token::NonOctalDecimalLiteral(_)
-                    | Token::BigIntLiteral(_)
-                    | Token::LeftBracket
-                    | Token::Keyword(_)
-                    | Token::PrivateName(_)
-                    | Token::NullLiteral
-                    | Token::BooleanLiteral(_)
-            );
+            let is_accessor = self.lookahead(|tokens| -> Result<bool, ParseError> {
+                tokens.advance()?;
+                Ok(Self::is_accessor_name_start(tokens.current()))
+            })?;
             if is_accessor {
+                self.advance()?; // consume get/set
                 let (key, computed) = self.parse_property_name()?;
                 if matches!(&key, PropertyKey::Private(_)) {
                     return Err(self.error("Private fields are not allowed in object literals"));
@@ -1880,36 +1885,17 @@ impl<'a> Parser<'a> {
                     method: true,
                 });
             }
-            // Not an accessor — push back current and restore get/set as current
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
         }
 
-        // Escaped get/set: advance past it to see what follows, then decide
-        if escaped_get_or_set {
-            let saved_lt = self.prev_line_terminator;
-            let saved = self.advance()?;
-            let looks_like_accessor = matches!(
-                &self.current,
-                Token::Identifier(_)
-                    | Token::IdentifierWithEscape(_)
-                    | Token::StringLiteral(_)
-                    | Token::NumericLiteral(_)
-                    | Token::LegacyOctalLiteral(_)
-                    | Token::NonOctalDecimalLiteral(_)
-                    | Token::BigIntLiteral(_)
-                    | Token::LeftBracket
-                    | Token::Keyword(_)
-                    | Token::PrivateName(_)
-            );
-            if looks_like_accessor {
-                return Err(self.error("Keyword must not contain escaped characters"));
-            }
-            // Not an accessor — push back and let the escaped identifier be parsed normally
-            self.push_back(self.current.clone(), self.prev_line_terminator);
-            self.current = saved;
-            self.prev_line_terminator = saved_lt;
+        // Escaped get/set: reject only when the following token makes it an accessor.
+        if escaped_get_or_set
+            && self.lookahead(|tokens| -> Result<bool, ParseError> {
+                tokens.advance()?;
+                Ok(Self::is_method_name_start(tokens.current()))
+            })?
+        {
+            self.advance()?;
+            return Err(self.error("Keyword must not contain escaped characters"));
         }
 
         let is_escaped_reserved = matches!(&self.current, Token::IdentifierWithEscape(name)

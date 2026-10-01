@@ -1,0 +1,4078 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-25T11:04:55+00:00",
+  "purpose": "Data for a blog post: how far jsse has come since 2026-03-17 (compat + perf), vs Node, Boa, engine262. Updated 2026-09-25 with jsse v0.9.0 (jsse-v0.9.0 and jsse-v0.9.0-bytecode). Every 2026-09-18 datum is carried over unchanged.",
+  "engines": {
+    "jsse-current": {
+      "version": "0.8.1",
+      "tag": "v0.8.1",
+      "commit_test262_runs": "077e4ec37be102af47925e7860e172867ce0e04e",
+      "commit_buildbox3_perf_runs": "083746f7be1941df819f19af55be3d3764a4e7d6",
+      "note": "083746f is the v0.8.1 release commit: version-bump/changelog only on top of 077e4ec (no source changes)."
+    },
+    "jsse-current-bytecode": {
+      "same_binary_as": "jsse-current",
+      "flags": [
+        "--bytecode"
+      ],
+      "note": "Bytecode compiler + VM for eligible functions; experimental, off by default."
+    },
+    "jsse-v0.9.0": {
+      "version": "0.9.0",
+      "tag": "v0.9.0",
+      "commit": "e30c5c7430040c73639143671917d5be42f648f4",
+      "date": "2026-09-23",
+      "note": "Release commit (chore(release): 0.9.0). Built from source at this commit with the same toolchains as the 2026-09-18 jsse builds (see toolchains); not the CI release tarball.",
+      "binary_sha256": {
+        "laptop_test262_build": "ac428840ef9220a00728c49a5b141ab7b007a7df518f136d76465820d68a760b",
+        "buildbox3_perf_build": "0845e982a4f48403223ab123529d1fc5dd69ed303c45f27a0d43f3c978e1b4da"
+      }
+    },
+    "jsse-v0.9.0-bytecode": {
+      "same_binary_as": "jsse-v0.9.0",
+      "flags": [
+        "--bytecode"
+      ],
+      "note": "Bytecode compiler + VM for eligible functions; experimental, off by default."
+    },
+    "jsse-mar17": {
+      "version": "0.1.0",
+      "commit": "7a4d0955aac7caa36cf7462fa496f843c8904862",
+      "date": "2026-03-17",
+      "note": "Predates the --bytecode flag."
+    },
+    "node-v26.9.0": {
+      "version": "v26.9.0",
+      "engine": "V8"
+    },
+    "boa-v0.22": {
+      "version": "0.22.0",
+      "source": "https://github.com/boa-dev/boa/releases/tag/v0.22"
+    },
+    "engine262": {
+      "version": "0.0.1 (package.json; built from GitHub main at run time)",
+      "runs_on": "node v26.9.0",
+      "source": "https://github.com/engine262/engine262"
+    }
+  },
+  "toolchains": {
+    "local_laptop_builds": "rustc 1.98.0 (88d9e12ae 2026-08-18) for both jsse-current and jsse-mar17 (test262 runs)",
+    "buildbox3_builds": "rustc 1.100.0-nightly (330d31712 2026-09-17) for both jsse-current and jsse-mar17 (micro-benchmarks and JetStream)",
+    "local_laptop_builds_v0_9_0": "rustc 1.98.0 (88d9e12ae 2026-08-18) for jsse-v0.9.0 (test262 runs; same toolchain as the 2026-09-18 laptop builds)",
+    "buildbox3_builds_v0_9_0": "rustc 1.100.0-nightly (330d31712 2026-09-17) for jsse-v0.9.0 (micro-benchmarks and JetStream; same toolchain as the 2026-09-18 buildbox3 builds)"
+  },
+  "hosts": {
+    "test262_runs": "ravenwing (laptop): AMD Ryzen AI 9 HX 370, 24 threads, Arch Linux; shared interactive desktop with variable load",
+    "perf_runs": "buildbox3: AMD EPYC 7501 32-Core, 61 CPUs, Debian 12 (glibc 2.36), Linux 6.1.0-53; shared build machine (another user's RISC-V LNT jobs were running, baseline loadavg ~1.2-1.7)",
+    "test262_runs_v0_9_0": "ravenwing (laptop): AMD Ryzen AI 9 HX 370, 24 threads, Arch Linux (Omarchy); same machine as the 2026-09-18 test262 runs; shared interactive desktop with variable load (loadavg1 6.7 at the start of the default run, ~18-19 at the end of each run, mostly the -j 12 run itself)",
+    "perf_runs_v0_9_0": "buildbox3 (same machine as the 2026-09-18 perf runs: AMD EPYC 7501 32-Core, 61 CPUs, Debian 12, Linux 6.1.0-53); shared build machine, baseline loadavg1 ~1.0-1.6 before the runs, no other user's processes among the top CPU consumers when the builds/runs started"
+  },
+  "test262": {
+    "checkout_sha": "aae8cf6eed6d6c6a203be48c1184bb194880f66b",
+    "spec_sha": "270a490b3f8bf6f15bced16021ee0c3ff107f823",
+    "files": 51983,
+    "scenarios": 99911,
+    "runner": "scripts/run-test262.py (default suite: language, built-ins, annexB, intl402; each test run in sloppy and strict where applicable)",
+    "flags": "-j 12 --timeout 120 (engine262: --sample 0.10 --seed 42); no --update-baseline",
+    "same_suite_for_all_engines": true,
+    "results": {
+      "jsse-current": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99911,
+        "skipped": 0,
+        "pass": 99911,
+        "fail": 0,
+        "pass_rate_of_run_pct": 100.0,
+        "timing": {
+          "tests_timed": 99911,
+          "sum_of_per_test_wall_s": 3307.6,
+          "median_s": 0.016,
+          "p95_s": 0.026,
+          "p99_s": 0.5,
+          "max_s": 11.52,
+          "scenarios_over_10s": 4,
+          "scenarios_at_or_over_timeout_120s": 0
+        },
+        "top_failing_areas": [],
+        "pass_rate_of_all_99911_scenarios_pct": 100.0,
+        "sampled": false
+      },
+      "jsse-current-bytecode": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99911,
+        "skipped": 0,
+        "pass": 99911,
+        "fail": 0,
+        "pass_rate_of_run_pct": 100.0,
+        "timing": {
+          "tests_timed": 99911,
+          "sum_of_per_test_wall_s": 2929.2,
+          "median_s": 0.015,
+          "p95_s": 0.02,
+          "p99_s": 0.491,
+          "max_s": 10.36,
+          "scenarios_over_10s": 3,
+          "scenarios_at_or_over_timeout_120s": 0
+        },
+        "top_failing_areas": [],
+        "pass_rate_of_all_99911_scenarios_pct": 100.0,
+        "sampled": false
+      },
+      "jsse-v0.9.0": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99911,
+        "skipped": 0,
+        "pass": 99911,
+        "fail": 0,
+        "pass_rate_of_run_pct": 100.0,
+        "timing": {
+          "tests_timed": 99911,
+          "sum_of_per_test_wall_s": 2859.2,
+          "median_s": 0.014,
+          "p95_s": 0.018,
+          "p99_s": 0.588,
+          "max_s": 10.98,
+          "scenarios_over_10s": 5,
+          "scenarios_at_or_over_timeout_120s": 0
+        },
+        "top_failing_areas": [],
+        "pass_rate_of_all_99911_scenarios_pct": 100.0,
+        "sampled": false
+      },
+      "jsse-v0.9.0-bytecode": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99911,
+        "skipped": 0,
+        "pass": 99911,
+        "fail": 0,
+        "pass_rate_of_run_pct": 100.0,
+        "timing": {
+          "tests_timed": 99911,
+          "sum_of_per_test_wall_s": 2828.2,
+          "median_s": 0.013,
+          "p95_s": 0.019,
+          "p99_s": 0.484,
+          "max_s": 11.0,
+          "scenarios_over_10s": 5,
+          "scenarios_at_or_over_timeout_120s": 0
+        },
+        "top_failing_areas": [],
+        "pass_rate_of_all_99911_scenarios_pct": 100.0,
+        "sampled": false
+      },
+      "jsse-mar17": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99911,
+        "skipped": 0,
+        "pass": 98872,
+        "fail": 1039,
+        "pass_rate_of_run_pct": 98.96,
+        "timing": {
+          "tests_timed": 99911,
+          "sum_of_per_test_wall_s": 14665.0,
+          "median_s": 0.014,
+          "p95_s": 0.029,
+          "p99_s": 0.879,
+          "max_s": 37.1,
+          "scenarios_over_10s": 902,
+          "scenarios_at_or_over_timeout_120s": 0
+        },
+        "top_failing_areas": [
+          {
+            "area": "built-ins/Iterator/prototype",
+            "failing_scenarios": 262
+          },
+          {
+            "area": "built-ins/Promise/allKeyed",
+            "failing_scenarios": 88
+          },
+          {
+            "area": "built-ins/Promise/allSettledKeyed",
+            "failing_scenarios": 86
+          },
+          {
+            "area": "built-ins/Error/prototype",
+            "failing_scenarios": 74
+          },
+          {
+            "area": "built-ins/Atomics/waitAsync",
+            "failing_scenarios": 51
+          },
+          {
+            "area": "built-ins/ArrayBuffer/prototype",
+            "failing_scenarios": 36
+          },
+          {
+            "area": "built-ins/TypedArray/prototype",
+            "failing_scenarios": 32
+          },
+          {
+            "area": "language/expressions/class",
+            "failing_scenarios": 32
+          },
+          {
+            "area": "language/statements/class",
+            "failing_scenarios": 32
+          },
+          {
+            "area": "built-ins/Temporal/PlainDate",
+            "failing_scenarios": 24
+          },
+          {
+            "area": "intl402/Locale/prototype",
+            "failing_scenarios": 24
+          },
+          {
+            "area": "language/expressions/async-generator",
+            "failing_scenarios": 24
+          },
+          {
+            "area": "built-ins/Temporal/PlainDateTime",
+            "failing_scenarios": 22
+          },
+          {
+            "area": "built-ins/Temporal/PlainYearMonth",
+            "failing_scenarios": 22
+          },
+          {
+            "area": "built-ins/AsyncDisposableStack/prototype",
+            "failing_scenarios": 14
+          }
+        ],
+        "pass_rate_of_all_99911_scenarios_pct": 98.96,
+        "sampled": false
+      },
+      "node-v26.9.0": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99081,
+        "skipped": 830,
+        "pass": 95353,
+        "fail": 3728,
+        "pass_rate_of_run_pct": 96.24,
+        "timing": {
+          "tests_timed": 99081,
+          "sum_of_per_test_wall_s": 28025.8,
+          "median_s": 0.031,
+          "p95_s": 0.048,
+          "p99_s": 0.103,
+          "max_s": 120.12,
+          "scenarios_over_10s": 206,
+          "scenarios_at_or_over_timeout_120s": 206
+        },
+        "top_failing_areas": [
+          {
+            "area": "language/expressions/dynamic-import",
+            "failing_scenarios": 344
+          },
+          {
+            "area": "built-ins/Iterator/prototype",
+            "failing_scenarios": 262
+          },
+          {
+            "area": "built-ins/Array/fromAsync",
+            "failing_scenarios": 176
+          },
+          {
+            "area": "annexB/language/eval-code",
+            "failing_scenarios": 138
+          },
+          {
+            "area": "language/statements/await-using",
+            "failing_scenarios": 129
+          },
+          {
+            "area": "language/statements/with",
+            "failing_scenarios": 112
+          },
+          {
+            "area": "built-ins/Atomics/waitAsync",
+            "failing_scenarios": 102
+          },
+          {
+            "area": "language/eval-code/direct",
+            "failing_scenarios": 101
+          },
+          {
+            "area": "built-ins/ShadowRealm/prototype",
+            "failing_scenarios": 94
+          },
+          {
+            "area": "built-ins/Atomics/wait",
+            "failing_scenarios": 92
+          },
+          {
+            "area": "built-ins/Promise/allKeyed",
+            "failing_scenarios": 88
+          },
+          {
+            "area": "built-ins/Promise/allSettledKeyed",
+            "failing_scenarios": 86
+          },
+          {
+            "area": "built-ins/Iterator/zipKeyed",
+            "failing_scenarios": 84
+          },
+          {
+            "area": "language/expressions/compound-assignment",
+            "failing_scenarios": 77
+          },
+          {
+            "area": "built-ins/Function/prototype",
+            "failing_scenarios": 72
+          }
+        ],
+        "pass_rate_of_all_99911_scenarios_pct": 95.44,
+        "sampled": false
+      },
+      "boa-v0.22": {
+        "scenarios_in_suite": 99911,
+        "scenarios_selected": 99911,
+        "run": 99911,
+        "skipped": 0,
+        "pass": 84767,
+        "fail": 15144,
+        "pass_rate_of_run_pct": 84.84,
+        "timing": {
+          "tests_timed": 99911,
+          "sum_of_per_test_wall_s": 2118.8,
+          "median_s": 0.019,
+          "p95_s": 0.028,
+          "p99_s": 0.067,
+          "max_s": 4.02,
+          "scenarios_over_10s": 0,
+          "scenarios_at_or_over_timeout_120s": 0
+        },
+        "top_failing_areas": [
+          {
+            "area": "language/statements/for-await-of",
+            "failing_scenarios": 2251
+          },
+          {
+            "area": "language/expressions/class",
+            "failing_scenarios": 2089
+          },
+          {
+            "area": "language/statements/class",
+            "failing_scenarios": 2087
+          },
+          {
+            "area": "language/expressions/async-generator",
+            "failing_scenarios": 820
+          },
+          {
+            "area": "language/expressions/dynamic-import",
+            "failing_scenarios": 801
+          },
+          {
+            "area": "language/expressions/object",
+            "failing_scenarios": 434
+          },
+          {
+            "area": "language/statements/async-generator",
+            "failing_scenarios": 413
+          },
+          {
+            "area": "built-ins/TypedArray/prototype",
+            "failing_scenarios": 274
+          },
+          {
+            "area": "intl402/DateTimeFormat/prototype",
+            "failing_scenarios": 266
+          },
+          {
+            "area": "intl402/NumberFormat/prototype",
+            "failing_scenarios": 216
+          },
+          {
+            "area": "built-ins/Iterator/prototype",
+            "failing_scenarios": 202
+          },
+          {
+            "area": "built-ins/AsyncDisposableStack/prototype",
+            "failing_scenarios": 182
+          },
+          {
+            "area": "built-ins/Array/fromAsync",
+            "failing_scenarios": 176
+          },
+          {
+            "area": "built-ins/DataView/prototype",
+            "failing_scenarios": 176
+          },
+          {
+            "area": "intl402/DurationFormat/prototype",
+            "failing_scenarios": 162
+          }
+        ],
+        "pass_rate_of_all_99911_scenarios_pct": 84.84,
+        "sampled": false
+      },
+      "engine262": {
+        "scenarios_in_suite": null,
+        "scenarios_selected": 11752,
+        "run": 11752,
+        "skipped": 0,
+        "pass": 10342,
+        "fail": 1410,
+        "pass_rate_of_run_pct": 88.0,
+        "timing": {
+          "tests_timed": 11752,
+          "sum_of_per_test_wall_s": 13245.5,
+          "median_s": 0.19,
+          "p95_s": 0.317,
+          "p99_s": 1.865,
+          "max_s": 120.31,
+          "scenarios_over_10s": 104,
+          "scenarios_at_or_over_timeout_120s": 20
+        },
+        "top_failing_areas": [
+          {
+            "area": "intl402/Temporal/ZonedDateTime",
+            "failing_scenarios": 154
+          },
+          {
+            "area": "intl402/Temporal/PlainDate",
+            "failing_scenarios": 128
+          },
+          {
+            "area": "intl402/Temporal/PlainDateTime",
+            "failing_scenarios": 118
+          },
+          {
+            "area": "intl402/Temporal/PlainYearMonth",
+            "failing_scenarios": 88
+          },
+          {
+            "area": "intl402/Locale/prototype",
+            "failing_scenarios": 52
+          },
+          {
+            "area": "annexB/built-ins/String",
+            "failing_scenarios": 46
+          },
+          {
+            "area": "intl402/DateTimeFormat/prototype",
+            "failing_scenarios": 46
+          },
+          {
+            "area": "intl402/NumberFormat/prototype",
+            "failing_scenarios": 46
+          },
+          {
+            "area": "annexB/language/eval-code",
+            "failing_scenarios": 36
+          },
+          {
+            "area": "annexB/built-ins/RegExp",
+            "failing_scenarios": 24
+          },
+          {
+            "area": "intl402/DurationFormat/prototype",
+            "failing_scenarios": 24
+          },
+          {
+            "area": "intl402/Temporal/PlainMonthDay",
+            "failing_scenarios": 24
+          },
+          {
+            "area": "language/import/import-defer",
+            "failing_scenarios": 23
+          },
+          {
+            "area": "built-ins/Atomics/waitAsync",
+            "failing_scenarios": 22
+          },
+          {
+            "area": "built-ins/SharedArrayBuffer/prototype",
+            "failing_scenarios": 20
+          }
+        ],
+        "sampled": true,
+        "sample_fraction_pct": 10.0,
+        "sample_seed": 42,
+        "pass_rate_approx_95ci_pct": [
+          87.4,
+          88.58
+        ],
+        "note": "Estimate from a 10% per-directory random sample, not the full suite; CI is a naive binomial (Wilson) interval that ignores clustering by directory."
+      }
+    },
+    "v0_9_0_run": {
+      "date": "2026-09-25",
+      "runner": "scripts/run-test262.py from the v0.9.0 tree, run with --binary <snapshot of the release build>",
+      "flags": "-j 12 --timeout 120; no --update-baseline (default run, then --bytecode run, sequential)",
+      "checkout_sha": "aae8cf6eed6d6c6a203be48c1184bb194880f66b",
+      "checkout_note": "Same test262 checkout (and spec_sha) as the 2026-09-18 runs, so pass counts are directly comparable.",
+      "default": {
+        "start_utc": "2026-09-25T09:35:55Z",
+        "end_utc": "2026-09-25T09:40:03Z",
+        "regressions_vs_origin_main_baseline": 0
+      },
+      "bytecode": {
+        "start_utc": "2026-09-25T09:40:03Z",
+        "end_utc": "2026-09-25T09:44:08Z",
+        "regressions_vs_origin_main_baseline": 0
+      },
+      "timing_percentile_method": "linear interpolation over per-scenario wall times (the method used for the 2026-09-18 entries was not recorded)"
+    }
+  },
+  "micro_benchmarks": {
+    "host": "buildbox3 (AMD EPYC 7501 32-Core, 61 CPUs, Debian 12, Linux 6.1.0-53)",
+    "protocol": {
+      "repeats": 5,
+      "statistic": "median wall-clock seconds per process invocation (includes engine startup)",
+      "timeout_s": 120,
+      "idle_gate_loadavg1_max": 1.5,
+      "scripts": "benchmarks/scripts/bench_*.js (9 scripts)"
+    },
+    "results": {
+      "jsse-current": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 2.3777496688999236,
+          "min_s": 2.2635172799928114,
+          "max_s": 2.4489742380101234,
+          "all_s": [
+            2.32556449691765,
+            2.4489742380101234,
+            2.3777496688999236,
+            2.2635172799928114,
+            2.3907258309191093
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 4.591303129913285,
+          "min_s": 4.037441845983267,
+          "max_s": 4.674502090085298,
+          "all_s": [
+            4.596431566984393,
+            4.591303129913285,
+            4.037441845983267,
+            4.674502090085298,
+            4.560959946014918
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 1.3604576849611476,
+          "min_s": 1.159480371978134,
+          "max_s": 1.3740617550211027,
+          "all_s": [
+            1.1820311850169674,
+            1.159480371978134,
+            1.3604576849611476,
+            1.3740617550211027,
+            1.3693805190268904
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 32.11234512296505,
+          "min_s": 31.617645165068097,
+          "max_s": 32.59812812798191,
+          "all_s": [
+            32.59812812798191,
+            32.135259879985824,
+            31.830422764993273,
+            32.11234512296505,
+            31.617645165068097
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.7537514619762078,
+          "min_s": 0.7450494579970837,
+          "max_s": 0.7951865480281413,
+          "all_s": [
+            0.7951865480281413,
+            0.7558881600853056,
+            0.7495429950067773,
+            0.7450494579970837,
+            0.7537514619762078
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 0.12525790801737458,
+          "min_s": 0.12096060998737812,
+          "max_s": 0.14951935096178204,
+          "all_s": [
+            0.12525790801737458,
+            0.12222255894448608,
+            0.12096060998737812,
+            0.13727070903405547,
+            0.14951935096178204
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 5.993270623032004,
+          "min_s": 5.86072668095585,
+          "max_s": 6.019471443956718,
+          "all_s": [
+            5.993270623032004,
+            6.019471443956718,
+            5.86072668095585,
+            5.870047417003661,
+            6.018892984953709
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.29766650300007313,
+          "min_s": 0.29049681802280247,
+          "max_s": 0.3270902340300381,
+          "all_s": [
+            0.30123221105895936,
+            0.3270902340300381,
+            0.29049681802280247,
+            0.2970770240062848,
+            0.29766650300007313
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 28.528747214004397,
+          "min_s": 25.089903624961153,
+          "max_s": 28.882037892006338,
+          "all_s": [
+            25.089903624961153,
+            28.445078870048746,
+            28.528747214004397,
+            28.748559138039127,
+            28.882037892006338
+          ]
+        }
+      },
+      "jsse-current-bytecode": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 2.3562692060368136,
+          "min_s": 2.3472009499091655,
+          "max_s": 2.411618239013478,
+          "all_s": [
+            2.3472009499091655,
+            2.411618239013478,
+            2.3562692060368136,
+            2.354596575954929,
+            2.388402684009634
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 4.124393939040601,
+          "min_s": 4.116819276008755,
+          "max_s": 4.170633540023118,
+          "all_s": [
+            4.116819276008755,
+            4.147059845039621,
+            4.170633540023118,
+            4.124393939040601,
+            4.123876390047371
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 1.352502095978707,
+          "min_s": 1.1761787440627813,
+          "max_s": 1.4161280960543081,
+          "all_s": [
+            1.1761787440627813,
+            1.4161280960543081,
+            1.337641219026409,
+            1.352502095978707,
+            1.3646909500239417
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 30.489077175967395,
+          "min_s": 28.113213830976747,
+          "max_s": 31.569442662061192,
+          "all_s": [
+            31.569442662061192,
+            28.113213830976747,
+            30.37204516096972,
+            30.489077175967395,
+            30.56542321795132
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.7277147710556164,
+          "min_s": 0.7136639188975096,
+          "max_s": 0.7351543660042807,
+          "all_s": [
+            0.7351543660042807,
+            0.7136639188975096,
+            0.7271947999252006,
+            0.7323884879006073,
+            0.7277147710556164
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 0.1203514909138903,
+          "min_s": 0.11285152495838702,
+          "max_s": 0.12268318003043532,
+          "all_s": [
+            0.11285152495838702,
+            0.12268318003043532,
+            0.11785440298262984,
+            0.1203514909138903,
+            0.12199482996948063
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 6.16582728701178,
+          "min_s": 5.7614265030715615,
+          "max_s": 6.276835753000341,
+          "all_s": [
+            5.7614265030715615,
+            6.16582728701178,
+            6.251326306024566,
+            6.276835753000341,
+            6.134084468940273
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.2803073460236192,
+          "min_s": 0.27320411102846265,
+          "max_s": 0.2814049649750814,
+          "all_s": [
+            0.2803073460236192,
+            0.2811294039711356,
+            0.27320411102846265,
+            0.27902640600223094,
+            0.2814049649750814
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 22.58294317801483,
+          "min_s": 22.45186762092635,
+          "max_s": 22.7415366609348,
+          "all_s": [
+            22.45186762092635,
+            22.718652929994278,
+            22.7415366609348,
+            22.568847339018248,
+            22.58294317801483
+          ]
+        }
+      },
+      "jsse-v0.9.0": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 2.0929032859858125,
+          "min_s": 2.0769768240861595,
+          "max_s": 2.2000885400921106,
+          "all_s": [
+            2.110446156002581,
+            2.0929032859858125,
+            2.2000885400921106,
+            2.079418993089348,
+            2.0769768240861595
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 4.011018963064998,
+          "min_s": 3.9179972999263555,
+          "max_s": 4.070515180937946,
+          "all_s": [
+            4.011018963064998,
+            4.033425720175728,
+            3.994027270935476,
+            4.070515180937946,
+            3.9179972999263555
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 1.0428729099221528,
+          "min_s": 0.9148151660338044,
+          "max_s": 1.060091971885413,
+          "all_s": [
+            0.9148151660338044,
+            1.060091971885413,
+            1.0426342589780688,
+            1.0428729099221528,
+            1.054086044197902
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 27.540223143063486,
+          "min_s": 27.278187807882205,
+          "max_s": 27.67968135001138,
+          "all_s": [
+            27.278187807882205,
+            27.67968135001138,
+            27.64156725886278,
+            27.540223143063486,
+            27.350862389896065
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.668325575068593,
+          "min_s": 0.6625341658946127,
+          "max_s": 0.6916258819401264,
+          "all_s": [
+            0.6916258819401264,
+            0.6626176959834993,
+            0.6625341658946127,
+            0.668325575068593,
+            0.6702944131102413
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 0.10417281580157578,
+          "min_s": 0.10332683706656098,
+          "max_s": 0.10564140509814024,
+          "all_s": [
+            0.10449929581955075,
+            0.10417281580157578,
+            0.10352859599515796,
+            0.10332683706656098,
+            0.10564140509814024
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 5.284495961852372,
+          "min_s": 5.218608326977119,
+          "max_s": 5.322629063157365,
+          "all_s": [
+            5.2727849369402975,
+            5.218608326977119,
+            5.317411265103146,
+            5.284495961852372,
+            5.322629063157365
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.17600861890241504,
+          "min_s": 0.17284990986809134,
+          "max_s": 0.20377702498808503,
+          "all_s": [
+            0.17586280894465744,
+            0.17600861890241504,
+            0.17284990986809134,
+            0.20194969489239156,
+            0.20377702498808503
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 25.763639834010974,
+          "min_s": 25.492025735089555,
+          "max_s": 26.352946867002174,
+          "all_s": [
+            25.621990996878594,
+            25.492025735089555,
+            26.352946867002174,
+            25.763639834010974,
+            25.984638028079644
+          ]
+        }
+      },
+      "jsse-v0.9.0-bytecode": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 2.104336000047624,
+          "min_s": 2.0767128539737314,
+          "max_s": 2.1257288991473615,
+          "all_s": [
+            2.1257288991473615,
+            2.0928876758553088,
+            2.104336000047624,
+            2.111491736024618,
+            2.0767128539737314
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 3.5773436268791556,
+          "min_s": 3.5419520549476147,
+          "max_s": 3.6567106349393725,
+          "all_s": [
+            3.6170095859561116,
+            3.6567106349393725,
+            3.5773436268791556,
+            3.5419520549476147,
+            3.5749672690872103
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 1.0633084690198302,
+          "min_s": 1.0416394812054932,
+          "max_s": 1.1029338489752263,
+          "all_s": [
+            1.0730370949022472,
+            1.059138571145013,
+            1.0633084690198302,
+            1.1029338489752263,
+            1.0416394812054932
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 27.716951231006533,
+          "min_s": 27.653028124012053,
+          "max_s": 28.202726799994707,
+          "all_s": [
+            27.653028124012053,
+            27.673569754930213,
+            27.716951231006533,
+            28.190566847100854,
+            28.202726799994707
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.6638169770594686,
+          "min_s": 0.656154259108007,
+          "max_s": 0.6948020800482482,
+          "all_s": [
+            0.6606826868373901,
+            0.6638169770594686,
+            0.6948020800482482,
+            0.656154259108007,
+            0.6665835559833795
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 0.10192369809374213,
+          "min_s": 0.10127400793135166,
+          "max_s": 0.1026322660036385,
+          "all_s": [
+            0.10187613707967103,
+            0.10192369809374213,
+            0.1026322660036385,
+            0.10127400793135166,
+            0.10233111586421728
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 5.717192119220272,
+          "min_s": 5.699011727934703,
+          "max_s": 5.727697223192081,
+          "all_s": [
+            5.699011727934703,
+            5.717192119220272,
+            5.727697223192081,
+            5.7209093468263745,
+            5.707171553047374
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.17822156799957156,
+          "min_s": 0.17556512891314924,
+          "max_s": 0.1807048860937357,
+          "all_s": [
+            0.17822156799957156,
+            0.17556512891314924,
+            0.17826594691723585,
+            0.17622863897122443,
+            0.1807048860937357
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 20.189383720979095,
+          "min_s": 20.02287752693519,
+          "max_s": 20.384811851894483,
+          "all_s": [
+            20.384811851894483,
+            20.189383720979095,
+            20.10878128395416,
+            20.02287752693519,
+            20.230095881037414
+          ]
+        }
+      },
+      "jsse-mar17": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 3.1849573228973895,
+          "min_s": 3.159146921010688,
+          "max_s": 3.2181884909514338,
+          "all_s": [
+            3.2154778129188344,
+            3.159146921010688,
+            3.1849573228973895,
+            3.174114558030851,
+            3.2181884909514338
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 31.71998287900351,
+          "min_s": 28.072324987035245,
+          "max_s": 31.85321567102801,
+          "all_s": [
+            28.072324987035245,
+            31.85321567102801,
+            31.625955858035013,
+            31.734569861902855,
+            31.71998287900351
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 5.465054904925637,
+          "min_s": 5.458024068968371,
+          "max_s": 5.54189180303365,
+          "all_s": [
+            5.54189180303365,
+            5.465054904925637,
+            5.459143574000336,
+            5.497786184074357,
+            5.458024068968371
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 0,
+          "error": "timeout"
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.9197967340005562,
+          "min_s": 0.9017828369978815,
+          "max_s": 0.9246558019658551,
+          "all_s": [
+            0.9197967340005562,
+            0.9017828369978815,
+            0.9246558019658551,
+            0.9172037979587913,
+            0.9216292930068448
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 5.9740389820653945,
+          "min_s": 5.966217597946525,
+          "max_s": 5.992144420975819,
+          "all_s": [
+            5.966217597946525,
+            5.9740389820653945,
+            5.971288503962569,
+            5.992144420975819,
+            5.98289688793011
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 15.703962268889882,
+          "min_s": 15.536908148089424,
+          "max_s": 15.813155104056932,
+          "all_s": [
+            15.703962268889882,
+            15.536908148089424,
+            15.813155104056932,
+            15.638887689914554,
+            15.811614679987542
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.2748352000489831,
+          "min_s": 0.26869487308431417,
+          "max_s": 0.2765273089753464,
+          "all_s": [
+            0.26869487308431417,
+            0.2765273089753464,
+            0.27538883895613253,
+            0.2748352000489831,
+            0.269547221949324
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 70.69091700995341,
+          "min_s": 64.14320509694517,
+          "max_s": 70.83686051005498,
+          "all_s": [
+            64.14320509694517,
+            70.82545167999342,
+            70.62190407596063,
+            70.69091700995341,
+            70.83686051005498
+          ]
+        }
+      },
+      "node-v26.9.0": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 0.11567484796978533,
+          "min_s": 0.0969769690418616,
+          "max_s": 0.14689179905690253,
+          "all_s": [
+            0.0969769690418616,
+            0.12195311300456524,
+            0.11567484796978533,
+            0.104455993976444,
+            0.14689179905690253
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 0.1271764999255538,
+          "min_s": 0.09897700895089656,
+          "max_s": 0.15493564296048135,
+          "all_s": [
+            0.10530333407223225,
+            0.09897700895089656,
+            0.14123058097902685,
+            0.1271764999255538,
+            0.15493564296048135
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 0.13047378801275045,
+          "min_s": 0.11041171103715897,
+          "max_s": 0.15947143000084907,
+          "all_s": [
+            0.15573120198678225,
+            0.1227839239872992,
+            0.11041171103715897,
+            0.13047378801275045,
+            0.15947143000084907
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 0.11787535599432886,
+          "min_s": 0.10952807101421058,
+          "max_s": 0.1300976190250367,
+          "all_s": [
+            0.1300976190250367,
+            0.11787535599432886,
+            0.12335916294250637,
+            0.10952807101421058,
+            0.11721634701825678
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.24870760401245207,
+          "min_s": 0.2372644420247525,
+          "max_s": 0.25482163997367024,
+          "all_s": [
+            0.25482163997367024,
+            0.2505425229901448,
+            0.2372644420247525,
+            0.23870158998761326,
+            0.24870760401245207
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 0.09735711000394076,
+          "min_s": 0.0888531340751797,
+          "max_s": 0.13484422501642257,
+          "all_s": [
+            0.10962588107213378,
+            0.09735711000394076,
+            0.13484422501642257,
+            0.0888531340751797,
+            0.09234383294824511
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 0.2015170929953456,
+          "min_s": 0.1596061100717634,
+          "max_s": 0.2260237290756777,
+          "all_s": [
+            0.2260237290756777,
+            0.1596061100717634,
+            0.2015170929953456,
+            0.1811374279204756,
+            0.2109556490322575
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.12480054295156151,
+          "min_s": 0.11243275098968297,
+          "max_s": 0.1523129870183766,
+          "all_s": [
+            0.11243275098968297,
+            0.1523129870183766,
+            0.1304736869642511,
+            0.11977667803876102,
+            0.12480054295156151
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 0.11894663493148983,
+          "min_s": 0.11482369806617498,
+          "max_s": 0.14641044801101089,
+          "all_s": [
+            0.11894663493148983,
+            0.12161703396122903,
+            0.14641044801101089,
+            0.1158634569728747,
+            0.11482369806617498
+          ]
+        }
+      },
+      "boa-v0.22": {
+        "bench_loop": {
+          "repeats_ok": 5,
+          "median_s": 2.073416240978986,
+          "min_s": 2.039669902063906,
+          "max_s": 2.1148363150423393,
+          "all_s": [
+            2.073416240978986,
+            2.0771564389579,
+            2.1148363150423393,
+            2.039669902063906,
+            2.0481704970588908
+          ]
+        },
+        "bench_fib": {
+          "repeats_ok": 5,
+          "median_s": 1.3387293410487473,
+          "min_s": 1.2098006709711626,
+          "max_s": 1.3737887190654874,
+          "all_s": [
+            1.2098006709711626,
+            1.3737887190654874,
+            1.3387293410487473,
+            1.3650174250360578,
+            1.319865643978119
+          ]
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 0.5308363069780171,
+          "min_s": 0.514999745064415,
+          "max_s": 0.5560694020241499,
+          "all_s": [
+            0.5371997029287741,
+            0.5223046130267903,
+            0.5308363069780171,
+            0.5560694020241499,
+            0.514999745064415
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 0.3291261049453169,
+          "min_s": 0.3130823338869959,
+          "max_s": 0.33312187204137444,
+          "all_s": [
+            0.3130823338869959,
+            0.3291261049453169,
+            0.32627545506693423,
+            0.33312187204137444,
+            0.32941094308625907
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 0.6145293849986047,
+          "min_s": 0.5962746569421142,
+          "max_s": 0.6280645150691271,
+          "all_s": [
+            0.6023873679805547,
+            0.6166465280111879,
+            0.6145293849986047,
+            0.6280645150691271,
+            0.5962746569421142
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 0.1504383949795738,
+          "min_s": 0.14699162798933685,
+          "max_s": 0.1535705840215087,
+          "all_s": [
+            0.1504383949795738,
+            0.15277596493251622,
+            0.1535705840215087,
+            0.1501827760366723,
+            0.14699162798933685
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 5,
+          "median_s": 2.374479432008229,
+          "min_s": 2.3287062499439344,
+          "max_s": 2.400319845066406,
+          "all_s": [
+            2.3964585369685665,
+            2.400319845066406,
+            2.374479432008229,
+            2.355039675021544,
+            2.3287062499439344
+          ]
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 0.3100787259172648,
+          "min_s": 0.2999009219929576,
+          "max_s": 0.3559526269091293,
+          "all_s": [
+            0.3100787259172648,
+            0.3559526269091293,
+            0.2999009219929576,
+            0.3118542240699753,
+            0.30772840697318316
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 5,
+          "median_s": 5.69257293199189,
+          "min_s": 5.061736815958284,
+          "max_s": 5.750181836076081,
+          "all_s": [
+            5.701759107061662,
+            5.061736815958284,
+            5.750181836076081,
+            5.665982047095895,
+            5.69257293199189
+          ]
+        }
+      },
+      "engine262": {
+        "bench_loop": {
+          "repeats_ok": 0,
+          "error": "timeout"
+        },
+        "bench_fib": {
+          "repeats_ok": 0,
+          "error": "timeout"
+        },
+        "bench_string": {
+          "repeats_ok": 5,
+          "median_s": 14.198481673956849,
+          "min_s": 12.101893462007865,
+          "max_s": 14.41888726898469,
+          "all_s": [
+            12.101893462007865,
+            14.220383111969568,
+            14.41888726898469,
+            13.973384522018023,
+            14.198481673956849
+          ]
+        },
+        "bench_array": {
+          "repeats_ok": 5,
+          "median_s": 102.78290818992537,
+          "min_s": 101.43531854299363,
+          "max_s": 103.03168700495735,
+          "all_s": [
+            101.43531854299363,
+            102.78290818992537,
+            102.91059145797044,
+            103.03168700495735,
+            102.33546659105923
+          ]
+        },
+        "bench_object": {
+          "repeats_ok": 5,
+          "median_s": 58.299838943989016,
+          "min_s": 57.74092090304475,
+          "max_s": 59.18659141601529,
+          "all_s": [
+            58.299838943989016,
+            57.74092090304475,
+            58.858538082102314,
+            59.18659141601529,
+            58.10499499796424
+          ]
+        },
+        "bench_regex": {
+          "repeats_ok": 5,
+          "median_s": 8.488853267976083,
+          "min_s": 6.14121745491866,
+          "max_s": 8.579065856989473,
+          "all_s": [
+            6.14121745491866,
+            8.579065856989473,
+            8.422199439955875,
+            8.488853267976083,
+            8.56831180199515
+          ]
+        },
+        "bench_closures": {
+          "repeats_ok": 0,
+          "error": "timeout"
+        },
+        "bench_json": {
+          "repeats_ok": 5,
+          "median_s": 8.437509548966773,
+          "min_s": 8.362226824043319,
+          "max_s": 8.911657591932453,
+          "all_s": [
+            8.437509548966773,
+            8.911657591932453,
+            8.385551454965025,
+            8.362226824043319,
+            8.58922197506763
+          ]
+        },
+        "bench_opmix": {
+          "repeats_ok": 0,
+          "error": "timeout"
+        }
+      }
+    },
+    "derived": {
+      "jsse_current_vs_jsse_mar17_speedup": {
+        "bench_loop": {
+          "speedup_x": 1.34,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_fib": {
+          "speedup_x": 6.91,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_string": {
+          "speedup_x": 4.02,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_array": {
+          "speedup_x": 3.74,
+          "lower_bound_only": true,
+          "note": "mar17 hit the 120s timeout; true speedup is at least this"
+        },
+        "bench_object": {
+          "speedup_x": 1.22,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_regex": {
+          "speedup_x": 47.69,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_closures": {
+          "speedup_x": 2.62,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_json": {
+          "speedup_x": 0.92,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_opmix": {
+          "speedup_x": 2.48,
+          "lower_bound_only": false,
+          "note": null
+        }
+      },
+      "bytecode_vs_default_speedup": {
+        "bench_loop": 1.009,
+        "bench_fib": 1.113,
+        "bench_string": 1.006,
+        "bench_array": 1.053,
+        "bench_object": 1.036,
+        "bench_regex": 1.041,
+        "bench_closures": 0.972,
+        "bench_json": 1.062,
+        "bench_opmix": 1.263
+      },
+      "slowdown_vs_node": {
+        "bench_loop": 20.6,
+        "bench_fib": 36.1,
+        "bench_string": 10.4,
+        "bench_array": 272.4,
+        "bench_object": 3.0,
+        "bench_regex": 1.3,
+        "bench_closures": 29.7,
+        "bench_json": 2.4,
+        "bench_opmix": 239.8
+      },
+      "slowdown_vs_boa": {
+        "bench_loop": 1.15,
+        "bench_fib": 3.43,
+        "bench_string": 2.56,
+        "bench_array": 97.57,
+        "bench_object": 1.23,
+        "bench_regex": 0.83,
+        "bench_closures": 2.52,
+        "bench_json": 0.96,
+        "bench_opmix": 5.01
+      },
+      "jsse_v0_9_0_vs_jsse_mar17_speedup": {
+        "bench_loop": {
+          "speedup_x": 1.52,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_fib": {
+          "speedup_x": 7.91,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_string": {
+          "speedup_x": 5.24,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_array": {
+          "speedup_x": 4.36,
+          "lower_bound_only": true,
+          "note": "mar17 hit the 120s timeout; true speedup is at least this"
+        },
+        "bench_object": {
+          "speedup_x": 1.38,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_regex": {
+          "speedup_x": 57.35,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_closures": {
+          "speedup_x": 2.97,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_json": {
+          "speedup_x": 1.56,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_opmix": {
+          "speedup_x": 2.74,
+          "lower_bound_only": false,
+          "note": null
+        }
+      },
+      "jsse_v0_9_0_vs_jsse_v0_8_1_speedup": {
+        "bench_loop": {
+          "speedup_x": 1.14,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_fib": {
+          "speedup_x": 1.14,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_string": {
+          "speedup_x": 1.3,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_array": {
+          "speedup_x": 1.17,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_object": {
+          "speedup_x": 1.13,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_regex": {
+          "speedup_x": 1.2,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_closures": {
+          "speedup_x": 1.13,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_json": {
+          "speedup_x": 1.69,
+          "lower_bound_only": false,
+          "note": null
+        },
+        "bench_opmix": {
+          "speedup_x": 1.11,
+          "lower_bound_only": false,
+          "note": null
+        }
+      },
+      "bytecode_vs_default_speedup_v0_9_0": {
+        "bench_loop": 0.995,
+        "bench_fib": 1.121,
+        "bench_string": 0.981,
+        "bench_array": 0.994,
+        "bench_object": 1.007,
+        "bench_regex": 1.022,
+        "bench_closures": 0.924,
+        "bench_json": 0.988,
+        "bench_opmix": 1.276
+      },
+      "slowdown_vs_node_v0_9_0": {
+        "bench_loop": 18.1,
+        "bench_fib": 31.5,
+        "bench_string": 8.0,
+        "bench_array": 233.6,
+        "bench_object": 2.7,
+        "bench_regex": 1.1,
+        "bench_closures": 26.2,
+        "bench_json": 1.4,
+        "bench_opmix": 216.6
+      },
+      "slowdown_vs_boa_v0_9_0": {
+        "bench_loop": 1.01,
+        "bench_fib": 3.0,
+        "bench_string": 1.96,
+        "bench_array": 83.68,
+        "bench_object": 1.09,
+        "bench_regex": 0.69,
+        "bench_closures": 2.23,
+        "bench_json": 0.57,
+        "bench_opmix": 4.53
+      }
+    },
+    "v0_9_0_run": {
+      "date": "2026-09-25",
+      "binary": "jsse-v0.9.0 buildbox3 build (see engines.jsse-v0.9.0.binary_sha256.buildbox3_perf_build)",
+      "protocol": "Same as 2026-09-18: 5 process runs per benchmark, median wall-clock seconds including startup, 120s timeout, loadavg1 idle gate <= 1.5 checked once before the first run; default then --bytecode, benchmarks in the same order.",
+      "benchmark_scripts": "benchmarks/scripts/bench_*.js, unchanged between v0.8.1 and v0.9.0 (empty git diff)",
+      "loadavg_at_start": [
+        1.27,
+        2.07,
+        1.53
+      ],
+      "loadavg_at_end": [
+        1.5,
+        2.01,
+        1.87
+      ],
+      "start_utc": "2026-09-25T09:37:32Z",
+      "end_utc": "2026-09-25T09:48:14Z",
+      "loadavg1_before_each_benchmark": {
+        "jsse-v0.9.0/bench_loop": 1.27,
+        "jsse-v0.9.0/bench_fib": 1.31,
+        "jsse-v0.9.0/bench_string": 1.58,
+        "jsse-v0.9.0/bench_array": 1.53,
+        "jsse-v0.9.0/bench_object": 2.85,
+        "jsse-v0.9.0/bench_regex": 3.02,
+        "jsse-v0.9.0/bench_closures": 3.02,
+        "jsse-v0.9.0/bench_json": 3.08,
+        "jsse-v0.9.0/bench_opmix": 3.08,
+        "jsse-v0.9.0-bytecode/bench_loop": 2.77,
+        "jsse-v0.9.0-bytecode/bench_fib": 2.65,
+        "jsse-v0.9.0-bytecode/bench_string": 2.69,
+        "jsse-v0.9.0-bytecode/bench_array": 2.55,
+        "jsse-v0.9.0-bytecode/bench_object": 1.87,
+        "jsse-v0.9.0-bytecode/bench_regex": 1.87,
+        "jsse-v0.9.0-bytecode/bench_closures": 1.88,
+        "jsse-v0.9.0-bytecode/bench_json": 1.82,
+        "jsse-v0.9.0-bytecode/bench_opmix": 1.82
+      }
+    }
+  },
+  "jetstream": {
+    "checkout": "WebKit/JetStream c603c04db8505477867974a69789309ded2cc948 (assets decompressed with npm run decompress)",
+    "runner": "scripts/run-jetstream.py --iterations 1 --timeout 120 -j 1 --no-idle-gate (repeats=3 default)",
+    "host": "buildbox3",
+    "targets": {
+      "jsse-current": {
+        "timestamp": "2026-09-18T16:22:37",
+        "passed": 34,
+        "total": 48,
+        "overall_score_geomean": 0.9207433556156448,
+        "status_counts": {
+          "pass": 34,
+          "error": 13,
+          "timeout": 1
+        },
+        "benchmarks": [
+          {
+            "name": "Air",
+            "status": "pass",
+            "median_time_ms": 1702,
+            "median_score": 2.9377203290246774,
+            "score_relative_range": 0.0106,
+            "unstable": false
+          },
+          {
+            "name": "Basic",
+            "status": "pass",
+            "median_time_ms": 2683,
+            "median_score": 1.8635855385762206,
+            "score_relative_range": 0.0163,
+            "unstable": false
+          },
+          {
+            "name": "ML",
+            "status": "pass",
+            "median_time_ms": 56066,
+            "median_score": 0.08918060856847287,
+            "score_relative_range": 0.0051,
+            "unstable": false
+          },
+          {
+            "name": "Babylon",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "cdjs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: object (class=Object, callable=false, id=1204, keys=[]) is not a function"
+          },
+          {
+            "name": "first-inspector-code-load",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "multi-inspector-code-load",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "Box2D",
+            "status": "pass",
+            "median_time_ms": 6954,
+            "median_score": 0.719010641357492,
+            "score_relative_range": 0.0205,
+            "unstable": false
+          },
+          {
+            "name": "octane-code-load",
+            "status": "pass",
+            "median_time_ms": 61,
+            "median_score": 81.96721311475407,
+            "score_relative_range": 0.0167,
+            "unstable": false
+          },
+          {
+            "name": "crypto",
+            "status": "pass",
+            "median_time_ms": 5392,
+            "median_score": 0.9272997032640949,
+            "score_relative_range": 0.011,
+            "unstable": false
+          },
+          {
+            "name": "delta-blue",
+            "status": "pass",
+            "median_time_ms": 6156,
+            "median_score": 0.8122157244964262,
+            "score_relative_range": 0.0287,
+            "unstable": false
+          },
+          {
+            "name": "earley-boyer",
+            "status": "pass",
+            "median_time_ms": 5456,
+            "median_score": 0.9164222873900293,
+            "score_relative_range": 0.0035,
+            "unstable": false
+          },
+          {
+            "name": "gbemu",
+            "status": "pass",
+            "median_time_ms": 27059,
+            "median_score": 0.18478140359954173,
+            "score_relative_range": 0.0049,
+            "unstable": false
+          },
+          {
+            "name": "mandreel",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "navier-stokes",
+            "status": "pass",
+            "median_time_ms": 4790,
+            "median_score": 1.0438413361169103,
+            "score_relative_range": 0.0046,
+            "unstable": false
+          },
+          {
+            "name": "pdfjs",
+            "status": "pass",
+            "median_time_ms": 11564,
+            "median_score": 0.4323763403666551,
+            "score_relative_range": 0.0054,
+            "unstable": false
+          },
+          {
+            "name": "raytrace",
+            "status": "pass",
+            "median_time_ms": 13343,
+            "median_score": 0.37472832196657424,
+            "score_relative_range": 0.0091,
+            "unstable": false
+          },
+          {
+            "name": "regexp-octane",
+            "status": "pass",
+            "median_time_ms": 2849,
+            "median_score": 1.755001755001755,
+            "score_relative_range": 0.0099,
+            "unstable": false
+          },
+          {
+            "name": "richards",
+            "status": "pass",
+            "median_time_ms": 10577,
+            "median_score": 0.47272383473574736,
+            "score_relative_range": 0.0035,
+            "unstable": false
+          },
+          {
+            "name": "splay",
+            "status": "pass",
+            "median_time_ms": 8116,
+            "median_score": 0.6160670280926565,
+            "score_relative_range": 0.0323,
+            "unstable": false
+          },
+          {
+            "name": "typescript-octane",
+            "status": "pass",
+            "median_time_ms": 84218,
+            "median_score": 0.05936973093637941,
+            "score_relative_range": 0.02,
+            "unstable": false
+          },
+          {
+            "name": "FlightPlanner",
+            "status": "pass",
+            "median_time_ms": 1147,
+            "median_score": 4.3591979075850045,
+            "score_relative_range": 0.0079,
+            "unstable": false
+          },
+          {
+            "name": "OfflineAssembler",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Line #42 differs.  Expected: \"const TagTypeNumber = 18446462598732840000\", got \"const TagTypeNumber = 18446462598732839000\""
+          },
+          {
+            "name": "UniPoker",
+            "status": "pass",
+            "median_time_ms": 4715,
+            "median_score": 1.0604453870625663,
+            "score_relative_range": 0.017,
+            "unstable": false
+          },
+          {
+            "name": "validatorjs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Error: Assertion failure: 2010-07-02,[object Object]"
+          },
+          {
+            "name": "hash-map",
+            "status": "pass",
+            "median_time_ms": 14077,
+            "median_score": 0.3551893159053776,
+            "score_relative_range": 0.0028,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-promise",
+            "status": "pass",
+            "median_time_ms": 13037,
+            "median_score": 0.3835238168290251,
+            "score_relative_range": 0.0107,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-async",
+            "status": "pass",
+            "median_time_ms": 6184,
+            "median_score": 0.8085381630012937,
+            "score_relative_range": 0.0114,
+            "unstable": false
+          },
+          {
+            "name": "ai-astar",
+            "status": "pass",
+            "median_time_ms": 5082,
+            "median_score": 0.9838646202282566,
+            "score_relative_range": 0.0262,
+            "unstable": false
+          },
+          {
+            "name": "gaussian-blur",
+            "status": "pass",
+            "median_time_ms": 30935,
+            "median_score": 0.16162922256343948,
+            "score_relative_range": 0.021,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-aes",
+            "status": "pass",
+            "median_time_ms": 7740,
+            "median_score": 0.6459948320413437,
+            "score_relative_range": 0.0063,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-pbkdf2",
+            "status": "pass",
+            "median_time_ms": 4804,
+            "median_score": 1.0407993338884263,
+            "score_relative_range": 0.0084,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-sha256",
+            "status": "pass",
+            "median_time_ms": 5135,
+            "median_score": 0.9737098344693281,
+            "score_relative_range": 0.0058,
+            "unstable": false
+          },
+          {
+            "name": "json-stringify-inspector",
+            "status": "pass",
+            "median_time_ms": 1488,
+            "median_score": 3.360215053763441,
+            "score_relative_range": 0.0129,
+            "unstable": false
+          },
+          {
+            "name": "json-parse-inspector",
+            "status": "pass",
+            "median_time_ms": 1057,
+            "median_score": 4.7303689687795645,
+            "score_relative_range": 0.0702,
+            "unstable": true
+          },
+          {
+            "name": "bigint-noble-bls12-381",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "bigint-noble-secp256k1",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "bigint-noble-ed25519",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "bigint-paillier",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "ReferenceError: self is not defined"
+          },
+          {
+            "name": "bigint-bigdenary",
+            "status": "pass",
+            "median_time_ms": 4226,
+            "median_score": 1.183151916706105,
+            "score_relative_range": 0.0143,
+            "unstable": false
+          },
+          {
+            "name": "proxy-mobx",
+            "status": "pass",
+            "median_time_ms": 591,
+            "median_score": 8.460236886632826,
+            "score_relative_range": 0.0277,
+            "unstable": false
+          },
+          {
+            "name": "proxy-vue",
+            "status": "pass",
+            "median_time_ms": 971,
+            "median_score": 5.149330587023686,
+            "score_relative_range": 0.0566,
+            "unstable": true
+          },
+          {
+            "name": "raytrace-public-class-fields",
+            "status": "pass",
+            "median_time_ms": 13054,
+            "median_score": 0.3830243603493182,
+            "score_relative_range": 0.0161,
+            "unstable": false
+          },
+          {
+            "name": "raytrace-private-class-fields",
+            "status": "pass",
+            "median_time_ms": 14587,
+            "median_score": 0.34277096044423117,
+            "score_relative_range": 0.0121,
+            "unstable": false
+          },
+          {
+            "name": "async-fs",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "sync-fs",
+            "status": "pass",
+            "median_time_ms": 8896,
+            "median_score": 0.5620503597122302,
+            "score_relative_range": 0.0083,
+            "unstable": false
+          },
+          {
+            "name": "lazy-collections",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: Generator is already running"
+          },
+          {
+            "name": "js-tokens",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Error: this.tokenCount of 115475 is invalid!"
+          }
+        ]
+      },
+      "jsse-current-bytecode": {
+        "timestamp": "2026-09-18T16:45:22",
+        "passed": 34,
+        "total": 48,
+        "overall_score_geomean": 0.9961559053285067,
+        "status_counts": {
+          "pass": 34,
+          "error": 13,
+          "timeout": 1
+        },
+        "benchmarks": [
+          {
+            "name": "Air",
+            "status": "pass",
+            "median_time_ms": 1683,
+            "median_score": 2.9708853238265003,
+            "score_relative_range": 0.0144,
+            "unstable": false
+          },
+          {
+            "name": "Basic",
+            "status": "pass",
+            "median_time_ms": 2691,
+            "median_score": 1.858045336306206,
+            "score_relative_range": 0.0256,
+            "unstable": false
+          },
+          {
+            "name": "ML",
+            "status": "pass",
+            "median_time_ms": 55309,
+            "median_score": 0.090401200527943,
+            "score_relative_range": 0.0074,
+            "unstable": false
+          },
+          {
+            "name": "Babylon",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "cdjs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: object (class=Object, callable=false, id=1204, keys=[]) is not a function"
+          },
+          {
+            "name": "first-inspector-code-load",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "multi-inspector-code-load",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "Box2D",
+            "status": "pass",
+            "median_time_ms": 6535,
+            "median_score": 0.7651109410864575,
+            "score_relative_range": 0.0167,
+            "unstable": false
+          },
+          {
+            "name": "octane-code-load",
+            "status": "pass",
+            "median_time_ms": 40,
+            "median_score": 125.00000000000004,
+            "score_relative_range": 0.475,
+            "unstable": true
+          },
+          {
+            "name": "crypto",
+            "status": "pass",
+            "median_time_ms": 4377,
+            "median_score": 1.142334932602239,
+            "score_relative_range": 0.0064,
+            "unstable": false
+          },
+          {
+            "name": "delta-blue",
+            "status": "pass",
+            "median_time_ms": 5515,
+            "median_score": 0.9066183136899365,
+            "score_relative_range": 0.0104,
+            "unstable": false
+          },
+          {
+            "name": "earley-boyer",
+            "status": "pass",
+            "median_time_ms": 5147,
+            "median_score": 0.9714396735962697,
+            "score_relative_range": 0.0216,
+            "unstable": false
+          },
+          {
+            "name": "gbemu",
+            "status": "pass",
+            "median_time_ms": 25377,
+            "median_score": 0.19702880561138036,
+            "score_relative_range": 0.0054,
+            "unstable": false
+          },
+          {
+            "name": "mandreel",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "navier-stokes",
+            "status": "pass",
+            "median_time_ms": 2826,
+            "median_score": 1.7692852087756545,
+            "score_relative_range": 0.0135,
+            "unstable": false
+          },
+          {
+            "name": "pdfjs",
+            "status": "pass",
+            "median_time_ms": 11387,
+            "median_score": 0.43909721612364977,
+            "score_relative_range": 0.008,
+            "unstable": false
+          },
+          {
+            "name": "raytrace",
+            "status": "pass",
+            "median_time_ms": 11591,
+            "median_score": 0.4313691657320335,
+            "score_relative_range": 0.0069,
+            "unstable": false
+          },
+          {
+            "name": "regexp-octane",
+            "status": "pass",
+            "median_time_ms": 2837,
+            "median_score": 1.7624250969333803,
+            "score_relative_range": 0.016,
+            "unstable": false
+          },
+          {
+            "name": "richards",
+            "status": "pass",
+            "median_time_ms": 10145,
+            "median_score": 0.4928536224741252,
+            "score_relative_range": 0.0093,
+            "unstable": false
+          },
+          {
+            "name": "splay",
+            "status": "pass",
+            "median_time_ms": 8144,
+            "median_score": 0.6139489194499018,
+            "score_relative_range": 0.0042,
+            "unstable": false
+          },
+          {
+            "name": "typescript-octane",
+            "status": "pass",
+            "median_time_ms": 81041,
+            "median_score": 0.06169716563221085,
+            "score_relative_range": 0.0056,
+            "unstable": false
+          },
+          {
+            "name": "FlightPlanner",
+            "status": "pass",
+            "median_time_ms": 1085,
+            "median_score": 4.608294930875575,
+            "score_relative_range": 0.0129,
+            "unstable": false
+          },
+          {
+            "name": "OfflineAssembler",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Line #42 differs.  Expected: \"const TagTypeNumber = 18446462598732840000\", got \"const TagTypeNumber = 18446462598732839000\""
+          },
+          {
+            "name": "UniPoker",
+            "status": "pass",
+            "median_time_ms": 4581,
+            "median_score": 1.0914647456887143,
+            "score_relative_range": 0.0092,
+            "unstable": false
+          },
+          {
+            "name": "validatorjs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Error: Assertion failure: 2010-07-02,[object Object]"
+          },
+          {
+            "name": "hash-map",
+            "status": "pass",
+            "median_time_ms": 13817,
+            "median_score": 0.3618730549323297,
+            "score_relative_range": 0.0055,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-promise",
+            "status": "pass",
+            "median_time_ms": 13071,
+            "median_score": 0.3825262030449086,
+            "score_relative_range": 0.0005,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-async",
+            "status": "pass",
+            "median_time_ms": 5813,
+            "median_score": 0.860141063134354,
+            "score_relative_range": 0.0079,
+            "unstable": false
+          },
+          {
+            "name": "ai-astar",
+            "status": "pass",
+            "median_time_ms": 4894,
+            "median_score": 1.021659174499387,
+            "score_relative_range": 0.0166,
+            "unstable": false
+          },
+          {
+            "name": "gaussian-blur",
+            "status": "pass",
+            "median_time_ms": 22435,
+            "median_score": 0.22286605749944283,
+            "score_relative_range": 0.0125,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-aes",
+            "status": "pass",
+            "median_time_ms": 7778,
+            "median_score": 0.6428387760349704,
+            "score_relative_range": 0.0141,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-pbkdf2",
+            "status": "pass",
+            "median_time_ms": 4139,
+            "median_score": 1.2080212611741967,
+            "score_relative_range": 0.0112,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-sha256",
+            "status": "pass",
+            "median_time_ms": 4479,
+            "median_score": 1.1163206072784104,
+            "score_relative_range": 0.0247,
+            "unstable": false
+          },
+          {
+            "name": "json-stringify-inspector",
+            "status": "pass",
+            "median_time_ms": 1489,
+            "median_score": 3.35795836131632,
+            "score_relative_range": 0.0054,
+            "unstable": false
+          },
+          {
+            "name": "json-parse-inspector",
+            "status": "pass",
+            "median_time_ms": 1090,
+            "median_score": 4.587155963302752,
+            "score_relative_range": 0.0101,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-bls12-381",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "bigint-noble-secp256k1",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "bigint-noble-ed25519",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "bigint-paillier",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "ReferenceError: self is not defined"
+          },
+          {
+            "name": "bigint-bigdenary",
+            "status": "pass",
+            "median_time_ms": 4090,
+            "median_score": 1.2224938875305624,
+            "score_relative_range": 0.014,
+            "unstable": false
+          },
+          {
+            "name": "proxy-mobx",
+            "status": "pass",
+            "median_time_ms": 581,
+            "median_score": 8.605851979345953,
+            "score_relative_range": 0.0104,
+            "unstable": false
+          },
+          {
+            "name": "proxy-vue",
+            "status": "pass",
+            "median_time_ms": 970,
+            "median_score": 5.154639175257732,
+            "score_relative_range": 0.0581,
+            "unstable": true
+          },
+          {
+            "name": "raytrace-public-class-fields",
+            "status": "pass",
+            "median_time_ms": 11450,
+            "median_score": 0.4366812227074236,
+            "score_relative_range": 0.0038,
+            "unstable": false
+          },
+          {
+            "name": "raytrace-private-class-fields",
+            "status": "pass",
+            "median_time_ms": 14573,
+            "median_score": 0.3431002538941878,
+            "score_relative_range": 0.0273,
+            "unstable": false
+          },
+          {
+            "name": "async-fs",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "sync-fs",
+            "status": "pass",
+            "median_time_ms": 8796,
+            "median_score": 0.5684402000909504,
+            "score_relative_range": 0.0072,
+            "unstable": false
+          },
+          {
+            "name": "lazy-collections",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: Generator is already running"
+          },
+          {
+            "name": "js-tokens",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Error: this.tokenCount of 115475 is invalid!"
+          }
+        ]
+      },
+      "jsse-v0.9.0": {
+        "timestamp": "2026-09-25T10:19:04",
+        "passed": 47,
+        "total": 48,
+        "overall_score_geomean": 0.9661284952665962,
+        "status_counts": {
+          "pass": 47,
+          "timeout": 1
+        },
+        "benchmarks": [
+          {
+            "name": "Air",
+            "status": "pass",
+            "median_time_ms": 1949,
+            "median_score": 2.565418163160595,
+            "score_relative_range": 0.0062,
+            "unstable": false
+          },
+          {
+            "name": "Basic",
+            "status": "pass",
+            "median_time_ms": 3431,
+            "median_score": 1.457301078402798,
+            "score_relative_range": 0.0076,
+            "unstable": false
+          },
+          {
+            "name": "ML",
+            "status": "pass",
+            "median_time_ms": 56379,
+            "median_score": 0.0886855034676032,
+            "score_relative_range": 0.01,
+            "unstable": false
+          },
+          {
+            "name": "Babylon",
+            "status": "pass",
+            "median_time_ms": 2562,
+            "median_score": 1.95160031225605,
+            "score_relative_range": 0.009,
+            "unstable": false
+          },
+          {
+            "name": "cdjs",
+            "status": "pass",
+            "median_time_ms": 18460,
+            "median_score": 0.27085590465872156,
+            "score_relative_range": 0.0147,
+            "unstable": false
+          },
+          {
+            "name": "first-inspector-code-load",
+            "status": "pass",
+            "median_time_ms": 266,
+            "median_score": 18.796992481203006,
+            "score_relative_range": 0.0038,
+            "unstable": false
+          },
+          {
+            "name": "multi-inspector-code-load",
+            "status": "pass",
+            "median_time_ms": 266,
+            "median_score": 18.796992481203006,
+            "score_relative_range": 0.0075,
+            "unstable": false
+          },
+          {
+            "name": "Box2D",
+            "status": "pass",
+            "median_time_ms": 6992,
+            "median_score": 0.7151029748283753,
+            "score_relative_range": 0.0104,
+            "unstable": false
+          },
+          {
+            "name": "octane-code-load",
+            "status": "pass",
+            "median_time_ms": 40,
+            "median_score": 125.00000000000004,
+            "score_relative_range": 0.4615,
+            "unstable": true
+          },
+          {
+            "name": "crypto",
+            "status": "pass",
+            "median_time_ms": 5491,
+            "median_score": 0.9105809506465125,
+            "score_relative_range": 0.0049,
+            "unstable": false
+          },
+          {
+            "name": "delta-blue",
+            "status": "pass",
+            "median_time_ms": 6151,
+            "median_score": 0.8128759551292473,
+            "score_relative_range": 0.0723,
+            "unstable": true
+          },
+          {
+            "name": "earley-boyer",
+            "status": "pass",
+            "median_time_ms": 5484,
+            "median_score": 0.9117432530999271,
+            "score_relative_range": 0.0121,
+            "unstable": false
+          },
+          {
+            "name": "gbemu",
+            "status": "pass",
+            "median_time_ms": 27039,
+            "median_score": 0.18491808128998855,
+            "score_relative_range": 0.0035,
+            "unstable": false
+          },
+          {
+            "name": "mandreel",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "navier-stokes",
+            "status": "pass",
+            "median_time_ms": 4822,
+            "median_score": 1.0369141435089175,
+            "score_relative_range": 0.0133,
+            "unstable": false
+          },
+          {
+            "name": "pdfjs",
+            "status": "pass",
+            "median_time_ms": 11524,
+            "median_score": 0.4338771259979174,
+            "score_relative_range": 0.0031,
+            "unstable": false
+          },
+          {
+            "name": "raytrace",
+            "status": "pass",
+            "median_time_ms": 13323,
+            "median_score": 0.375290850409067,
+            "score_relative_range": 0.009,
+            "unstable": false
+          },
+          {
+            "name": "regexp-octane",
+            "status": "pass",
+            "median_time_ms": 2896,
+            "median_score": 1.7265193370165746,
+            "score_relative_range": 0.0021,
+            "unstable": false
+          },
+          {
+            "name": "richards",
+            "status": "pass",
+            "median_time_ms": 10655,
+            "median_score": 0.4692632566870014,
+            "score_relative_range": 0.0225,
+            "unstable": false
+          },
+          {
+            "name": "splay",
+            "status": "pass",
+            "median_time_ms": 8040,
+            "median_score": 0.6218905472636815,
+            "score_relative_range": 0.0069,
+            "unstable": false
+          },
+          {
+            "name": "typescript-octane",
+            "status": "pass",
+            "median_time_ms": 84329,
+            "median_score": 0.05929158415254539,
+            "score_relative_range": 0.0075,
+            "unstable": false
+          },
+          {
+            "name": "FlightPlanner",
+            "status": "pass",
+            "median_time_ms": 1149,
+            "median_score": 4.351610095735422,
+            "score_relative_range": 0.0486,
+            "unstable": false
+          },
+          {
+            "name": "OfflineAssembler",
+            "status": "pass",
+            "median_time_ms": 15289,
+            "median_score": 0.32703250703119896,
+            "score_relative_range": 0.0154,
+            "unstable": false
+          },
+          {
+            "name": "UniPoker",
+            "status": "pass",
+            "median_time_ms": 4723,
+            "median_score": 1.0586491636671607,
+            "score_relative_range": 0.0051,
+            "unstable": false
+          },
+          {
+            "name": "validatorjs",
+            "status": "pass",
+            "median_time_ms": 1457,
+            "median_score": 3.431708991077557,
+            "score_relative_range": 0.0096,
+            "unstable": false
+          },
+          {
+            "name": "hash-map",
+            "status": "pass",
+            "median_time_ms": 14314,
+            "median_score": 0.3493083694285315,
+            "score_relative_range": 0.0072,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-promise",
+            "status": "pass",
+            "median_time_ms": 12195,
+            "median_score": 0.4100041000410004,
+            "score_relative_range": 0.067,
+            "unstable": true
+          },
+          {
+            "name": "doxbee-async",
+            "status": "pass",
+            "median_time_ms": 6455,
+            "median_score": 0.774593338497289,
+            "score_relative_range": 0.0698,
+            "unstable": true
+          },
+          {
+            "name": "ai-astar",
+            "status": "pass",
+            "median_time_ms": 5026,
+            "median_score": 0.9948269001193792,
+            "score_relative_range": 0.0108,
+            "unstable": false
+          },
+          {
+            "name": "gaussian-blur",
+            "status": "pass",
+            "median_time_ms": 31433,
+            "median_score": 0.15906849489390132,
+            "score_relative_range": 0.0216,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-aes",
+            "status": "pass",
+            "median_time_ms": 7831,
+            "median_score": 0.6384880602732729,
+            "score_relative_range": 0.0225,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-pbkdf2",
+            "status": "pass",
+            "median_time_ms": 4817,
+            "median_score": 1.0379904504878554,
+            "score_relative_range": 0.0213,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-sha256",
+            "status": "pass",
+            "median_time_ms": 5197,
+            "median_score": 0.9620935154897056,
+            "score_relative_range": 0.0174,
+            "unstable": false
+          },
+          {
+            "name": "json-stringify-inspector",
+            "status": "pass",
+            "median_time_ms": 561,
+            "median_score": 8.912655971479499,
+            "score_relative_range": 0.0126,
+            "unstable": false
+          },
+          {
+            "name": "json-parse-inspector",
+            "status": "pass",
+            "median_time_ms": 1176,
+            "median_score": 4.2517006802721085,
+            "score_relative_range": 0.0373,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-bls12-381",
+            "status": "pass",
+            "median_time_ms": 49382,
+            "median_score": 0.10125146814628812,
+            "score_relative_range": 0.0227,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-secp256k1",
+            "status": "pass",
+            "median_time_ms": 4266,
+            "median_score": 1.1720581340834506,
+            "score_relative_range": 0.0089,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-ed25519",
+            "status": "pass",
+            "median_time_ms": 5061,
+            "median_score": 0.9879470460383324,
+            "score_relative_range": 0.0073,
+            "unstable": false
+          },
+          {
+            "name": "bigint-paillier",
+            "status": "pass",
+            "median_time_ms": 8639,
+            "median_score": 0.5787706910522051,
+            "score_relative_range": 0.0133,
+            "unstable": false
+          },
+          {
+            "name": "bigint-bigdenary",
+            "status": "pass",
+            "median_time_ms": 4241,
+            "median_score": 1.1789672247111531,
+            "score_relative_range": 0.0097,
+            "unstable": false
+          },
+          {
+            "name": "proxy-mobx",
+            "status": "pass",
+            "median_time_ms": 579,
+            "median_score": 8.635578583765112,
+            "score_relative_range": 0.0408,
+            "unstable": false
+          },
+          {
+            "name": "proxy-vue",
+            "status": "pass",
+            "median_time_ms": 976,
+            "median_score": 5.122950819672131,
+            "score_relative_range": 0.0216,
+            "unstable": false
+          },
+          {
+            "name": "raytrace-public-class-fields",
+            "status": "pass",
+            "median_time_ms": 12992,
+            "median_score": 0.38485221674876846,
+            "score_relative_range": 0.0109,
+            "unstable": false
+          },
+          {
+            "name": "raytrace-private-class-fields",
+            "status": "pass",
+            "median_time_ms": 14537,
+            "median_score": 0.3439499208915182,
+            "score_relative_range": 0.0094,
+            "unstable": false
+          },
+          {
+            "name": "async-fs",
+            "status": "pass",
+            "median_time_ms": 6306,
+            "median_score": 0.792895654931811,
+            "score_relative_range": 0.0046,
+            "unstable": false
+          },
+          {
+            "name": "sync-fs",
+            "status": "pass",
+            "median_time_ms": 8892,
+            "median_score": 0.5623031938821412,
+            "score_relative_range": 0.0044,
+            "unstable": false
+          },
+          {
+            "name": "lazy-collections",
+            "status": "pass",
+            "median_time_ms": 8084,
+            "median_score": 0.6185056902523504,
+            "score_relative_range": 0.0489,
+            "unstable": false
+          },
+          {
+            "name": "js-tokens",
+            "status": "pass",
+            "median_time_ms": 24929,
+            "median_score": 0.20056961771430865,
+            "score_relative_range": 0.0479,
+            "unstable": false
+          }
+        ]
+      },
+      "jsse-v0.9.0-bytecode": {
+        "timestamp": "2026-09-25T10:48:42",
+        "passed": 47,
+        "total": 48,
+        "overall_score_geomean": 1.0030713742392272,
+        "status_counts": {
+          "pass": 47,
+          "timeout": 1
+        },
+        "benchmarks": [
+          {
+            "name": "Air",
+            "status": "pass",
+            "median_time_ms": 1914,
+            "median_score": 2.6123301985370952,
+            "score_relative_range": 0.024,
+            "unstable": false
+          },
+          {
+            "name": "Basic",
+            "status": "pass",
+            "median_time_ms": 3431,
+            "median_score": 1.457301078402798,
+            "score_relative_range": 0.0073,
+            "unstable": false
+          },
+          {
+            "name": "ML",
+            "status": "pass",
+            "median_time_ms": 63001,
+            "median_score": 0.07936381962191075,
+            "score_relative_range": 0.0115,
+            "unstable": false
+          },
+          {
+            "name": "Babylon",
+            "status": "pass",
+            "median_time_ms": 2504,
+            "median_score": 1.9968051118210863,
+            "score_relative_range": 0.0124,
+            "unstable": false
+          },
+          {
+            "name": "cdjs",
+            "status": "pass",
+            "median_time_ms": 17533,
+            "median_score": 0.2851765242685222,
+            "score_relative_range": 0.0128,
+            "unstable": false
+          },
+          {
+            "name": "first-inspector-code-load",
+            "status": "pass",
+            "median_time_ms": 264,
+            "median_score": 18.93939393939394,
+            "score_relative_range": 0.0076,
+            "unstable": false
+          },
+          {
+            "name": "multi-inspector-code-load",
+            "status": "pass",
+            "median_time_ms": 266,
+            "median_score": 18.796992481203006,
+            "score_relative_range": 0.0076,
+            "unstable": false
+          },
+          {
+            "name": "Box2D",
+            "status": "pass",
+            "median_time_ms": 6502,
+            "median_score": 0.7689941556444171,
+            "score_relative_range": 0.008,
+            "unstable": false
+          },
+          {
+            "name": "octane-code-load",
+            "status": "pass",
+            "median_time_ms": 60,
+            "median_score": 83.33333333333334,
+            "score_relative_range": 0.5,
+            "unstable": true
+          },
+          {
+            "name": "crypto",
+            "status": "pass",
+            "median_time_ms": 4482,
+            "median_score": 1.1155734047300312,
+            "score_relative_range": 0.0072,
+            "unstable": false
+          },
+          {
+            "name": "delta-blue",
+            "status": "pass",
+            "median_time_ms": 5579,
+            "median_score": 0.8962179602079225,
+            "score_relative_range": 0.0049,
+            "unstable": false
+          },
+          {
+            "name": "earley-boyer",
+            "status": "pass",
+            "median_time_ms": 5230,
+            "median_score": 0.9560229445506692,
+            "score_relative_range": 0.0065,
+            "unstable": false
+          },
+          {
+            "name": "gbemu",
+            "status": "pass",
+            "median_time_ms": 25453,
+            "median_score": 0.19644049817310338,
+            "score_relative_range": 0.0016,
+            "unstable": false
+          },
+          {
+            "name": "mandreel",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "navier-stokes",
+            "status": "pass",
+            "median_time_ms": 2811,
+            "median_score": 1.7787264318747777,
+            "score_relative_range": 0.0161,
+            "unstable": false
+          },
+          {
+            "name": "pdfjs",
+            "status": "pass",
+            "median_time_ms": 11474,
+            "median_score": 0.43576782290395677,
+            "score_relative_range": 0.0038,
+            "unstable": false
+          },
+          {
+            "name": "raytrace",
+            "status": "pass",
+            "median_time_ms": 11624,
+            "median_score": 0.4301445285615967,
+            "score_relative_range": 0.0203,
+            "unstable": false
+          },
+          {
+            "name": "regexp-octane",
+            "status": "pass",
+            "median_time_ms": 2906,
+            "median_score": 1.7205781142463867,
+            "score_relative_range": 0.0079,
+            "unstable": false
+          },
+          {
+            "name": "richards",
+            "status": "pass",
+            "median_time_ms": 10159,
+            "median_score": 0.492174426616793,
+            "score_relative_range": 0.0095,
+            "unstable": false
+          },
+          {
+            "name": "splay",
+            "status": "pass",
+            "median_time_ms": 8054,
+            "median_score": 0.6208095356344674,
+            "score_relative_range": 0.046,
+            "unstable": false
+          },
+          {
+            "name": "typescript-octane",
+            "status": "pass",
+            "median_time_ms": 82163,
+            "median_score": 0.06085464260068399,
+            "score_relative_range": 0.0098,
+            "unstable": false
+          },
+          {
+            "name": "FlightPlanner",
+            "status": "pass",
+            "median_time_ms": 1096,
+            "median_score": 4.562043795620437,
+            "score_relative_range": 0.0212,
+            "unstable": false
+          },
+          {
+            "name": "OfflineAssembler",
+            "status": "pass",
+            "median_time_ms": 15101,
+            "median_score": 0.3311039004039468,
+            "score_relative_range": 0.0118,
+            "unstable": false
+          },
+          {
+            "name": "UniPoker",
+            "status": "pass",
+            "median_time_ms": 4588,
+            "median_score": 1.0897994768962511,
+            "score_relative_range": 0.0028,
+            "unstable": false
+          },
+          {
+            "name": "validatorjs",
+            "status": "pass",
+            "median_time_ms": 1453,
+            "median_score": 3.441156228492774,
+            "score_relative_range": 0.0083,
+            "unstable": false
+          },
+          {
+            "name": "hash-map",
+            "status": "pass",
+            "median_time_ms": 13905,
+            "median_score": 0.35958288385472853,
+            "score_relative_range": 0.0113,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-promise",
+            "status": "pass",
+            "median_time_ms": 13089,
+            "median_score": 0.3820001528000611,
+            "score_relative_range": 0.0126,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-async",
+            "status": "pass",
+            "median_time_ms": 6337,
+            "median_score": 0.7890168849613381,
+            "score_relative_range": 0.0032,
+            "unstable": false
+          },
+          {
+            "name": "ai-astar",
+            "status": "pass",
+            "median_time_ms": 4849,
+            "median_score": 1.031140441328109,
+            "score_relative_range": 0.0136,
+            "unstable": false
+          },
+          {
+            "name": "gaussian-blur",
+            "status": "pass",
+            "median_time_ms": 22870,
+            "median_score": 0.2186270222999563,
+            "score_relative_range": 0.0376,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-aes",
+            "status": "pass",
+            "median_time_ms": 7817,
+            "median_score": 0.6396315722144045,
+            "score_relative_range": 0.0105,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-pbkdf2",
+            "status": "pass",
+            "median_time_ms": 4075,
+            "median_score": 1.2269938650306749,
+            "score_relative_range": 0.0241,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-sha256",
+            "status": "pass",
+            "median_time_ms": 4428,
+            "median_score": 1.1291779584462511,
+            "score_relative_range": 0.0054,
+            "unstable": false
+          },
+          {
+            "name": "json-stringify-inspector",
+            "status": "pass",
+            "median_time_ms": 563,
+            "median_score": 8.880994671403199,
+            "score_relative_range": 0.0125,
+            "unstable": false
+          },
+          {
+            "name": "json-parse-inspector",
+            "status": "pass",
+            "median_time_ms": 1201,
+            "median_score": 4.163197335553705,
+            "score_relative_range": 0.0161,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-bls12-381",
+            "status": "pass",
+            "median_time_ms": 47132,
+            "median_score": 0.10608503776627345,
+            "score_relative_range": 0.0044,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-secp256k1",
+            "status": "pass",
+            "median_time_ms": 4189,
+            "median_score": 1.1936022917164002,
+            "score_relative_range": 0.0081,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-ed25519",
+            "status": "pass",
+            "median_time_ms": 4981,
+            "median_score": 1.003814495081309,
+            "score_relative_range": 0.0078,
+            "unstable": false
+          },
+          {
+            "name": "bigint-paillier",
+            "status": "pass",
+            "median_time_ms": 8574,
+            "median_score": 0.583158385817588,
+            "score_relative_range": 0.016,
+            "unstable": false
+          },
+          {
+            "name": "bigint-bigdenary",
+            "status": "pass",
+            "median_time_ms": 4169,
+            "median_score": 1.1993283761093787,
+            "score_relative_range": 0.0053,
+            "unstable": false
+          },
+          {
+            "name": "proxy-mobx",
+            "status": "pass",
+            "median_time_ms": 593,
+            "median_score": 8.431703204047217,
+            "score_relative_range": 0.057,
+            "unstable": true
+          },
+          {
+            "name": "proxy-vue",
+            "status": "pass",
+            "median_time_ms": 960,
+            "median_score": 5.208333333333334,
+            "score_relative_range": 0.0199,
+            "unstable": false
+          },
+          {
+            "name": "raytrace-public-class-fields",
+            "status": "pass",
+            "median_time_ms": 11562,
+            "median_score": 0.4324511330219685,
+            "score_relative_range": 0.0227,
+            "unstable": false
+          },
+          {
+            "name": "raytrace-private-class-fields",
+            "status": "pass",
+            "median_time_ms": 14619,
+            "median_score": 0.34202065804774606,
+            "score_relative_range": 0.0125,
+            "unstable": false
+          },
+          {
+            "name": "async-fs",
+            "status": "pass",
+            "median_time_ms": 6246,
+            "median_score": 0.8005123278898495,
+            "score_relative_range": 0.0037,
+            "unstable": false
+          },
+          {
+            "name": "sync-fs",
+            "status": "pass",
+            "median_time_ms": 8869,
+            "median_score": 0.5637614161686774,
+            "score_relative_range": 0.0036,
+            "unstable": false
+          },
+          {
+            "name": "lazy-collections",
+            "status": "pass",
+            "median_time_ms": 8031,
+            "median_score": 0.6225874735400324,
+            "score_relative_range": 0.0035,
+            "unstable": false
+          },
+          {
+            "name": "js-tokens",
+            "status": "pass",
+            "median_time_ms": 25037,
+            "median_score": 0.19970443743259975,
+            "score_relative_range": 0.0066,
+            "unstable": false
+          }
+        ]
+      },
+      "jsse-mar17": {
+        "timestamp": "2026-09-18T17:34:01",
+        "passed": 22,
+        "total": 48,
+        "overall_score_geomean": 0.35495705913762304,
+        "status_counts": {
+          "error": 19,
+          "timeout": 7,
+          "pass": 22
+        },
+        "benchmarks": [
+          {
+            "name": "Air",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: next called on non-array iterator"
+          },
+          {
+            "name": "Basic",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: Generator.prototype.next called on non-object"
+          },
+          {
+            "name": "ML",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "Babylon",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "cdjs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: object (class=Object, callable=false, id=1186, keys=[]) is not a function"
+          },
+          {
+            "name": "first-inspector-code-load",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "multi-inspector-code-load",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "Box2D",
+            "status": "pass",
+            "median_time_ms": 16661,
+            "median_score": 0.3001020346917952,
+            "score_relative_range": 0.0013,
+            "unstable": false
+          },
+          {
+            "name": "octane-code-load",
+            "status": "pass",
+            "median_time_ms": 138,
+            "median_score": 36.231884057971016,
+            "score_relative_range": 0.1681,
+            "unstable": true
+          },
+          {
+            "name": "crypto",
+            "status": "pass",
+            "median_time_ms": 11694,
+            "median_score": 0.4275696938600992,
+            "score_relative_range": 0.0109,
+            "unstable": false
+          },
+          {
+            "name": "delta-blue",
+            "status": "pass",
+            "median_time_ms": 22067,
+            "median_score": 0.22658268001993928,
+            "score_relative_range": 0.0079,
+            "unstable": false
+          },
+          {
+            "name": "earley-boyer",
+            "status": "pass",
+            "median_time_ms": 31348,
+            "median_score": 0.1594998086002297,
+            "score_relative_range": 0.0017,
+            "unstable": false
+          },
+          {
+            "name": "gbemu",
+            "status": "pass",
+            "median_time_ms": 57875,
+            "median_score": 0.08639308855291576,
+            "score_relative_range": 0.0012,
+            "unstable": false
+          },
+          {
+            "name": "mandreel",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "navier-stokes",
+            "status": "pass",
+            "median_time_ms": 8882,
+            "median_score": 0.5629362756136005,
+            "score_relative_range": 0.0082,
+            "unstable": false
+          },
+          {
+            "name": "pdfjs",
+            "status": "pass",
+            "median_time_ms": 23051,
+            "median_score": 0.21691032926987985,
+            "score_relative_range": 0.016,
+            "unstable": false
+          },
+          {
+            "name": "raytrace",
+            "status": "pass",
+            "median_time_ms": 36919,
+            "median_score": 0.1354316205747718,
+            "score_relative_range": 0.0102,
+            "unstable": false
+          },
+          {
+            "name": "regexp-octane",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "richards",
+            "status": "pass",
+            "median_time_ms": 30200,
+            "median_score": 0.16556291390728478,
+            "score_relative_range": 0.0073,
+            "unstable": false
+          },
+          {
+            "name": "splay",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "typescript-octane",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "FlightPlanner",
+            "status": "pass",
+            "median_time_ms": 16993,
+            "median_score": 0.2942388042134997,
+            "score_relative_range": 0.0149,
+            "unstable": false
+          },
+          {
+            "name": "OfflineAssembler",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          },
+          {
+            "name": "UniPoker",
+            "status": "pass",
+            "median_time_ms": 20899,
+            "median_score": 0.2392458969328676,
+            "score_relative_range": 0.0085,
+            "unstable": false
+          },
+          {
+            "name": "validatorjs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "Error: Assertion failure: http://foobar.com,[object Object]"
+          },
+          {
+            "name": "hash-map",
+            "status": "pass",
+            "median_time_ms": 114009,
+            "median_score": 0.04385618679227078,
+            "score_relative_range": 0.0071,
+            "unstable": false
+          },
+          {
+            "name": "doxbee-promise",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "doxbee-async",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "ai-astar",
+            "status": "pass",
+            "median_time_ms": 54206,
+            "median_score": 0.09224071136036603,
+            "score_relative_range": 0.0228,
+            "unstable": false
+          },
+          {
+            "name": "gaussian-blur",
+            "status": "pass",
+            "median_time_ms": 53281,
+            "median_score": 0.0938420825434958,
+            "score_relative_range": 0.0107,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-aes",
+            "status": "pass",
+            "median_time_ms": 13812,
+            "median_score": 0.36200405444540973,
+            "score_relative_range": 0.0007,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-pbkdf2",
+            "status": "pass",
+            "median_time_ms": 8187,
+            "median_score": 0.6107243190423842,
+            "score_relative_range": 0.0037,
+            "unstable": false
+          },
+          {
+            "name": "stanford-crypto-sha256",
+            "status": "pass",
+            "median_time_ms": 8839,
+            "median_score": 0.5656748500961647,
+            "score_relative_range": 0.0084,
+            "unstable": false
+          },
+          {
+            "name": "json-stringify-inspector",
+            "status": "pass",
+            "median_time_ms": 537,
+            "median_score": 9.31098696461825,
+            "score_relative_range": 0.0188,
+            "unstable": false
+          },
+          {
+            "name": "json-parse-inspector",
+            "status": "pass",
+            "median_time_ms": 1326,
+            "median_score": 3.7707390648567123,
+            "score_relative_range": 0.0098,
+            "unstable": false
+          },
+          {
+            "name": "bigint-noble-bls12-381",
+            "status": "error",
+            "reason": "exit code 2",
+            "stderr_preview": "SyntaxError: ParseError { message: \"Invalid regular expression: /[^+/0-9A-Za-z-_]/ : Range out of order in character class\" }"
+          },
+          {
+            "name": "bigint-noble-secp256k1",
+            "status": "error",
+            "reason": "exit code 2",
+            "stderr_preview": "SyntaxError: ParseError { message: \"Invalid regular expression: /[^+/0-9A-Za-z-_]/ : Range out of order in character class\" }"
+          },
+          {
+            "name": "bigint-noble-ed25519",
+            "status": "error",
+            "reason": "exit code 2",
+            "stderr_preview": "SyntaxError: ParseError { message: \"Invalid regular expression: /[^+/0-9A-Za-z-_]/ : Range out of order in character class\" }"
+          },
+          {
+            "name": "bigint-paillier",
+            "status": "error",
+            "reason": "exit code 2",
+            "stderr_preview": "SyntaxError: ParseError { message: \"Invalid regular expression: /[^+/0-9A-Za-z-_]/ : Range out of order in character class\" }"
+          },
+          {
+            "name": "bigint-bigdenary",
+            "status": "pass",
+            "median_time_ms": 17858,
+            "median_score": 0.27998656064508903,
+            "score_relative_range": 0.0077,
+            "unstable": false
+          },
+          {
+            "name": "proxy-mobx",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "proxy-vue",
+            "status": "error",
+            "reason": "exit code 2",
+            "stderr_preview": "SyntaxError: ParseError { message: \"Identifier 't' has already been declared\" }"
+          },
+          {
+            "name": "raytrace-public-class-fields",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: undefined is not a function"
+          },
+          {
+            "name": "raytrace-private-class-fields",
+            "status": "pass",
+            "median_time_ms": 51397,
+            "median_score": 0.09728194252582836,
+            "score_relative_range": 0.0206,
+            "unstable": false
+          },
+          {
+            "name": "async-fs",
+            "status": "error",
+            "reason": "no JSON output"
+          },
+          {
+            "name": "sync-fs",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: Generator.prototype.next called on non-object"
+          },
+          {
+            "name": "lazy-collections",
+            "status": "error",
+            "reason": "exit code 1",
+            "stderr_preview": "TypeError: Generator.prototype.next called on non-object"
+          },
+          {
+            "name": "js-tokens",
+            "status": "timeout",
+            "reason": "exceeded 120s"
+          }
+        ]
+      }
+    },
+    "comparisons": {
+      "jsse_current_vs_jsse_mar17": {
+        "numerator": "jsse-current",
+        "denominator": "jsse-mar17",
+        "benchmarks_passing_in_both": 22,
+        "geomean_speedup": 2.765,
+        "median_speedup": 2.329,
+        "per_benchmark_speedup": {
+          "Box2D": 2.396,
+          "octane-code-load": 2.262,
+          "crypto": 2.169,
+          "delta-blue": 3.585,
+          "earley-boyer": 5.746,
+          "gbemu": 2.139,
+          "navier-stokes": 1.854,
+          "pdfjs": 1.993,
+          "raytrace": 2.767,
+          "richards": 2.855,
+          "FlightPlanner": 14.815,
+          "UniPoker": 4.432,
+          "hash-map": 8.099,
+          "ai-astar": 10.666,
+          "gaussian-blur": 1.722,
+          "stanford-crypto-aes": 1.784,
+          "stanford-crypto-pbkdf2": 1.704,
+          "stanford-crypto-sha256": 1.721,
+          "json-stringify-inspector": 0.361,
+          "json-parse-inspector": 1.254,
+          "bigint-bigdenary": 4.226,
+          "raytrace-private-class-fields": 3.523
+        },
+        "passing_only_in_numerator": [
+          "Air",
+          "Basic",
+          "ML",
+          "regexp-octane",
+          "splay",
+          "typescript-octane",
+          "doxbee-promise",
+          "doxbee-async",
+          "proxy-mobx",
+          "proxy-vue",
+          "raytrace-public-class-fields",
+          "sync-fs"
+        ],
+        "passing_only_in_denominator": []
+      },
+      "jsse_current_bytecode_vs_jsse_current": {
+        "numerator": "jsse-current-bytecode",
+        "denominator": "jsse-current",
+        "benchmarks_passing_in_both": 34,
+        "geomean_speedup": 1.082,
+        "median_speedup": 1.035,
+        "per_benchmark_speedup": {
+          "Air": 1.011,
+          "Basic": 0.997,
+          "ML": 1.014,
+          "Box2D": 1.064,
+          "octane-code-load": 1.525,
+          "crypto": 1.232,
+          "delta-blue": 1.116,
+          "earley-boyer": 1.06,
+          "gbemu": 1.066,
+          "navier-stokes": 1.695,
+          "pdfjs": 1.016,
+          "raytrace": 1.151,
+          "regexp-octane": 1.004,
+          "richards": 1.043,
+          "splay": 0.997,
+          "typescript-octane": 1.039,
+          "FlightPlanner": 1.057,
+          "UniPoker": 1.029,
+          "hash-map": 1.019,
+          "doxbee-promise": 0.997,
+          "doxbee-async": 1.064,
+          "ai-astar": 1.038,
+          "gaussian-blur": 1.379,
+          "stanford-crypto-aes": 0.995,
+          "stanford-crypto-pbkdf2": 1.161,
+          "stanford-crypto-sha256": 1.146,
+          "json-stringify-inspector": 0.999,
+          "json-parse-inspector": 0.97,
+          "bigint-bigdenary": 1.033,
+          "proxy-mobx": 1.017,
+          "proxy-vue": 1.001,
+          "raytrace-public-class-fields": 1.14,
+          "raytrace-private-class-fields": 1.001,
+          "sync-fs": 1.011
+        },
+        "passing_only_in_numerator": [],
+        "passing_only_in_denominator": []
+      },
+      "jsse_v0_9_0_vs_jsse_mar17": {
+        "numerator": "jsse-v0.9.0",
+        "denominator": "jsse-mar17",
+        "benchmarks_passing_in_both": 22,
+        "geomean_speedup": 2.92,
+        "median_speedup": 2.577,
+        "per_benchmark_speedup": {
+          "Box2D": 2.383,
+          "octane-code-load": 3.45,
+          "crypto": 2.13,
+          "delta-blue": 3.588,
+          "earley-boyer": 5.716,
+          "gbemu": 2.14,
+          "navier-stokes": 1.842,
+          "pdfjs": 2.0,
+          "raytrace": 2.771,
+          "richards": 2.834,
+          "FlightPlanner": 14.789,
+          "UniPoker": 4.425,
+          "hash-map": 7.965,
+          "ai-astar": 10.785,
+          "gaussian-blur": 1.695,
+          "stanford-crypto-aes": 1.764,
+          "stanford-crypto-pbkdf2": 1.7,
+          "stanford-crypto-sha256": 1.701,
+          "json-stringify-inspector": 0.957,
+          "json-parse-inspector": 1.128,
+          "bigint-bigdenary": 4.211,
+          "raytrace-private-class-fields": 3.536
+        },
+        "passing_only_in_numerator": [
+          "Air",
+          "Basic",
+          "ML",
+          "Babylon",
+          "cdjs",
+          "first-inspector-code-load",
+          "multi-inspector-code-load",
+          "regexp-octane",
+          "splay",
+          "typescript-octane",
+          "OfflineAssembler",
+          "validatorjs",
+          "doxbee-promise",
+          "doxbee-async",
+          "bigint-noble-bls12-381",
+          "bigint-noble-secp256k1",
+          "bigint-noble-ed25519",
+          "bigint-paillier",
+          "proxy-mobx",
+          "proxy-vue",
+          "raytrace-public-class-fields",
+          "async-fs",
+          "sync-fs",
+          "lazy-collections",
+          "js-tokens"
+        ],
+        "passing_only_in_denominator": []
+      },
+      "jsse_v0_9_0_vs_jsse_v0_8_1": {
+        "numerator": "jsse-v0.9.0",
+        "denominator": "jsse-current",
+        "benchmarks_passing_in_both": 34,
+        "geomean_speedup": 1.025,
+        "median_speedup": 0.996,
+        "per_benchmark_speedup": {
+          "Air": 0.873,
+          "Basic": 0.782,
+          "ML": 0.994,
+          "Box2D": 0.995,
+          "octane-code-load": 1.525,
+          "crypto": 0.982,
+          "delta-blue": 1.001,
+          "earley-boyer": 0.995,
+          "gbemu": 1.001,
+          "navier-stokes": 0.993,
+          "pdfjs": 1.003,
+          "raytrace": 1.002,
+          "regexp-octane": 0.984,
+          "richards": 0.993,
+          "splay": 1.009,
+          "typescript-octane": 0.999,
+          "FlightPlanner": 0.998,
+          "UniPoker": 0.998,
+          "hash-map": 0.983,
+          "doxbee-promise": 1.069,
+          "doxbee-async": 0.958,
+          "ai-astar": 1.011,
+          "gaussian-blur": 0.984,
+          "stanford-crypto-aes": 0.988,
+          "stanford-crypto-pbkdf2": 0.997,
+          "stanford-crypto-sha256": 0.988,
+          "json-stringify-inspector": 2.652,
+          "json-parse-inspector": 0.899,
+          "bigint-bigdenary": 0.996,
+          "proxy-mobx": 1.021,
+          "proxy-vue": 0.995,
+          "raytrace-public-class-fields": 1.005,
+          "raytrace-private-class-fields": 1.003,
+          "sync-fs": 1.0
+        },
+        "passing_only_in_numerator": [
+          "Babylon",
+          "cdjs",
+          "first-inspector-code-load",
+          "multi-inspector-code-load",
+          "OfflineAssembler",
+          "validatorjs",
+          "bigint-noble-bls12-381",
+          "bigint-noble-secp256k1",
+          "bigint-noble-ed25519",
+          "bigint-paillier",
+          "async-fs",
+          "lazy-collections",
+          "js-tokens"
+        ],
+        "passing_only_in_denominator": []
+      },
+      "jsse_v0_9_0_bytecode_vs_jsse_v0_9_0": {
+        "numerator": "jsse-v0.9.0-bytecode",
+        "denominator": "jsse-v0.9.0",
+        "benchmarks_passing_in_both": 47,
+        "geomean_speedup": 1.038,
+        "median_speedup": 1.017,
+        "per_benchmark_speedup": {
+          "Air": 1.018,
+          "Basic": 1.0,
+          "ML": 0.895,
+          "Babylon": 1.023,
+          "cdjs": 1.053,
+          "first-inspector-code-load": 1.008,
+          "multi-inspector-code-load": 1.0,
+          "Box2D": 1.075,
+          "octane-code-load": 0.667,
+          "crypto": 1.225,
+          "delta-blue": 1.103,
+          "earley-boyer": 1.049,
+          "gbemu": 1.062,
+          "navier-stokes": 1.715,
+          "pdfjs": 1.004,
+          "raytrace": 1.146,
+          "regexp-octane": 0.997,
+          "richards": 1.049,
+          "splay": 0.998,
+          "typescript-octane": 1.026,
+          "FlightPlanner": 1.048,
+          "OfflineAssembler": 1.012,
+          "UniPoker": 1.029,
+          "validatorjs": 1.003,
+          "hash-map": 1.029,
+          "doxbee-promise": 0.932,
+          "doxbee-async": 1.019,
+          "ai-astar": 1.037,
+          "gaussian-blur": 1.374,
+          "stanford-crypto-aes": 1.002,
+          "stanford-crypto-pbkdf2": 1.182,
+          "stanford-crypto-sha256": 1.174,
+          "json-stringify-inspector": 0.996,
+          "json-parse-inspector": 0.979,
+          "bigint-noble-bls12-381": 1.048,
+          "bigint-noble-secp256k1": 1.018,
+          "bigint-noble-ed25519": 1.016,
+          "bigint-paillier": 1.008,
+          "bigint-bigdenary": 1.017,
+          "proxy-mobx": 0.976,
+          "proxy-vue": 1.017,
+          "raytrace-public-class-fields": 1.124,
+          "raytrace-private-class-fields": 0.994,
+          "async-fs": 1.01,
+          "sync-fs": 1.003,
+          "lazy-collections": 1.007,
+          "js-tokens": 0.996
+        },
+        "passing_only_in_numerator": [],
+        "passing_only_in_denominator": []
+      }
+    },
+    "v0_9_0_run": {
+      "date": "2026-09-25",
+      "runner": "scripts/run-jetstream.py from the v0.9.0 tree (differs from the runner used on 2026-09-18; see caveats)",
+      "flags": "--iterations 1 --timeout 120 -j 1 --no-idle-gate (repeats=3 default), same as 2026-09-18",
+      "jetstream_checkout": "WebKit/JetStream c603c04db8505477867974a69789309ded2cc948 (same checkout as 2026-09-18)",
+      "host": "buildbox3",
+      "loadavg_start_default": {
+        "one_minute": 1.33,
+        "five_minutes": 1.94,
+        "fifteen_minutes": 1.85
+      },
+      "loadavg_start_bytecode": {
+        "one_minute": 4.16,
+        "five_minutes": 3.47,
+        "fifteen_minutes": 2.62
+      },
+      "runner_effect_control": {
+        "provenance": "Out-of-band run from an earlier 2026-09-23 session on buildbox3, not produced by the 2026-09-25 runs and not re-verified: jsse v0.8.1 CI release binary run under the v0.9.0-era scripts/run-jetstream.py with the same flags. Included only to separate runner effects from engine effects.",
+        "timestamp": "2026-09-23T19:27:40",
+        "passed": 43,
+        "total": 48,
+        "overall_score_geomean": 0.9932441026676168,
+        "failing": {
+          "mandreel": "timeout",
+          "OfflineAssembler": "error",
+          "validatorjs": "error",
+          "lazy-collections": "error",
+          "js-tokens": "error"
+        },
+        "flipped_error_to_pass_vs_2026_09_18_v0_8_1": [
+          "Babylon",
+          "cdjs",
+          "first-inspector-code-load",
+          "multi-inspector-code-load",
+          "OfflineAssembler",
+          "validatorjs",
+          "bigint-noble-bls12-381",
+          "bigint-noble-secp256k1",
+          "bigint-noble-ed25519",
+          "bigint-paillier",
+          "async-fs",
+          "lazy-collections",
+          "js-tokens"
+        ],
+        "of_which_already_pass_with_v0_8_1_engine_under_new_runner": [
+          "Babylon",
+          "cdjs",
+          "first-inspector-code-load",
+          "multi-inspector-code-load",
+          "bigint-noble-bls12-381",
+          "bigint-noble-secp256k1",
+          "bigint-noble-ed25519",
+          "bigint-paillier",
+          "async-fs"
+        ],
+        "of_which_need_v0_9_0_engine": [
+          "OfflineAssembler",
+          "validatorjs",
+          "lazy-collections",
+          "js-tokens"
+        ]
+      }
+    }
+  },
+  "prior_reference_points": {
+    "march_10_2026_three_engine_test262": {
+      "source": "docs/data.md",
+      "suite": "91,986 scenarios (older test262 revision; NOT directly comparable to the 99,911-scenario suite above)",
+      "jsse_29a72a7": {
+        "pass": 91986,
+        "fail": 0,
+        "rate_pct": 100.0
+      },
+      "boa_v0.21": {
+        "pass": 83260,
+        "fail": 8726,
+        "rate_pct": 90.51
+      },
+      "node_v25.8.0": {
+        "run": 91187,
+        "skipped": 799,
+        "pass": 79201,
+        "fail": 11986,
+        "rate_pct": 86.86
+      }
+    },
+    "may_2026_head_vs_march_17": {
+      "source": "docs/perf/2026-05-07/benchmark-report.md",
+      "summary": "JetStream 19/48 -> 26/48 passing; geomean speedup 1.92x on 19 common workloads; test262 wall time 4.73x faster (828.85s vs 175.2s)."
+    }
+  },
+  "caveats": [
+    "test262: all engines ran the same checkout (aae8cf6, 99,911 scenarios) with the same runner and 120s timeout, so jsse-mar17's 98.96% is against TODAY's suite; its 1,039 failures are mostly features added after March 17 (Iterator helpers, Promise.allKeyed/allSettledKeyed, immutable ArrayBuffer, Atomics.waitAsync, AsyncDisposableStack, Temporal gaps), not regressions.",
+    "test262 was run on a shared interactive laptop with variable load: pass/fail counts are unaffected, but per-test timing stats (sum_of_per_test_wall_s etc.) are indicative only and run at -j 12.",
+    "Node: 830 module scenarios are skipped by the adapter (pass_rate_of_run 96.24% vs 95.44% of all scenarios), and the Node adapter uses a basic $262.agent prelude, so some Atomics/agent failures are adapter limitations rather than pure V8 conformance. Node runs under a larger address-space limit than jsse/boa (V8 needs it).",
+    "engine262: only a seeded 10% per-directory sample (seed 42) was run because a full run is impractically slow; treat its pass rate as an estimate.",
+    "Boa: run through its CLI with the harness inlined into the script; syntax-error (negative) tests are detected by a 'SyntaxError' substring in stderr.",
+    "Micro-benchmarks are tiny scripts timed per process (5 runs, median, includes engine startup). Node's ~0.1s numbers are largely startup floor, so slowdown-vs-node ratios are not meaningful as steady-state JIT comparisons. Timeouts (120s) are censored: engine262 timed out on bench_loop, bench_fib, bench_closures and bench_opmix; jsse-mar17 timed out on bench_array, so its speedup entry is a lower bound.",
+    "Perf runs (micro-benchmarks, JetStream) were done on buildbox3, a SHARED build machine: another user's RISC-V LNT jobs were running throughout (baseline loadavg ~1.2-1.7). The micro-benchmark run passed the 1.5 idle gate (loadavg 1.19 at start); JetStream was run with --no-idle-gate. Both jsse builds were built with the same toolchain on each host.",
+    "The perf runs used commit 083746f (the v0.8.1 release commit) while test262 runs used 077e4ec; 083746f only changes version/changelog files on top of 077e4ec.",
+    "JetStream: run with the project's runner (scripts/run-jetstream.py, --iterations 1, 120s timeout, 3 repeats, pinned JetStream c603c04), NOT JetStream's own driver, and with 1 iteration instead of the default iteration counts. Scores are therefore only meaningful as relative comparisons between the jsse builds, not comparable to published JetStream scores.",
+    "JetStream errors are not root-caused. Captured stderr suggests a mix: 'self is not defined' (bigint-paillier) looks like a host-API gap in the runner, while 'Generator is already running' (lazy-collections), 'tokenCount ... is invalid' (js-tokens), a large-number formatting mismatch in OfflineAssembler, a validatorjs assertion and a 'not a function' TypeError in cdjs look like possible engine bugs worth follow-up. 'no JSON output' failures are async workloads that were not investigated.",
+    "The --bytecode VM is experimental and off by default; it only affects functions eligible for compilation, so its effect is workload dependent (largest on bench_opmix).",
+    "Earlier aborted attempts (a laptop micro-benchmark run under load, and JetStream runs with default iteration counts, missing decompressed assets and a clobbered /tmp on buildbox3) were discarded and are not included in any number here.",
+    "[2026-09-25, jsse v0.9.0] Key naming: 'jsse-current' / 'jsse-current-bytecode' and every derived key built on them are jsse v0.8.1 from the 2026-09-18 snapshot, NOT the latest. jsse v0.9.0 is 'jsse-v0.9.0' / 'jsse-v0.9.0-bytecode'; its comparisons are the '*_v0_9_0*' / 'jsse_v0_9_0_*' keys.",
+    "[2026-09-25, jsse v0.9.0] Only jsse v0.9.0 was (re)measured on 2026-09-25. jsse-mar17, jsse v0.8.1 (jsse-current), Node, Boa and engine262 are the unchanged 2026-09-18 numbers, so every v0.9.0 vs. those ratio compares two sessions a week apart on the same shared host, carrying session-to-session noise on top of within-run variation. In particular slowdown_vs_node_v0_9_0 and slowdown_vs_boa_v0_9_0 divide a 2026-09-25 jsse median by a 2026-09-18 Node/Boa median.",
+    "[2026-09-25, jsse v0.9.0] jsse v0.9.0 (tag v0.9.0, e30c5c7, the release commit) was built from source on both hosts with the same toolchains as the 2026-09-18 jsse builds (laptop stable rustc 1.98.0 for test262; buildbox3 nightly rustc 1.100.0-nightly 330d31712 for micro-benchmarks and JetStream), not from the CI release tarball. test262 used the same checkout (aae8cf6, 99,911 scenarios) and 120s timeout, so its pass counts are directly comparable to the 2026-09-18 runs.",
+    "[2026-09-25, jsse v0.9.0] test262 timing stats for the v0.9.0 entries were again taken on a shared interactive laptop at -j 12 and are indicative only. They use linear-interpolation percentiles; the method behind the 2026-09-18 percentiles was not recorded, but with 99,911 samples the difference is far below the reported precision.",
+    "[2026-09-25, jsse v0.9.0] Micro-benchmarks: the idle gate (loadavg1 <= 1.5) was checked once, before the first run (1.27), as on 2026-09-18. The loadavg1 sampled before each individual benchmark (recorded under micro_benchmarks.v0_9_0_run) ranged from 1.27 to about 3.1; a single-threaded benchmark itself contributes about 1.0 of that, and buildbox3 is shared, so treat differences of a few percent as noise. Every benchmark completed all 5 repeats without errors or timeouts. Two independent 2026-09-23 runs of the CI release binary on the same host (not included) gave medians within ~4% of these for every benchmark except the sub-0.2s bench_regex and bench_json, which are startup-dominated and varied by up to ~30% between sessions: bench_regex measured 0.10 s here but 0.10 and 0.13 s on 2026-09-23 (v0.8.1: 0.13 s), so its 1.20x speedup vs v0.8.1 is within session-to-session noise and should not be headlined; bench_json's 1.69x (0.30 s to 0.18 s here, 0.18-0.20 s on 2026-09-23) reproduced across sessions, and the enumerable_own_keys optimization (#656) landed in 0.8.2.",
+    "[2026-09-25, jsse v0.9.0] The JetStream runner changed between the two snapshots: 2026-09-18 numbers (jsse-mar17, jsse-current, jsse-current-bytecode) used the v0.8.1-era scripts/run-jetstream.py; the v0.9.0 runs use the v0.9.0 runner, which the v0.9.0 engine requires (its parser now rejects the old harness's script-level redeclaration, #673). The newer runner also defines `self` (bigint-paillier, noble-*), serves JetStream.getString preloads (async workloads), makes console.assert throw, reports async rejections, and wraps the harness in an IIFE (#673, #675, #681, #702). The runner effect and the engine effect are therefore mixed in every pass-count and 'passing_only_in_numerator' comparison against 2026-09-18 data.",
+    "[2026-09-25, jsse v0.9.0] JetStream pass count is NOT a like-for-like engine metric across the two snapshots: 34/48 (v0.8.1, old runner) to 47/48 (v0.9.0, new runner). An out-of-band 2026-09-23 control (v0.8.1 CI release binary under the v0.9.0-era runner; see jetstream.v0_9_0_run.runner_effect_control) already passed 43/48, i.e. most of the newly passing workloads are attributable to the runner and only four (OfflineAssembler, validatorjs, lazy-collections, js-tokens) need the v0.9.0 engine. The control was made by an earlier session, uses the release-tarball binary and was not re-run or re-verified here; a same-binary control (the exact 2026-09-18 v0.8.1 build under the new runner) was not run because the original version was deliberately not re-measured.",
+    "[2026-09-25, jsse v0.9.0] JetStream speed comparisons (per_benchmark_speedup, geomean_speedup) only cover workloads that pass in both builds, and 'overall_score_geomean' of a target is over that target's own passing set, so it is not comparable between targets that pass different numbers of workloads (v0.9.0 0.966 over 47 vs v0.8.1 0.921 over 34); use the comparisons block. Repeat-to-repeat instability >5% is flagged per workload (unstable); JetStream was again run with --no-idle-gate on the shared host, and the loadavg at the start of each run is recorded under jetstream.v0_9_0_run. The speed ratios (per_benchmark_speedup, geomean/median) that cross the runner change (v0.9.0 vs 2026-09-18 v0.8.1 and mar17) also mix runners: the harness changes sit outside the timed runIteration() region so the effect is expected to be small, but it was not measured, and the 2026-09-23 control cannot isolate it (different binary, possibly a different toolchain).",
+    "[2026-09-25, jsse v0.9.0] mandreel still times out (120s) on v0.9.0 in both configurations, exactly as on v0.8.1, so it is excluded from all JetStream comparisons."
+  ],
+  "reproduction": {
+    "test262": "uv run python scripts/run-test262.py [--engine node|boa|engine262 --binary <bin>] [--bytecode] -j 12 --timeout 120 [--sample 0.10 --seed 42]",
+    "micro_benchmarks": "benchmarks/scripts/bench_*.js, median of 5 process runs per engine",
+    "jetstream": "python3 scripts/run-jetstream.py --iterations 1 --timeout 120 -j 1 --no-idle-gate --engine <bin> --jetstream <JetStream@c603c04> --json <out>",
+    "build_v0_9_0": "git checkout v0.9.0 && cargo build --release  (laptop: stable rustc 1.98.0; buildbox3: `cargo +nightly`, 1.100.0-nightly 330d31712)",
+    "test262_v0_9_0": "uv run python scripts/run-test262.py --binary <v0.9.0 release binary> [--bytecode] -j 12 --timeout 120   (v0.9.0 tree, test262 @ aae8cf6)",
+    "micro_benchmarks_v0_9_0": "benchmarks/scripts/bench_*.js, median of 5 process runs per engine, same driver logic as 2026-09-18 (scripts/benchmark_protocol.py idle gate)",
+    "jetstream_v0_9_0": "python3 scripts/run-jetstream.py --iterations 1 --timeout 120 -j 1 --no-idle-gate --engine <bin> --jetstream <JetStream@c603c04> --json <out>   (v0.9.0 runner)"
+  },
+  "notable_findings": {
+    "jetstream_regressions_vs_mar17": [
+      {
+        "benchmark": "json-stringify-inspector",
+        "mar17_ms": 537,
+        "current_ms": 1488,
+        "slowdown_x": 2.77
+      }
+    ],
+    "jetstream_newly_passing_since_mar17": [
+      "Air",
+      "Basic",
+      "ML",
+      "regexp-octane",
+      "splay",
+      "typescript-octane",
+      "doxbee-promise",
+      "doxbee-async",
+      "proxy-mobx",
+      "proxy-vue",
+      "raytrace-public-class-fields",
+      "sync-fs"
+    ],
+    "jetstream_bytecode_top_speedups": [
+      [
+        "navier-stokes",
+        1.695
+      ],
+      [
+        "octane-code-load",
+        1.525
+      ],
+      [
+        "gaussian-blur",
+        1.379
+      ],
+      [
+        "crypto",
+        1.232
+      ],
+      [
+        "stanford-crypto-pbkdf2",
+        1.161
+      ]
+    ],
+    "jetstream_bytecode_worst": [
+      [
+        "json-parse-inspector",
+        0.97
+      ],
+      [
+        "stanford-crypto-aes",
+        0.995
+      ],
+      [
+        "Basic",
+        0.997
+      ]
+    ],
+    "micro_regressions_vs_mar17": [
+      "bench_json"
+    ],
+    "micro_bytecode_best": [
+      "bench_opmix",
+      1.263
+    ],
+    "jetstream_current_failures": [
+      {
+        "name": "Babylon",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "cdjs",
+        "status": "error",
+        "reason": "exit code 1",
+        "stderr_preview": "TypeError: object (class=Object, callable=false, id=1204, keys=[]) is not a function"
+      },
+      {
+        "name": "first-inspector-code-load",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "multi-inspector-code-load",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "mandreel",
+        "status": "timeout",
+        "reason": "exceeded 120s"
+      },
+      {
+        "name": "OfflineAssembler",
+        "status": "error",
+        "reason": "exit code 1",
+        "stderr_preview": "Line #42 differs.  Expected: \"const TagTypeNumber = 18446462598732840000\", got \"const TagTypeNumber = 18446462598732839000\""
+      },
+      {
+        "name": "validatorjs",
+        "status": "error",
+        "reason": "exit code 1",
+        "stderr_preview": "Error: Assertion failure: 2010-07-02,[object Object]"
+      },
+      {
+        "name": "bigint-noble-bls12-381",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "bigint-noble-secp256k1",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "bigint-noble-ed25519",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "bigint-paillier",
+        "status": "error",
+        "reason": "exit code 1",
+        "stderr_preview": "ReferenceError: self is not defined"
+      },
+      {
+        "name": "async-fs",
+        "status": "error",
+        "reason": "no JSON output"
+      },
+      {
+        "name": "lazy-collections",
+        "status": "error",
+        "reason": "exit code 1",
+        "stderr_preview": "TypeError: Generator is already running"
+      },
+      {
+        "name": "js-tokens",
+        "status": "error",
+        "reason": "exit code 1",
+        "stderr_preview": "Error: this.tokenCount of 115475 is invalid!"
+      }
+    ]
+  },
+  "previous_snapshot": {
+    "path": "docs/perf/2026-09-18/engine-comparison.json",
+    "generated_at": "2026-09-18T17:36:11+00:00"
+  },
+  "key_naming_note": "Keys carried over from the 2026-09-18 snapshot keep their original names: 'jsse-current' and 'jsse-current-bytecode' are jsse v0.8.1 (NOT the latest). The latest is 'jsse-v0.9.0' / 'jsse-v0.9.0-bytecode'. 'jsse-mar17' is the original 0.1.0 baseline of 2026-03-17."
+}

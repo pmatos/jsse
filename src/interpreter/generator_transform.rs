@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
+use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
 
@@ -91,6 +92,27 @@ impl GeneratorState {
     }
 }
 
+/// The `IteratorBindingInitialization` primitive an `ArrayPatternIter`
+/// terminator performs. See `StateTerminator::ArrayPatternIter`.
+#[derive(Debug, Clone)]
+pub(crate) enum ArrayPatternIterOp {
+    /// `GetIterator(iterable, sync)`, opening the iterator this pattern steps.
+    Init { iterable: Expression },
+    /// `IteratorStepValue` for one element. `None` is an elision: step and
+    /// discard. Once the iterator has been observed done (by an earlier
+    /// `Step`/`Drain` in the same pattern), this binds `dest_var` to
+    /// `undefined` without calling the iterator again, per spec.
+    Step { dest_var: Option<String> },
+    /// `IteratorStepValue` looped to exhaustion for a `BindingRestElement`,
+    /// collecting into a fresh array bound to `dest_var`.
+    Drain { dest_var: String },
+    /// Normal-completion `IteratorClose` when the pattern didn't fully drain
+    /// the iterator (`sec-runtime-semantics-bindinginitialization`'s `If
+    /// iteratorRecord.[[Done]] is false, return ? IteratorClose(...)`). A
+    /// no-op if the iterator was already observed done.
+    Finish,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum StateTerminator {
     Yield {
@@ -158,6 +180,23 @@ pub(crate) enum StateTerminator {
         resume_state: usize,
         sent_value_binding: Option<SentValueBinding>,
     },
+    /// One primitive of `IteratorBindingInitialization` for a lowered array
+    /// binding pattern (`lower_array_pattern_binding`): opening the iterator,
+    /// stepping it once for an element (or eliding one), draining it for a
+    /// rest element, or closing it on normal completion when the pattern
+    /// under-consumed it. Always synchronous — `GetIterator` for a binding
+    /// pattern is never `for await`, even inside an async function — so
+    /// unlike `Await` this terminator never suspends by itself; only an
+    /// element's own default (lowered separately via `Await`/`Yield`) can.
+    /// Reuses `for_of_stack`/`ForOfLoopState` purely so the driver's existing
+    /// abrupt-unwind path closes the iterator for free on a `throw` crossing
+    /// this point, not because this is a real loop (nothing can `break`/
+    /// `continue` into a binding pattern).
+    ArrayPatternIter {
+        op: ArrayPatternIterOp,
+        iter_var: String,
+        next_state: usize,
+    },
     /// Opens a block scope: creates the block's own `Environment` (a child of
     /// whatever env is active), pushes it onto the driver's `scope_stack`, and
     /// continues at `body_state` executing against it. Emitted only for a
@@ -196,34 +235,16 @@ pub(crate) struct LoopControlTarget {
     pub scope_depth: usize,
 }
 
-/// Clear IC sites in a sent-value binding pattern (the destructuring target of
-/// `x = yield` / `x = await`). The pattern is applied to the resumed value before
-/// the next `exec_body` switches to a state-body store, so any computed-key or
-/// default-value sites in it run under the caller's handle and must be cleared.
-fn clear_sent_value_binding(binding: &mut Option<SentValueBinding>) {
-    if let Some(SentValueBinding {
-        kind: SentValueBindingKind::Pattern(p),
-    }) = binding
-    {
-        crate::ast::clear_pattern_ic_sites(p);
-    }
-}
-
 /// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
 /// `ast::clear_expr_ic_sites`: terminator expressions run under the caller's IC
 /// handle rather than any state body's store, so they must take the slow path.
 fn clear_terminator_ic_sites(t: &mut StateTerminator) {
     use crate::ast::{clear_expr_ic_sites, clear_for_in_of_left, clear_pattern_ic_sites};
     match t {
-        StateTerminator::Yield {
-            value,
-            sent_value_binding,
-            ..
-        } => {
+        StateTerminator::Yield { value, .. } => {
             if let Some(v) = value {
                 clear_expr_ic_sites(v);
             }
-            clear_sent_value_binding(sent_value_binding);
         }
         StateTerminator::Return(v) => {
             if let Some(v) = v {
@@ -246,13 +267,15 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         // later in ForOfHead, which is where its sites are cleared.
         StateTerminator::ForOfInit { iterable, .. } => clear_expr_ic_sites(iterable),
         StateTerminator::ForOfHead { left, .. } => clear_for_in_of_left(left),
-        StateTerminator::Await {
-            value,
-            sent_value_binding,
-            ..
-        } => {
+        StateTerminator::Await { value, .. } => {
             clear_expr_ic_sites(value);
-            clear_sent_value_binding(sent_value_binding);
+        }
+        // `Step`/`Drain`/`Finish` carry no expressions of their own; only
+        // `Init`'s `iterable` needs clearing.
+        StateTerminator::ArrayPatternIter { op, .. } => {
+            if let ArrayPatternIterOp::Init { iterable } = op {
+                clear_expr_ic_sites(iterable);
+            }
         }
         StateTerminator::TryEnter { catch_state, .. } => {
             if let Some(ci) = catch_state
@@ -296,7 +319,6 @@ pub(crate) struct SentValueBinding {
 #[derive(Debug, Clone)]
 pub(crate) enum SentValueBindingKind {
     Variable(String),
-    Pattern(Pattern),
     #[allow(dead_code)]
     Discard,
     InlineYield {
@@ -611,7 +633,7 @@ fn stmt_contains_for_of_head(
 ) -> bool {
     let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
     match stmt {
-        Statement::ForOf(f) => head(f),
+        Statement::ForOf(f) => head(f) || contains(&f.body),
         Statement::Block(stmts) => stmts.iter().any(contains),
         Statement::If(i) => {
             contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
@@ -675,11 +697,11 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
     // suspension point in any async context, generators included. A `yield`
     // or `await` inside the head's own binding target still needs the
     // tree-walker's inline replay, so such a loop is left native.
-    if let Statement::ForOf(f) = stmt
-        && ((is_async && f.disposes_at_head())
+    if stmt_contains_for_of_head(stmt, |f| {
+        (is_async && f.disposes_at_head())
             || (detect_for_await && f.awaits_at_head())
-            || (is_async && f.is_await && !for_in_of_left_contains_suspension(&f.left)))
-    {
+            || (is_async && f.is_await && !for_in_of_left_contains_suspension(&f.left))
+    }) {
         return true;
     }
     if is_async {
@@ -1344,6 +1366,25 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
+        Expression::Assign(op, left, right)
+            if *op == AssignOp::Assign
+                && matches!(
+                    left.as_ref(),
+                    Expression::Array(..) | Expression::Object(..)
+                )
+                && expr_to_pattern(left.clone().into_expression())
+                    .is_ok_and(|p| pattern_needs_assignment_lowering(&p)) =>
+        {
+            let pattern = expr_to_pattern(left.clone().into_expression())
+                .expect("checked by the guard above");
+            let source = ctx.new_temp_var("dstr_src");
+            bind_expression_to_temp(right, &source, ctx);
+            lower_pattern_assignment(&pattern, &source, ctx);
+            // The assignment expression's completion value is the RHS value
+            // (`rval` in DestructuringAssignmentEvaluation), already held in `source`.
+            emit_expression_with_binding(&Expression::Identifier(source), &binding, ctx);
+        }
+
         Expression::Assign(op, left, right) => {
             let right_suspends = expr_has_suspension(right, ctx.is_async);
             let target = lower_reference_operand(left, right_suspends, ctx);
@@ -1760,16 +1801,6 @@ fn emit_expression_with_binding(
             );
             ctx.emit_statement(Statement::Expression(assign));
         }
-        Some(SentValueBindingKind::Pattern(pattern)) => {
-            let decl = Statement::Variable(VariableDeclaration {
-                kind: VarKind::Let,
-                declarations: vec![VariableDeclarator {
-                    pattern: pattern.clone(),
-                    init: Some(expr.clone()),
-                }],
-            });
-            ctx.emit_statement(decl);
-        }
         Some(SentValueBindingKind::Discard)
         | Some(SentValueBindingKind::InlineYield { .. })
         | None => {
@@ -1789,14 +1820,71 @@ fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformCont
     }
 }
 
-fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
-    ctx.emit_statement(Statement::Variable(VariableDeclaration {
+fn synth_pattern_let_decl(kind: VarKind, pattern: Pattern, source: &str) -> Statement {
+    Statement::Variable(VariableDeclaration {
         kind,
         declarations: vec![VariableDeclarator {
             pattern,
             init: Some(Expression::Identifier(source.to_string())),
         }],
-    }));
+    })
+}
+
+fn emit_pattern_binding(kind: VarKind, pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(synth_pattern_let_decl(kind, pattern, source));
+}
+
+/// If `pattern` contains a yield or an (unlowered-default-shape) await,
+/// computed key, or member-expression target, returns a trivial
+/// `Pattern::Identifier(temp)` to bind in its place plus a synthesized
+/// `let <pattern> = <temp>;` that re-homes the real binding -- for call sites
+/// (`EnterCatch`/`ForOfHead`) that bind their pattern via a single
+/// non-suspending runtime call and so can't run a suspending pattern through
+/// it directly (see #727, #726). Returns `None` when `pattern` has neither,
+/// so the caller can skip the rewrite (and its clones) entirely in the
+/// common case.
+fn hoist_suspending_pattern(
+    pattern: &Pattern,
+    kind: VarKind,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> Option<(Pattern, Statement)> {
+    if !pattern_contains_yield(pattern) && !pattern_needs_await_lowering(pattern) {
+        return None;
+    }
+    let temp = ctx.new_temp_var(prefix);
+    let synth = synth_pattern_let_decl(kind, pattern.clone(), &temp);
+    Some((Pattern::Identifier(temp), synth))
+}
+
+/// Like `hoist_suspending_pattern`, but for a `for`/`for-in`/`for-of` head's
+/// *assignment*-form pattern (`ForInOfLeft::Pattern`, e.g.
+/// `for await ([a = yield] of it)`): the synthesized statement re-homing the
+/// real pattern is a plain `<pattern> = <temp>;` (`DestructuringAssignmentEvaluation`),
+/// not a declaration -- the head is an assignment target, not a binding.
+/// `await`-only defaults are left alone here (see
+/// `for_in_of_variable_head_contains_await`'s own `Pattern` arm, deliberately
+/// unchanged): only a `yield` forces the hoist, so an unsupported shape (an
+/// array pattern, which `pattern_needs_assignment_lowering` never accepts)
+/// still moves out of `ForOfHead`'s single non-suspending bind call and into
+/// the body, where the ordinary per-statement transform handles it -- fully
+/// decomposed into states when the shape allows, replayed via the InlineYield
+/// backstop otherwise.
+fn hoist_suspending_pattern_assignment(
+    pattern: &Pattern,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> Option<(Pattern, Statement)> {
+    if !pattern_contains_yield(pattern) {
+        return None;
+    }
+    let temp = ctx.new_temp_var(prefix);
+    let synth = Statement::Expression(Expression::Assign(
+        AssignOp::Assign,
+        ExprBox::new(pattern_to_expr(pattern.clone())),
+        ExprBox::new(Expression::Identifier(temp.clone())),
+    ));
+    Some((Pattern::Identifier(temp), synth))
 }
 
 fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContext) {
@@ -1842,23 +1930,160 @@ fn lower_pattern_binding(
     source: &str,
     ctx: &mut TransformContext,
 ) {
-    let Pattern::Object(props) = pattern.clone() else {
-        emit_pattern_binding(kind, pattern.clone(), source, ctx);
-        return;
-    };
     if !pattern_contains_suspension(pattern) {
         emit_pattern_binding(kind, pattern.clone(), source, ctx);
         return;
     }
-    emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
-    for prop in props {
-        match prop {
-            ObjectPatternProperty::KeyValue(key, value) => {
-                lower_pattern_property(kind, key, value, source, ctx);
+    match pattern {
+        Pattern::Object(props) => {
+            emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
+            for prop in props.clone() {
+                match prop {
+                    ObjectPatternProperty::KeyValue(key, value) => {
+                        lower_pattern_property(kind, key, value, source, ctx);
+                    }
+                    other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
+                }
             }
-            other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
+        }
+        Pattern::Array(elements) => lower_array_pattern_binding(kind, elements, source, ctx),
+        _ => emit_pattern_binding(kind, pattern.clone(), source, ctx),
+    }
+}
+
+/// Binds an array pattern from the iterator opened on `source`, suspending at
+/// every `await`/`yield` an element's default reaches. `IteratorStepValue`
+/// order is itself observable (#725), so every element costs exactly one
+/// `Step` regardless of whether it suspends — only an element whose own
+/// sub-pattern needs a suspension is broken up further via a recursive
+/// `lower_pattern_binding`/`lower_conditional_default`; everything else binds
+/// through the tree-walker in one call, exactly as `lower_pattern_property`
+/// does for a non-suspending object property. Callers only pass patterns
+/// `pattern_needs_lowering` accepts.
+fn lower_array_pattern_binding(
+    kind: VarKind,
+    elements: &[Option<ArrayPatternElement>],
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let iter_var = ctx.new_temp_var("dstr_iter");
+    let after_init = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+        op: ArrayPatternIterOp::Init {
+            iterable: Expression::Identifier(source.to_string()),
+        },
+        iter_var: iter_var.clone(),
+        next_state: after_init,
+    });
+    ctx.current_state_id = after_init;
+
+    // The parser rejects a rest element anywhere but last (`"Rest element
+    // must be last element"`), so checking the final slot is equivalent to
+    // tracking it through the loop.
+    let ends_in_rest = matches!(elements.last(), Some(Some(ArrayPatternElement::Rest(_))));
+    // One temp reused for every non-elided element: each `step_tmp` is
+    // consumed immediately by the binding that follows its own `Step`, so no
+    // two elements ever have it live at once.
+    let step_tmp = ctx.new_temp_var("dstr_elem");
+    for elem in elements {
+        match elem {
+            None => {
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Step { dest_var: None },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+            }
+            Some(ArrayPatternElement::Pattern(pattern)) => {
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Step {
+                        dest_var: Some(step_tmp.clone()),
+                    },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+
+                if !pattern_contains_suspension(pattern) {
+                    emit_pattern_binding(kind, pattern.clone(), &step_tmp, ctx);
+                } else if let Pattern::Assign(target, default) = pattern {
+                    lower_conditional_default(&step_tmp, default, ctx);
+                    lower_pattern_binding(kind, target, &step_tmp, ctx);
+                } else {
+                    lower_pattern_binding(kind, pattern, &step_tmp, ctx);
+                }
+            }
+            Some(ArrayPatternElement::Rest(pattern)) => {
+                let rest_tmp = ctx.new_temp_var("dstr_rest");
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Drain {
+                        dest_var: rest_tmp.clone(),
+                    },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+                if !pattern_contains_suspension(pattern) {
+                    emit_pattern_binding(kind, pattern.clone(), &rest_tmp, ctx);
+                } else {
+                    lower_pattern_binding(kind, pattern, &rest_tmp, ctx);
+                }
+            }
         }
     }
+
+    // A rest element always drains the iterator to exhaustion itself
+    // ([[Done]] is already true by construction), so the pattern never
+    // reaches `Finish` when it ends in one.
+    if !ends_in_rest {
+        let next_state = ctx.new_state();
+        ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+            op: ArrayPatternIterOp::Finish,
+            iter_var: iter_var.clone(),
+            next_state,
+        });
+        ctx.current_state_id = next_state;
+    }
+}
+
+/// Evaluate `default` into `value_temp` only when it currently holds
+/// `undefined` — the "if Initializer is present and v is undefined" step
+/// shared by `KeyedBindingInitialization` and
+/// `KeyedDestructuringAssignmentEvaluation`. Used by both the declaration and
+/// assignment pattern-property lowerings.
+fn lower_conditional_default(value_temp: &str, default: &Expression, ctx: &mut TransformContext) {
+    let default_state = ctx.new_state();
+    let join_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+        condition: Expression::Binary(
+            BinaryOp::StrictEq,
+            ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
+                value_temp.to_string(),
+            )))),
+            ExprBox::new(Expression::Literal(Literal::String(
+                "undefined".encode_utf16().collect(),
+            ))),
+        ),
+        true_state: default_state,
+        false_state: join_state,
+    });
+    ctx.current_state_id = default_state;
+    if expr_has_suspension(default, ctx.is_async) {
+        transform_yielding_expression(
+            default,
+            ctx,
+            usize::MAX,
+            Some(SentValueBindingKind::Variable(value_temp.to_string())),
+        );
+    } else {
+        emit_temp_assignment(value_temp, default.clone(), ctx);
+    }
+    ctx.finalize_current_state(StateTerminator::Goto(join_state));
+    ctx.current_state_id = join_state;
 }
 
 fn lower_pattern_property(
@@ -1895,39 +2120,111 @@ fn lower_pattern_property(
     emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
     let target = match value {
         Pattern::Assign(target, default) => {
-            let default_state = ctx.new_state();
-            let join_state = ctx.new_state();
-            ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-                condition: Expression::Binary(
-                    BinaryOp::StrictEq,
-                    ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
-                        value_temp.clone(),
-                    )))),
-                    ExprBox::new(Expression::Literal(Literal::String(
-                        "undefined".encode_utf16().collect(),
-                    ))),
-                ),
-                true_state: default_state,
-                false_state: join_state,
-            });
-            ctx.current_state_id = default_state;
-            if expr_has_suspension(&default, ctx.is_async) {
-                transform_yielding_expression(
-                    &default,
-                    ctx,
-                    usize::MAX,
-                    Some(SentValueBindingKind::Variable(value_temp.clone())),
-                );
-            } else {
-                emit_temp_assignment(&value_temp, default.into_expression(), ctx);
-            }
-            ctx.finalize_current_state(StateTerminator::Goto(join_state));
-            ctx.current_state_id = join_state;
+            lower_conditional_default(&value_temp, &default, ctx);
             *target
         }
         other => other,
     };
     lower_pattern_binding(kind, &target, &value_temp, ctx);
+}
+
+/// Assignment-form twin of `lower_pattern_binding`: an `ObjectAssignmentPattern`
+/// left side of `=`. A leaf resolves to a plain assignment expression
+/// statement instead of a `Statement::Variable`, and a
+/// `Pattern::MemberExpression` leaf's reference is captured (base and
+/// computed key, in source order) before the property read, per the
+/// `KeyedDestructuringAssignmentEvaluation` step order. Callers only pass
+/// patterns `pattern_needs_assignment_lowering` accepts.
+fn lower_pattern_assignment(pattern: &Pattern, source: &str, ctx: &mut TransformContext) {
+    let Pattern::Object(props) = pattern.clone() else {
+        emit_pattern_assignment(pattern.clone(), source, ctx);
+        return;
+    };
+    if !pattern_contains_suspension(pattern) {
+        emit_pattern_assignment(pattern.clone(), source, ctx);
+        return;
+    }
+    // RequireObjectCoercible(source), same as the declaration form's `<kind> {} = src`.
+    emit_pattern_assignment(Pattern::Object(Vec::new()), source, ctx);
+    for prop in props {
+        match prop {
+            ObjectPatternProperty::KeyValue(key, value) => {
+                lower_pattern_assignment_property(key, value, source, ctx);
+            }
+            other => emit_pattern_assignment(Pattern::Object(vec![other]), source, ctx),
+        }
+    }
+}
+
+fn emit_pattern_assignment(pattern: Pattern, source: &str, ctx: &mut TransformContext) {
+    ctx.emit_statement(Statement::Expression(Expression::Assign(
+        AssignOp::Assign,
+        ExprBox::new(pattern_to_expr(pattern)),
+        ExprBox::new(Expression::Identifier(source.to_string())),
+    )));
+}
+
+fn lower_pattern_assignment_property(
+    key: PropertyKey,
+    value: Pattern,
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let key = match key {
+        PropertyKey::Computed(e) if expr_has_suspension(&e, ctx.is_async) => {
+            let key_temp = ctx.new_temp_var("dstr_key");
+            transform_yielding_expression(
+                &e,
+                ctx,
+                usize::MAX,
+                Some(SentValueBindingKind::Variable(key_temp.clone())),
+            );
+            PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp)))
+        }
+        other => other,
+    };
+    if !pattern_contains_suspension(&value) {
+        emit_pattern_assignment(
+            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)]),
+            source,
+            ctx,
+        );
+        return;
+    }
+
+    let (target, default) = match value {
+        Pattern::Assign(target, default) => (*target, Some(default)),
+        other => (other, None),
+    };
+
+    // A member-expression target is not a pattern: `KeyedDestructuringAssignmentEvaluation`
+    // evaluates its reference (base, then computed key) before the property read, so a
+    // suspension inside the read or a later default must not reorder around it.
+    if let Pattern::MemberExpression(member_expr) = &target {
+        let captured_ref = lower_reference_operand(member_expr, true, ctx);
+        let value_temp = ctx.new_temp_var("dstr_val");
+        emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+        if let Some(default) = default {
+            lower_conditional_default(&value_temp, &default, ctx);
+        }
+        ctx.emit_statement(Statement::Expression(Expression::Assign(
+            AssignOp::Assign,
+            ExprBox::new(captured_ref),
+            ExprBox::new(Expression::Identifier(value_temp)),
+        )));
+        return;
+    }
+
+    let value_temp = ctx.new_temp_var("dstr_val");
+    emit_temp_assignment(&value_temp, pattern_key_read(source, &key), ctx);
+    let target = match default {
+        Some(default) => {
+            lower_conditional_default(&value_temp, &default, ctx);
+            target
+        }
+        None => target,
+    };
+    lower_pattern_assignment(&target, &value_temp, ctx);
 }
 
 /// `var === null || var === void 0` — true exactly when `var` is undefined or
@@ -2071,7 +2368,7 @@ fn transform_variable_declaration(
             lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
         } else if let Some(init) = &declarator.init {
             if expr_has_suspension(init, ctx.is_async) {
-                let binding = match &declarator.pattern {
+                match &declarator.pattern {
                     Pattern::Identifier(name) => {
                         // Ensure the variable is declared as a temp var so it exists
                         // in strict mode (the original let/const/var decl is replaced
@@ -2079,11 +2376,21 @@ fn transform_variable_declaration(
                         if !ctx.temp_vars.contains(name) {
                             ctx.temp_vars.push(name.clone());
                         }
-                        SentValueBindingKind::Variable(name.clone())
+                        let binding = SentValueBindingKind::Variable(name.clone());
+                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
                     }
-                    pat => SentValueBindingKind::Pattern(pat.clone()),
-                };
-                transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
+                    pattern => {
+                        let pattern = pattern.clone();
+                        let source = ctx.new_temp_var("dstr_src");
+                        let binding = SentValueBindingKind::Variable(source.clone());
+                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
+                        // decl.kind here (not `Var`) so the resumed value is bound
+                        // via the normal, already-correct BindingPattern evaluation
+                        // path -- InitializeReferencedBinding for let/const,
+                        // PutValue for var.
+                        emit_pattern_binding(decl.kind, pattern, &source, ctx);
+                    }
+                }
             } else {
                 let stmt = Statement::Variable(VariableDeclaration {
                     kind: decl.kind,
@@ -2399,6 +2706,7 @@ fn transform_for_statement(
                     d.init
                         .as_ref()
                         .is_some_and(|e| expr_has_suspension(e, ctx.is_async))
+                        || pattern_needs_await_lowering(&d.pattern)
                 }) {
                     transform_variable_declaration(decl, ctx, usize::MAX);
                 } else {
@@ -2567,6 +2875,46 @@ fn transform_for_in_of_loop(
     let head_state = ctx.new_state();
     let body_state = ctx.new_state();
 
+    // `ForOfHead` binds its per-iteration `left` with a single, non-suspending
+    // runtime call, the same constraint `EnterCatch` has on its `param` (see
+    // the comment there). A `Variable` head whose pattern's default contains
+    // `yield` or `await` desugars the same way: `ForOfHead` sees a trivial
+    // `Pattern::Identifier`, and the real pattern becomes a synthesized
+    // `let <pattern> = <temp>;` prepended to the loop body, where the
+    // ordinary `Statement::Variable` lowering picks it up. A `Pattern`
+    // (assignment-form) head whose pattern contains a `yield` mirrors this
+    // with a synthesized `<pattern> = <temp>;` instead, picked up by the
+    // ordinary destructuring-assignment lowering (`ForInOfLeft::Pattern` is
+    // an assignment target, not a declaration, so it has no `await`
+    // counterpart here -- see `for_in_of_variable_head_contains_await`'s own
+    // `Pattern` arm). `ForOfInit`'s own `left` is deliberately *not*
+    // rewritten -- it exists solely to supply `BoundNames` for the head's TDZ
+    // environment (`for_of_head_tdz_env`), evaluated before the iterable
+    // expression, so it must keep seeing the real pattern for a
+    // self-referential head (`for (let x of [x])`) to still throw from TDZ;
+    // `for_of_head_lexical` returns `None` for a `Pattern` head regardless,
+    // so this is a no-op for the assignment-form case.
+    let mut left_param_synth: Option<Statement> = None;
+    let rewritten_left = if let ForInOfLeft::Variable(decl) = left
+        && let Some(d) = decl.declarations.first()
+        && let Some((new_pattern, synth)) =
+            hoist_suspending_pattern(&d.pattern, decl.kind, "for_head_param", ctx)
+    {
+        let mut decl = decl.clone();
+        decl.declarations[0].pattern = new_pattern;
+        left_param_synth = Some(synth);
+        Some(ForInOfLeft::Variable(decl))
+    } else if let ForInOfLeft::Pattern(pattern) = left
+        && let Some((new_pattern, synth)) =
+            hoist_suspending_pattern_assignment(pattern, "for_head_param", ctx)
+    {
+        left_param_synth = Some(synth);
+        Some(ForInOfLeft::Pattern(new_pattern))
+    } else {
+        None
+    };
+    let head_left: &ForInOfLeft = rewritten_left.as_ref().unwrap_or(left);
+
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
 
@@ -2604,7 +2952,7 @@ fn transform_for_in_of_loop(
     ctx.finalize_current_state(StateTerminator::ForOfHead {
         iter_var: iter_var.clone(),
         next_var: next_var.clone(),
-        left: left.clone(),
+        left: head_left.clone(),
         body_state,
         after_state: after_loop,
         is_await,
@@ -2612,13 +2960,21 @@ fn transform_for_in_of_loop(
 
     ctx.current_state_id = body_state;
     ctx.for_of_depth += 1;
-    if stmt_has_suspension(body, ctx.is_async, ctx.detect_for_await) {
-        transform_yielding_statement(body, ctx, head_state);
+    let synthesized_body;
+    let effective_body: &Statement = match left_param_synth {
+        Some(synth) => {
+            synthesized_body = Statement::Block(vec![synth, body.clone()]);
+            &synthesized_body
+        }
+        None => body,
+    };
+    if stmt_has_suspension(effective_body, ctx.is_async, ctx.detect_for_await) {
+        transform_yielding_statement(effective_body, ctx, head_state);
         if ctx.current_state_id != head_state {
             ctx.finalize_current_state(StateTerminator::Goto(head_state));
         }
     } else {
-        ctx.emit_statement(body.clone());
+        ctx.emit_statement(effective_body.clone());
         ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
     ctx.for_of_depth -= 1;
@@ -2666,11 +3022,31 @@ fn transform_try_statement(
 
     let try_body_state = ctx.new_state();
 
+    // `EnterCatch` binds its `param` with a single, non-suspending runtime
+    // call (it needs the not-yet-known thrown value, so it can't go through
+    // the ordinary per-statement transform pipeline). A pattern whose default
+    // contains `yield` or `await` can't run through that call: desugar to a
+    // trivial `Pattern::Identifier` for `EnterCatch` itself, and re-home the
+    // real pattern as a synthesized `let <param> = <temp>;` prepended to the
+    // catch body, where the ordinary `Statement::Variable` lowering (already
+    // tested for #727/#726) picks it up — `lower_pattern_binding` for a
+    // supported shape, native replay confined to `catch_body_state` for one
+    // that isn't.
+    let mut catch_param_synth: Option<Statement> = None;
     let catch_info = try_stmt.handler.as_ref().map(|h| {
         let catch_entry_state = ctx.new_state();
+        let param = if let Some(p) = &h.param
+            && let Some((new_pattern, synth)) =
+                hoist_suspending_pattern(p, VarKind::Let, "catch_param", ctx)
+        {
+            catch_param_synth = Some(synth);
+            Some(new_pattern)
+        } else {
+            h.param.clone()
+        };
         CatchInfo {
             state: catch_entry_state,
-            param: h.param.clone(),
+            param,
         }
     });
 
@@ -2740,7 +3116,14 @@ fn transform_try_statement(
         ctx.current_state_id = catch_body_state;
         ctx.scope_depth += 1;
         if let Some(handler) = &try_stmt.handler {
-            transform_clause_body(&handler.body, ctx, clause_completion_state);
+            if let Some(synth) = catch_param_synth.take() {
+                let body_with_param: Vec<Statement> = std::iter::once(synth)
+                    .chain(handler.body.iter().cloned())
+                    .collect();
+                transform_clause_body(&body_with_param, ctx, clause_completion_state);
+            } else {
+                transform_clause_body(&handler.body, ctx, clause_completion_state);
+            }
         }
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
@@ -3169,11 +3552,20 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Update(op, prefix, e) => {
             Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)))
         }
-        Expression::Assign(op, l, r) => Expression::Assign(
-            *op,
-            ExprBox::new(rewrite_expr(l)),
-            ExprBox::new(rewrite_expr(r)),
-        ),
+        Expression::Assign(op, l, r) => {
+            // A destructuring-assignment cover-grammar LHS (`[..] = ..` / `{..} = ..`)
+            // is not itself a suspension boundary the tree-walker can split; leave any
+            // `await` inside it untouched, same as a `Pattern` already does, and let
+            // pattern lowering (or the blocking-`await_value` fallback) handle it.
+            let new_l = if *op == AssignOp::Assign
+                && matches!(l.as_ref(), Expression::Array(..) | Expression::Object(..))
+            {
+                l.clone()
+            } else {
+                ExprBox::new(rewrite_expr(l))
+            };
+            Expression::Assign(*op, new_l, ExprBox::new(rewrite_expr(r)))
+        }
         Expression::Conditional(t, c, a) => Expression::Conditional(
             ExprBox::new(rewrite_expr(t)),
             ExprBox::new(rewrite_expr(c)),
@@ -3284,6 +3676,27 @@ mod tests {
     }
 
     #[test]
+    fn yield_in_declaration_pattern_default_is_lowered() {
+        let program =
+            crate::parser::Parser::new("function* g(){ var {a = yield 1} = {}; return a }")
+                .expect("parser init")
+                .parse_program()
+                .expect("parse program");
+        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
+            panic!("expected a function declaration");
+        };
+        let sm = transform_generator(f.body.as_slice(), &f.params);
+        assert_eq!(sm.num_yields, 1);
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::Yield { .. })),
+            "expected a Yield terminator state, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
     fn test_yield_in_variable() {
         let body = vec![Statement::Variable(VariableDeclaration {
             kind: VarKind::Let,
@@ -3384,6 +3797,79 @@ mod tests {
                 .any(|stmt| matches!(stmt, Statement::ClassDeclaration(_)))
         });
         assert!(class_emitted);
+    }
+
+    fn for_await_stmt(body: Statement) -> Statement {
+        Statement::ForOf(ForOfStatement {
+            left: ForInOfLeft::Pattern(Pattern::Identifier("y".to_string())),
+            right: Expression::Identifier("ys".to_string()),
+            body: Box::new(body),
+            is_await: true,
+        })
+    }
+
+    fn for_of_stmt(body: Statement) -> Statement {
+        Statement::ForOf(ForOfStatement {
+            left: ForInOfLeft::Pattern(Pattern::Identifier("x".to_string())),
+            right: Expression::Identifier("xs".to_string()),
+            body: Box::new(body),
+            is_await: false,
+        })
+    }
+
+    #[test]
+    fn test_stmt_contains_for_await_recurses_into_outer_loop_body() {
+        // `for (const x of xs) { for await (const y of ys) {} }` — the outer
+        // loop's own head doesn't await, but its body contains one.
+        let outer = for_of_stmt(for_await_stmt(Statement::Block(vec![])));
+        assert!(stmt_contains_for_await(&outer));
+    }
+
+    fn try_wrapping(body: Statement) -> Statement {
+        Statement::Try(TryStatement {
+            block: vec![body],
+            handler: None,
+            finalizer: Some(vec![]),
+        })
+    }
+
+    fn if_wrapping(body: Statement) -> Statement {
+        Statement::If(IfStatement {
+            test: Expression::Literal(Literal::Boolean(true)),
+            consequent: Box::new(body),
+            alternate: None,
+        })
+    }
+
+    fn block_wrapping(body: Statement) -> Statement {
+        Statement::Block(vec![body])
+    }
+
+    #[test]
+    fn test_stmt_has_suspension_sees_for_await_nested_in_try_if_block() {
+        let inner = for_await_stmt(Statement::Block(vec![]));
+        for wrap in [try_wrapping, if_wrapping, block_wrapping] {
+            let stmt = wrap(inner.clone());
+            assert!(
+                stmt_has_suspension(&stmt, true, true),
+                "expected suspension for {stmt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stmt_has_suspension_sees_for_await_nested_for_async_generator() {
+        // Async generator shape: `detect_for_await = false`, disjunct 3
+        // (`f.is_await && !for_in_of_left_contains_suspension`) must still fire
+        // through the same container recursion.
+        let inner = for_await_stmt(Statement::Block(vec![]));
+        for wrap in [try_wrapping, if_wrapping, block_wrapping] {
+            let stmt = wrap(inner.clone());
+            assert!(
+                stmt_has_suspension(&stmt, true, false),
+                "expected suspension for {stmt:?}"
+            );
+        }
     }
 
     #[test]
@@ -3791,21 +4277,185 @@ mod tests {
 
     #[test]
     fn test_unsupported_pattern_shapes_stay_on_the_tree_walker() {
-        for src in [
-            "var [a = await 1] = [];",
-            "var { a = await 1, ...rest } = {};",
-            "var { x: [a = await 1] } = {};",
-        ] {
-            let sm = async_machine(src);
-            assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
+        let src = "var { a = await 1, ...rest } = {};";
+        let sm = async_machine(src);
+        assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
+    }
+
+    #[test]
+    fn test_awaiting_array_element_lowers_to_conditional_await_state() {
+        let sm = async_machine("var [a = await 1] = []; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1,
+            "the default's await is a real Await state"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ConditionalGoto { .. }
+            )),
+            1,
+            "the default only runs when the stepped value is undefined"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Init { .. },
+                    ..
+                }
+            )),
+            1,
+            "opens exactly one iterator"
+        );
+        let step_pos = sm
+            .states
+            .iter()
+            .position(|s| {
+                matches!(
+                    s.terminator,
+                    StateTerminator::ArrayPatternIter {
+                        op: ArrayPatternIterOp::Step { .. },
+                        ..
+                    }
+                )
+            })
+            .expect("a Step state");
+        let await_pos = sm
+            .states
+            .iter()
+            .position(|s| matches!(s.terminator, StateTerminator::Await { .. }))
+            .expect("an Await state");
+        assert!(
+            step_pos < await_pos,
+            "the element is stepped before its default suspends"
+        );
+    }
+
+    #[test]
+    fn test_present_and_elided_array_elements_take_no_conditional_default() {
+        // Every element still costs one `Step` (iterator order is observable),
+        // but only `b`'s default reaches an `Await` — `a`'s present value and
+        // the elision short-circuit without their own `ConditionalGoto`.
+        let sm = async_machine("var [a = 5, , b = await 1] = []; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Step { .. },
+                    ..
+                }
+            )),
+            3,
+            "one Step per element, including the elision"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ConditionalGoto { .. }
+            )),
+            1,
+            "only b's default is conditional"
+        );
+    }
+
+    #[test]
+    fn test_array_pattern_nested_in_object_is_lowered() {
+        let sm = async_machine("var { x: [a = await 1] } = {x: []}; return a;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Init { .. },
+                    ..
+                }
+            )),
+            1,
+            "the nested array pattern opens its own iterator"
+        );
+    }
+
+    #[test]
+    fn test_array_pattern_rest_never_reaches_finish() {
+        let sm = async_machine("var [a = await 1, ...rest] = []; return rest;");
+
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Drain { .. },
+                    ..
+                }
+            )),
+            1
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(
+                t,
+                StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Finish,
+                    ..
+                }
+            )),
+            0,
+            "a pattern ending in rest drains to exhaustion itself"
+        );
+    }
+
+    #[test]
+    fn test_async_generator_yield_only_object_pattern_is_lowered() {
+        let body = parse_fn_body("async function* g() { var { a = yield 1 } = {}; }");
+        let sm = transform_async_generator(&body, &[]);
+
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::Yield { .. })),
+            "expected a Yield terminator state, got {:#?}",
+            sm.states
+        );
+    }
+
+    fn stmt_contains_yield(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Expression(e) => expr_contains_yield(e),
+            Statement::Return(Some(e)) => expr_contains_yield(e),
+            Statement::Variable(decl) => decl
+                .declarations
+                .iter()
+                .any(|d| d.init.as_ref().is_some_and(expr_contains_yield)),
+            _ => false,
         }
     }
 
     #[test]
-    fn test_async_generator_yield_only_pattern_is_not_lowered() {
-        let body = parse_fn_body("async function* g() { var { a = yield 1 } = {}; }");
-        let sm = transform_async_generator(&body, &[]);
-
-        assert_eq!(sm.states.len(), 1);
+    fn test_destructuring_assignment_await_is_not_rewritten_to_yield() {
+        // Regression for issue #724: an `await` inside a destructuring-assignment
+        // cover-grammar LHS (`[..] = ..` / `{..} = ..`) must never be turned into a
+        // bare `Yield` node, because a plain async function's driver has no inline
+        // path to service one outside a real suspension state.
+        for src in ["[a = await 1] = [];", "({a = await 1} = {});"] {
+            let sm = async_machine(src);
+            let has_bare_yield = sm
+                .states
+                .iter()
+                .any(|s| s.body.as_slice().iter().any(stmt_contains_yield));
+            assert!(
+                !has_bare_yield,
+                "destructuring-assignment await must survive as Await, not Yield: {src}"
+            );
+        }
     }
 }

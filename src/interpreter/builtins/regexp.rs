@@ -7848,8 +7848,6 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
     }
 }
 
-/// Inner implementation of RegExp @@replace result collection and processing.
-/// Extracted so the caller can bracket it with gc_temp_roots save/restore.
 /// AdvanceStringIndex per spec (22.2.7.3). `index` is in UTF-16 code units.
 ///
 /// The spec defines this over the original String S, so it reads the retained
@@ -9152,289 +9150,277 @@ impl Interpreter {
                 }
 
                 // 10-11. Collect results (slow path)
-                let mut results: Vec<JsValue> = Vec::new();
-                let gc_root_start = interp.gc_temp_roots.len();
-                loop {
-                    // 11a. Let result be ? RegExpExec(rx, S).
-                    let result = regexp_exec_abstract(interp, rx_id, &regex_input);
-                    match result {
-                        Completion::Normal(ref v) if v.is_null() => break,
-                        Completion::Normal(ref result_val) if result_val.is_object() => {
-                            let result_obj = result_val.clone();
-                            if let Some(res_id) = result_obj.as_object_id() {
-                                interp.gc_temp_roots.push(res_id);
-                            }
-                            results.push(result_obj.clone());
+                interp.with_gc_root_scope(|interp| {
+                    let mut results: Vec<JsValue> = Vec::new();
+                    loop {
+                        // 11a. Let result be ? RegExpExec(rx, S).
+                        let result = regexp_exec_abstract(interp, rx_id, &regex_input);
+                        match result {
+                            Completion::Normal(v) if v.is_null() => break,
+                            Completion::Normal(result_obj) if result_obj.is_object() => {
+                                interp.gc_root_value(&result_obj);
+                                results.push(result_obj.clone());
 
-                            if !global {
-                                break;
-                            }
-
-                            // For global: check if match is empty and advance
-                            let result_id = if let Some(id) = result_obj.as_object_id() {
-                                id
-                            } else {
-                                unreachable!()
-                            };
-                            let matched_val =
-                                match interp.get_object_property(result_id, "0", &result_obj) {
-                                    Completion::Normal(v) => v,
-                                    other => {
-                                        interp.gc_temp_roots.truncate(gc_root_start);
-                                        return other;
-                                    }
-                                };
-                            let match_str = match interp.to_string_value(&matched_val) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    interp.gc_temp_roots.truncate(gc_root_start);
-                                    return Completion::Throw(e);
+                                if !global {
+                                    break;
                                 }
-                            };
-                            if match_str.is_empty() {
-                                // a. Let thisIndex be ? ToLength(? Get(rx, "lastIndex")).
-                                let rx_val = JsValue::object(rx_id);
-                                let li_val =
-                                    match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
+
+                                // For global: check if match is empty and advance
+                                let result_id = if let Some(id) = result_obj.as_object_id() {
+                                    id
+                                } else {
+                                    unreachable!()
+                                };
+                                let matched_val =
+                                    match interp.get_object_property(result_id, "0", &result_obj) {
                                         Completion::Normal(v) => v,
                                         other => {
-                                            interp.gc_temp_roots.truncate(gc_root_start);
                                             return other;
                                         }
                                     };
-                                let li_num = match interp.to_number_value(&li_val) {
-                                    Ok(n) => n,
+                                let match_str = match interp.to_string_value(&matched_val) {
+                                    Ok(s) => s,
                                     Err(e) => {
-                                        interp.gc_temp_roots.truncate(gc_root_start);
                                         return Completion::Throw(e);
                                     }
                                 };
-                                let this_index = {
-                                    let n = if li_num.is_nan() || li_num <= 0.0 {
-                                        0.0
-                                    } else {
-                                        li_num.min(9007199254740991.0).floor()
+                                if match_str.is_empty() {
+                                    // a. Let thisIndex be ? ToLength(? Get(rx, "lastIndex")).
+                                    let rx_val = JsValue::object(rx_id);
+                                    let li_val = match interp.get_object_property(
+                                        rx_id,
+                                        "lastIndex",
+                                        &rx_val,
+                                    ) {
+                                        Completion::Normal(v) => v,
+                                        other => {
+                                            return other;
+                                        }
                                     };
-                                    n as usize
-                                };
-                                let next_index =
-                                    advance_string_index(&regex_input, this_index, full_unicode);
-                                match set_last_index_strict(interp, rx_id, next_index as f64) {
-                                    Ok(()) => {}
-                                    Err(e) => {
-                                        interp.gc_temp_roots.truncate(gc_root_start);
-                                        return Completion::Throw(e);
+                                    let li_num = match interp.to_number_value(&li_val) {
+                                        Ok(n) => n,
+                                        Err(e) => {
+                                            return Completion::Throw(e);
+                                        }
+                                    };
+                                    let this_index = {
+                                        let n = if li_num.is_nan() || li_num <= 0.0 {
+                                            0.0
+                                        } else {
+                                            li_num.min(9007199254740991.0).floor()
+                                        };
+                                        n as usize
+                                    };
+                                    let next_index = advance_string_index(
+                                        &regex_input,
+                                        this_index,
+                                        full_unicode,
+                                    );
+                                    match set_last_index_strict(interp, rx_id, next_index as f64) {
+                                        Ok(()) => {}
+                                        Err(e) => {
+                                            return Completion::Throw(e);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Completion::Normal(_) => break,
-                        other => {
-                            interp.gc_temp_roots.truncate(gc_root_start);
-                            return other;
+                            Completion::Normal(_) => break,
+                            other => {
+                                return other;
+                            }
                         }
                     }
-                }
 
-                // 14. For each element result of results, do
-                let mut accumulated_result = Vec::new();
-                let mut next_source_position: usize = 0;
+                    // 14. For each element result of results, do
+                    let mut accumulated_result = Vec::new();
+                    let mut next_source_position: usize = 0;
 
-                for result_val in &results {
-                    let result_id = if let Some(id) = result_val.as_object_id() {
-                        id
-                    } else {
-                        continue;
-                    };
-
-                    // a. Let nCaptures be ? ToLength(? Get(result, "length")).
-                    let len_val = match interp.get_object_property(result_id, "length", result_val)
-                    {
-                        Completion::Normal(v) => v,
-                        other => {
-                            interp.gc_temp_roots.truncate(gc_root_start);
-                            return other;
-                        }
-                    };
-                    let n_captures = {
-                        let n = match interp.to_number_value(&len_val) {
-                            Ok(n) => n,
-                            Err(e) => {
-                                interp.gc_temp_roots.truncate(gc_root_start);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let len = if n.is_nan() || n <= 0.0 {
-                            0.0
+                    for result_val in &results {
+                        let result_id = if let Some(id) = result_val.as_object_id() {
+                            id
                         } else {
-                            n.min(9007199254740991.0).floor()
+                            continue;
                         };
-                        (len as usize).max(1) // at least 1
-                    };
-                    // nCaptures = max(nCaptures - 1, 0) -- number of capture groups
-                    let n_cap = if n_captures > 0 { n_captures - 1 } else { 0 };
 
-                    // d. Let matched be ? ToString(? Get(result, "0")).
-                    let matched_val = match interp.get_object_property(result_id, "0", result_val) {
-                        Completion::Normal(v) => v,
-                        other => {
-                            interp.gc_temp_roots.truncate(gc_root_start);
-                            return other;
-                        }
-                    };
-                    let matched_js = match interp.to_js_string(&matched_val) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            interp.gc_temp_roots.truncate(gc_root_start);
-                            return Completion::Throw(e);
-                        }
-                    };
-                    // Compute matchLength in UTF-16 code units for tail_pos calculation.
-                    let match_length_utf16 = matched_js.code_units.len();
-
-                    // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
-                    let index_val = match interp.get_object_property(result_id, "index", result_val)
-                    {
-                        Completion::Normal(v) => v,
-                        other => {
-                            interp.gc_temp_roots.truncate(gc_root_start);
-                            return other;
-                        }
-                    };
-                    let position_utf16 = {
-                        let n = match interp.to_number_value(&index_val) {
-                            Ok(n) => n,
-                            Err(e) => {
-                                interp.gc_temp_roots.truncate(gc_root_start);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let int = to_integer_or_infinity(n);
-                        (int.max(0.0) as usize).min(s_utf16_len)
-                    };
-
-                    // g-i. Get captures
-                    let mut captures: Vec<JsValue> = Vec::new();
-                    for n in 1..=n_cap {
-                        let cap_n =
-                            match interp.get_object_property(result_id, &n.to_string(), result_val)
-                            {
+                        // a. Let nCaptures be ? ToLength(? Get(result, "length")).
+                        let len_val =
+                            match interp.get_object_property(result_id, "length", result_val) {
                                 Completion::Normal(v) => v,
                                 other => {
-                                    interp.gc_temp_roots.truncate(gc_root_start);
                                     return other;
                                 }
                             };
-                        if !cap_n.is_undefined() {
-                            let cap_str = match interp.to_js_string(&cap_n) {
-                                Ok(s) => s,
+                        let n_captures = {
+                            let n = match interp.to_number_value(&len_val) {
+                                Ok(n) => n,
                                 Err(e) => {
-                                    interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
                                 }
                             };
-                            captures.push(JsValue::string(cap_str));
-                        } else {
-                            captures.push(JsValue::UNDEFINED);
-                        }
-                    }
-
-                    // j. Let namedCaptures be ? Get(result, "groups").
-                    let named_captures =
-                        match interp.get_object_property(result_id, "groups", result_val) {
-                            Completion::Normal(v) => v,
-                            other => {
-                                interp.gc_temp_roots.truncate(gc_root_start);
-                                return other;
-                            }
+                            let len = if n.is_nan() || n <= 0.0 {
+                                0.0
+                            } else {
+                                n.min(9007199254740991.0).floor()
+                            };
+                            (len as usize).max(1) // at least 1
                         };
+                        // nCaptures = max(nCaptures - 1, 0) -- number of capture groups
+                        let n_cap = if n_captures > 0 { n_captures - 1 } else { 0 };
 
-                    let replacement = if functional_replace {
-                        // k. If functionalReplace is true, then
-                        let mut replacer_args: Vec<JsValue> = Vec::new();
-                        replacer_args.push(JsValue::string(matched_js));
-                        for cap in &captures {
-                            replacer_args.push(cap.clone());
-                        }
-                        // Pass UTF-16 position and the primitive string S itself,
-                        // rather than re-decoding the PUA view once per match.
-                        replacer_args.push(JsValue::number(position_utf16 as f64));
-                        replacer_args.push(JsValue::string(regex_input.subject.clone()));
-                        if !named_captures.is_undefined() {
-                            replacer_args.push(named_captures.clone());
-                        }
-                        let repl_val = interp.call_function(
-                            &replace_value,
-                            &JsValue::UNDEFINED,
-                            &replacer_args,
-                        );
-                        match repl_val {
-                            Completion::Normal(v) => match interp.to_js_string(&v) {
-                                Ok(s) => s.code_units.to_vec(),
-                                Err(e) => {
-                                    interp.gc_temp_roots.truncate(gc_root_start);
-                                    return Completion::Throw(e);
-                                }
-                            },
-                            other => {
-                                interp.gc_temp_roots.truncate(gc_root_start);
-                                return other;
-                            }
-                        }
-                    } else {
-                        // l. Else (string replace)
-                        let template = replace_str.as_ref().unwrap();
-                        let named_captures_obj = if !named_captures.is_undefined() {
-                            // i. Set namedCaptures to ? ToObject(namedCaptures).
-                            match interp.to_object(&named_captures) {
+                        // d. Let matched be ? ToString(? Get(result, "0")).
+                        let matched_val =
+                            match interp.get_object_property(result_id, "0", result_val) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    interp.gc_temp_roots.truncate(gc_root_start);
-                                    return Completion::Throw(e);
+                                other => {
+                                    return other;
                                 }
-                                _ => JsValue::UNDEFINED,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
-                        match get_substitution(
-                            interp,
-                            &matched_js.code_units,
-                            &regex_input.subject.code_units,
-                            position_utf16,
-                            tail_pos,
-                            &captures,
-                            &named_captures_obj,
-                            &template.code_units,
-                        ) {
+                            };
+                        let matched_js = match interp.to_js_string(&matched_val) {
                             Ok(s) => s,
                             Err(e) => {
-                                interp.gc_temp_roots.truncate(gc_root_start);
                                 return Completion::Throw(e);
                             }
+                        };
+                        // Compute matchLength in UTF-16 code units for tail_pos calculation.
+                        let match_length_utf16 = matched_js.code_units.len();
+
+                        // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
+                        let index_val =
+                            match interp.get_object_property(result_id, "index", result_val) {
+                                Completion::Normal(v) => v,
+                                other => {
+                                    return other;
+                                }
+                            };
+                        let position_utf16 = {
+                            let n = match interp.to_number_value(&index_val) {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    return Completion::Throw(e);
+                                }
+                            };
+                            let int = to_integer_or_infinity(n);
+                            (int.max(0.0) as usize).min(s_utf16_len)
+                        };
+
+                        // g-i. Get captures
+                        let mut captures: Vec<JsValue> = Vec::new();
+                        for n in 1..=n_cap {
+                            let cap_n = match interp.get_object_property(
+                                result_id,
+                                &n.to_string(),
+                                result_val,
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => {
+                                    return other;
+                                }
+                            };
+                            if !cap_n.is_undefined() {
+                                let cap_str = match interp.to_js_string(&cap_n) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        return Completion::Throw(e);
+                                    }
+                                };
+                                captures.push(JsValue::string(cap_str));
+                            } else {
+                                captures.push(JsValue::UNDEFINED);
+                            }
                         }
-                    };
 
-                    // p. If position >= nextSourcePosition, then
-                    let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
-                    if position_utf16 >= next_source_position {
-                        accumulated_result.extend_from_slice(
-                            &regex_input.subject.code_units[next_source_position..position_utf16],
-                        );
-                        accumulated_result.extend_from_slice(&replacement);
-                        next_source_position = tail_pos_final;
+                        // j. Let namedCaptures be ? Get(result, "groups").
+                        let named_captures =
+                            match interp.get_object_property(result_id, "groups", result_val) {
+                                Completion::Normal(v) => v,
+                                other => {
+                                    return other;
+                                }
+                            };
+
+                        let replacement = if functional_replace {
+                            // k. If functionalReplace is true, then
+                            let mut replacer_args: Vec<JsValue> = Vec::new();
+                            replacer_args.push(JsValue::string(matched_js));
+                            for cap in &captures {
+                                replacer_args.push(cap.clone());
+                            }
+                            // Pass UTF-16 position and the primitive string S itself,
+                            // rather than re-decoding the PUA view once per match.
+                            replacer_args.push(JsValue::number(position_utf16 as f64));
+                            replacer_args.push(JsValue::string(regex_input.subject.clone()));
+                            if !named_captures.is_undefined() {
+                                replacer_args.push(named_captures.clone());
+                            }
+                            let repl_val = interp.call_function(
+                                &replace_value,
+                                &JsValue::UNDEFINED,
+                                &replacer_args,
+                            );
+                            match repl_val {
+                                Completion::Normal(v) => match interp.to_js_string(&v) {
+                                    Ok(s) => s.code_units.to_vec(),
+                                    Err(e) => {
+                                        return Completion::Throw(e);
+                                    }
+                                },
+                                other => {
+                                    return other;
+                                }
+                            }
+                        } else {
+                            // l. Else (string replace)
+                            let template = replace_str.as_ref().unwrap();
+                            let named_captures_obj = if !named_captures.is_undefined() {
+                                // i. Set namedCaptures to ? ToObject(namedCaptures).
+                                match interp.to_object(&named_captures) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => {
+                                        return Completion::Throw(e);
+                                    }
+                                    _ => JsValue::UNDEFINED,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
+                            match get_substitution(
+                                interp,
+                                &matched_js.code_units,
+                                &regex_input.subject.code_units,
+                                position_utf16,
+                                tail_pos,
+                                &captures,
+                                &named_captures_obj,
+                                &template.code_units,
+                            ) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                        };
+
+                        // p. If position >= nextSourcePosition, then
+                        let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
+                        if position_utf16 >= next_source_position {
+                            accumulated_result.extend_from_slice(
+                                &regex_input.subject.code_units
+                                    [next_source_position..position_utf16],
+                            );
+                            accumulated_result.extend_from_slice(&replacement);
+                            next_source_position = tail_pos_final;
+                        }
                     }
-                }
 
-                interp.gc_temp_roots.truncate(gc_root_start);
-
-                // 15. Return accumulatedResult + remainder of S.
-                if next_source_position < s_utf16_len {
-                    accumulated_result
-                        .extend_from_slice(&regex_input.subject.code_units[next_source_position..]);
-                }
-                Completion::Normal(JsValue::string(JsString::from_vec(accumulated_result)))
+                    // 15. Return accumulatedResult + remainder of S.
+                    if next_source_position < s_utf16_len {
+                        accumulated_result.extend_from_slice(
+                            &regex_input.subject.code_units[next_source_position..],
+                        );
+                    }
+                    Completion::Normal(JsValue::string(JsString::from_vec(accumulated_result)))
+                })
             },
         ));
         if let Some(key) = get_symbol_key(self, "replace") {

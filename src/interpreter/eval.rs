@@ -912,21 +912,9 @@ impl Interpreter {
                     } else {
                         JsValue::UNDEFINED
                     };
-                    let is_async_gen = self
-                        .generator_context
-                        .as_ref()
-                        .map(|c| c.is_async)
-                        .unwrap_or(false);
-                    let iterator = if is_async_gen {
-                        match self.get_async_iterator(&iterable) {
-                            Ok(it) => it,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        match self.get_iterator(&iterable) {
-                            Ok(it) => it,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    let iterator = match self.get_iterator(&iterable) {
+                        Ok(it) => it,
+                        Err(e) => return Completion::Throw(e),
                     };
                     self.with_gc_root_scope(|this| {
                         this.gc_root_value(&iterator);
@@ -934,15 +922,6 @@ impl Interpreter {
                             let next_result = match this.iterator_next(&iterator) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
-                            };
-                            let next_result = if is_async_gen {
-                                match this.await_value(&next_result) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                next_result
                             };
                             let done = match this.iterator_complete(&next_result) {
                                 Ok(d) => d,
@@ -1868,10 +1847,9 @@ impl Interpreter {
                 {
                     self.perf.body_compiled += 1;
                 }
-                let prev = self.enter_ic_body(body);
-                let result = vm::run_chunk(self, &chunk, exec_env, this_val.clone());
-                self.leave_ic_body(prev);
-                return result;
+                return self.with_ic_body(body, |interp| {
+                    vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
+                });
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -1883,9 +1861,9 @@ impl Interpreter {
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
         let analysis = self.hoist_cache.analysis_for(body);
-        let prev = self.enter_ic_body(body);
-        let result = self.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis));
-        self.leave_ic_body(prev);
+        let result = self.with_ic_body(body, |interp| {
+            interp.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis))
+        });
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
         result
@@ -4063,6 +4041,58 @@ impl Interpreter {
         }
     }
 
+    /// Keep a captured destructuring Reference alive while `body` computes its
+    /// value, then perform the matching PutValue operation.
+    fn with_destruct_lref(
+        &mut self,
+        lref: Option<DestructLRef>,
+        fallback_target: &Expression,
+        env: &EnvRef,
+        body: impl FnOnce(&mut Self) -> Completion,
+    ) -> Completion {
+        self.with_gc_root_scope(|interp| {
+            if let Some(lref) = &lref {
+                interp.gc_root_destruct_lref(lref);
+            }
+
+            let value = match body(interp) {
+                Completion::Normal(value) => value,
+                other => return other,
+            };
+            interp.gc_root_value(&value);
+
+            match lref {
+                Some(DestructLRef::Member(base, raw_key)) => {
+                    let key = match interp.to_property_key(&raw_key) {
+                        Ok(key) => key,
+                        Err(error) => return Completion::Throw(error),
+                    };
+                    let strict = env.borrow().strict;
+                    match interp.set_object_with_key(base, &key, value, strict) {
+                        Ok(()) => Completion::Empty,
+                        Err(error) => Completion::Throw(error),
+                    }
+                }
+                Some(DestructLRef::Private(base, name)) => {
+                    match interp.set_private_field(&base, &name, value, env) {
+                        Ok(()) => Completion::Empty,
+                        Err(error) => Completion::Throw(error),
+                    }
+                }
+                Some(DestructLRef::Super(base_id, key, this_val, strict)) => {
+                    match interp.super_set_property(base_id, &key, value, &this_val, strict) {
+                        Completion::Normal(_) | Completion::Empty => Completion::Empty,
+                        other => other,
+                    }
+                }
+                None => match interp.put_value_to_target(fallback_target, value, env) {
+                    Completion::Normal(_) | Completion::Empty => Completion::Empty,
+                    other => other,
+                },
+            }
+        })
+    }
+
     /// Evaluate a member expression as an lref (Reference) for destructuring.
     /// Returns base + key info or suspension explicitly; ToPropertyKey is
     /// deferred to PutValue time per spec.
@@ -4192,24 +4222,17 @@ impl Interpreter {
                         }
                     };
 
-                    // Keep the lRef's base, pending key, and receiver alive
-                    // through iterator collection and the eventual PutValue.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &precomp {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
+                    let result = self.with_destruct_lref(precomp, inner, env, |interp| {
                         // Collect remaining iterator values into rest array
                         let mut rest = Vec::new();
                         if !done {
                             loop {
-                                match self.iterator_step(&iterator) {
-                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                match interp.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match interp.iterator_value(&result) {
                                         Ok(v) => {
                                             // Later steps run user code; the
                                             // Vec is invisible to the GC.
-                                            self.gc_root_value(&v);
+                                            interp.gc_root_value(&v);
                                             rest.push(v);
                                         }
                                         Err(e) => {
@@ -4229,51 +4252,8 @@ impl Interpreter {
                             }
                         }
 
-                        let arr = self.create_array(rest);
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&arr);
-                        match precomp {
-                            Some(DestructLRef::Member(base, raw_key)) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base, &key, arr, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                            Some(DestructLRef::Private(base, ref name)) => {
-                                if let Err(e) = self.set_private_field(&base, name, arr, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, arr, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            None => match self.put_value_to_target(inner, arr, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                Completion::Throw(e) => {
-                                    return Completion::Throw(e);
-                                }
-                                Completion::Yield(v) => {
-                                    return Completion::Yield(v);
-                                }
-                                _ => {}
-                            },
-                        }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
+                        Completion::Normal(interp.create_array(rest))
+                    });
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4305,19 +4285,12 @@ impl Interpreter {
                         }
                     };
 
-                    // The target was evaluated before iterator/default user
-                    // code; its lRef must survive until PutValue.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &precomp {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
+                    let result = self.with_destruct_lref(precomp, target, env, |interp| {
                         let item = if done {
                             JsValue::UNDEFINED
                         } else {
-                            match self.iterator_step(&iterator) {
-                                Ok(Some(result)) => match self.iterator_value(&result) {
+                            match interp.iterator_step(&iterator) {
+                                Ok(Some(result)) => match interp.iterator_value(&result) {
                                     Ok(v) => v,
                                     Err(e) => {
                                         done = true;
@@ -4337,12 +4310,12 @@ impl Interpreter {
 
                         let val = if item.is_undefined() {
                             if let Some(default) = default_expr {
-                                match self.eval_expr(default, env) {
+                                match interp.eval_expr(default, env) {
                                     Completion::Normal(v) => {
                                         if let Expression::Identifier(name) = target
                                             && default.is_anonymous_function_definition()
                                         {
-                                            self.set_function_name(&v, name);
+                                            interp.set_function_name(&v, name);
                                         }
                                         v
                                     }
@@ -4357,46 +4330,8 @@ impl Interpreter {
                             item
                         };
 
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&val);
-                        match precomp {
-                            Some(DestructLRef::Member(base, raw_key)) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base, &key, val, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                            Some(DestructLRef::Private(base, ref name)) => {
-                                if let Err(e) = self.set_private_field(&base, name, val, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, val, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            None => match self.put_value_to_target(target, val, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                Completion::Yield(v) => return Completion::Yield(v),
-                                _ => {}
-                            },
-                        }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
+                        Completion::Normal(val)
+                    });
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4554,20 +4489,13 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
 
-                        // GetV and an initializer can run user code after the
-                        // target is evaluated, so retain the whole lRef.
-                        let gc_frame = self.gc_root_frame();
-                        if let Some(lref) = &pre_ref {
-                            self.gc_root_destruct_lref(lref);
-                        }
-
-                        let result = (|| {
+                        let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
                             // Get property via get_object_property (invokes getters/Proxy)
                             let val = if let Some(o) = obj_val
                                 .as_object_id()
                                 .map(|id| crate::types::JsObject { id })
                             {
-                                match self.get_object_property(o.id, &key, &obj_val) {
+                                match interp.get_object_property(o.id, &key, &obj_val) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     Completion::Yield(v) => return Completion::Yield(v),
@@ -4579,17 +4507,21 @@ impl Interpreter {
 
                             let val = if val.is_undefined() {
                                 if let Some(default) = default_expr {
-                                    match self.eval_expr(default, env) {
+                                    match interp.eval_expr(default, env) {
                                         Completion::Normal(v) => {
                                             if let Expression::Identifier(name) = target
                                                 && default.is_anonymous_function_definition()
                                             {
-                                                self.set_function_name(&v, name);
+                                                interp.set_function_name(&v, name);
                                             }
                                             v
                                         }
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        Completion::Yield(v) => return Completion::Yield(v),
+                                        Completion::Throw(e) => {
+                                            return Completion::Throw(e);
+                                        }
+                                        Completion::Yield(v) => {
+                                            return Completion::Yield(v);
+                                        }
                                         other => return other,
                                     }
                                 } else {
@@ -4599,47 +4531,8 @@ impl Interpreter {
                                 val
                             };
 
-                            // ToPropertyKey and the write itself can run user code.
-                            self.gc_root_value(&val);
-                            if let Some(lref) = pre_ref {
-                                match lref {
-                                    DestructLRef::Member(base_val, raw_key) => {
-                                        match self.to_property_key(&raw_key) {
-                                            Ok(key) => {
-                                                let strict = env.borrow().strict;
-                                                if let Err(e) = self.set_object_with_key(
-                                                    base_val, &key, val, strict,
-                                                ) {
-                                                    return Completion::Throw(e);
-                                                }
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    DestructLRef::Private(base_val, ref name) => {
-                                        if let Err(e) =
-                                            self.set_private_field(&base_val, name, val, env)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                        if let Completion::Throw(e) = self
-                                            .super_set_property(base_id, key, val, this_val, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                }
-                            } else {
-                                match self.put_value_to_target(target, val, env) {
-                                    Completion::Normal(_) | Completion::Empty => {}
-                                    other => return other,
-                                }
-                            }
-                            Completion::Empty
-                        })();
-                        self.gc_unroot_frame(gc_frame);
+                            Completion::Normal(val)
+                        });
 
                         match result {
                             Completion::Normal(_) | Completion::Empty => {}
@@ -5089,13 +4982,30 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest = args.get(index..).unwrap_or(&[]).to_vec();
                 let rest_array = self.create_array(rest);
-                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                self.bind_pattern_or_throw(inner, rest_array, BindingKind::Var, func_env)?;
                 break;
             }
             let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
-            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
+            self.bind_pattern_or_throw(param, value, BindingKind::Var, func_env)?;
         }
         Ok(())
+    }
+
+    /// Like `bind_pattern`, but for call sites where the pattern is known to
+    /// never contain `yield` (e.g. function parameters, an early SyntaxError
+    /// in generator formals) so only `Throw` is reachable, and the caller
+    /// wants plain `Result` propagation via `?`.
+    fn bind_pattern_or_throw(
+        &mut self,
+        pat: &Pattern,
+        val: JsValue,
+        kind: BindingKind,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        match self.bind_pattern(pat, val, kind, env) {
+            Completion::Throw(e) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     pub(crate) fn call_function(
@@ -8185,7 +8095,7 @@ impl Interpreter {
         is_error: bool,
     ) -> Completion {
         use crate::interpreter::generator_transform::{
-            LoopControlTarget, SentValueBindingKind, StateTerminator,
+            ArrayPatternIterOp, LoopControlTarget, SentValueBindingKind, StateTerminator,
         };
 
         let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
@@ -8241,10 +8151,6 @@ impl Interpreter {
                     } else {
                         env.set(name, sent_value.clone()).ok();
                     }
-                }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
             }
@@ -9505,7 +9411,7 @@ impl Interpreter {
                                     }
                                 }
                                 if let Some(d) = decl.declarations.first() {
-                                    self.bind_pattern(
+                                    match self.bind_pattern(
                                         &d.pattern,
                                         value,
                                         match decl.kind {
@@ -9516,7 +9422,10 @@ impl Interpreter {
                                             | VarKind::AwaitUsing => BindingKind::Const,
                                         },
                                         &bind_env,
-                                    )
+                                    ) {
+                                        Completion::Throw(e) => Err(e),
+                                        _ => Ok(()),
+                                    }
                                 } else {
                                     Ok(())
                                 }
@@ -9537,6 +9446,143 @@ impl Interpreter {
                         current_id = body_state;
                     }
                 }
+
+                StateTerminator::ArrayPatternIter {
+                    ref op,
+                    ref iter_var,
+                    next_state,
+                } => match op {
+                    ArrayPatternIterOp::Init { iterable } => {
+                        let iterable_val = operand!(iterable, &term_env);
+                        let iterator = match self.for_of_init_iterator(&iterable_val, false) {
+                            Ok(it) => it,
+                            Err(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                        };
+                        self.gc_root_value(&iterator);
+                        self.env_set(&func_env, iter_var, iterator).ok();
+                        for_of_stack.push(ForOfLoopState {
+                            iter_var: iter_var.clone(),
+                            label_set: vec![],
+                            head_state: next_state,
+                            after_state: next_state,
+                            try_depth: try_stack.len(),
+                            outer_env: term_env.clone(),
+                            iteration_env: None,
+                        });
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Step { dest_var } => {
+                        let loop_pos = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                        let value = match loop_pos {
+                            None => JsValue::UNDEFINED,
+                            Some(pos) => {
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                match self.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            for_of_protocol_failure = Some(iter_var.clone());
+                                            pending_exception = Some(e);
+                                            continue;
+                                        }
+                                    },
+                                    Ok(None) => {
+                                        self.unroot_for_of_iterator(&iterator);
+                                        for_of_stack.remove(pos);
+                                        JsValue::UNDEFINED
+                                    }
+                                    Err(e) => {
+                                        for_of_protocol_failure = Some(iter_var.clone());
+                                        pending_exception = Some(e);
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        if let Some(dest) = dest_var {
+                            self.env_set(&func_env, dest, value).ok();
+                        }
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Drain { dest_var } => {
+                        let loop_pos = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                        let rest = match loop_pos {
+                            None => Vec::new(),
+                            Some(pos) => {
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                let mut rest = Vec::new();
+                                let mut drain_failed = false;
+                                loop {
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => match self.iterator_value(&result) {
+                                            Ok(v) => rest.push(v),
+                                            Err(e) => {
+                                                for_of_protocol_failure = Some(iter_var.clone());
+                                                pending_exception = Some(e);
+                                                drain_failed = true;
+                                                break;
+                                            }
+                                        },
+                                        Ok(None) => break,
+                                        Err(e) => {
+                                            for_of_protocol_failure = Some(iter_var.clone());
+                                            pending_exception = Some(e);
+                                            drain_failed = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if drain_failed {
+                                    continue;
+                                }
+                                self.unroot_for_of_iterator(&iterator);
+                                for_of_stack.remove(pos);
+                                rest
+                            }
+                        };
+                        let arr = self.create_array(rest);
+                        self.env_set(&func_env, dest_var, arr).ok();
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Finish => {
+                        if let Some(pos) = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                        {
+                            let loop_state = for_of_stack.remove(pos);
+                            match self.close_for_of_loop(
+                                loop_state,
+                                &func_env,
+                                Completion::Normal(JsValue::UNDEFINED),
+                                None,
+                            ) {
+                                Completion::Throw(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                                Completion::Exit(code) => {
+                                    self.scheduler.remove_async_function_state(async_id);
+                                    return Completion::Exit(code);
+                                }
+                                _ => {}
+                            }
+                        }
+                        current_id = next_state;
+                    }
+                },
 
                 StateTerminator::Completed => {
                     complete_function!();
@@ -9641,15 +9687,34 @@ impl Interpreter {
 
     fn close_for_of_loop(
         &mut self,
-        loop_state: ForOfLoopState,
+        mut loop_state: ForOfLoopState,
         func_env: &EnvRef,
         completion: Completion,
         generator_id: Option<u64>,
     ) -> Completion {
-        let mut completion = match loop_state.iteration_env {
+        let completion = match loop_state.iteration_env.take() {
             Some(env) => self.dispose_resources(&env, completion),
             None => completion,
         };
+        self.close_for_of_iterator(loop_state, func_env, completion, generator_id)
+    }
+
+    /// The synchronous half of `close_for_of_loop`: IteratorClose for the
+    /// loop's iterator once its per-iteration environment (if any) has
+    /// already been disposed (`loop_state.iteration_env` is `None`). Split
+    /// out so an async-generator caller can dispose that environment through
+    /// its own resumable path first, then share this synchronous tail.
+    fn close_for_of_iterator(
+        &mut self,
+        loop_state: ForOfLoopState,
+        func_env: &EnvRef,
+        mut completion: Completion,
+        generator_id: Option<u64>,
+    ) -> Completion {
+        debug_assert!(
+            loop_state.iteration_env.is_none(),
+            "close_for_of_iterator expects the iteration_env already disposed"
+        );
 
         // The borrow must end before `iterator_close_result` runs the user's
         // `return` method, which may write bindings in this same environment.
@@ -10094,6 +10159,48 @@ fn compare_bigint_number(
                 number < trunc
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod destructuring_reference_scope_tests {
+    use super::*;
+
+    #[test]
+    fn roots_and_finalizes_a_captured_member_reference() {
+        let mut interp = Interpreter::new();
+        let object_id = interp.create_object_id();
+        let env = Environment::new(None);
+        let baseline = interp.gc_root_frame();
+        let reference = DestructLRef::Member(
+            JsValue::object(object_id),
+            JsValue::string(JsString::from_str("answer")),
+        );
+
+        let completion =
+            interp.with_destruct_lref(Some(reference), &Expression::This, &env, |interp| {
+                assert!(
+                    interp.gc_temp_roots.contains(&object_id),
+                    "captured member base must stay rooted while the body runs"
+                );
+                Completion::Normal(JsValue::number(42.0))
+            });
+
+        assert!(matches!(completion, Completion::Empty));
+        assert_eq!(
+            interp.gc_root_frame(),
+            baseline,
+            "reference roots must be released after finalization"
+        );
+        let descriptor = interp
+            .get_object_cell_expect(object_id)
+            .borrow()
+            .get_own_property_full("answer")
+            .expect("captured reference must receive the body value");
+        assert_eq!(
+            descriptor.value.and_then(|value| value.as_number()),
+            Some(42.0)
+        );
     }
 }
 

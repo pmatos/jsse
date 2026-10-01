@@ -55,6 +55,10 @@ generator's disposers.
   (`dispose_scopes_inside_for_of`, `close_for_of_loop`'s iteration environment)
   still dispose through the blocking driver. Unwinding a `for-of` must become a
   resumable operation across its five callers first.
+  **Update (issue #733, ADR-2026-09-22-2340):** the throw-routing caller
+  (`route_generator_exception`) is now resumable; the other four callers
+  (`pending_return`, the two `Return` terminator arms, loop-control/`Goto`)
+  are tracked in issue #742. Inline yield replay is unchanged.
 - Delegated `yield*` abrupt exits do not run enclosing `finally` blocks or
   close outer `for-of` loops, and a rejected inner result rejects the request
   instead of throwing into the body's `try`/`catch`. The rejected-inner-result
@@ -68,6 +72,10 @@ generator's disposers.
 - A `for (await using …)` nested in a container with no `await`/`yield` of its
   own (`try`, `if`, …) is not lowered, in async generators and async functions
   alike, and still disposes inline.
+  **Update (issue #733):** this turned out to already be fixed by #737's
+  `stmt_contains_for_of_head` recursion fix, merged before #733 was picked up;
+  locked in by `test262-extra/async-generator-for-of-await-using-nested-in-container-suspends.js`.
+  No production change was needed.
 - The "throwing disposer replaces an in-flight `return` and does not re-enter a
   `finally` already selected" defect ADR-2026-09-21-2015 named was not
   reproducible: every probed shape matched the reference engine, and the
