@@ -5084,31 +5084,56 @@ impl Interpreter {
     pub(crate) fn iterator_close_result(&mut self, iterator: &JsValue) -> Result<(), JsValue> {
         // See `iterator_close` (issue #242): only reached when the loop is not
         // unwinding a body `Completion::Exit`. If `return()` itself calls
-        // `__host_exit`, record it in the terminal sink — this `Result`-typed
-        // boundary cannot carry a `Completion::Exit`. Inert off-path.
-        if let Some(iter_id) = iterator.as_object_id() {
-            // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
-            let return_val = match self.get_object_property(iter_id, "return", iterator) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Ok(()),
-            };
-            if return_val.is_undefined() || return_val.is_null() {
-                return Ok(());
+        // `__host_exit`, `iterator_return_call_raw` records it in the
+        // terminal sink — this `Result`-typed boundary cannot carry a
+        // `Completion::Exit`. Inert off-path.
+        match self.iterator_return_call_raw(iterator)? {
+            Some(v) if !v.is_object() => {
+                Err(self.create_type_error("Iterator result is not an object"))
             }
-            if !self.is_callable(&return_val) {
-                return Err(self.create_type_error("iterator.return is not a function"));
-            }
-            match self.call_function(&return_val, iterator, &[]) {
-                Completion::Normal(inner_result) if !inner_result.is_object() => {
-                    return Err(self.create_type_error("Iterator result is not an object"));
-                }
-                Completion::Throw(e) => return Err(e),
-                Completion::Exit(code) => self.pending_exit = Some(code),
-                _ => {}
-            }
+            _ => Ok(()),
         }
-        Ok(())
+    }
+
+    /// `GetMethod(iterator, "return")` + `Call(return, iterator)` with no
+    /// arguments, shared by `iterator_close_result`'s synchronous
+    /// `IteratorClose` and `AsyncIteratorClose`'s deferred
+    /// (post-`Await`) typecheck (`generator_runtime.rs`). Returns the
+    /// call's raw result value uninspected so each caller can typecheck it
+    /// on its own schedule; `undefined`/`null` is "no method" (`Ok(None)`),
+    /// a found-but-non-callable value is `GetMethod`'s own `TypeError`.
+    pub(crate) fn iterator_return_call_raw(
+        &mut self,
+        iterator: &JsValue,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let Some(iter_id) = iterator.as_object_id() else {
+            return Ok(None);
+        };
+        let return_val = match self.get_object_property(iter_id, "return", iterator) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(None),
+        };
+        if return_val.is_undefined() || return_val.is_null() {
+            return Ok(None);
+        }
+        if !self.is_callable(&return_val) {
+            return Err(self.create_type_error("iterator.return is not a function"));
+        }
+        match self.call_function(&return_val, iterator, &[]) {
+            Completion::Normal(v) => Ok(Some(v)),
+            Completion::Throw(e) => Err(e),
+            // A `__host_exit` (issue #242) inside `return()` returns a
+            // `JsValue`-typed `Result` here and so cannot carry the exit
+            // directly: latch the terminal sink, matching `iterator_close`'s
+            // own handling of this same call. The caller must check
+            // `self.pending_exit` before acting on `Ok(None)`.
+            Completion::Exit(code) => {
+                self.pending_exit = Some(code);
+                Ok(None)
+            }
+            _ => Err(self.create_type_error("Iterator return failed")),
+        }
     }
 
     fn iterator_step_direct(

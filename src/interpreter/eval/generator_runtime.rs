@@ -3011,47 +3011,44 @@ impl Interpreter {
         self.async_gen_reenter(gen_id, completion, request)
     }
 
-    /// `GetMethod(iterator, "return")` + `Call(return, iterator)` with no
-    /// arguments, for `AsyncIteratorClose` (spec.html:7220-7245 steps 3-4.c).
-    /// Unlike `iterator_return`/`iterator_throw` (`iterators.rs`), which
-    /// treat any non-object property value as "no method", this
-    /// distinguishes `undefined`/`null` (`Ok(None)`, nothing to close) from
-    /// a found-but-non-callable value (`Err`, `GetMethod`'s own
-    /// `TypeError`) -- matching `iterator_close`'s own lookup shape instead.
-    /// The caller still owes an `Await` of an `Ok(Some(..))` result; this
-    /// does not perform it.
-    fn async_iterator_close_return_call(
+    /// Await `value`, map its outcome to a `Completion` via `map_outcome`,
+    /// deliver it through `deliver_yield_star_completion`, and mark the
+    /// generator's request queue as yield-pending. Shared by the return- and
+    /// throw-arm "no method" `yield*` delegation paths in
+    /// `async_generator_next_state_machine_with_promise_and_reentry`, which
+    /// differ only in how they turn the awaited outcome into a `Completion`.
+    fn yield_star_await_then_deliver(
         &mut self,
-        iterator: &JsValue,
-    ) -> Result<Option<JsValue>, JsValue> {
-        let Some(iter_id) = iterator.as_object_id() else {
-            return Ok(None);
-        };
-        let return_val = match self.get_object_property(iter_id, "return", iterator) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
-            _ => return Ok(None),
-        };
-        if return_val.is_undefined() || return_val.is_null() {
-            return Ok(None);
-        }
-        if !self.is_callable(&return_val) {
-            return Err(self.create_type_error("iterator.return is not a function"));
-        }
-        match self.call_function(&return_val, iterator, &[]) {
-            Completion::Normal(v) => Ok(Some(v)),
-            Completion::Throw(e) => Err(e),
-            // A `__host_exit` (issue #242) inside `return()` returns a
-            // `JsValue`-typed `Result` here and so cannot carry the exit
-            // directly: latch the terminal sink, matching `iterator_close`'s
-            // own handling of this same call. The caller must check
-            // `self.pending_exit` before acting on `Ok(None)`.
-            Completion::Exit(code) => {
-                self.pending_exit = Some(code);
-                Ok(None)
-            }
-            _ => Err(self.create_type_error("Iterator return failed")),
-        }
+        value: &JsValue,
+        gen_id: u64,
+        state_machine: Rc<crate::interpreter::generator_transform::GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+        try_stack: Vec<TryContextInfo>,
+        deleg_info: DelegatedIteratorInfo,
+        promise: JsValue,
+        resolve_fn: JsValue,
+        reject_fn: JsValue,
+        map_outcome: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
+    ) -> Completion {
+        let promise_c = promise.clone();
+        let resolve_c = resolve_fn.clone();
+        let reject_c = reject_fn.clone();
+        self.await_then(value, move |interp, outcome| {
+            let completion = map_outcome(interp, outcome);
+            interp.deliver_yield_star_completion(
+                gen_id,
+                state_machine.clone(),
+                func_env.clone(),
+                is_strict,
+                try_stack.clone(),
+                &deleg_info,
+                completion,
+                (&promise_c, &resolve_c, &reject_c),
+            )
+        });
+        self.scheduler.set_async_gen_yield_pending(true);
+        Completion::Normal(promise)
     }
 
     /// Suspend an async generator parked at a `yield*` on `Await(innerResult)`
@@ -3607,28 +3604,22 @@ impl Interpreter {
                             // own initial Await before this driver call ever
                             // ran); this step owes it exactly one more Await
                             // before forming ReturnCompletion.
-                            let deleg_info = deleg_info.clone();
-                            let promise_c = promise.clone();
-                            let resolve_c = resolve_fn.clone();
-                            let reject_c = reject_fn.clone();
-                            self.await_then(&ret_val, move |interp, outcome| {
-                                let completion = match outcome {
+                            return self.yield_star_await_then_deliver(
+                                &ret_val,
+                                o.id,
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                try_stack,
+                                deleg_info.clone(),
+                                promise,
+                                resolve_fn,
+                                reject_fn,
+                                |_interp, outcome| match outcome {
                                     Ok(v) => Completion::Return(v),
                                     Err(e) => Completion::Throw(e),
-                                };
-                                interp.deliver_yield_star_completion(
-                                    o.id,
-                                    state_machine.clone(),
-                                    func_env.clone(),
-                                    is_strict,
-                                    try_stack.clone(),
-                                    &deleg_info,
-                                    completion,
-                                    (&promise_c, &resolve_c, &reject_c),
-                                )
-                            });
-                            self.scheduler.set_async_gen_yield_pending(true);
-                            return Completion::Normal(promise);
+                                },
+                            );
                         }
                         Err(e) => {
                             // Step 7.c.ii's own GetMethod(iterator, "return")
@@ -3668,7 +3659,7 @@ impl Interpreter {
                             // (spec.html:7220-7245), the completion passed in here
                             // is always normal, never throw, so any abrupt result
                             // from the close overrides the TypeError outright.
-                            let close_result = self.async_iterator_close_return_call(&iterator);
+                            let close_result = self.iterator_return_call_raw(&iterator);
                             if let Some(code) = self.pending_exit {
                                 return Completion::Exit(code);
                             }
@@ -3687,12 +3678,18 @@ impl Interpreter {
                                     break 'delegation;
                                 }
                                 Ok(Some(call_result)) => {
-                                    let deleg_info = deleg_info.clone();
-                                    let promise_c = promise.clone();
-                                    let resolve_c = resolve_fn.clone();
-                                    let reject_c = reject_fn.clone();
-                                    self.await_then(&call_result, move |interp, outcome| {
-                                        let completion = match outcome {
+                                    return self.yield_star_await_then_deliver(
+                                        &call_result,
+                                        o.id,
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        try_stack,
+                                        deleg_info.clone(),
+                                        promise,
+                                        resolve_fn,
+                                        reject_fn,
+                                        |interp, outcome| match outcome {
                                             // `AsyncIteratorClose` step 8: the close
                                             // completed normally, so the original
                                             // "no throw method" TypeError (constructed
@@ -3708,20 +3705,8 @@ impl Interpreter {
                                                 "Iterator result is not an object",
                                             )),
                                             Err(reason) => Completion::Throw(reason),
-                                        };
-                                        interp.deliver_yield_star_completion(
-                                            o.id,
-                                            state_machine.clone(),
-                                            func_env.clone(),
-                                            is_strict,
-                                            try_stack.clone(),
-                                            &deleg_info,
-                                            completion,
-                                            (&promise_c, &resolve_c, &reject_c),
-                                        )
-                                    });
-                                    self.scheduler.set_async_gen_yield_pending(true);
-                                    return Completion::Normal(promise);
+                                        },
+                                    );
                                 }
                             }
                         }
