@@ -3532,85 +3532,143 @@ impl Interpreter {
             is_strict,
             execution_state,
             try_stack,
-            pending_binding,
+            mut pending_binding,
             delegated_iterator,
-            pending_exception: stored_pending_exception,
-            pending_return: stored_pending_return,
+            pending_exception: mut stored_pending_exception,
+            pending_return: mut stored_pending_return,
             ..
         }) = state
         else {
             return self.reject_with_type_error("not a state machine async generator");
         };
 
-        if let Some(ref deleg_info) = delegated_iterator {
-            let iterator = deleg_info.iterator.clone();
-            let next_method = deleg_info.next_method.clone();
+        'delegation: {
+            if let Some(ref deleg_info) = delegated_iterator {
+                let iterator = deleg_info.iterator.clone();
+                let next_method = deleg_info.next_method.clone();
 
-            // Handle .return() during yield* delegation
-            if let Some(ret_val) = stored_pending_return {
-                match self.iterator_return(&iterator, &ret_val) {
-                    Ok(Some(iter_result)) => {
-                        self.yield_star_suspend_on_inner_result(
-                            this,
-                            o.id,
-                            &iter_result,
-                            DelegateStep::Return,
-                            &promise,
-                            &resolve_fn,
-                            &reject_fn,
-                        );
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    }
-                    Ok(None) => {
-                        // No .return() method — complete the generator
-                        // §15.5.5 step 7.c.iii.1: Await(received.[[Value]])
-                        let completion = match self.async_gen_dispose(
-                            o.id,
-                            &func_env,
-                            Completion::Return(ret_val),
-                            GeneratorDisposeThen::ReturnAwait,
-                            (&promise, &resolve_fn, &reject_fn),
-                        ) {
-                            GeneratorDisposeStart::Parked => {
-                                self.scheduler.set_async_gen_yield_pending(true);
-                                return Completion::Normal(promise);
-                            }
-                            GeneratorDisposeStart::Done(completion) => completion,
-                        };
-                        self.sync_generator_scope_stack(o.id, &[]);
-                        self.retire_generator(o.id);
-                        return match completion {
-                            Completion::Return(value) => self.async_gen_await_return_in_driver(
+                // Handle .return() during yield* delegation
+                if let Some(ret_val) = stored_pending_return.take() {
+                    match self.iterator_return(&iterator, &ret_val) {
+                        Ok(Some(iter_result)) => {
+                            self.yield_star_suspend_on_inner_result(
+                                this,
                                 o.id,
-                                value,
-                                promise,
+                                &iter_result,
+                                DelegateStep::Return,
+                                &promise,
                                 &resolve_fn,
                                 &reject_fn,
-                            ),
-                            Completion::Throw(error) => {
-                                let _ =
-                                    self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-                                Completion::Normal(promise)
-                            }
-                            other => other,
-                        };
-                    }
-                    Err(e) => {
-                        return self.reject_async_generator_request(o.id, promise, &reject_fn, e);
+                            );
+                            self.scheduler.set_async_gen_yield_pending(true);
+                            return Completion::Normal(promise);
+                        }
+                        Ok(None) => {
+                            // No .return() method — complete the generator
+                            // §15.5.5 step 7.c.iii.1: Await(received.[[Value]])
+                            let completion = match self.async_gen_dispose(
+                                o.id,
+                                &func_env,
+                                Completion::Return(ret_val),
+                                GeneratorDisposeThen::ReturnAwait,
+                                (&promise, &resolve_fn, &reject_fn),
+                            ) {
+                                GeneratorDisposeStart::Parked => {
+                                    self.scheduler.set_async_gen_yield_pending(true);
+                                    return Completion::Normal(promise);
+                                }
+                                GeneratorDisposeStart::Done(completion) => completion,
+                            };
+                            self.sync_generator_scope_stack(o.id, &[]);
+                            self.retire_generator(o.id);
+                            return match completion {
+                                Completion::Return(value) => self.async_gen_await_return_in_driver(
+                                    o.id,
+                                    value,
+                                    promise,
+                                    &resolve_fn,
+                                    &reject_fn,
+                                ),
+                                Completion::Throw(error) => {
+                                    let _ = self.call_function(
+                                        &reject_fn,
+                                        &JsValue::UNDEFINED,
+                                        &[error],
+                                    );
+                                    Completion::Normal(promise)
+                                }
+                                other => other,
+                            };
+                        }
+                        Err(e) => {
+                            // Step 7.c.ii's own GetMethod(iterator, "return")
+                            // failed: the delegate is never notified. Fall
+                            // through to the ordinary abrupt-resume path
+                            // below instead of calling the delegate's own
+                            // throw/next (step 8.b/8.a never run for this).
+                            stored_pending_exception = Some(e);
+                            pending_binding = None;
+                            break 'delegation;
+                        }
                     }
                 }
-            }
 
-            // Handle .throw() during yield* delegation
-            if let Some(exc) = stored_pending_exception {
-                match self.iterator_throw(&iterator, &exc) {
-                    Ok(Some(iter_result)) => {
+                // Handle .throw() during yield* delegation
+                if let Some(exc) = stored_pending_exception.take() {
+                    match self.iterator_throw(&iterator, &exc) {
+                        Ok(Some(iter_result)) => {
+                            self.yield_star_suspend_on_inner_result(
+                                this,
+                                o.id,
+                                &iter_result,
+                                DelegateStep::Throw,
+                                &promise,
+                                &resolve_fn,
+                                &reject_fn,
+                            );
+                            self.scheduler.set_async_gen_yield_pending(true);
+                            return Completion::Normal(promise);
+                        }
+                        Ok(None) => {
+                            // No .throw() method — close iterator and throw TypeError
+                            let _ = self.iterator_close(&iterator, exc.clone());
+                            let type_err = self
+                                .create_type_error("The iterator does not provide a throw method");
+                            return self.reject_async_generator_request(
+                                o.id, promise, &reject_fn, type_err,
+                            );
+                        }
+                        Err(e) => {
+                            // Step 8.b's own GetMethod(iterator, "throw")
+                            // failed: the delegate is never notified.
+                            stored_pending_exception = Some(e);
+                            pending_binding = None;
+                            break 'delegation;
+                        }
+                    }
+                }
+
+                let result = match self.call_function(
+                    &next_method,
+                    &iterator,
+                    std::slice::from_ref(&sent_value),
+                ) {
+                    Completion::Normal(v) if (v).is_object() => Ok(v),
+                    Completion::Normal(_) => {
+                        Err(self.create_type_error("Iterator result is not an object"))
+                    }
+                    Completion::Throw(e) => Err(e),
+                    _ => Err(self.create_type_error("Iterator next failed")),
+                };
+                match result {
+                    Ok(iter_result) => {
+                        // §15.5.5 step 8.a.ii: Await(innerResult) suspends the
+                        // generator; the continuation settles the request.
                         self.yield_star_suspend_on_inner_result(
                             this,
                             o.id,
                             &iter_result,
-                            DelegateStep::Throw,
+                            DelegateStep::Next,
                             &promise,
                             &resolve_fn,
                             &reject_fn,
@@ -3618,50 +3676,14 @@ impl Interpreter {
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
-                    Ok(None) => {
-                        // No .throw() method — close iterator and throw TypeError
-                        let _ = self.iterator_close(&iterator, exc.clone());
-                        let type_err =
-                            self.create_type_error("The iterator does not provide a throw method");
-                        return self
-                            .reject_async_generator_request(o.id, promise, &reject_fn, type_err);
-                    }
                     Err(e) => {
-                        return self.reject_async_generator_request(o.id, promise, &reject_fn, e);
+                        // Step 8.a.i's own Call(nextMethod, ...) failed before
+                        // any Await was even reached: the delegate is never
+                        // notified.
+                        stored_pending_exception = Some(e);
+                        pending_binding = None;
+                        break 'delegation;
                     }
-                }
-            }
-
-            let result = match self.call_function(
-                &next_method,
-                &iterator,
-                std::slice::from_ref(&sent_value),
-            ) {
-                Completion::Normal(v) if (v).is_object() => Ok(v),
-                Completion::Normal(_) => {
-                    Err(self.create_type_error("Iterator result is not an object"))
-                }
-                Completion::Throw(e) => Err(e),
-                _ => Err(self.create_type_error("Iterator next failed")),
-            };
-            match result {
-                Ok(iter_result) => {
-                    // §15.5.5 step 8.a.ii: Await(innerResult) suspends the
-                    // generator; the continuation settles the request.
-                    self.yield_star_suspend_on_inner_result(
-                        this,
-                        o.id,
-                        &iter_result,
-                        DelegateStep::Next,
-                        &promise,
-                        &resolve_fn,
-                        &reject_fn,
-                    );
-                    self.scheduler.set_async_gen_yield_pending(true);
-                    return Completion::Normal(promise);
-                }
-                Err(e) => {
-                    return self.reject_async_generator_request(o.id, promise, &reject_fn, e);
                 }
             }
         }
