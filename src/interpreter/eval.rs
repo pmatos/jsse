@@ -9594,6 +9594,68 @@ impl Interpreter {
                     }
                 },
 
+                StateTerminator::ToPropertyKey {
+                    ref source,
+                    ref dest,
+                    next_state,
+                } => {
+                    let raw = term_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    match self.to_property_key_value(&raw) {
+                        Ok(v) => {
+                            self.env_set(&func_env, dest, v).ok();
+                            current_id = next_state;
+                        }
+                        Err(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                    }
+                }
+
+                StateTerminator::ObjectRestCopy {
+                    ref source,
+                    ref excluded,
+                    ref dest_var,
+                    next_state,
+                } => {
+                    let source_val = term_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    let mut excluded_vals = Vec::with_capacity(excluded.len());
+                    let mut eval_failed = false;
+                    for expr in excluded {
+                        let v = match self.eval_operand(expr, &term_env) {
+                            Operand::Value(v) => v,
+                            Operand::Throw(e) => {
+                                pending_exception = Some(e);
+                                eval_failed = true;
+                                break;
+                            }
+                            Operand::Abort(exit) => {
+                                self.scheduler.remove_async_function_state(async_id);
+                                return exit;
+                            }
+                            Operand::Suspend(_) | Operand::Other(_) => JsValue::UNDEFINED,
+                        };
+                        excluded_vals.push(v);
+                    }
+                    if eval_failed {
+                        continue;
+                    }
+                    let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        _ => JsValue::UNDEFINED,
+                    };
+                    self.env_set(&func_env, dest_var, rest_val).ok();
+                    current_id = next_state;
+                }
+
                 StateTerminator::Completed => {
                     complete_function!();
                 }

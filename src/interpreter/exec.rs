@@ -1398,6 +1398,25 @@ impl Interpreter {
         Completion::Normal(JsValue::object(rest_obj_id))
     }
 
+    /// Runtime half of the `ObjectRestCopy` state-machine terminator
+    /// (generator_transform.rs): `ToObject(source_val)`, then
+    /// `ToPropertyKey` each already-evaluated exclusion value, then
+    /// `bind_object_rest_values`. Driver-specific operand evaluation
+    /// (`excluded`'s expressions) happens before this is called; this is the
+    /// part shared by all three state-machine drivers.
+    pub(crate) fn object_rest_copy(
+        &mut self,
+        source_val: JsValue,
+        excluded_vals: &[JsValue],
+    ) -> Completion {
+        let obj_val = propagate!(self.to_object(&source_val));
+        let mut excluded_keys = Vec::with_capacity(excluded_vals.len());
+        for v in excluded_vals {
+            excluded_keys.push(propagate!(self.to_property_key(v)));
+        }
+        self.bind_object_rest_values(&obj_val, &excluded_keys)
+    }
+
     pub(crate) fn bind_pattern(
         &mut self,
         pat: &Pattern,

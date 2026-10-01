@@ -210,6 +210,38 @@ pub(crate) enum StateTerminator {
         iter_var: String,
         next_state: usize,
     },
+    /// Converts the raw value held in temp `source` to its canonical
+    /// property key (§7.1.19 `ToPropertyKey`) and writes the converted
+    /// primitive (a string or a symbol) back into temp `dest` (usually the
+    /// same temp as `source`, overwriting it in place). Emitted ahead of a
+    /// trailing object-pattern `Rest` for a computed key: `ToPropertyKey` on
+    /// a computed key is user-observable (`toString`/`Symbol.toPrimitive`),
+    /// so it must run exactly once. Converting here means the key's later
+    /// `GetV` read (`pattern_key_read`) and `ObjectRestCopy`'s own exclusion
+    /// list both reuse the same already-primitive value — re-running
+    /// `ToPropertyKey` on a primitive is spec-guaranteed side-effect-free, so
+    /// those later reads are safe no-ops (issue #771).
+    ToPropertyKey {
+        source: String,
+        dest: String,
+        next_state: usize,
+    },
+    /// `RestBindingInitialization`'s object-construction step (§14.3.3.3) for
+    /// a lowered object pattern ending in `...rest`: builds a fresh plain
+    /// object from `source`'s own enumerable properties, excluding every key
+    /// already consumed by a preceding property in the pattern, and binds
+    /// the result into `dest_var`. Each `excluded` expression evaluates to
+    /// one already-consumed key — a string literal for a non-computed key,
+    /// or a temp a preceding `ToPropertyKey` terminator already converted in
+    /// place for a computed one, so this terminator's own `ToPropertyKey`
+    /// pass (inside `object_rest_copy`) is always a safe no-op rather than a
+    /// second real conversion (issue #771).
+    ObjectRestCopy {
+        source: String,
+        excluded: Vec<Expression>,
+        dest_var: String,
+        next_state: usize,
+    },
     /// Opens a block scope: creates the block's own `Environment` (a child of
     /// whatever env is active), pushes it onto the driver's `scope_stack`, and
     /// continues at `body_state` executing against it. Emitted only for a
@@ -288,6 +320,13 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         StateTerminator::ArrayPatternIter { op, .. } => {
             if let ArrayPatternIterOp::Init { iterable } = op {
                 clear_expr_ic_sites(iterable);
+            }
+        }
+        // `source`/`dest` are temp-var names, not expressions.
+        StateTerminator::ToPropertyKey { .. } => {}
+        StateTerminator::ObjectRestCopy { excluded, .. } => {
+            for e in excluded.iter_mut() {
+                clear_expr_ic_sites(e);
             }
         }
         StateTerminator::TryEnter { catch_state, .. } => {
@@ -1966,10 +2005,13 @@ fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContex
     )));
 }
 
-/// Property read of a pattern key off the destructuring source, standing in
-/// for the `GetV` of `KeyedBindingInitialization`.
-fn pattern_key_read(source: &str, key: &PropertyKey) -> Expression {
-    let key_expr = match key {
+/// The expression form of a pattern property key: a literal for a
+/// non-computed key, or the (possibly already-hoisted-to-a-temp) computed
+/// expression itself. Shared by `pattern_key_read` and, for a pattern ending
+/// in a trailing `Rest`, the exclusion-list accumulator in
+/// `lower_pattern_binding`.
+fn pattern_key_expr(key: &PropertyKey) -> Expression {
+    match key {
         PropertyKey::Identifier(name) => {
             Expression::Literal(Literal::String(name.encode_utf16().collect()))
         }
@@ -1977,10 +2019,15 @@ fn pattern_key_read(source: &str, key: &PropertyKey) -> Expression {
         PropertyKey::Number(n) => Expression::Literal(Literal::Number(*n)),
         PropertyKey::Computed(e) => e.clone().into_expression(),
         PropertyKey::Private(_) => unreachable!("private names are not pattern keys"),
-    };
+    }
+}
+
+/// Property read of a pattern key off the destructuring source, standing in
+/// for the `GetV` of `KeyedBindingInitialization`.
+fn pattern_key_read(source: &str, key: &PropertyKey) -> Expression {
     Expression::Member(
         ExprBox::new(Expression::Identifier(source.to_string())),
-        MemberProperty::Computed(ExprBox::new(key_expr)),
+        MemberProperty::Computed(ExprBox::new(pattern_key_expr(key))),
         PropSiteId::UNASSIGNED,
     )
 }
@@ -2008,12 +2055,48 @@ fn lower_pattern_binding(
     match pattern {
         Pattern::Object(props) => {
             emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
+            // The parser rejects a rest property anywhere but last, so the
+            // final slot is the only place one can be.
+            let ends_in_rest = matches!(props.last(), Some(ObjectPatternProperty::Rest(_)));
+            let mut excluded: Vec<Expression> = Vec::new();
             for prop in props.clone() {
                 match prop {
                     ObjectPatternProperty::KeyValue(key, value) => {
-                        lower_pattern_property(kind, key, value, source, ctx);
+                        if let Some(key_expr) =
+                            lower_pattern_property(kind, key, value, source, ends_in_rest, ctx)
+                        {
+                            excluded.push(key_expr);
+                        }
                     }
-                    other => emit_pattern_binding(kind, Pattern::Object(vec![other]), source, ctx),
+                    ObjectPatternProperty::Shorthand(name) => {
+                        emit_pattern_binding(
+                            kind,
+                            Pattern::Object(vec![ObjectPatternProperty::Shorthand(name.clone())]),
+                            source,
+                            ctx,
+                        );
+                        if ends_in_rest {
+                            excluded.push(Expression::Literal(Literal::String(
+                                name.encode_utf16().collect(),
+                            )));
+                        }
+                    }
+                    ObjectPatternProperty::Rest(rest_pattern) => {
+                        let dest_var = ctx.new_temp_var("dstr_rest");
+                        let next_state = ctx.new_state();
+                        ctx.finalize_current_state(StateTerminator::ObjectRestCopy {
+                            source: source.to_string(),
+                            excluded: std::mem::take(&mut excluded),
+                            dest_var: dest_var.clone(),
+                            next_state,
+                        });
+                        ctx.current_state_id = next_state;
+                        if !pattern_contains_suspension(&rest_pattern) {
+                            emit_pattern_binding(kind, rest_pattern, &dest_var, ctx);
+                        } else {
+                            lower_pattern_binding(kind, &rest_pattern, &dest_var, ctx);
+                        }
+                    }
                 }
             }
         }
@@ -2157,14 +2240,40 @@ fn lower_conditional_default(value_temp: &str, default: &Expression, ctx: &mut T
     ctx.current_state_id = join_state;
 }
 
+/// Converts the raw value held in `temp` to its canonical property key in
+/// place, via a `ToPropertyKey` terminator. Used by `lower_pattern_property`
+/// only when the enclosing object pattern ends in a trailing `Rest`: the
+/// exclusion list needs to reuse this same key later, and `ToPropertyKey` on
+/// a computed key must run exactly once (see `StateTerminator::ToPropertyKey`).
+fn hoist_to_property_key(temp: &str, ctx: &mut TransformContext) {
+    let next_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ToPropertyKey {
+        source: temp.to_string(),
+        dest: temp.to_string(),
+        next_state,
+    });
+    ctx.current_state_id = next_state;
+}
+
+/// Lowers one `KeyValue` object-pattern property. `capture_key` is true when
+/// the enclosing pattern ends in a trailing `Rest`, which needs every
+/// preceding property's key for its exclusion list; the returned expression,
+/// when present, is exactly that key (see `lower_pattern_binding`'s
+/// accumulator) and is `None` iff `capture_key` is false. A non-suspending
+/// computed key is normally re-embedded verbatim and converted implicitly at
+/// its one `GetV` read (the common, no-rest case costs nothing extra); with
+/// `capture_key` set it is instead hoisted to a temp and converted via
+/// `hoist_to_property_key` up front, so the conversion still happens exactly
+/// once even though the exclusion list reads the same key again later.
 fn lower_pattern_property(
     kind: VarKind,
     key: PropertyKey,
     value: Pattern,
     source: &str,
+    capture_key: bool,
     ctx: &mut TransformContext,
-) {
-    let key = match key {
+) -> Option<Expression> {
+    let (key, captured) = match key {
         PropertyKey::Computed(e) if expr_has_suspension(&e, ctx.is_async) => {
             let key_temp = ctx.new_temp_var("dstr_key");
             transform_yielding_expression(
@@ -2173,9 +2282,24 @@ fn lower_pattern_property(
                 usize::MAX,
                 Some(SentValueBindingKind::Variable(key_temp.clone())),
             );
-            PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp)))
+            if capture_key {
+                hoist_to_property_key(&key_temp, ctx);
+            }
+            let key = PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp.clone())));
+            let captured = capture_key.then(|| Expression::Identifier(key_temp));
+            (key, captured)
         }
-        other => other,
+        PropertyKey::Computed(e) if capture_key => {
+            let key_temp = ctx.new_temp_var("dstr_key");
+            emit_temp_assignment(&key_temp, e.into_expression(), ctx);
+            hoist_to_property_key(&key_temp, ctx);
+            let key = PropertyKey::Computed(ExprBox::new(Expression::Identifier(key_temp.clone())));
+            (key, Some(Expression::Identifier(key_temp)))
+        }
+        other => {
+            let captured = capture_key.then(|| pattern_key_expr(&other));
+            (other, captured)
+        }
     };
     if !pattern_contains_suspension(&value) {
         emit_pattern_binding(
@@ -2184,7 +2308,7 @@ fn lower_pattern_property(
             source,
             ctx,
         );
-        return;
+        return captured;
     }
 
     let value_temp = ctx.new_temp_var("dstr_val");
@@ -2197,6 +2321,7 @@ fn lower_pattern_property(
         other => other,
     };
     lower_pattern_binding(kind, &target, &value_temp, ctx);
+    captured
 }
 
 /// Assignment-form twin of `lower_pattern_binding`: an `ObjectAssignmentPattern`
@@ -4380,10 +4505,114 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_pattern_shapes_stay_on_the_tree_walker() {
+    fn test_object_rest_beside_suspending_sibling_is_lowered() {
         let src = "var { a = await 1, ...rest } = {};";
         let sm = async_machine(src);
-        assert_eq!(sm.states.len(), 1, "expected the simple machine for: {src}");
+        assert!(
+            sm.states.len() > 1,
+            "expected a real state machine for: {src}, got the simple-machine fast path"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ObjectRestCopy { .. })),
+            1,
+            "exactly one ObjectRestCopy terminator for the trailing rest"
+        );
+    }
+
+    #[test]
+    fn test_object_rest_excludes_preceding_non_computed_keys() {
+        let sm = async_machine("var { a, b = await 1, ...rest } = {};");
+        let excluded = sm
+            .states
+            .iter()
+            .find_map(|s| match &s.terminator {
+                StateTerminator::ObjectRestCopy { excluded, .. } => Some(excluded.clone()),
+                _ => None,
+            })
+            .expect("an ObjectRestCopy terminator");
+        assert_eq!(
+            excluded.len(),
+            2,
+            "both preceding keys (`a` and `b`) are excluded, not just the suspending one"
+        );
+    }
+
+    #[test]
+    fn test_object_rest_excludes_preceding_non_suspending_computed_key_once() {
+        // A non-suspending computed key ahead of a trailing rest must be
+        // hoisted and `ToPropertyKey`-converted exactly once, then reused
+        // for the exclusion list rather than re-converted (issue #771 §4
+        // slice 3's double-conversion hazard).
+        let sm = async_machine("var { [k()]: a, b = await 1, ...rest } = {};");
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ToPropertyKey { .. })),
+            1,
+            "the computed key converts exactly once"
+        );
+        let excluded = sm
+            .states
+            .iter()
+            .find_map(|s| match &s.terminator {
+                StateTerminator::ObjectRestCopy { excluded, .. } => Some(excluded.clone()),
+                _ => None,
+            })
+            .expect("an ObjectRestCopy terminator");
+        assert_eq!(
+            excluded.len(),
+            2,
+            "both the computed key and `b` are excluded"
+        );
+    }
+
+    #[test]
+    fn test_object_rest_excludes_preceding_awaited_computed_key_once() {
+        let sm = async_machine("var { [await k()]: a, ...rest } = {};");
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::Await { .. })),
+            1,
+            "the key's own await is still a real Await state"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ToPropertyKey { .. })),
+            1,
+            "the awaited key converts exactly once, after resume"
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ObjectRestCopy { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn test_object_rest_nested_in_object_pattern_is_lowered() {
+        let sm = async_machine("var { x: { a = await 1, ...rest } } = { x: {} };");
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ObjectRestCopy { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn test_object_rest_nested_in_array_pattern_is_lowered() {
+        let sm = async_machine("var [ { a = await 1, ...rest } ] = [{}];");
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ObjectRestCopy { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn test_object_rest_beside_await_only_stays_declined_at_constrained_sites() {
+        let sm = async_machine(
+            "try {} catch ({ a = await 1, ...rest }) {} \
+             for (var { b = await 1, ...rest } of []) {}",
+        );
+        assert_eq!(
+            count_terminators(&sm, |t| matches!(t, StateTerminator::ObjectRestCopy { .. })),
+            0,
+            "ConstrainedDeclaration sites (catch-param/for-of-head) stay on \
+             the tree-walker/replay path for an await-only rest pattern"
+        );
     }
 
     #[test]

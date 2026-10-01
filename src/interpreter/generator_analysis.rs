@@ -1063,8 +1063,11 @@ enum PatternLoweringForm {
 /// arm yet, and the constrained declaration form's call sites have no way to
 /// drive the array terminator either, so a suspending array pattern at either
 /// still falls back to the tree-walker, exactly as before this terminator
-/// existed. An object rest beside a suspending sibling is also still
-/// evaluated by the tree-walker. A bare member-expression target is only
+/// existed. An object rest beside a suspending sibling lowers too, but only
+/// for the unconstrained declaration form, for the same reason array patterns
+/// are so restricted: `EnterCatch`/`ForOfHead` bind via a single
+/// non-suspending runtime call with no way to drive the `ObjectRestCopy`
+/// terminator (see issue #771). A bare member-expression target is only
 /// supported for the assignment form — a declaration can never bind into one.
 fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> bool {
     if !pattern_contains_suspension(pattern) {
@@ -1074,7 +1077,9 @@ fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> b
         Pattern::Object(props) => props.iter().all(|prop| match prop {
             ObjectPatternProperty::KeyValue(_, value) => pattern_lowering_supported(value, form),
             ObjectPatternProperty::Shorthand(_) => true,
-            ObjectPatternProperty::Rest(_) => false,
+            ObjectPatternProperty::Rest(inner) => {
+                form == PatternLoweringForm::Declaration && pattern_lowering_supported(inner, form)
+            }
         }),
         Pattern::Array(elements) if form == PatternLoweringForm::Declaration => {
             elements.iter().all(|elem| match elem {
@@ -1093,9 +1098,10 @@ fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> b
 
 /// True for a declaration pattern whose suspensions the transform lowers into
 /// states (see `lower_pattern_binding`). Both `await` and `yield` trigger the
-/// lowering, for object patterns and array patterns alike; a pattern shape it
-/// can't lower (an object rest beside a suspending sibling) stays on the
-/// replay path regardless.
+/// lowering, for object patterns, array patterns, and an object rest beside a
+/// suspending sibling alike (issue #771); a pattern shape it can't lower (an
+/// array pattern at a constrained-declaration site) stays on the replay path
+/// regardless.
 pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
     pattern_contains_suspension(pattern)
         && pattern_lowering_supported(pattern, PatternLoweringForm::Declaration)
@@ -1864,7 +1870,7 @@ mod tests {
     }
 
     #[test]
-    fn object_and_array_patterns_are_lowered_but_not_object_rest() {
+    fn object_and_array_patterns_and_object_rest_are_all_lowered() {
         assert!(pattern_needs_lowering(&declared_pattern(
             "var { a = await 1, b: { c = await 2 } } = {};"
         )));
@@ -1874,8 +1880,19 @@ mod tests {
         assert!(pattern_needs_lowering(&declared_pattern(
             "var { x: [a = await 1] } = {};"
         )));
-        assert!(!pattern_needs_lowering(&declared_pattern(
+        // An object rest beside a suspending sibling lowers too (issue #771),
+        // at both top level and nested.
+        assert!(pattern_needs_lowering(&declared_pattern(
             "var { a = await 1, ...r } = {};"
+        )));
+        assert!(pattern_needs_lowering(&declared_pattern(
+            "var { x: { a = await 1, ...r } } = {};"
+        )));
+        // The rest target itself still can't be anything but a plain
+        // identifier (the grammar never allows otherwise); a pattern that
+        // somehow reached one here would stay declined rather than mishandled.
+        assert!(pattern_needs_lowering(&declared_pattern(
+            "var [ { a = await 1, ...r } ] = [];"
         )));
     }
 
@@ -1976,6 +1993,16 @@ mod tests {
         )));
         assert!(!pattern_needs_await_lowering(&declared_pattern(
             "var { a = 1 } = {};"
+        )));
+        // An object rest beside a suspending sibling is declined at
+        // ConstrainedDeclaration sites (catch-param/for-in/of-head/C-style
+        // for-init) just like an array pattern is: those sites bind via a
+        // single non-suspending runtime call with no way to drive the
+        // `ObjectRestCopy` terminator (issue #771 — only the unconstrained
+        // `Declaration` form, checked by `pattern_needs_lowering` above, is
+        // in scope).
+        assert!(!pattern_needs_await_lowering(&declared_pattern(
+            "var { a = await 1, ...r } = {};"
         )));
         // `yield`-only defaults never trigger the await-only predicate.
         let yield_only = declared_pattern_in("async function*", "var { a = yield 1 } = {};");
