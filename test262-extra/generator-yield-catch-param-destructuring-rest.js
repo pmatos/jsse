@@ -5,7 +5,11 @@ description: >
   resumes using the sent value -- the catch-parameter desugar
   (`catch ($tmp) { let <pattern> = $tmp; ... }`) turns the parameter into
   an ordinary `let` declaration, which reaches the same `Declaration`-form
-  lowering as any other suspending object-rest pattern (issue #771).
+  lowering as any other suspending object-rest pattern (issue #771). Also
+  covers the same non-idempotent-getter correctness property with no rest
+  at all: a catch parameter's own yield-defaulted property must suspend and
+  resume without ever being replayed, independent of whether a trailing
+  rest is present.
 esid: sec-runtime-semantics-catchclauseevaluation
 info: |
   Catch : catch ( CatchParameter ) Block
@@ -65,3 +69,30 @@ assert.sameValue(
   'the value sent to .next() is used for the default, not discarded by a replay'
 );
 assert.sameValue(calls, 1, "the catch value's getter is called exactly once, never replayed");
+
+var callsNoRest = 0;
+function* nonIdempotentGetterNoRest() {
+  try {
+    throw {
+      get a() {
+        callsNoRest += 1;
+        return callsNoRest === 1 ? undefined : 42;
+      }
+    };
+  } catch ({ a = yield 1 }) {
+    return a;
+  }
+}
+var it3 = nonIdempotentGetterNoRest();
+it3.next();
+var r4 = it3.next(55);
+assert.sameValue(
+  r4.value,
+  55,
+  'with no trailing rest at all, the sent value is still used for the default'
+);
+assert.sameValue(
+  callsNoRest,
+  1,
+  "the catch value's getter is called exactly once even without a rest property"
+);
