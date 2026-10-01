@@ -3012,6 +3012,40 @@ impl Interpreter {
         self.async_gen_reenter(gen_id, completion, request)
     }
 
+    /// `GetMethod(iterator, "return")` + `Call(return, iterator)` with no
+    /// arguments, for `AsyncIteratorClose` (spec.html:7220-7245 steps 3-4.c).
+    /// Unlike `iterator_return`/`iterator_throw` (`iterators.rs`), which
+    /// treat any non-object property value as "no method", this
+    /// distinguishes `undefined`/`null` (`Ok(None)`, nothing to close) from
+    /// a found-but-non-callable value (`Err`, `GetMethod`'s own
+    /// `TypeError`) -- matching `iterator_close`'s own lookup shape instead.
+    /// The caller still owes an `Await` of an `Ok(Some(..))` result; this
+    /// does not perform it.
+    fn async_iterator_close_return_call(
+        &mut self,
+        iterator: &JsValue,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let Some(iter_id) = iterator.as_object_id() else {
+            return Ok(None);
+        };
+        let return_val = match self.get_object_property(iter_id, "return", iterator) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(None),
+        };
+        if return_val.is_undefined() || return_val.is_null() {
+            return Ok(None);
+        }
+        if !self.is_callable(&return_val) {
+            return Err(self.create_type_error("iterator.return is not a function"));
+        }
+        match self.call_function(&return_val, iterator, &[]) {
+            Completion::Normal(v) => Ok(Some(v)),
+            Completion::Throw(e) => Err(e),
+            _ => Err(self.create_type_error("Iterator return failed")),
+        }
+    }
+
     /// for `step`. The generator must already be stored as
     /// `SuspendedAtState { resume_state }` with `delegated_iterator: Some(..)`
     /// and the front request in the queue: the continuation owns that request
@@ -3617,13 +3651,57 @@ impl Interpreter {
                             return Completion::Normal(promise);
                         }
                         Ok(None) => {
-                            // No .throw() method — close iterator and throw TypeError
-                            let _ = self.iterator_close(&iterator, exc.clone());
+                            // No .throw() method: AsyncIteratorClose(iteratorRecord,
+                            // NormalCompletion(empty)) (spec.html:24310-24316 step
+                            // 8.b.iii.3) must close the delegate -- and Await an
+                            // async .return() -- before the "no throw method"
+                            // TypeError forms. Per AsyncIteratorClose step 5
+                            // (spec.html:7220-7245), the completion passed in here
+                            // is always normal, never throw, so any abrupt result
+                            // from the close overrides the TypeError outright.
                             let type_err = self
                                 .create_type_error("The iterator does not provide a throw method");
-                            return self.reject_async_generator_request(
-                                o.id, promise, &reject_fn, type_err,
-                            );
+                            match self.async_iterator_close_return_call(&iterator) {
+                                Ok(None) => {
+                                    stored_pending_exception = Some(type_err);
+                                    pending_binding = None;
+                                    break 'delegation;
+                                }
+                                Err(e) => {
+                                    stored_pending_exception = Some(e);
+                                    pending_binding = None;
+                                    break 'delegation;
+                                }
+                                Ok(Some(call_result)) => {
+                                    let deleg_info = deleg_info.clone();
+                                    let promise_c = promise.clone();
+                                    let resolve_c = resolve_fn.clone();
+                                    let reject_c = reject_fn.clone();
+                                    self.await_then(&call_result, move |interp, outcome| {
+                                        let completion = match outcome {
+                                            Ok(v) if v.is_object() => {
+                                                Completion::Throw(type_err.clone())
+                                            }
+                                            Ok(_) => Completion::Throw(interp.create_type_error(
+                                                "Iterator result is not an object",
+                                            )),
+                                            Err(reason) => Completion::Throw(reason),
+                                        };
+                                        interp.deliver_yield_star_completion(
+                                            o.id,
+                                            state_machine.clone(),
+                                            func_env.clone(),
+                                            is_strict,
+                                            try_stack.clone(),
+                                            &deleg_info,
+                                            completion,
+                                            (&promise_c, &resolve_c, &reject_c),
+                                        )
+                                    });
+                                    self.scheduler.set_async_gen_yield_pending(true);
+                                    return Completion::Normal(promise);
+                                }
+                            }
                         }
                         Err(e) => {
                             // Step 8.b's own GetMethod(iterator, "throw")
