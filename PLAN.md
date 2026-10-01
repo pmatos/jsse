@@ -127,7 +127,22 @@ a parked-then-resumed re-entry that extracts the value back out of the
 resumed `Completion` and re-invokes the *same* macro from scratch is provably
 equivalent to letting the original call continue uninterrupted — exactly the
 existing `ScopeCrossReturn`/`ScopeCrossLoopControl`/`ScopeCrossThrow` idiom
-(`eval.rs:8602-8622`), now extended to for-of. The one piece of
+(`eval.rs:8602-8622`), now extended to for-of. **Verified directly** (not just
+inferred from the IteratorClose comment the earlier draft of this plan leaned
+on): `DisposeCursor::new`/`finish` (`dispose.rs:39-59, 154-159`) store
+whatever `completion` they're constructed with verbatim and return it
+unchanged from `finish()` on the no-disposer-error path regardless of its
+variant; `current_error` (the suppression chain) is seeded from the
+completion only when it's already `Completion::Throw`, so `Empty` and
+`Return(ret_val)` are provably interchangeable as a seed — confirming
+`ForOfCrossReturn` can stay a unit variant with `ret_val` riding in the
+cursor's own result, with no `DisposeThen: Copy` conflict. This also means
+seeding with `Return(ret_val)` instead of `Empty` is strictly better, not
+merely equivalent: `DisposeCursor::for_each_value` (`dispose.rs:138-142`) GC-roots
+`Completion::Return(v)`'s value but not `Empty`'s (there is none), so the
+in-flight return value is now kept alive for the whole duration of a parked
+dispose, where today's `Empty` seed wouldn't root it via this path at all.
+The one piece of
 `unwind_for_of!`-specific behavior that doesn't fall out of this for free is
 the per-level "a throw that emerged *during* this unwind may need to stop at
 a handler closer than the original `$from` target" re-check (8232-8260); that
@@ -140,16 +155,39 @@ an async disposer so it's exercised across an actual suspension too.
 
 1. **Red:** add `test262-extra/async-function-for-of-abrupt-unwind-suspends.js`
    with the witness-chain technique from
-   `async-generator-for-of-throw-unwind-suspends.js`, covering four
+   `async-generator-for-of-throw-unwind-suspends.js`, covering five
    independent shapes in one file, each its own assertion block:
-   (a) uncaught `throw` unwinding a single `await using`-bound loop whose
-   disposer awaits; (b) `return` doing the same; (c) `break`/`continue`
-   crossing the loop doing the same; (d) a `throw` whose disposer itself
-   throws *and* an enclosing `try`/`catch` exists outside the loop, verifying
-   the exception still lands at that `catch` after a suspension (the
-   handler-boundary regression shape from the paragraph above). Run:
-   `uv run python scripts/run-test262.py test262-extra/async-function-for-of-abrupt-unwind-suspends.js`
-   — expect all four to fail today (wrong tick ordering / synchronous drain).
+   - (a) uncaught `throw` unwinding a single `await using`-bound loop whose
+     disposer awaits (exercises `unwind_async_for_of_loops`/throw-routing).
+   - (b) `return` doing the same (exercises `route_return!`'s
+     `unwind_for_of!` call).
+   - (c1) an unlabeled `break` in a body *with no intervening `await`*,
+     crossing a single `await using`-bound loop whose disposer awaits —
+     this is the only shape that reaches the inline `Completion::Break` fast
+     path (8888-8896) rather than the `LoopControl` terminator.
+   - (c2) a `break`/labeled-`continue` reached from a body that itself
+     `await`s first, crossing two nested loops (so it is a genuine
+     *cross*, not a same-loop `continue`) — this reaches the `LoopControl`
+     terminator → `route_loop_control!` path. **Must not use an unlabeled
+     `continue` targeting its own innermost loop** — that goes through
+     `ForOfHead`'s per-iteration dispose (`DisposeThen::ForOfIteration`),
+     which is already resumable today and would be silently green before
+     this fix, defeating the red step.
+   - (e) `return` inside an *inner* `await using`-bound loop whose async
+     disposer **rejects**, with a `try`/`catch` sitting between the inner
+     and outer loop (outer loop not `await using`-bound). The return
+     becomes a throw mid-unwind; it must land at that `catch` — not
+     propagate to the outer loop or past it — and the outer loop must still
+     be open afterward. This is the shape that actually exercises
+     `unwind_for_of!`'s per-level handler-boundary re-check (8232-8260)
+     *across a suspension*; shape (a)'s throw-routing path does not reach
+     that code at all (its `unwind_from` is fixed before the call, with no
+     per-level re-check), so an earlier draft of this plan citing a
+     throw-with-catch shape under throw-routing as the guard for this logic
+     was wrong — (e) is the real guard, and it must run through
+     `route_return!`'s `unwind_for_of!`, not through throw-routing.
+   Run: `uv run python scripts/run-test262.py test262-extra/async-function-for-of-abrupt-unwind-suspends.js`
+   — expect all five to fail today (wrong tick ordering / synchronous drain).
 2. **Green — plumbing:** `generator_runtime.rs`'s `ForOfUnwindOutcome` and
    `dispose_env_for_for_of_unwind` become `pub(super)` (no logic change). Add
    the three `DisposeThen` variants to `dispose.rs`. `cargo build --release`
@@ -167,8 +205,8 @@ an async disposer so it's exercised across an actual suspension too.
    with `DisposeThen::ForOfCrossThrow`. Add the resume-dispatch arms:
    `(ForOfCrossThrow, Completion::Throw(e)) => { pending_exception = Some(e); }`,
    `(ForOfCrossThrow, _) => unreachable!(...)`. This alone makes shape (a)
-   and shape (d) pass (throw-routing). Confirm via the test file.
-4. **Green — Slice B, `route_return!` (shape b):** generalize
+   pass. Confirm via the test file.
+4. **Green — Slice B, `route_return!` (shapes b and e):** generalize
    `unwind_for_of!` to `($from, $seed, $then)`; update its per-level body to
    use `dispose_env_for_for_of_unwind`/`close_for_of_iterator` the same way as
    Slice A (shared code, not reimplemented); preserve the handler-boundary
@@ -181,8 +219,20 @@ an async disposer so it's exercised across an actual suspension too.
    `(ForOfCrossReturn, Completion::Throw(e)) => { pending_exception = Some(e); }`,
    `(ForOfCrossReturn, Completion::Return(v)) => { route_return!(v); }`,
    `(ForOfCrossReturn, _) => unreachable!(...)`. Confirm shape (b) passes.
-5. **Green — Slice C, `route_loop_control!` + `Completion::Break` (shape c):**
-   update `route_loop_control!` (8469) to call
+   For shape (e): the `(ForOfCrossReturn, Completion::Throw(e))` arm only sets
+   `pending_exception`, not `pending_for_of_unwind` — unlike `unwind_for_of!`'s
+   own synchronous Throw tail (8264-8270), which sets both before `continue`.
+   This is intentional, not a gap: the park left the loop still on
+   `for_of_stack` (iteration_env already taken, not yet popped), so when
+   `pending_exception` reaches the top-level throw-routing block,
+   `needs_for_of_unwind` (8687) is recomputed as true from that same
+   `for_of_stack`, and `pending_for_of_unwind` gets (re)set correctly at
+   8755-8763 if any loop remains open past the handler. Confirm this
+   explicitly with shape (e) rather than assuming it — it is the one place
+   this plan relies on throw-routing's own bookkeeping to finish a job
+   `route_return!`'s macro started.
+5. **Green — Slice C, `route_loop_control!` + `Completion::Break` (shapes c1,
+   c2):** update `route_loop_control!` (8469) to call
    `unwind_for_of!(handler_boundary.min(for_of_stack.len()), Completion::Empty, DisposeThen::ForOfCrossLoopControl(target))`
    (seed unchanged from today — `Completion::Empty` is already what this call
    site uses). Resume-dispatch arms:
@@ -194,11 +244,22 @@ an async disposer so it's exercised across an actual suspension too.
    scope_stack.len() }` and call `route_loop_control!(target)`, deleting its
    own direct `unwind_for_of!(pos)` call — mirroring the adjacent
    `Completion::Continue` arm exactly (8901-8916), which already does this.
-   Run the **existing** `generator-loop-control-closes-for-of-iterators.js`
-   and `async-function-for-of-abrupt-completion-unwind.js` first, before
-   adding any new resumability, to confirm the Break→`route_loop_control!`
-   conversion alone is behavior-preserving; then confirm shape (c) passes
-   with resumability added.
+   **Before wiring this up, diff what `route_loop_control!` does that the
+   inline arm doesn't**: `routed_to`/finally dispatch (8432-8440),
+   `pending_for_of_unwind = None` (8430), and `try_stack.truncate(target.try_depth)`
+   in the no-`routed_to` tail (8489) — the inline arm today does none of
+   these. For each, confirm it's either unreachable from the inline-break
+   state today (e.g. no open `finally` can exist there) or is genuinely a
+   spec-required behavior the inline path was silently skipping. If the
+   latter — e.g. if today's inline `break` can cross an un-entered `finally`
+   without running it — the conversion is a **behavior fix**, not a neutral
+   refactor, and needs its own dedicated test plus a PR note calling it out
+   explicitly, not just "existing tests still pass." Run the **existing**
+   `generator-loop-control-closes-for-of-iterators.js` and
+   `async-function-for-of-abrupt-completion-unwind.js` first, before adding
+   any new resumability, to catch any such behavior change in isolation from
+   the new suspend/resume logic; then confirm shapes (c1)/(c2) pass with
+   resumability added.
 6. **Confirm green + no regressions:** full Slice-1 test file green. Run
    `cargo build --release`, full targeted test262 surface (§5),
    `cargo test --release`.
@@ -242,9 +303,12 @@ an async disposer so it's exercised across an actual suspension too.
   expansion" to "evaluated per level, synchronous or resumed" (Slice B). A
   mistake here would misroute an exception that arises from a disposal
   failure to the wrong `catch`/`finally` — behavior, not a crash, so it needs
-  the dedicated shape-(d) test (§4.1) plus the existing
-  `async-function-for-of-abrupt-completion-unwind.js` oracle, not just a
-  build-succeeds check.
+  the dedicated shape-(e) test (§4.1), not shape (a) or (d) from an earlier
+  draft of this plan (throw-routing's `unwind_async_for_of_loops` has a fixed
+  `unwind_from` and never reaches this per-level re-check at all — only
+  `route_return!`'s/`route_loop_control!`'s `unwind_for_of!` call does), plus
+  the existing `async-function-for-of-abrupt-completion-unwind.js` oracle, not
+  just a build-succeeds check.
 - **Second touch to already-shipped code:** `ForOfUnwindOutcome`/
   `dispose_env_for_for_of_unwind` visibility change (`pub(super)`, purely
   additive) — run the full generator-suspend test262-extra files (§5)
@@ -252,7 +316,12 @@ an async disposer so it's exercised across an actual suspension too.
 - **`Completion::Break` → `route_loop_control!` conversion:** a refactor of
   existing (currently-correct, currently-blocking) behavior, not just new
   resumability — verified against the existing break/continue-closes-iterator
-  tests *before* resumability is added on top (Slice C's ordering, §4.5).
+  tests *before* resumability is added on top (Slice C's ordering, §4.5). If
+  the implementer finds the inline arm was skipping a `finally`/leaving
+  `pending_for_of_unwind` stale/under-truncating `try_stack` relative to what
+  `route_loop_control!` does (§4.5's diff), that's a behavior fix riding
+  along with this PR and must be called out in the PR description and covered
+  by its own test, not folded silently into "resumability added."
 - **What could move `test262-pass.txt`:** nothing in test262 proper currently
   exercises this ordering (confirmed in §5), so no baseline movement is
   expected; a regression would show up as new *failures*. The baseline itself
