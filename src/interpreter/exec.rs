@@ -1372,6 +1372,32 @@ impl Interpreter {
     /// being silently discarded — see issue #727. `Throw` and (for array
     /// patterns) the iterator-close bookkeeping are otherwise unchanged from
     /// the pre-#727 `Result`-returning version.
+    /// RestBindingInitialization's object-construction step (§14.3.3.3 /
+    /// §7.3.26 `CopyDataProperties`): builds a fresh plain object from the
+    /// own enumerable properties of `source_val` that aren't in `excluded`.
+    /// Shared by the tree-walker `Pattern::Object` rest arm and the
+    /// state-machine `ObjectRestCopy` terminator dispatch so both inherit
+    /// the same GC-rooting discipline for one implementation.
+    pub(crate) fn bind_object_rest_values(
+        &mut self,
+        source_val: &JsValue,
+        excluded: &[JsPropertyKey],
+    ) -> Completion {
+        let rest_obj_id = self.create_object_id();
+        if let Some(o) = source_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
+            let pairs = propagate!(self.copy_data_properties(o.id, source_val, excluded));
+            for (k, v) in pairs {
+                self.get_object_cell_expect(rest_obj_id)
+                    .borrow_mut()
+                    .insert_value(k, v);
+            }
+        }
+        Completion::Normal(JsValue::object(rest_obj_id))
+    }
+
     pub(crate) fn bind_pattern(
         &mut self,
         pat: &Pattern,
@@ -1729,24 +1755,8 @@ impl Interpreter {
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
-                            let rest_obj_id = self.create_object_id();
-                            if let Some(o) = obj_val
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let pairs = propagate!(self.copy_data_properties(
-                                    o.id,
-                                    &obj_val,
-                                    &excluded_keys
-                                ));
-                                for (k, v) in pairs {
-                                    self.get_object_cell_expect(rest_obj_id)
-                                        .borrow_mut()
-                                        .insert_value(k, v);
-                                }
-                            }
-                            let rest_id = rest_obj_id;
-                            let rest_val = JsValue::object(rest_id);
+                            let rest_val =
+                                propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
                             propagate!(self.bind_pattern(pat, rest_val, kind, env));
                         }
                     }
