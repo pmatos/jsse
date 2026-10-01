@@ -8151,9 +8151,6 @@ impl Interpreter {
                 current_state: 0,
                 try_stack: vec![],
                 pending_binding: None,
-                pending_return: None,
-                pending_loop_control: None,
-                saved_finally_exception: None,
                 pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
@@ -8202,9 +8199,6 @@ impl Interpreter {
             current_state,
             mut try_stack,
             pending_binding,
-            pending_return: saved_pending_return,
-            pending_loop_control: restored_pending_loop_control,
-            saved_finally_exception: restored_saved_finally_exception,
             pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
             reject_fn,
@@ -8286,9 +8280,6 @@ impl Interpreter {
                 current_state,
                 try_stack: try_stack.clone(),
                 pending_binding: None,
-                pending_return: None,
-                pending_loop_control: restored_pending_loop_control,
-                saved_finally_exception: None,
                 pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
@@ -8302,9 +8293,6 @@ impl Interpreter {
         let saved_in_state_machine = self.in_state_machine;
         self.in_state_machine = true;
         let mut current_id = current_state;
-        let mut pending_return: Option<JsValue> = saved_pending_return;
-        let mut pending_loop_control = restored_pending_loop_control;
-        let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
         // Lowered lexical scopes, including suspendable `await using` blocks.
@@ -8415,9 +8403,6 @@ impl Interpreter {
                                 current_id,
                                 &try_stack,
                                 None,
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -8681,9 +8666,6 @@ impl Interpreter {
                             current_id,
                             &try_stack,
                             None,
-                            pending_return.take(),
-                            pending_loop_control.take(),
-                            saved_finally_exception.take(),
                             pending_for_of_unwind.take(),
                             &resolve_fn,
                             &reject_fn,
@@ -8792,10 +8774,6 @@ impl Interpreter {
                     }
                 }
 
-                // A throw produced while an intervening finally was handling
-                // another abrupt completion replaces that completion.
-                pending_return = None;
-                pending_loop_control = None;
                 // §14.7.5.6: any abrupt body completion leaving a for-of closes
                 // its iterator, so every still-active loop crossed on the way to
                 // the handler unwinds — not just the ones a previous unwind
@@ -9047,9 +9025,6 @@ impl Interpreter {
                     current_id,
                     &try_stack,
                     None,
-                    pending_return.take(),
-                    pending_loop_control.take(),
-                    saved_finally_exception.take(),
                     pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
@@ -9086,9 +9061,6 @@ impl Interpreter {
                                 current_id,
                                 &try_stack,
                                 sent_value_binding.clone(),
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -9114,9 +9086,6 @@ impl Interpreter {
                         resume_state,
                         &try_stack,
                         sent_value_binding.clone(),
-                        pending_return.take(),
-                        pending_loop_control.take(),
-                        saved_finally_exception.take(),
                         pending_for_of_unwind.take(),
                         &resolve_fn,
                         &reject_fn,
@@ -9213,19 +9182,6 @@ impl Interpreter {
                             // unchanged.
                             if let Some(exc) = pending_exception.take() {
                                 pending_exception = Some(exc);
-                                continue;
-                            }
-                            if let Some(ret_val) = pending_return.take() {
-                                route_return!(ret_val);
-                                continue;
-                            }
-                            // Restore any exception saved from before the finally block
-                            if let Some(exc) = saved_finally_exception.take() {
-                                pending_exception = Some(exc);
-                                continue;
-                            }
-                            if let Some(target) = pending_loop_control.take() {
-                                route_loop_control!(target);
                                 continue;
                             }
                             if pending_for_of_unwind
@@ -9469,9 +9425,6 @@ impl Interpreter {
                                 current_id, // resume to same ForOfHead state
                                 &try_stack,
                                 binding,
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -9765,9 +9718,6 @@ impl Interpreter {
         resume_state: usize,
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
-        pending_return: Option<JsValue>,
-        pending_loop_control: Option<crate::interpreter::generator_transform::LoopControlTarget>,
-        saved_finally_exception: Option<JsValue>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
@@ -9796,9 +9746,6 @@ impl Interpreter {
                 current_state: resume_state,
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
-                pending_return,
-                pending_loop_control,
-                saved_finally_exception,
                 pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),

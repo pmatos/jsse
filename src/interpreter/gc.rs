@@ -469,16 +469,10 @@ impl Interpreter {
             Self::collect_env_roots(&afs.func_env, &mut roots, &mut seen_envs);
             Self::collect_value_roots(&afs.resolve_fn, &mut roots);
             Self::collect_value_roots(&afs.reject_fn, &mut roots);
-            if let Some(ref v) = afs.pending_return {
-                Self::collect_value_roots(v, &mut roots);
-            }
             if let Some(ref pending) = afs.pending_dispose {
                 pending
                     .cursor
                     .for_each_value(|v| Self::collect_value_roots(v, &mut roots));
-            }
-            if let Some(ref v) = afs.saved_finally_exception {
-                Self::collect_value_roots(v, &mut roots);
             }
             for try_info in &afs.try_stack {
                 match &try_info.pending_completion {

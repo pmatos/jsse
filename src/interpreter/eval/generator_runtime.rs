@@ -6,16 +6,6 @@
 use super::*;
 use crate::interpreter::generator_transform::LoopControlTarget;
 
-/// Whether a jump to `target` stays inside the innermost running finally body
-/// (a loop nested in it) rather than leaving it. A jump that leaves replaces
-/// the throw or return that entered that finally.
-fn stays_inside_running_finally(try_stack: &[TryContextInfo], target: &LoopControlTarget) -> bool {
-    try_stack
-        .iter()
-        .rposition(|try_info| try_info.entered_finally)
-        .is_some_and(|running| target.try_depth > running)
-}
-
 /// Which `yield*` protocol step produced the inner result being awaited.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DelegateStep {
@@ -1369,12 +1359,6 @@ impl Interpreter {
                 // finally it crosses, so it is routed rather than jumped.
                 StateTerminator::LoopControl(target) => {
                     let target = *target;
-                    // A jump that leaves the running finally body replaces the
-                    // throw or return that entered it.
-                    if !stays_inside_running_finally(&current_try_stack, &target) {
-                        pending_exception = None;
-                        pending_return = None;
-                    }
                     current_id = route_loop_control_result!(target);
                 }
 
@@ -4483,12 +4467,6 @@ impl Interpreter {
                 // finally it crosses, so it is routed rather than jumped.
                 StateTerminator::LoopControl(target) => {
                     let target = *target;
-                    // A jump that leaves the running finally body replaces the
-                    // throw or return that entered it.
-                    if !stays_inside_running_finally(&current_try_stack, &target) {
-                        pending_exception = None;
-                        pending_return = None;
-                    }
                     current_id = route_loop_control_result!(target);
                 }
 
