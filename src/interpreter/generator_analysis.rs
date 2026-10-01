@@ -1907,9 +1907,7 @@ mod tests {
         assert!(pattern_needs_lowering(&declared_pattern(
             "var { x: { a = await 1, ...r } } = {};"
         )));
-        // The rest target itself still can't be anything but a plain
-        // identifier (the grammar never allows otherwise); a pattern that
-        // somehow reached one here would stay declined rather than mishandled.
+        // ...and nested inside an array pattern element too.
         assert!(pattern_needs_lowering(&declared_pattern(
             "var [ { a = await 1, ...r } ] = [];"
         )));
