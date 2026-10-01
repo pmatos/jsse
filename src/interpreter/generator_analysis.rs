@@ -365,6 +365,14 @@ fn analyze_statement(
                         &mut analysis.local_vars,
                         ctx,
                     );
+                    // A yield in the catch parameter's own default/computed
+                    // key (e.g. `catch ({ a = yield 1 })`) must register as a
+                    // real yield point too -- `collect_pattern_vars` alone
+                    // only gathers bound names, so without this the whole
+                    // function never leaves the single-state fast path and
+                    // the yield silently falls back to the tree-walker's
+                    // InlineYield replay (issue #771).
+                    analyze_pattern_expressions(param, analysis, ctx);
                 }
                 analyze_statements(&handler.body, analysis, ctx);
                 ctx.scope_depth -= 1;
@@ -756,9 +764,10 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
         Statement::Throw(e) => expr_contains_yield(e),
         Statement::Try(t) => {
             t.block.iter().any(contains_yield)
-                || t.handler
-                    .as_ref()
-                    .is_some_and(|h| h.body.iter().any(contains_yield))
+                || t.handler.as_ref().is_some_and(|h| {
+                    h.body.iter().any(contains_yield)
+                        || h.param.as_ref().is_some_and(pattern_contains_yield)
+                })
                 || t.finalizer
                     .as_ref()
                     .is_some_and(|f| f.iter().any(contains_yield))
@@ -1346,7 +1355,17 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
             t.block.iter().any(contains_suspension)
                 || t.handler.as_ref().is_some_and(|h| {
                     h.body.iter().any(contains_suspension)
-                        || h.param.as_ref().is_some_and(pattern_needs_await_lowering)
+                        || h.param.as_ref().is_some_and(|p| {
+                            // Mirrors `for_in_of_head_contains_yield`/
+                            // `for_in_of_variable_head_contains_await`: any
+                            // yield in the catch parameter forces the
+                            // compiled state machine (the InlineYield
+                            // fallback still handles a shape
+                            // `hoist_suspending_pattern` doesn't lower), while
+                            // an await-only pattern is shape-gated since an
+                            // unsupported one must stay fully inline.
+                            pattern_contains_yield(p) || pattern_needs_await_lowering(p)
+                        })
                 })
                 || t.finalizer
                     .as_ref()
