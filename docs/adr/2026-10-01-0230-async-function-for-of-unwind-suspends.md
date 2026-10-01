@@ -49,22 +49,31 @@ mechanism.
     exactly instead of calling `unwind_for_of!` directly. Diffed against
     what `route_loop_control!` does that the old inline arm didn't
     (`pending_for_of_unwind = None`, un-entered-`finally` routing via
-    `routed_to`, `try_stack.truncate(target.try_depth)`): an unlabeled break
-    reaching this arm always targets the innermost loop with no intervening
-    `try`/`finally` possible (any such `break` is lowered to a `LoopControl`
-    terminator at transform time regardless of `await`, which already calls
-    `route_loop_control!` unconditionally — unaffected by this change), so
-    `routed_to` is always `None` here and the resulting `try_stack` length is
-    identical either way. `pending_for_of_unwind` is reset to `None` by
-    `route_loop_control!` where the old arm left it untouched, but that field
-    has no other reader in the driver besides the two `clear_at_state`
-    checks that clear it again later — confirmed by grepping every
-    `pending_for_of_unwind` reference, not assumed — so this is inert for
-    every reachable case, verified empirically too: both pre-existing
-    oracles (`async-function-for-of-abrupt-completion-unwind.js`,
+    `routed_to`, `try_stack.truncate(target.try_depth)`) and verified each
+    directly against a pre-change binary (`git worktree add` at the parent
+    commit) rather than reasoning about it from the code alone:
+    - `break` wrapped in a `try { break; } finally { … }`, both with and
+      without an `await` inside the `finally`, and both unconditional and
+      conditional forms, produce byte-identical logs (close order, the
+      `finally` running before `IteratorClose`, `after` running last) on
+      the pre- and post-change binaries. A `break` lexically inside a `try`
+      with a `finally` is lowered to a `LoopControl` terminator at
+      transform time regardless of `await` — `route_loop_control!` already
+      ran for it unconditionally before this change — so the inline arm
+      this ADR converts is in practice only ever reached with no `finally`
+      open between it and its target loop, making `routed_to` always `None`
+      there and the resulting `try_stack` length identical either way.
+    - `pending_for_of_unwind` is reset to `None` by `route_loop_control!`
+      where the old inline arm left it untouched, but that field has no
+      other reader in the driver besides the two `clear_at_state` checks
+      that clear it again later (confirmed by grepping every
+      `pending_for_of_unwind` reference) — inert for every case reachable
+      from this arm.
+
+    Both pre-existing oracles (`async-function-for-of-abrupt-completion-unwind.js`,
     `generator-loop-control-closes-for-of-iterators.js`, the latter a
-    sync-generator file unaffected by this driver's code at all) stay green
-    unchanged. This is a true refactor, not a silent behavior change.
+    sync-generator file unaffected by this driver's code at all) also stay
+    green unchanged. This is a true refactor, not a silent behavior change.
 - **Resume-dispatch arms.** The `(DisposeThen, Completion)` match in
   `async_function_resume` gains:
   - `(ForOfCrossReturn, Throw(e))` → `pending_exception = Some(e)`;
@@ -112,18 +121,41 @@ scope disposal, now extended one level up to for-of.
 
 `test262-extra/async-function-for-of-abrupt-unwind-suspends.js`: a
 witness-chain probe (the same technique as
-`async-generator-for-of-throw-unwind-suspends.js`) covering five shapes in
-one file: an uncaught throw (`unwind_async_for_of_loops`/throw-routing), a
+`async-generator-for-of-throw-unwind-suspends.js`) covering six shapes in one
+file: an uncaught throw (`unwind_async_for_of_loops`/throw-routing), a
 `return` (`route_return!`), an unlabeled `break` with no preceding `await`
-(the inline fast path), a labeled `break` after an `await` crossing two
-nested loops (`route_loop_control!` via the `LoopControl` terminator), and a
-`return` whose inner disposer rejects with an intervening `catch` that must
-handle it before the (non-`await using`) outer loop — the guard for
-`unwind_for_of!`'s per-level handler-boundary re-check running across a
-suspension, since the throw-routing path never reaches that re-check at all
-(its `unwind_from` is fixed before the call). All five assert the driver
-returns control to its synchronous caller before draining any queued job —
-red before this change, green after. The existing sync-dispose-only oracle
+(the inline fast path), a labeled `break` with no preceding `await` crossing
+two nested loops (`route_loop_control!` via the `LoopControl` terminator —
+a labeled break is never produced as the raw `Completion::Break` the
+inline-fast-path shape matches, so this is a distinct call path from it),
+the same shape again but with an `await` ahead of the break (exercises
+`route_loop_control!`'s resume-dispatch arm twice in a row, once per nested
+loop — not on its own a suspend-vs-block distinguisher, since the unwind
+already starts inside a microtask either way), and a `return` whose inner
+disposer rejects with an intervening `catch` that must handle it before the
+(non-`await using`) outer loop. For the last shape, the park happens inside
+the inner disposal itself, so resume dispatches straight to
+`pending_exception` and the top-level throw-routing block's own handler
+search, not back into `route_return!`'s `unwind_for_of!` — it guards that
+search correctly stopping at the catch using a `for_of_stack` a
+parked-then-resumed disposal left behind, not `unwind_for_of!`'s own
+per-level handler-boundary re-check (the existing synchronous-only oracle,
+`async-function-for-of-abrupt-completion-unwind.js`'s
+`innerCloseFailureReachesCatchBeforeOuterClose`-style cases, already covers
+that re-check; extending it across a suspension specifically needs a third
+nesting level and was left out of this file on scope grounds). Five of the
+six shapes (all but the after-`await` `(c2)` one) distinguish red from
+green purely by whether `sync-end` precedes or follows the disposal's own
+witness ticks, each confirmed red against a pre-change binary snapshot
+(`git worktree add` at the parent commit) before this change landed. The
+after-`await` `(c2)` shape cannot distinguish that way — `sync-end`
+precedes `w1` on both sides of this change once an earlier `await` is
+already in play, since the unwind then starts from inside a microtask
+either way, so a blocking drain and a real suspension produce the same
+witness order — it instead locks in the correct trace (confirmed
+byte-identical against the same pre-change snapshot, since this specific
+shape's behavior does not change) as a regression guard for the
+resume-dispatch arm firing twice in a row. The existing sync-dispose-only oracle
 (`async-function-for-of-abrupt-completion-unwind.js`) and the per-iteration
 environment/return/break regression files stay green unchanged, confirming
 no observable ordering or `SuppressedError`-chaining change for the cases

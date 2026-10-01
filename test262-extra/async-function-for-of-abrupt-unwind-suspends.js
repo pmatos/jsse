@@ -115,9 +115,41 @@ asyncTest(async function () {
     'an unlabeled break with no preceding await suspends at the resource disposal Await'
   );
 
-  // (c2) a labeled break reached from a body that itself awaits first,
-  // crossing two nested `await using` loops, reaches the `LoopControl`
-  // terminator and `route_loop_control!`'s `unwind_for_of!` call.
+  // (c2) a labeled break with no preceding await, crossing two nested
+  // `await using` loops, reaches the `LoopControl` terminator and
+  // `route_loop_control!`'s `unwind_for_of!` call — a *labeled* break is
+  // never produced as a raw `Completion::Break` the inline fast path (c1)
+  // matches (that path only ever fires for an unlabeled break), so this is
+  // a genuinely distinct call path from (c1), and with no preceding await
+  // the suspension at each disposal's own Await is the only thing that can
+  // delay `sync-end`.
+  async function breakNoAwaitAcrossNested(L) {
+    outer: for (await using a of [resource(L, 'Outer')]) {
+      for (await using b of [resource(L, 'Inner')]) {
+        L('body');
+        break outer;
+      }
+    }
+    return 'after-nested-break';
+  }
+  log = await observe(function (L) { return breakNoAwaitAcrossNested(L); });
+  assert.compareArray(
+    log,
+    [
+      'body', 'dispInner', 'sync-end', 'w1', 'dispOuter', 'w2', 'w3',
+      'resolved:after-nested-break', 'w4', 'w5', 'w6'
+    ],
+    'a labeled break crossing two nested loops suspends at each loop\'s disposal Await in turn'
+  );
+
+  // (c2b) the same shape, but with an `await null` ahead of the break —
+  // this does not distinguish suspending from blocking on its own (the
+  // unwind already starts from inside a microtask either way, so a
+  // blocking drain and a real suspension produce the same witness-chain
+  // order), but it does exercise `route_loop_control!`'s own resumable
+  // path a second time in a row (inner then outer), each park/resume cycle
+  // re-entering `route_loop_control!` from scratch via the
+  // `DisposeThen::ForOfCrossLoopControl` resume-dispatch arm.
   async function breakAfterAwaitAcrossNested(L) {
     outer: for (await using a of [resource(L, 'Outer')]) {
       for (await using b of [resource(L, 'Inner')]) {
@@ -126,25 +158,30 @@ asyncTest(async function () {
         break outer;
       }
     }
-    return 'after-nested-break';
+    return 'after-nested-break-after-await';
   }
   log = await observe(function (L) { return breakAfterAwaitAcrossNested(L); });
   assert.compareArray(
     log,
     [
       'sync-end', 'w1', 'body', 'dispInner', 'w2', 'dispOuter', 'w3', 'w4',
-      'resolved:after-nested-break', 'w5', 'w6'
+      'resolved:after-nested-break-after-await', 'w5', 'w6'
     ],
-    'a labeled break crossing two nested loops suspends at each loop\'s disposal Await in turn'
+    'a double park/resume across two nested loops carries the loop-control target through each resume'
   );
 
   // (e) a return inside an inner `await using`-bound loop whose async
   // disposer rejects, with a try/catch between the inner and outer loop
   // (the outer loop is not `await using`-bound). The return becomes a
   // throw mid-unwind; it must land at that catch, not propagate to or past
-  // the outer loop, and the outer loop must still be open afterward — the
-  // guard for `unwind_for_of!`'s per-level handler-boundary re-check
-  // running across a suspension.
+  // the outer loop, and the outer loop must still be open afterward. The
+  // park happens inside the inner disposal itself, so resume dispatches
+  // through `(DisposeThen::ForOfCrossReturn, Completion::Throw(e))`
+  // straight to `pending_exception`, then the top-level throw-routing
+  // block's own handler search — not back into `route_return!`'s
+  // `unwind_for_of!` — so this is the guard for *that* search correctly
+  // stopping at the catch instead of also unwinding the outer loop, using
+  // a for_of_stack a parked-then-resumed disposal left behind.
   var outerReturnCount = 0;
   function trackedOuter(values) {
     var index = 0;
