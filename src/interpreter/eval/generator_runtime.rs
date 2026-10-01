@@ -4561,11 +4561,11 @@ impl Interpreter {
                             continue;
                         }
                         None => {
-                            // A return not yet owned by any context (the
-                            // interception sites still park it on the
-                            // driver-local `pending_return` rather than on
-                            // `pending_completion`) keeps threading through
-                            // via `check_abrupt_on_resume` until it is.
+                            // Every return-interception site now parks on
+                            // `pending_completion` instead (issue #719), so
+                            // this should never find anything — defensive
+                            // only, in case some path still threads a return
+                            // through the driver-local `pending_return`.
                             if let Some(ret_val) = pending_return.take() {
                                 pending_return = Some(ret_val);
                                 check_abrupt_on_resume = true;
@@ -4779,9 +4779,12 @@ impl Interpreter {
                         let cursor = DisposeCursor::new(stack, Completion::Empty);
                         let completion = if pending_exception.is_some() || pending_return.is_some()
                         {
-                            // A `finally` body is running on behalf of a completion
-                            // held in this frame's locals, which a parked request
-                            // cannot carry across the suspension: dispose inline.
+                            // A fresh, not-yet-routed throw or return (the
+                            // one-shot resume input, not a completion parked
+                            // on `pending_completion` — see issue #719) is
+                            // held only in these locals, which a parked
+                            // request cannot carry across the suspension:
+                            // dispose inline instead.
                             self.run_dispose_cursor_holding(
                                 cursor,
                                 &[pending_exception.as_ref(), pending_return.as_ref()],
