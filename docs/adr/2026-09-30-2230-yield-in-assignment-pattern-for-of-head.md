@@ -110,6 +110,11 @@ mechanism (full decomposition or replay) ends up evaluating it.
   for-of/for-in head is issue #725's territory (currently open, owned
   elsewhere), not this one. `hoist_suspending_pattern_assignment` is gated on
   `pattern_contains_yield` only, so it never fires for an await-only pattern.
+
+  **Superseded by ADR-2026-10-02-0000** (issue #788): both are now widened —
+  `for_in_of_variable_head_contains_await`'s `Pattern` arm calls
+  `pattern_needs_await_lowering`, and `hoist_suspending_pattern_assignment`
+  also fires on it — closing this gap for both object and array shapes.
 - **`ForOfInit`'s own `left` field** is left un-rewritten (kept as the
   original, real pattern) for the same reason #726/ADR-2026-09-21-2143
   established for the `Variable` case: it only supplies `BoundNames` for the
