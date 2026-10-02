@@ -305,14 +305,18 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let evaluated_args = match self.eval_spread_args(args, env) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
-                match self.call_function(&func_val, &this_val, &evaluated_args) {
-                    Completion::Normal(_) => Completion::Normal(JsValue::boolean(true)),
-                    other => other,
-                }
+                self.with_gc_root_scope(|i| {
+                    i.gc_root_value(&func_val);
+                    i.gc_root_value(&this_val);
+                    let evaluated_args = match i.eval_spread_args(args, env) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match i.call_function(&func_val, &this_val, &evaluated_args) {
+                        Completion::Normal(_) => Completion::Normal(JsValue::boolean(true)),
+                        other => other,
+                    }
+                })
             }
             _ => {
                 // Fallback: evaluate the chain for side effects, return true
