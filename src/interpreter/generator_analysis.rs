@@ -1155,6 +1155,7 @@ pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
                     .is_some_and(|s| has_block_with_await_using(s))
         }
         Statement::Labeled(_, inner) => has_block_with_await_using(inner),
+        Statement::For(f) => f.disposes_at_head(),
         _ => false,
     }
 }
