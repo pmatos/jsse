@@ -968,34 +968,14 @@ fn hoist_class_suspensions(
     }
 }
 
-/// False for a declarator that `transform_variable_declaration` reroutes to a
-/// function-level temp var instead of a genuine binding in the enclosing
-/// block's Environment: a plain identifier (no destructuring) whose
-/// initializer suspends is declared as a temp var and assigned via
-/// `SentValueBinding` once the suspension resumes ("the original let/const/
-/// var decl is replaced by a plain assignment") — its real storage is
-/// `func_env`, not this block. Pre-declaring that same name as TDZ in the
-/// block would shadow the temp var, so `collect_block_lexical_decls` must
-/// skip it: a destructuring pattern's own suspending default is lowered
-/// through a different path (`lower_pattern_binding`/`emit_pattern_binding`)
-/// that *does* bind into the block normally, so only the bare-identifier
-/// shortcut needs excluding.
-fn declarator_enters_block_env(d: &VariableDeclarator, is_async: bool) -> bool {
-    !(matches!(d.pattern, Pattern::Identifier(_))
-        && d.init
-            .as_ref()
-            .is_some_and(|init| expr_has_suspension(init, is_async)))
-}
-
 /// `sec-static-semantics-lexicallyscopeddeclarations`: a block's own lexical
 /// declarations are exactly its *directly nested* `let`/`const`/`using`/
 /// `await using`/class declarations (not those of nested blocks, loops, or
 /// function bodies) -- a shallow, non-recursive scan over the whole,
 /// unsplit block. Mirrors `Interpreter::hoist_lexical_declarations`
 /// (`exec.rs`), which performs the same scan directly against an
-/// `Environment` rather than collecting it for later use. Declarators that
-/// `declarator_enters_block_env` excludes are left out entirely.
-fn collect_block_lexical_decls(stmts: &[Statement], is_async: bool) -> Vec<(String, bool)> {
+/// `Environment` rather than collecting it for later use.
+fn collect_block_lexical_decls(stmts: &[Statement]) -> Vec<(String, bool)> {
     let mut decls = Vec::new();
     for stmt in stmts {
         match stmt {
@@ -1007,9 +987,6 @@ fn collect_block_lexical_decls(stmts: &[Statement], is_async: bool) -> Vec<(Stri
             {
                 let is_const = decl.kind != VarKind::Let;
                 for d in &decl.declarations {
-                    if !declarator_enters_block_env(d, is_async) {
-                        continue;
-                    }
                     let mut names = Vec::new();
                     d.pattern.bound_names(&mut names);
                     decls.extend(names.into_iter().map(|name| (name, is_const)));
@@ -1084,9 +1061,8 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.finalize_current_state(StateTerminator::Goto(entry_state));
                 ctx.current_state_id = entry_state;
                 ctx.scope_depth += 1;
-                ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(stmts, ctx.is_async),
-                ));
+                ctx.states[entry_state].scope_action =
+                    Some(ScopeAction::OpenBlock(collect_block_lexical_decls(stmts)));
 
                 let inner_after = ctx.new_state();
                 transform_statements(stmts, ctx, inner_after);
@@ -2559,30 +2535,54 @@ fn transform_variable_declaration(
             }
             lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
         } else if let Some(init) = &declarator.init {
-            if expr_has_suspension(init, ctx.is_async) {
-                match &declarator.pattern {
-                    Pattern::Identifier(name) => {
-                        // Ensure the variable is declared as a temp var so it exists
-                        // in strict mode (the original let/const/var decl is replaced
-                        // by a plain assignment)
-                        if !ctx.temp_vars.contains(name) {
-                            ctx.temp_vars.push(name.clone());
-                        }
-                        let binding = SentValueBindingKind::Variable(name.clone());
-                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
-                    }
-                    pattern => {
-                        let pattern = pattern.clone();
-                        let source = ctx.new_temp_var("dstr_src");
-                        let binding = SentValueBindingKind::Variable(source.clone());
-                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
-                        // decl.kind here (not `Var`) so the resumed value is bound
-                        // via the normal, already-correct BindingPattern evaluation
-                        // path -- InitializeReferencedBinding for let/const,
-                        // PutValue for var.
-                        emit_pattern_binding(decl.kind, pattern, &source, ctx);
-                    }
-                }
+            if let Expression::Class(class_expr) = init
+                && init.is_anonymous_function_definition()
+                && expr_has_suspension(init, ctx.is_async)
+            {
+                // `Expression::Class` is the only shape that is both an
+                // anonymous-function-definition position (NamedEvaluation
+                // must name it after the declared identifier,
+                // sec-runtime-semantics-evaluation's `LexicalBinding :
+                // BindingIdentifier Initializer`) and able to contain a
+                // suspension that belongs to *this* generator/async function
+                // (a nested `function`/arrow body has its own
+                // [[GeneratorKind]], so `expr_has_suspension` never looks
+                // inside one -- only a class's heritage/computed keys, which
+                // evaluate in the enclosing scope, can). Routing this
+                // through the generic fresh-temp path below would assign the
+                // class to a compiler-generated temp first; because that
+                // temp's name is suppressed to avoid leaking into `.name`
+                // (`emit_expression_with_binding`), and the final
+                // `let <name> = <temp>;` is just an identifier reference
+                // (not itself an anonymous-function-definition), the class
+                // would end up permanently unnamed. Hoisting only the
+                // suspending heritage/key sub-expressions (as
+                // `transform_yielding_expression`'s own `Expression::Class`
+                // arm does) leaves a suspension-free class expression that
+                // can be emitted as a genuine `Statement::Variable` with the
+                // real pattern -- NamedEvaluation and the block's own
+                // TDZ'd/binding semantics both apply exactly as for any
+                // non-suspending declarator.
+                let mut class_expr = class_expr.clone();
+                hoist_class_suspensions(&mut class_expr.super_class, &mut class_expr.body, ctx);
+                ctx.emit_statement(Statement::Variable(VariableDeclaration {
+                    kind: decl.kind,
+                    declarations: vec![VariableDeclarator {
+                        pattern: declarator.pattern.clone(),
+                        init: Some(Expression::Class(class_expr)),
+                    }],
+                }));
+            } else if expr_has_suspension(init, ctx.is_async) {
+                let pattern = declarator.pattern.clone();
+                let source = ctx.new_temp_var("dstr_src");
+                let binding = SentValueBindingKind::Variable(source.clone());
+                transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
+                // decl.kind here (not `Var`) so the resumed value is bound
+                // via the normal, already-correct BindingPattern evaluation
+                // path -- InitializeReferencedBinding for let/const (a real
+                // binding in the enclosing block's Environment, TDZ'd until
+                // now), PutValue for var.
+                emit_pattern_binding(decl.kind, pattern, &source, ctx);
             } else {
                 let stmt = Statement::Variable(VariableDeclaration {
                     kind: decl.kind,
@@ -2888,19 +2888,16 @@ fn transform_for_statement(
         ctx.finalize_current_state(StateTerminator::Goto(init_state));
         ctx.current_state_id = init_state;
         ctx.scope_depth += 1;
-        // Unlike `per_iteration_bindings` above (which `CopyForward` uses to
-        // copy a name's *current* value forward regardless of where it lives),
-        // this initial TDZ pre-declare must exclude any name
-        // `declarator_enters_block_env` rejects: such a name's real storage is
-        // a function-level temp var (see that function's doc comment), and
-        // pre-declaring it here would shadow the temp var with an
-        // uninitialized binding that never gets the suspended initializer's
-        // value.
+        // Every bound name of the head's own `LexicalDeclaration` enters this
+        // per-iteration Environment up front, uninitialized, matching every
+        // other lexical shape (`sec-createperiterationenvironment`) --
+        // `transform_variable_declaration` now routes a suspending own-
+        // initializer through `emit_pattern_binding` for every pattern shape,
+        // so there is no temp-var shortcut left here to shadow.
         let initial_lexical_bindings: Vec<(String, bool)> =
             if let Some(ForInit::Variable(decl)) = &for_stmt.init {
                 decl.declarations
                     .iter()
-                    .filter(|d| declarator_enters_block_env(d, ctx.is_async))
                     .flat_map(|d| {
                         let is_const = decl.kind == VarKind::Const;
                         let mut names = Vec::new();
@@ -3307,7 +3304,7 @@ fn transform_try_statement(
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
         ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
-            collect_block_lexical_decls(&try_stmt.block, ctx.is_async),
+            collect_block_lexical_decls(&try_stmt.block),
         ));
         ctx.scope_depth += 1;
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
@@ -3326,7 +3323,7 @@ fn transform_try_statement(
             lexical_decls: try_stmt
                 .handler
                 .as_ref()
-                .map(|h| collect_block_lexical_decls(&h.body, ctx.is_async))
+                .map(|h| collect_block_lexical_decls(&h.body))
                 .unwrap_or_default(),
         });
 
@@ -3368,7 +3365,7 @@ fn transform_try_statement(
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(finalizer, ctx.is_async),
+                    collect_block_lexical_decls(finalizer),
                 ));
                 ctx.scope_depth += 1;
                 transform_statements(finalizer, ctx, finally_exit_state);
