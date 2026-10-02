@@ -371,4 +371,69 @@ asyncTest(async function () {
     ['disp', 'sync-end', 'w1', 'after-outer', 'w2', 'settled', 'w3', 'w4'],
     'the head binding does not leak into the enclosing scope'
   );
+
+  log = await observe(function (L) {
+    return (async function () {
+      var i = 0;
+      for (await using a = { [Symbol.asyncDispose]() { L('disp'); } }; await (i < 2); i++) {
+        L('body' + i);
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['sync-end', 'w1', 'body0', 'w2', 'body1', 'w3', 'disp', 'w4', 'after', 'settled'],
+    'an await in the test ticks independently of the head disposal'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
+      var i = 0;
+      for (await using a = { [Symbol.asyncDispose]() { L('disp'); } }; i < 2; i += await 1) {
+        L('body' + i);
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['body0', 'sync-end', 'w1', 'body1', 'w2', 'disp', 'w3', 'after', 'w4', 'settled'],
+    'an await in the update ticks independently of the head disposal'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
+      var i = 0;
+      lbl: for (await using a = { [Symbol.asyncDispose]() { L('disp'); } }; i < 3; i++) {
+        L('body' + i);
+        break lbl;
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['body0', 'disp', 'sync-end', 'w1', 'after', 'w2', 'settled', 'w3', 'w4'],
+    'break to the loop\'s own label disposes the loop environment'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
+      var i = 0;
+      switch (1) {
+        case 1:
+          for (await using a = { [Symbol.asyncDispose]() { L('disp'); } }; i < 1; i++) {
+            L('body');
+          }
+          L('after-loop');
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['body', 'disp', 'sync-end', 'w1', 'after-loop', 'after', 'w2', 'settled', 'w3', 'w4'],
+    'a head in a switch case still suspends at its disposal'
+  );
 });

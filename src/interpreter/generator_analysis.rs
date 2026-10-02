@@ -1159,6 +1159,10 @@ pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
     }
 }
 
+pub(crate) fn is_await_using_for_head(f: &ForStatement) -> bool {
+    matches!(&f.init, Some(ForInit::Variable(decl)) if decl.kind == VarKind::AwaitUsing)
+}
+
 /// The scope statement list a `for (await using x = init; test; update)` head
 /// is equivalent to: the declaration followed by the loop with an empty
 /// initializer. `using` bindings are const-like, so ForBodyEvaluation has no
@@ -1173,7 +1177,7 @@ pub(crate) fn await_using_for_head_scope(
     let Some(ForInit::Variable(decl)) = &f.init else {
         return None;
     };
-    if decl.kind != VarKind::AwaitUsing {
+    if !is_await_using_for_head(f) {
         return None;
     }
     let inner_loop = Statement::For(ForStatement {
@@ -1273,7 +1277,10 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         Statement::While(w) => scan_await_using(&w.body),
         Statement::DoWhile(d) => scan_await_using(&d.body),
         Statement::For(f) => {
-            if await_using_for_head_scope(f, &[]).is_some() {
+            // Like a block that directly declares `await using`, the head's
+            // own scope is isolatable without scanning the body: nested
+            // containers are classified again when the body is lowered.
+            if is_await_using_for_head(f) {
                 return AwaitUsingScan::Isolatable;
             }
             let body = scan_await_using(&f.body);
@@ -1319,6 +1326,9 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// transform can lower: `if`, labeled statements, plain blocks, loop bodies,
 /// `try`/`catch`/`finally` bodies and `switch` cases. The block's disposal then
 /// suspends the function at its Awaits instead of draining the queue inline.
+///
+/// A `for (await using ..;;)` head counts as such a block: its loop
+/// environment is lowered as a scope of its own.
 ///
 /// Containers whose lowering would flatten an observable lexical scope
 /// (`for (let ..)`, `for-in`, `with`, a list declaring a binding beside the

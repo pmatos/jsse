@@ -1049,6 +1049,21 @@ fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_
     ctx.current_state_id = after_state;
 }
 
+/// `transform_scope_block` for a caller that may not have a join state yet
+/// (`usize::MAX`): allocates the state control resumes at once the scope exits.
+fn transform_scope_block_joined(
+    stmts: &[Statement],
+    ctx: &mut TransformContext,
+    after_state: usize,
+) {
+    let resume_state = if after_state == usize::MAX {
+        ctx.new_state()
+    } else {
+        after_state
+    };
+    transform_scope_block(stmts, ctx, resume_state);
+}
+
 fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, after_state: usize) {
     match stmt {
         Statement::Expression(expr) => {
@@ -1067,12 +1082,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 // it a real scope (`EnterScope`/`ExitScope`) so its interior
                 // lowers through the ordinary per-statement pipeline instead
                 // of being tree-walked intact — see issue #683.
-                let resume_state = if after_state == usize::MAX {
-                    ctx.new_state()
-                } else {
-                    after_state
-                };
-                transform_scope_block(stmts, ctx, resume_state);
+                transform_scope_block_joined(stmts, ctx, after_state);
             } else {
                 // §14.2.2 Block Evaluation: a fresh declarative environment per
                 // entry, discarded on the way out. Force a state boundary
@@ -1131,13 +1141,8 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 None
             };
             if let Some(scope_stmts) = head_scope {
-                let resume_state = if after_state == usize::MAX {
-                    ctx.new_state()
-                } else {
-                    after_state
-                };
                 let labels = std::mem::take(&mut ctx.iteration_labels);
-                transform_scope_block(&scope_stmts, ctx, resume_state);
+                transform_scope_block_joined(&scope_stmts, ctx, after_state);
                 ctx.iteration_labels = labels;
             } else {
                 transform_for_statement(for_stmt, ctx, after_state);
