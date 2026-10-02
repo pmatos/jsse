@@ -31,7 +31,18 @@ pub(crate) struct GcPacer {
     /// Consecutive minor collections in which at least 90% of the nursery
     /// survived. Two saturated minors switch back to major pacing.
     high_survival_minors: u8,
+    /// Debug stress mode: force a collection every `stress_period` safepoints
+    /// that would otherwise not collect. Zero disables it.
+    stress_period: u32,
+    stress_tick: u32,
+    /// Stress collections alternate major (finds missing roots) and minor
+    /// (finds missing write barriers).
+    stress_next_major: bool,
 }
+
+/// Environment variable that enables the GC stress mode: a collection is
+/// forced at every Nth safepoint. Unset, `0` or unparseable leaves it off.
+pub(crate) const GC_STRESS_ENV: &str = "JSSE_GC_STRESS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollectionKind {
@@ -51,7 +62,20 @@ impl GcPacer {
             major_requested: false,
             minor_suppressed: false,
             high_survival_minors: 0,
+            stress_period: std::env::var(GC_STRESS_ENV)
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0),
+            stress_tick: 0,
+            stress_next_major: true,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_stress_period(&mut self, period: u32) {
+        self.stress_period = period;
+        self.stress_tick = 0;
+        self.stress_next_major = true;
     }
 
     /// Charge one object allocation. Reused logical slots still hold a full
@@ -105,6 +129,19 @@ impl GcPacer {
         } else if self.minor_requested {
             self.minor_requested = false;
             Some(CollectionKind::Minor)
+        } else if self.stress_period != 0 {
+            self.stress_tick += 1;
+            if self.stress_tick < self.stress_period {
+                return None;
+            }
+            self.stress_tick = 0;
+            let kind = if self.stress_next_major {
+                CollectionKind::Major
+            } else {
+                CollectionKind::Minor
+            };
+            self.stress_next_major = !self.stress_next_major;
+            Some(kind)
         } else {
             None
         }
@@ -1337,6 +1374,62 @@ mod tests {
     // GcPacer — the allocation-pressure heuristic that decides when to collect.
     // Tested through its public interface; expected budgets are hand-computed
     // literals (independent of the pacer's own arithmetic).
+
+    #[test]
+    fn stress_period_zero_never_collects() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(0);
+        for _ in 0..1000 {
+            assert_eq!(pacer.begin_collection(), None);
+        }
+    }
+
+    #[test]
+    fn stress_period_fires_every_nth_safepoint_alternating_major_and_minor() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(3);
+        let fired: Vec<_> = (1..=12).map(|_| pacer.begin_collection()).collect();
+        assert_eq!(
+            fired,
+            vec![
+                None,
+                None,
+                Some(CollectionKind::Major),
+                None,
+                None,
+                Some(CollectionKind::Minor),
+                None,
+                None,
+                Some(CollectionKind::Major),
+                None,
+                None,
+                Some(CollectionKind::Minor),
+            ]
+        );
+    }
+
+    #[test]
+    fn stress_period_one_collects_at_every_safepoint() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(1);
+        for _ in 0..4 {
+            assert!(pacer.begin_collection().is_some());
+        }
+    }
+
+    #[test]
+    fn real_requests_take_priority_over_stress_and_do_not_advance_it() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(2);
+        assert_eq!(pacer.begin_collection(), None);
+        pacer.request();
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+        assert_eq!(
+            pacer.begin_collection(),
+            Some(CollectionKind::Major),
+            "the pending request did not consume a stress tick"
+        );
+    }
 
     #[test]
     fn fresh_pacer_requests_no_collection() {
