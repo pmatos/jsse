@@ -2220,11 +2220,6 @@ fn lower_array_pattern_binding(
     }
 }
 
-/// Evaluate `default` into `value_temp` only when it currently holds
-/// `undefined` — the "if Initializer is present and v is undefined" step
-/// shared by `KeyedBindingInitialization` and
-/// `KeyedDestructuringAssignmentEvaluation`. Used by both the declaration and
-/// assignment pattern-property lowerings.
 /// `typeof <name> === "undefined"` -- the "if Initializer is present and v is
 /// undefined" condition shared by every conditional-default site in this
 /// file (`lower_conditional_default` and the array-assignment identifier
@@ -2241,6 +2236,11 @@ fn undefined_check_condition(name: &str) -> Expression {
     )
 }
 
+/// Evaluate `default` into `value_temp` only when it currently holds
+/// `undefined` — the "if Initializer is present and v is undefined" step
+/// shared by `KeyedBindingInitialization` and
+/// `KeyedDestructuringAssignmentEvaluation`. Used by both the declaration and
+/// assignment pattern-property lowerings.
 fn lower_conditional_default(value_temp: &str, default: &Expression, ctx: &mut TransformContext) {
     let default_state = ctx.new_state();
     let join_state = ctx.new_state();
@@ -2447,12 +2447,7 @@ fn lower_array_pattern_assignment(
                     Pattern::Assign(target, default) => (target.as_ref(), Some(default.as_ref())),
                     other => (other, None),
                 };
-                let captured_ref = match target {
-                    Pattern::MemberExpression(member_expr) => {
-                        Some(lower_reference_operand(member_expr, true, ctx))
-                    }
-                    _ => None,
-                };
+                let captured_ref = capture_member_ref(target, ctx);
                 // A non-suspending default on a plain identifier target
                 // assigns straight into that identifier from each branch
                 // (default vs. stepped value) instead of through
@@ -2479,19 +2474,16 @@ fn lower_array_pattern_assignment(
                         true_state: default_state,
                         false_state: stepped_state,
                     });
+                    let binding = Some(SentValueBindingKind::Variable(name.clone()));
                     ctx.current_state_id = default_state;
-                    ctx.emit_statement(Statement::Expression(Expression::Assign(
-                        AssignOp::Assign,
-                        ExprBox::new(Expression::Identifier(name.clone())),
-                        ExprBox::new(default.clone()),
-                    )));
+                    emit_expression_with_binding(default, &binding, ctx);
                     ctx.finalize_current_state(StateTerminator::Goto(next_state));
                     ctx.current_state_id = stepped_state;
-                    ctx.emit_statement(Statement::Expression(Expression::Assign(
-                        AssignOp::Assign,
-                        ExprBox::new(Expression::Identifier(name.clone())),
-                        ExprBox::new(Expression::Identifier(step_tmp.clone())),
-                    )));
+                    emit_expression_with_binding(
+                        &Expression::Identifier(step_tmp.clone()),
+                        &binding,
+                        ctx,
+                    );
                     ctx.finalize_current_state(StateTerminator::Goto(next_state));
                     ctx.current_state_id = next_state;
                     continue;
@@ -2500,27 +2492,13 @@ fn lower_array_pattern_assignment(
                 if let Some(default) = default {
                     lower_conditional_default(&step_tmp, default, ctx);
                 }
-                match captured_ref {
-                    Some(captured_ref) => {
-                        ctx.emit_statement(Statement::Expression(Expression::Assign(
-                            AssignOp::Assign,
-                            ExprBox::new(captured_ref),
-                            ExprBox::new(Expression::Identifier(step_tmp.clone())),
-                        )));
-                    }
-                    None => lower_pattern_assignment(target, &step_tmp, ctx),
-                }
+                assign_captured_or_recurse(captured_ref, target, &step_tmp, ctx);
             }
             Some(ArrayPatternElement::Rest(pattern)) => {
                 // Same unconditional-capture rationale as the `Pattern` arm
                 // above: a MemberExpression rest target's reference must be
                 // evaluated before the iterator is drained, not after.
-                let captured_ref = match pattern {
-                    Pattern::MemberExpression(member_expr) => {
-                        Some(lower_reference_operand(member_expr, true, ctx))
-                    }
-                    _ => None,
-                };
+                let captured_ref = capture_member_ref(pattern, ctx);
                 let rest_tmp = ctx.new_temp_var("dstr_rest");
                 let next_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
@@ -2531,16 +2509,7 @@ fn lower_array_pattern_assignment(
                     next_state,
                 });
                 ctx.current_state_id = next_state;
-                match captured_ref {
-                    Some(captured_ref) => {
-                        ctx.emit_statement(Statement::Expression(Expression::Assign(
-                            AssignOp::Assign,
-                            ExprBox::new(captured_ref),
-                            ExprBox::new(Expression::Identifier(rest_tmp.clone())),
-                        )));
-                    }
-                    None => lower_pattern_assignment(pattern, &rest_tmp, ctx),
-                }
+                assign_captured_or_recurse(captured_ref, pattern, &rest_tmp, ctx);
             }
         }
     }
@@ -2556,6 +2525,42 @@ fn lower_array_pattern_assignment(
             next_state,
         });
         ctx.current_state_id = next_state;
+    }
+}
+
+/// A `Pattern::MemberExpression` target's reference (base, then computed
+/// key), captured via `lower_reference_operand` before the `Step`/`Drain`
+/// that follows -- per `KeyedDestructuringAssignmentEvaluation`'s step order.
+/// `None` for any other target shape, which binds through the recursive
+/// `lower_pattern_assignment` call instead (see `assign_captured_or_recurse`).
+fn capture_member_ref(pattern: &Pattern, ctx: &mut TransformContext) -> Option<Expression> {
+    match pattern {
+        Pattern::MemberExpression(member_expr) => {
+            Some(lower_reference_operand(member_expr, true, ctx))
+        }
+        _ => None,
+    }
+}
+
+/// Finishes binding `value_tmp` into `pattern`: a captured member-expression
+/// reference (from `capture_member_ref`) is assigned into directly, anything
+/// else recurses into `lower_pattern_assignment`. Shared by
+/// `lower_array_pattern_assignment`'s `Pattern` and `Rest` arms.
+fn assign_captured_or_recurse(
+    captured_ref: Option<Expression>,
+    pattern: &Pattern,
+    value_tmp: &str,
+    ctx: &mut TransformContext,
+) {
+    match captured_ref {
+        Some(captured_ref) => {
+            ctx.emit_statement(Statement::Expression(Expression::Assign(
+                AssignOp::Assign,
+                ExprBox::new(captured_ref),
+                ExprBox::new(Expression::Identifier(value_tmp.to_string())),
+            )));
+        }
+        None => lower_pattern_assignment(pattern, value_tmp, ctx),
     }
 }
 
