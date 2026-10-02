@@ -89,6 +89,9 @@ jobs:
       - name: Build (release-checked)
         run: cargo build --profile release-checked
 
+      - name: Run unit tests (release-checked, debug assertions on)
+        run: cargo nextest run --cargo-profile release-checked
+
       - name: Run test262-extra (GC root-stack assertions)
         run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 test262-extra/ --fail-on-failures
 
