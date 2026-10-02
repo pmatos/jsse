@@ -1159,6 +1159,35 @@ pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
     }
 }
 
+/// The scope statement list a `for (await using x = init; test; update)` head
+/// is equivalent to: the declaration followed by the loop with an empty
+/// initializer. `using` bindings are const-like, so ForBodyEvaluation has no
+/// per-iteration copy to preserve and the loop environment's single
+/// DisposeResources at loop exit is exactly a block scope's disposal. The
+/// loop's own `labels` move onto the inner loop, where `continue label` has to
+/// resolve.
+pub(crate) fn await_using_for_head_scope(
+    f: &ForStatement,
+    labels: &[String],
+) -> Option<Vec<Statement>> {
+    let Some(ForInit::Variable(decl)) = &f.init else {
+        return None;
+    };
+    if decl.kind != VarKind::AwaitUsing {
+        return None;
+    }
+    let inner_loop = Statement::For(ForStatement {
+        init: None,
+        test: f.test.clone(),
+        update: f.update.clone(),
+        body: f.body.clone(),
+    });
+    let labeled_loop = labels.iter().rev().fold(inner_loop, |stmt, label| {
+        Statement::Labeled(label.clone(), Box::new(stmt))
+    });
+    Some(vec![Statement::Variable(decl.clone()), labeled_loop])
+}
+
 pub(crate) fn block_has_await_using(stmts: &[Statement]) -> bool {
     stmts
         .iter()
@@ -1244,6 +1273,9 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         Statement::While(w) => scan_await_using(&w.body),
         Statement::DoWhile(d) => scan_await_using(&d.body),
         Statement::For(f) => {
+            if await_using_for_head_scope(f, &[]).is_some() {
+                return AwaitUsingScan::Isolatable;
+            }
             let body = scan_await_using(&f.body);
             match &f.init {
                 Some(ForInit::Variable(decl)) if decl.kind != VarKind::Var => {
@@ -1484,6 +1516,13 @@ mod tests {
             "outer: while (c) { { await using a = null; } }",
             "switch (x) { case 1: { await using a = null; } break; }",
             "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
+            "for (await using a = null; c; i++) {}",
+            "for (await using a = null, b = null; ;) {}",
+            "l: for (await using a = null; ;) {}",
+            "if (c) { for (await using a = null; ;) {} }",
+            "while (c) { for (await using a = null; ;) {} }",
+            "try { for (await using a = null; ;) {} } finally {}",
+            "for (await using a = null; ;) { { await using b = null; } }",
         ];
         for src in isolatable {
             assert!(scan_first_statement(src), "expected isolatable: {src}");
@@ -1500,6 +1539,8 @@ mod tests {
             "while (c) { x(); }",
             "for await (const x of y) { z(); }",
             "for (let i = 0; i < 2; i++) { x(); }",
+            "for (using a = null; ;) {}",
+            "for (const a = null; ;) {}",
             "switch (x) { case 1: y(); }",
             "async function g() { { await using a = null; } }",
         ];
@@ -1519,6 +1560,7 @@ mod tests {
             "try {} catch (e) { const x = 1; { await using a = null; } }",
             "try {} finally { class C {} { await using a = null; } }",
             "{ let x = 1; { await using a = null; } }",
+            "{ let x = 1; for (await using a = null; ;) {} }",
             "with (o) { { await using a = null; } }",
             "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",

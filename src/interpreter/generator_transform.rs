@@ -1125,7 +1125,23 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::For(for_stmt) => {
-            transform_for_statement(for_stmt, ctx, after_state);
+            let head_scope = if ctx.is_async && ctx.detect_for_await {
+                await_using_for_head_scope(for_stmt, &ctx.iteration_labels)
+            } else {
+                None
+            };
+            if let Some(scope_stmts) = head_scope {
+                let resume_state = if after_state == usize::MAX {
+                    ctx.new_state()
+                } else {
+                    after_state
+                };
+                let labels = std::mem::take(&mut ctx.iteration_labels);
+                transform_scope_block(&scope_stmts, ctx, resume_state);
+                ctx.iteration_labels = labels;
+            } else {
+                transform_for_statement(for_stmt, ctx, after_state);
+            }
         }
 
         Statement::ForIn(for_in_stmt) => {
