@@ -311,8 +311,9 @@ fn close_async_iterator(interp: &mut Interpreter, iterator: &JsValue) {
 // --- Array.fromAsync continuation-passing machinery ---
 // Shared state threaded through non-blocking continuations. The object-valued
 // captures live in one RootedSlots container: it is rooted for the synchronous
-// first step and pinned on every Await handler afterwards, so no persistent
-// entry on gc_temp_roots outlives the call.
+// first step, then pinned on the fulfill/reject handlers of a pending await or
+// passed to the microtask root list for an already-settled one, so no
+// persistent entry on gc_temp_roots outlives the call.
 const FA_ITERATOR: usize = 0;
 const FA_ARR: usize = 1;
 const FA_MAP_FN: usize = 2;
@@ -455,14 +456,8 @@ fn from_async_attach_await(
 fn from_async_iter_step(interp: &mut Interpreter, state: Rc<RefCell<FromAsyncState>>) {
     {
         if state.borrow().k >= 0x1FFFFFFFFFFFFF {
-            let iterator = fa_get(interp, &state, FA_ITERATOR);
-            let reject_fn = fa_get(interp, &state, FA_REJECT_FN);
             let err = interp.create_type_error("Array.fromAsync: too many elements");
-            interp.with_gc_root_scope(|interp| {
-                interp.gc_root_value(&err);
-                close_async_iterator(interp, &iterator);
-            });
-            let _ = interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[err]);
+            from_async_reject(interp, &state, err, true);
             return;
         }
     }

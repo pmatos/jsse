@@ -49,7 +49,7 @@ result
 
 $262.gc();
 releases[0]("first");
-Promise.resolve().then(function () {
+void Promise.resolve().then(function () {
   $262.gc();
   releases[1]("second");
   $262.gc();

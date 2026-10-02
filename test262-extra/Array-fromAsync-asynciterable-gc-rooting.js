@@ -51,7 +51,7 @@ result
 function afterTurns(n, fn) {
   var p = Promise.resolve();
   for (var i = 0; i < n; i++) p = p.then(function () {});
-  p.then(fn);
+  void p.then(fn);
 }
 
 $262.gc();
