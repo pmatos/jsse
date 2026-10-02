@@ -2546,38 +2546,27 @@ fn transform_variable_declaration(
             }
             lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
         } else if let Some(init) = &declarator.init {
+            let init_suspends = expr_has_suspension(init, ctx.is_async);
             if let Expression::Class(class_expr) = init
                 && matches!(declarator.pattern, Pattern::Identifier(_))
-                && init.is_anonymous_function_definition()
-                && expr_has_suspension(init, ctx.is_async)
+                && init_suspends
             {
-                // `Expression::Class` behind a `BindingIdentifier` is the only
-                // shape that is both a NamedEvaluation position (the class
-                // must be named after the declared identifier,
-                // sec-runtime-semantics-evaluation's `LexicalBinding :
-                // BindingIdentifier Initializer`) and able to contain a
+                // `Expression::Class` behind a `BindingIdentifier` can hold a
                 // suspension that belongs to *this* generator/async function
-                // (a nested `function`/arrow body has its own
+                // (heritage/computed keys evaluate eagerly in the enclosing
+                // scope; a nested function/arrow body has its own
                 // [[GeneratorKind]], so `expr_has_suspension` never looks
-                // inside one -- only a class's heritage/computed keys, which
-                // evaluate in the enclosing scope, can). Routing this
-                // through the generic fresh-temp path below would assign the
-                // class to a compiler-generated temp first; because that
-                // temp's name is suppressed to avoid leaking into `.name`
+                // inside one). The generic fresh-temp path below would lose
+                // NamedEvaluation for an *anonymous* class -- the temp's name
+                // is suppressed to avoid leaking into `.name`
                 // (`emit_expression_with_binding`), and the final
-                // `let <name> = <temp>;` is just an identifier reference
-                // (not itself an anonymous-function-definition), the class
-                // would end up permanently unnamed. Hoisting only the
-                // suspending heritage/key sub-expressions (as
-                // `transform_yielding_expression`'s own `Expression::Class`
-                // arm does) leaves a suspension-free class expression that
-                // can be emitted as a genuine `Statement::Variable` with the
-                // real pattern -- NamedEvaluation and the block's own
-                // TDZ'd/binding semantics both apply exactly as for any
-                // non-suspending declarator. A destructuring pattern is
-                // excluded: it's never a NamedEvaluation position, so the
-                // generic fresh-temp path below (correctly unnamed) is fine
-                // for it.
+                // `let <name> = <temp>;` is just an identifier reference,
+                // never itself an anonymous-function-definition. Hoisting
+                // only the suspending sub-expressions and re-embedding as a
+                // real `Statement::Variable` keeps NamedEvaluation and TDZ
+                // correct for both named and anonymous classes. Destructuring
+                // patterns are excluded: never a NamedEvaluation position, so
+                // the generic (correctly unnamed) path is fine for them.
                 let class_expr = suspension_free_class_expr(class_expr, ctx);
                 ctx.emit_statement(Statement::Variable(VariableDeclaration {
                     kind: decl.kind,
@@ -2586,7 +2575,7 @@ fn transform_variable_declaration(
                         init: Some(Expression::Class(class_expr)),
                     }],
                 }));
-            } else if expr_has_suspension(init, ctx.is_async) {
+            } else if init_suspends {
                 let pattern = declarator.pattern.clone();
                 let source = ctx.new_temp_var("dstr_src");
                 let binding = SentValueBindingKind::Variable(source.clone());
@@ -2907,23 +2896,11 @@ fn transform_for_statement(
         // other lexical shape (`sec-createperiterationenvironment`) --
         // `transform_variable_declaration` now routes a suspending own-
         // initializer through `emit_pattern_binding` for every pattern shape,
-        // so there is no temp-var shortcut left here to shadow.
-        let initial_lexical_bindings: Vec<(String, bool)> =
-            if let Some(ForInit::Variable(decl)) = &for_stmt.init {
-                decl.declarations
-                    .iter()
-                    .flat_map(|d| {
-                        let is_const = decl.kind == VarKind::Const;
-                        let mut names = Vec::new();
-                        d.pattern.bound_names(&mut names);
-                        names.into_iter().map(move |n| (n, is_const))
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+        // so there is no temp-var shortcut left here to shadow. Same names as
+        // `per_iteration_bindings` above: `has_per_iteration_env` already
+        // guarantees `for_stmt.init` is this exact `ForInit::Variable(decl)`.
         ctx.states[init_state].scope_action =
-            Some(ScopeAction::OpenBlock(initial_lexical_bindings));
+            Some(ScopeAction::OpenBlock(per_iteration_bindings.clone()));
     }
 
     if let Some(init) = &for_stmt.init {
