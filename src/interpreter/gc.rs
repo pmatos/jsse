@@ -477,7 +477,7 @@ impl Interpreter {
                 }
             }
         }
-        roots.extend_from_slice(&self.gc_temp_roots);
+        roots.extend_from_slice(self.gc_temp_roots.as_slice());
         // Values held by active bytecode operand stacks
         roots.extend_from_slice(&self.gc_bytecode_roots);
         // Queued microtasks, pending async-generator requests and armed timers.
@@ -1619,7 +1619,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let owner = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(owner);
+        interp.gc_root_id(owner);
         interp.gc.request();
         interp.gc_safepoint();
 
@@ -1641,7 +1641,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let survivor = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(survivor);
+        interp.gc_root_id(survivor);
         assert!(interp.objects.get_cell_expect(survivor).is_young());
 
         interp.gc.request();
@@ -1662,7 +1662,7 @@ mod tests {
             (env.clone(), "captured".to_string()),
         )]));
         let owner = interp.alloc_object(owner_data);
-        interp.gc_temp_roots.push(owner);
+        interp.gc_root_id(owner);
 
         interp.gc.request();
         interp.gc_safepoint();
@@ -1741,7 +1741,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let parent = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(parent);
+        interp.gc_root_id(parent);
         interp.gc.request();
         interp.gc_safepoint();
         assert!(interp.objects.get_cell_expect(parent).is_old());
@@ -1763,7 +1763,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let survivor = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(survivor);
+        interp.gc_root_id(survivor);
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1779,7 +1779,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let parent = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(parent);
+        interp.gc_root_id(parent);
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1812,13 +1812,13 @@ mod tests {
         weak_map_data.class_name = "WeakMap".to_string();
         weak_map_data.kind = ObjectKind::Map(Vec::new());
         let weak_map = interp.alloc_object(weak_map_data);
-        interp.gc_temp_roots.push(weak_map);
+        interp.gc_root_id(weak_map);
         interp.gc.request();
         interp.gc_safepoint();
 
         let key = interp.alloc_object(JsObjectData::new());
         let value = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(key);
+        interp.gc_root_id(key);
         interp
             .objects
             .get_cell_expect(weak_map)
@@ -1831,7 +1831,7 @@ mod tests {
         interp.gc_safepoint();
         assert!(interp.objects.get_cell(value).is_some());
 
-        interp.gc_temp_roots.retain(|&id| id != key);
+        interp.gc_unroot_id(key);
         interp.gc.request_minor();
         interp.gc_safepoint();
         assert!(interp.objects.get_cell(key).is_none());
@@ -1856,7 +1856,7 @@ mod tests {
         weak_set_data.class_name = "WeakSet".to_string();
         weak_set_data.kind = ObjectKind::Set(Vec::new());
         let weak_set = interp.alloc_object(weak_set_data);
-        interp.gc_temp_roots.push(weak_set);
+        interp.gc_root_id(weak_set);
         interp.gc.request();
         interp.gc_safepoint();
 
@@ -1891,7 +1891,7 @@ mod tests {
 
     fn rooted_anchor(interp: &mut Interpreter) -> JsValue {
         let anchor = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(anchor);
+        interp.gc_root_id(anchor);
         obj(anchor)
     }
 

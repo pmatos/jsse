@@ -14,7 +14,8 @@ records the decision for the frame-scoping half of that question, now that
 captures the current temp-root depth, runs `body`, and bulk-unroots on every
 exit path the closure takes (tail, early `return`, `?`) — is the seam for
 whole-body, single-frame native temp-root scoping. It is not a Drop-guard:
-`gc_temp_roots` stays a plain `Vec<u64>`, so there is no interior-mutability
+`gc_temp_roots` stays a plain owned `Vec<u64>` (wrapped by the `RootStack` newtype
+that narrows its mutation vocabulary, #331), so there is no interior-mutability
 borrow tax (`RefCell`) on the GC hot path (`gc_root_value`, called from every
 allocation-adjacent site in the interpreter). The raw `gc_root_frame`/
 `gc_unroot_frame` primitive is retained for the one shape the combinator

@@ -45,6 +45,7 @@ pub(crate) mod perf_counters;
 pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
+mod root_stack;
 pub(crate) use property_map::PropertyMap;
 mod scheduler;
 #[cfg(test)]
@@ -290,7 +291,7 @@ pub(crate) struct Interpreter {
     function_env_pool: Vec<EnvRef>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
-    pub(crate) gc_temp_roots: Vec<u64>,
+    pub(crate) gc_temp_roots: root_stack::RootStack,
     pub(crate) gc_bytecode_roots: Vec<u64>,
     // microtask roots are stored inline alongside their jobs in JobScheduler
     pub(crate) class_private_names: Vec<HashMap<String, String>>,
@@ -715,7 +716,7 @@ impl Interpreter {
             function_env_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
-            gc_temp_roots: Vec::new(),
+            gc_temp_roots: root_stack::RootStack::default(),
             gc_bytecode_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
@@ -1442,9 +1443,7 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_unroot_id(&mut self, id: u64) {
-        if let Some(pos) = self.gc_temp_roots.iter().rposition(|&rid| rid == id) {
-            self.gc_temp_roots.remove(pos);
-        }
+        self.gc_temp_roots.remove_last(id);
     }
 
     /// Save the current GC temp-root stack depth. Call gc_unroot_frame()
