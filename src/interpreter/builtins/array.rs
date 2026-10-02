@@ -348,9 +348,7 @@ fn from_async_gc_root(interp: &mut Interpreter, state: &Rc<RefCell<FromAsyncStat
 fn from_async_gc_unroot(interp: &mut Interpreter, state: &Rc<RefCell<FromAsyncState>>) {
     let s = state.borrow();
     for &id in &s.gc_roots {
-        if let Some(pos) = interp.gc_temp_roots.iter().rposition(|&rid| rid == id) {
-            interp.gc_temp_roots.remove(pos);
-        }
+        interp.gc_unroot_id(id);
     }
 }
 

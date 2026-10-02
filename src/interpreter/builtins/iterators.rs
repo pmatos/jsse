@@ -3535,11 +3535,7 @@ impl Interpreter {
                                     all.extend(iters.iter().cloned());
                                     let _ = iterator_close_all(interp, &all, Err(e.clone()));
                                     for id in &collection_temp_ids {
-                                        if let Some(pos) =
-                                            interp.gc_temp_roots.iter().position(|x| *x == *id)
-                                        {
-                                            interp.gc_temp_roots.swap_remove(pos);
-                                        }
+                                        interp.gc_unroot_id(*id);
                                     }
                                     return Completion::Throw(e);
                                 }
@@ -3550,11 +3546,7 @@ impl Interpreter {
                             // IfAbruptCloseIterators(next, iters) — just the collected iters
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                             for id in &collection_temp_ids {
-                                if let Some(pos) =
-                                    interp.gc_temp_roots.iter().position(|x| *x == *id)
-                                {
-                                    interp.gc_temp_roots.swap_remove(pos);
-                                }
+                                interp.gc_unroot_id(*id);
                             }
                             return Completion::Throw(e);
                         }
@@ -3661,9 +3653,7 @@ impl Interpreter {
                         let result = zip_next_inner(interp, &state_next);
 
                         for id in &gc_ids {
-                            if let Some(pos) = interp.gc_temp_roots.iter().position(|x| x == id) {
-                                interp.gc_temp_roots.swap_remove(pos);
-                            }
+                            interp.gc_unroot_id(*id);
                         }
                         result
                     },
@@ -3711,9 +3701,7 @@ impl Interpreter {
                 }
                 // Remove all temp roots from collection and padding phases
                 for id in &collection_temp_ids {
-                    if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) {
-                        interp.gc_temp_roots.swap_remove(pos);
-                    }
+                    interp.gc_unroot_id(*id);
                 }
                 Completion::Normal(helper)
             },
@@ -3840,11 +3828,7 @@ impl Interpreter {
                             // Step 12.b: IfAbruptCloseIterators
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                             for id in &collection_temp_ids {
-                                if let Some(pos) =
-                                    interp.gc_temp_roots.iter().position(|x| *x == *id)
-                                {
-                                    interp.gc_temp_roots.swap_remove(pos);
-                                }
+                                interp.gc_unroot_id(*id);
                             }
                             return Completion::Throw(e);
                         }
@@ -3859,11 +3843,7 @@ impl Interpreter {
                         Completion::Throw(e) => {
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                             for id in &collection_temp_ids {
-                                if let Some(pos) =
-                                    interp.gc_temp_roots.iter().position(|x| *x == *id)
-                                {
-                                    interp.gc_temp_roots.swap_remove(pos);
-                                }
+                                interp.gc_unroot_id(*id);
                             }
                             return Completion::Throw(e);
                         }
@@ -3891,11 +3871,7 @@ impl Interpreter {
                         Err(e) => {
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                             for id in &collection_temp_ids {
-                                if let Some(pos) =
-                                    interp.gc_temp_roots.iter().position(|x| *x == *id)
-                                {
-                                    interp.gc_temp_roots.swap_remove(pos);
-                                }
+                                interp.gc_unroot_id(*id);
                             }
                             return Completion::Throw(e);
                         }
@@ -3976,9 +3952,7 @@ impl Interpreter {
                         }
                         let result = zip_keyed_next_inner(interp, &state_next);
                         for id in &gc_ids {
-                            if let Some(pos) = interp.gc_temp_roots.iter().position(|x| x == id) {
-                                interp.gc_temp_roots.swap_remove(pos);
-                            }
+                            interp.gc_unroot_id(*id);
                         }
                         result
                     },
@@ -4026,9 +4000,7 @@ impl Interpreter {
                     interp.set_helper_gc_roots(&helper, roots);
                 }
                 for id in &collection_temp_ids {
-                    if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) {
-                        interp.gc_temp_roots.swap_remove(pos);
-                    }
+                    interp.gc_unroot_id(*id);
                 }
                 Completion::Normal(helper)
             },

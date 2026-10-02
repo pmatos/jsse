@@ -1430,7 +1430,7 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
+    /// Sole production push into `gc_temp_roots`; pair with `gc_unroot_id`.
     pub(crate) fn gc_root_id(&mut self, id: u64) {
         self.gc_temp_roots.push(id);
     }
@@ -1438,6 +1438,12 @@ impl Interpreter {
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
         if let Some(id) = val.as_object_id() {
             self.gc_root_id(id);
+        }
+    }
+
+    pub(crate) fn gc_unroot_id(&mut self, id: u64) {
+        if let Some(pos) = self.gc_temp_roots.iter().rposition(|&rid| rid == id) {
+            self.gc_temp_roots.remove(pos);
         }
     }
 
@@ -1515,10 +1521,8 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
-        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
-            && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)
-        {
-            self.gc_temp_roots.remove(pos);
+        if let Some(id) = val.as_object_id() {
+            self.gc_unroot_id(id);
         }
     }
 
