@@ -5129,6 +5129,44 @@ fn with_gc_root_scope_truncates_on_every_exit() {
     assert!(interp.gc_temp_roots.contains(&9_001));
 }
 
+/// `Array.fromAsync` keeps its call state alive through pinned `RootedSlots`, so
+/// no entry it pushed may remain on the temp-root stack once the call has
+/// settled — on fulfillment, on a rejecting `mapfn`, and on a rejecting
+/// element, for both the array-like and the async-iterator paths.
+#[test]
+fn array_from_async_leaves_no_persistent_temp_roots() {
+    let interp = run_script(
+        r#"
+        var settled = 0;
+        var errors = [];
+        function track(p) {
+            p.then(function () { settled++; }, function (e) { settled++; errors.push(e); });
+        }
+        var asyncIterable = {};
+        asyncIterable[Symbol.asyncIterator] = function () {
+            var i = 0;
+            return {
+                next: function () {
+                    return Promise.resolve({ done: i >= 2, value: i++ });
+                },
+                return: function () { return Promise.resolve({ done: true }); },
+            };
+        };
+        track(Array.fromAsync({ length: 2, 0: Promise.resolve(1), 1: 2 }, function (v) { return v; }, {}));
+        track(Array.fromAsync(asyncIterable, function (v) { return Promise.resolve(v); }));
+        track(Array.fromAsync({ length: 1, 0: 1 }, function () { throw "map-sentinel"; }));
+        track(Array.fromAsync({ length: 1, 0: Promise.reject("element-sentinel") }));
+        track(Array.fromAsync(asyncIterable, function () { throw "iter-map-sentinel"; }));
+        "#,
+    );
+
+    assert_eq!(global_number(&interp, "settled"), 5.0);
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "Array.fromAsync must not leave persistent temp roots"
+    );
+}
+
 /// Pins the RegExp `@@replace` slow path's GC Root Scope: collected custom
 /// `exec` results stay alive across later user code and every exit releases
 /// the temporary roots. Behaviour-preserving: green before and after the
