@@ -871,7 +871,8 @@ fn for_in_of_head_contains_yield(left: &ForInOfLeft) -> bool {
 
 /// Like `for_in_of_head_contains_yield`, but `await`-only and
 /// shape-gated via `pattern_needs_await_lowering` -- an unsupported shape
-/// (array pattern, object rest) must not force the compiled state machine.
+/// (an object rest beside a suspending sibling, issue #771; array patterns
+/// are supported since issue #774) must not force the compiled state machine.
 fn for_in_of_variable_head_contains_await(left: &ForInOfLeft) -> bool {
     match left {
         ForInOfLeft::Variable(decl) => decl
@@ -1053,31 +1054,35 @@ pub(crate) fn pattern_contains_suspension(pattern: &Pattern) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PatternLoweringForm {
     Declaration,
-    /// Same as `Declaration`, except array patterns are never supported.
-    /// `EnterCatch`/`ForOfHead` bind their pattern via a single
-    /// non-suspending runtime call (see `hoist_suspending_pattern`); an
-    /// array pattern with a suspending default at these sites still needs
-    /// `lower_array_pattern_binding`'s iterator-stepping states, which none
-    /// of those call sites drive, so it must stay on the tree-walker/replay
-    /// path exactly as before array-pattern lowering existed.
+    /// Same as `Declaration` for an array pattern's `await` default (issue
+    /// #774) — `EnterCatch`/`ForOfHead` bind their pattern via a single
+    /// non-suspending runtime call (see `hoist_suspending_pattern`), but that
+    /// call never needs to drive `lower_array_pattern_binding`'s
+    /// iterator-stepping states itself: the hoist re-homes the whole pattern
+    /// into a synthesized `let <pattern> = <temp>;` declaration in the
+    /// ordinary statement stream, which the unconstrained `Declaration` path
+    /// lowers exactly as it would anywhere else. An object rest beside a
+    /// suspending sibling is still declined here (see below) — that gap is
+    /// issue #771, not this one.
     ConstrainedDeclaration,
     Assignment,
 }
 
 /// True when the state-machine transform can lower every part of the pattern
 /// that reaches a suspension into suspension states. Object patterns can, for
-/// both the declaration and assignment forms. Array patterns can too, but
-/// only for the unconstrained declaration form (`lower_array_pattern_binding`)
-/// — the assignment-form transform (`lower_pattern_assignment`) has no array
-/// arm yet, and the constrained declaration form's call sites have no way to
-/// drive the array terminator either, so a suspending array pattern at either
-/// still falls back to the tree-walker, exactly as before this terminator
-/// existed. An object rest beside a suspending sibling lowers too, but only
-/// for the unconstrained declaration form, for the same reason array patterns
-/// are so restricted: `EnterCatch`/`ForOfHead` bind via a single
-/// non-suspending runtime call with no way to drive the `ObjectRestCopy`
-/// terminator (see issue #771). A bare member-expression target is only
-/// supported for the assignment form — a declaration can never bind into one.
+/// both the declaration and assignment forms. Array patterns can too, for
+/// both the unconstrained and constrained declaration forms
+/// (`lower_array_pattern_binding`, reached either directly or via
+/// `ConstrainedDeclaration`'s hoist-to-temp desugar — see its doc comment) —
+/// but not for the assignment form, since `lower_pattern_assignment` has no
+/// array arm yet. An object rest beside a suspending sibling lowers too, but
+/// only for the unconstrained declaration form: `EnterCatch`/`ForOfHead`
+/// bind via a single non-suspending runtime call with no way to drive the
+/// `ObjectRestCopy` terminator, and (unlike a bare array pattern) there is no
+/// hoist-to-temp detour for a rest property specifically — the whole pattern
+/// containing it gets hoisted or not based on this same gate (see issue
+/// #771). A bare member-expression target is only supported for the
+/// assignment form — a declaration can never bind into one.
 fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> bool {
     if !pattern_contains_suspension(pattern) {
         return true;
@@ -1090,7 +1095,12 @@ fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> b
                 form == PatternLoweringForm::Declaration && pattern_lowering_supported(inner, form)
             }
         }),
-        Pattern::Array(elements) if form == PatternLoweringForm::Declaration => {
+        Pattern::Array(elements)
+            if matches!(
+                form,
+                PatternLoweringForm::Declaration | PatternLoweringForm::ConstrainedDeclaration
+            ) =>
+        {
             elements.iter().all(|elem| match elem {
                 None => true,
                 Some(ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p)) => {
@@ -1108,9 +1118,9 @@ fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> b
 /// True for a declaration pattern whose suspensions the transform lowers into
 /// states (see `lower_pattern_binding`). Both `await` and `yield` trigger the
 /// lowering, for object patterns, array patterns, and an object rest beside a
-/// suspending sibling alike (issue #771); a pattern shape it can't lower (an
-/// array pattern at a constrained-declaration site) stays on the replay path
-/// regardless.
+/// suspending sibling alike (issue #771). Always checked against the
+/// unconstrained `Declaration` form — see `pattern_needs_await_lowering` for
+/// the catch-param/for-in-of-head/C-style-for-init sites' own, narrower gate.
 pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
     pattern_contains_suspension(pattern)
         && pattern_lowering_supported(pattern, PatternLoweringForm::Declaration)
@@ -2038,15 +2048,15 @@ mod tests {
     }
 
     #[test]
-    fn contains_suspension_ignores_unsupported_await_for_of_head_shape() {
-        assert!(!contains_suspension(&first_statement(
+    fn contains_suspension_detects_await_for_of_head_array_param() {
+        assert!(contains_suspension(&first_statement(
             "for (var [b = await 1] of [[]]) {}"
         )));
     }
 
     #[test]
-    fn contains_suspension_ignores_unsupported_await_for_init_shape() {
-        assert!(!contains_suspension(&first_statement(
+    fn contains_suspension_detects_await_for_init_array_param() {
+        assert!(contains_suspension(&first_statement(
             "for (var [a = await 1] = [];;) { break; }"
         )));
     }
@@ -2066,8 +2076,8 @@ mod tests {
     }
 
     #[test]
-    fn contains_suspension_ignores_unsupported_await_catch_param_shape() {
-        assert!(!contains_suspension(&first_statement(
+    fn contains_suspension_detects_await_catch_array_param() {
+        assert!(contains_suspension(&first_statement(
             "try {} catch ([a = await 1]) {}"
         )));
     }
@@ -2077,7 +2087,7 @@ mod tests {
         assert!(pattern_needs_await_lowering(&declared_pattern(
             "var { a = await 1 } = {};"
         )));
-        assert!(!pattern_needs_await_lowering(&declared_pattern(
+        assert!(pattern_needs_await_lowering(&declared_pattern(
             "var [a = await 1] = [];"
         )));
         assert!(!pattern_needs_await_lowering(&declared_pattern(

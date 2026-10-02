@@ -4430,6 +4430,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_yield_array_pattern_at_catch_param_already_drives_array_iter() {
+        // Characterization, not a regression test for this issue: a `yield`
+        // (not `await`) default in an array pattern at the catch-param site
+        // already takes `hoist_suspending_pattern`'s temp-hoist today —
+        // `pattern_contains_yield` forces the hoist regardless of
+        // `pattern_needs_await_lowering`'s shape gate, and the re-homed
+        // `let [a = yield 1] = temp;` statement is an ordinary declaration
+        // that `lower_array_pattern_binding` already drives. This proves no
+        // new terminator-driving plumbing is needed for the `await` fix in
+        // this issue: widening the shape gate to admit arrays is enough.
+        let body = parse_fn_body("function* g() { try { throw 1 } catch ([a = yield 1]) {} }");
+        let sm = transform_generator(&body, &[]);
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ArrayPatternIter { .. })),
+            "expected an ArrayPatternIter terminator, got {:#?}",
+            sm.states
+        );
+    }
+
     fn async_machine(body_src: &str) -> GeneratorStateMachine {
         let body = parse_fn_body(&format!("async function f() {{ {body_src} }}"));
         transform_async_function(&body, &[])
@@ -4756,6 +4778,129 @@ mod tests {
             )),
             0,
             "a pattern ending in rest drains to exhaustion itself"
+        );
+    }
+
+    #[test]
+    fn test_await_array_pattern_at_catch_param_is_lowered() {
+        // Issue #774: an array pattern's `await` default at the catch-param
+        // site must suspend at a real `Await` state, not block on the
+        // tree-walker. `hoist_suspending_pattern` fires (gated on
+        // `pattern_needs_await_lowering`, now widened to array patterns),
+        // leaving `EnterCatch` a trivial `Pattern::Identifier` param and
+        // re-homing the real pattern into a synthesized declaration that
+        // `lower_array_pattern_binding` lowers to an `ArrayPatternIter`.
+        let sm = async_machine("try { throw 1; } catch ([a = await 1]) {}");
+        assert!(
+            sm.states.iter().any(|s| matches!(
+                &s.terminator,
+                StateTerminator::EnterCatch {
+                    param: Some(Pattern::Identifier(_)),
+                    ..
+                }
+            )),
+            "expected an EnterCatch terminator with a hoisted-to-temp Identifier param, got {:#?}",
+            sm.states
+        );
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ArrayPatternIter { .. })),
+            "expected the re-homed pattern to lower to an ArrayPatternIter terminator, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
+    fn test_await_array_pattern_at_for_of_head_is_lowered() {
+        // Issue #774, for-of-head site: `[a, b = await 1]` needs two
+        // elements -- a single-element `[a = await 1]` would never reach the
+        // default against a one-character stepped value in the for-in
+        // sibling test below, so both tests use two elements for symmetry.
+        let sm = async_machine("for (var [a, b = await 1] of it) {}");
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ForOfHead { .. })),
+            "expected a ForOfHead terminator, got {:#?}",
+            sm.states
+        );
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ArrayPatternIter { .. })),
+            "expected the re-homed pattern to lower to an ArrayPatternIter terminator, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
+    fn test_await_array_pattern_at_for_in_head_is_lowered() {
+        // Issue #774, for-in-head site: the stepped value is a single-code-unit
+        // property-key string, so `[a = await 1]` alone would destructure
+        // that one code unit and never reach the default -- `[a, b = await 1]`
+        // forces it once the string is exhausted.
+        let sm = async_machine("for (var [a, b = await 1] in obj) {}");
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ForOfHead { .. })),
+            "expected a ForOfHead terminator, got {:#?}",
+            sm.states
+        );
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ArrayPatternIter { .. })),
+            "expected the re-homed pattern to lower to an ArrayPatternIter terminator, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
+    fn test_await_array_pattern_at_for_await_of_head_is_lowered() {
+        // Issue #774, `for await`-of-head site: shares `transform_for_in_of_loop`
+        // and the `ForOfHead` terminator with the plain for-of case above
+        // (`is_await: true` instead of `false`), so it's gated by the same
+        // widened `pattern_needs_await_lowering` check. Structural proof is
+        // the only regression test this site gets: the mandatory per-step
+        // `Await(nextResult)` (`sec-forin-div-ofbodyevaluation`, step 6.b)
+        // already forces a real suspension before the pattern is ever bound,
+        // so a black-box job-ordering assertion can't distinguish the fixed
+        // lowering from the pre-fix blocking `await_value` here -- both
+        // produce the same observable order in every scenario tried, since
+        // draining the queue in place to resolve one already-reachable
+        // promise coincides with normal queue order when nothing else is
+        // scheduled in between. This test instead confirms, as
+        // `test_await_array_pattern_at_for_of_head_is_lowered` does for
+        // plain for-of, that the hoist actually fires and the re-homed
+        // pattern reaches `lower_array_pattern_binding`.
+        let sm = async_machine("for await (let [a, b = await 1] of it) {}");
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ArrayPatternIter { .. })),
+            "expected the re-homed pattern to lower to an ArrayPatternIter terminator, got {:#?}",
+            sm.states
+        );
+    }
+
+    #[test]
+    fn test_await_array_pattern_at_for_init_is_lowered() {
+        // Issue #774, C-style for-init site: this site never used
+        // `EnterCatch`/`ForOfHead` -- `transform_for_statement`'s
+        // `ForInit::Variable` arm calls `pattern_needs_await_lowering`
+        // directly and routes into `transform_variable_declaration`, so the
+        // only observable proof is that the pattern reached
+        // `lower_array_pattern_binding` instead of staying an intact,
+        // unlowered `Statement::Variable`.
+        let sm = async_machine("for (var [a = await 1] = x;;) { break; }");
+        assert!(
+            sm.states
+                .iter()
+                .any(|s| matches!(s.terminator, StateTerminator::ArrayPatternIter { .. })),
+            "expected the for-init pattern to lower to an ArrayPatternIter terminator, got {:#?}",
+            sm.states
         );
     }
 

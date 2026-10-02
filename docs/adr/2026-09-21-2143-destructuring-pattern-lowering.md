@@ -104,7 +104,12 @@ that #744/#760 had already covered `yield` at the catch/for-head sites
 before #726 landed — only the C-style for-init `yield` gap, and `await`
 everywhere, were still open). See ADR-2026-09-22-1752's "Left as residual"
 section for the strip-to-temp rewrite these three sites share, and its note
-on the `ForOfInit`/`ForOfHead` `left`-split #726 added.
+on the `ForOfInit`/`ForOfHead` `left`-split #726 added. #774 extends this
+same coverage to *array* patterns at these three sites (`catch ([a = await
+1])`, `for (var [a = await 1] of …)`, `for (var [a = await 1] = …;;)`) —
+#726/#773 had left array patterns excluded there pending confirmation that
+the shared strip-to-temp hoist needed no array-specific terminator-driving
+support of its own; it didn't.
 
 Accepted imprecision: a `let`/`const` binding created mid-machine gets the same
 TDZ precision `SentValueBindingKind::Pattern` already gives `let {a} = await p`.

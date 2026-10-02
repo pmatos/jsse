@@ -113,14 +113,25 @@ resumes.
 - **Non-suspending array patterns are untouched.** `pattern_needs_lowering`
   still requires `pattern_contains_suspension`; a plain `var [a, b] = arr`
   short-circuits to the unchanged single-state path.
-- **`for (var [a = await 1] = x;;)` initializers stay out of scope**, same as
-  the pre-existing object-pattern gap: `transform_for_statement`'s
-  `ForInit::Variable` branch only lowers when the *init expression* itself
-  suspends, never consulting `pattern_needs_lowering`.
-- **`for-of`/`for-in` heads and `catch` params are untouched** — both bind
-  through `ForInOfLeft`/`EnterCatch` directly, never through
-  `transform_variable_declaration`. Issue #726 tracks the equivalent
-  `await`-in-catch-param/for-head-default gap.
+~~**`for (var [a = await 1] = x;;)` initializers stay out of scope**, same as
+the pre-existing object-pattern gap: `transform_for_statement`'s
+`ForInit::Variable` branch only lowers when the *init expression* itself
+suspends, never consulting `pattern_needs_lowering`.~~
+**Closed by #773** (`transform_for_statement`'s `ForInit::Variable` branch now
+also consults `pattern_needs_await_lowering`, routing through
+`transform_variable_declaration`) **for object patterns, then by #774** for
+array patterns (`pattern_needs_await_lowering`'s shape gate widened to admit
+`Pattern::Array`).
+
+~~**`for-of`/`for-in` heads and `catch` params are untouched** — both bind
+through `ForInOfLeft`/`EnterCatch` directly, never through
+`transform_variable_declaration`. Issue #726 tracks the equivalent
+`await`-in-catch-param/for-head-default gap.~~
+**Closed by #773** for object patterns (`hoist_suspending_pattern` re-homes
+the pattern into a synthesized declaration that *does* route through
+`transform_variable_declaration`) **and by #774** for array patterns, via the
+same hoist, once `pattern_needs_await_lowering`'s shape gate stopped
+excluding `Pattern::Array`.
 - **Bytecode compiler has no exposure** — it never sees generator/async-function
   state machines.
 
