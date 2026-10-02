@@ -968,6 +968,18 @@ fn hoist_class_suspensions(
     }
 }
 
+/// Clone of `class_expr` with every heritage/computed-key suspension hoisted
+/// out via `hoist_class_suspensions`, so the result is safe to re-embed in a
+/// non-suspending position (a plain `emit_statement`/`emit_expression_with_binding`
+/// call). Shared by the two call sites that need a suspension-free class to
+/// hand to the tree-walker's own (already-correct) evaluation: a bare class
+/// expression and an own-initializer class declarator.
+fn suspension_free_class_expr(class_expr: &ClassExpr, ctx: &mut TransformContext) -> ClassExpr {
+    let mut class_expr = class_expr.clone();
+    hoist_class_suspensions(&mut class_expr.super_class, &mut class_expr.body, ctx);
+    class_expr
+}
+
 /// `sec-static-semantics-lexicallyscopeddeclarations`: a block's own lexical
 /// declarations are exactly its *directly nested* `let`/`const`/`using`/
 /// `await using`/class declarations (not those of nested blocks, loops, or
@@ -1610,8 +1622,7 @@ fn transform_yielding_expression(
         }
 
         Expression::Class(class_expr) => {
-            let mut class_expr = class_expr.clone();
-            hoist_class_suspensions(&mut class_expr.super_class, &mut class_expr.body, ctx);
+            let class_expr = suspension_free_class_expr(class_expr, ctx);
             emit_expression_with_binding(&Expression::Class(class_expr), &binding, ctx);
         }
 
@@ -2536,12 +2547,13 @@ fn transform_variable_declaration(
             lower_pattern_binding(decl.kind, &declarator.pattern, &source, ctx);
         } else if let Some(init) = &declarator.init {
             if let Expression::Class(class_expr) = init
+                && matches!(declarator.pattern, Pattern::Identifier(_))
                 && init.is_anonymous_function_definition()
                 && expr_has_suspension(init, ctx.is_async)
             {
-                // `Expression::Class` is the only shape that is both an
-                // anonymous-function-definition position (NamedEvaluation
-                // must name it after the declared identifier,
+                // `Expression::Class` behind a `BindingIdentifier` is the only
+                // shape that is both a NamedEvaluation position (the class
+                // must be named after the declared identifier,
                 // sec-runtime-semantics-evaluation's `LexicalBinding :
                 // BindingIdentifier Initializer`) and able to contain a
                 // suspension that belongs to *this* generator/async function
@@ -2562,9 +2574,11 @@ fn transform_variable_declaration(
                 // can be emitted as a genuine `Statement::Variable` with the
                 // real pattern -- NamedEvaluation and the block's own
                 // TDZ'd/binding semantics both apply exactly as for any
-                // non-suspending declarator.
-                let mut class_expr = class_expr.clone();
-                hoist_class_suspensions(&mut class_expr.super_class, &mut class_expr.body, ctx);
+                // non-suspending declarator. A destructuring pattern is
+                // excluded: it's never a NamedEvaluation position, so the
+                // generic fresh-temp path below (correctly unnamed) is fine
+                // for it.
+                let class_expr = suspension_free_class_expr(class_expr, ctx);
                 ctx.emit_statement(Statement::Variable(VariableDeclaration {
                     kind: decl.kind,
                     declarations: vec![VariableDeclarator {
