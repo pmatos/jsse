@@ -1986,21 +1986,26 @@ fn hoist_suspending_pattern(
 /// *assignment*-form pattern (`ForInOfLeft::Pattern`, e.g.
 /// `for await ([a = yield] of it)`): the synthesized statement re-homing the
 /// real pattern is a plain `<pattern> = <temp>;` (`DestructuringAssignmentEvaluation`),
-/// not a declaration -- the head is an assignment target, not a binding.
-/// `await`-only defaults are left alone here (see
-/// `for_in_of_variable_head_contains_await`'s own `Pattern` arm, deliberately
-/// unchanged): only a `yield` forces the hoist, so an unsupported shape (an
-/// array pattern, which `pattern_needs_assignment_lowering` never accepts)
-/// still moves out of `ForOfHead`'s single non-suspending bind call and into
-/// the body, where the ordinary per-statement transform handles it -- fully
-/// decomposed into states when the shape allows, replayed via the InlineYield
-/// backstop otherwise.
+/// not a declaration -- the head is an assignment target, not a binding. A
+/// `yield` always forces the hoist regardless of shape, so an unsupported one
+/// (an array pattern, which `pattern_needs_assignment_lowering` never
+/// accepted before issue #788) still moves out of `ForOfHead`'s single
+/// non-suspending bind call and into the body, where the ordinary
+/// per-statement transform handles it -- fully decomposed into states when
+/// the shape allows, replayed via the InlineYield backstop otherwise. An
+/// `await`-only default is narrower: gated on `pattern_needs_await_lowering`
+/// (not a looser check), mirroring `hoist_suspending_pattern`'s own gate --
+/// `await` has no InlineYield-style replay backstop, so hoisting a shape
+/// `lower_pattern_assignment` can't actually decompose (an object rest beside
+/// a suspending sibling, issue #771) would just leave the hoisted-out
+/// statement on the very same blocking-`await_value` path it started on, with
+/// nothing gained.
 fn hoist_suspending_pattern_assignment(
     pattern: &Pattern,
     prefix: &str,
     ctx: &mut TransformContext,
 ) -> Option<(Pattern, Statement)> {
-    if !pattern_contains_yield(pattern) {
+    if !pattern_contains_yield(pattern) && !pattern_needs_await_lowering(pattern) {
         return None;
     }
     let temp = ctx.new_temp_var(prefix);
@@ -3236,12 +3241,11 @@ fn transform_for_in_of_loop(
     // `Pattern::Identifier`, and the real pattern becomes a synthesized
     // `let <pattern> = <temp>;` prepended to the loop body, where the
     // ordinary `Statement::Variable` lowering picks it up. A `Pattern`
-    // (assignment-form) head whose pattern contains a `yield` mirrors this
-    // with a synthesized `<pattern> = <temp>;` instead, picked up by the
-    // ordinary destructuring-assignment lowering (`ForInOfLeft::Pattern` is
-    // an assignment target, not a declaration, so it has no `await`
-    // counterpart here -- see `for_in_of_variable_head_contains_await`'s own
-    // `Pattern` arm). `ForOfInit`'s own `left` is deliberately *not*
+    // (assignment-form) head whose pattern contains a `yield` or a
+    // shape-supported `await` (see `for_in_of_variable_head_contains_await`'s
+    // own `Pattern` arm) mirrors this with a synthesized `<pattern> =
+    // <temp>;` instead, picked up by the ordinary destructuring-assignment
+    // lowering. `ForOfInit`'s own `left` is deliberately *not*
     // rewritten -- it exists solely to supply `BoundNames` for the head's TDZ
     // environment (`for_of_head_tdz_env`), evaluated before the iterable
     // expression, so it must keep seeing the real pattern for a
