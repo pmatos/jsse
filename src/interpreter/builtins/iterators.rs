@@ -33,7 +33,10 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
             continue;
         }
         match iterator_step_value_getter(interp, it, nm) {
-            Ok(Some(v)) => values.push(v),
+            Ok(Some(v)) => {
+                interp.gc_root_value(&v);
+                values.push(v);
+            }
             Ok(None) => {
                 new_exhausted[i] = true;
 
@@ -177,7 +180,10 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
             continue;
         }
         match iterator_step_value_getter(interp, it, nm) {
-            Ok(Some(v)) => values.push((keys[i].clone(), v)),
+            Ok(Some(v)) => {
+                interp.gc_root_value(&v);
+                values.push((keys[i].clone(), v));
+            }
             Ok(None) => {
                 new_exhausted[i] = true;
 
@@ -3432,278 +3438,244 @@ impl Interpreter {
             "zip".to_string(),
             1,
             |interp, _this, args| {
-                let iterables_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                interp.with_gc_root_scope(|interp| {
+                    let iterables_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
-                // Step 1: If iterables is not an Object, throw a TypeError
-                if !iterables_arg.is_object() {
-                    let err = interp.create_type_error("iterables is not an object");
-                    return Completion::Throw(err);
-                }
-
-                // Step 2: GetOptionsObject(options)
-                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                if !options.is_undefined() && !options.is_object() {
-                    let err = interp.create_type_error("options must be an object or undefined");
-                    return Completion::Throw(err);
-                }
-
-                // Step 3: Get mode — NOT ToString, direct string comparison
-                let mode = if options.is_undefined() {
-                    "shortest".to_string()
-                } else if let Some(options_id) = options.as_object_id() {
-                    let mode_val = match interp.get_object_property(options_id, "mode", &options) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if mode_val.is_undefined() {
-                        "shortest".to_string()
-                    } else if let Some(s) = mode_val.as_string() {
-                        let rs = s.to_rust_string();
-                        match rs.as_str() {
-                            "shortest" | "longest" | "strict" => rs,
-                            _ => {
-                                let err = interp.create_type_error(
-                                    "mode must be 'shortest', 'longest', or 'strict'",
-                                );
-                                return Completion::Throw(err);
-                            }
-                        }
-                    } else {
-                        let err = interp
-                            .create_type_error("mode must be 'shortest', 'longest', or 'strict'");
+                    // Step 1: If iterables is not an Object, throw a TypeError
+                    if !iterables_arg.is_object() {
+                        let err = interp.create_type_error("iterables is not an object");
                         return Completion::Throw(err);
                     }
-                } else {
-                    "shortest".to_string()
-                };
 
-                // Step 7: Get padding from options (for "longest" mode)
-                let padding_option = if mode == "longest" {
-                    if let Some(options_id) = options.as_object_id() {
-                        let p = match interp.get_object_property(options_id, "padding", &options) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::UNDEFINED,
-                        };
-                        if !p.is_undefined() {
-                            if !p.is_object() {
-                                let err = interp
-                                    .create_type_error("padding must be an object or undefined");
-                                return Completion::Throw(err);
+                    // Step 2: GetOptionsObject(options)
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    if !options.is_undefined() && !options.is_object() {
+                        let err =
+                            interp.create_type_error("options must be an object or undefined");
+                        return Completion::Throw(err);
+                    }
+
+                    // Step 3: Get mode — NOT ToString, direct string comparison
+                    let mode = if options.is_undefined() {
+                        "shortest".to_string()
+                    } else if let Some(options_id) = options.as_object_id() {
+                        let mode_val =
+                            match interp.get_object_property(options_id, "mode", &options) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::UNDEFINED,
+                            };
+                        if mode_val.is_undefined() {
+                            "shortest".to_string()
+                        } else if let Some(s) = mode_val.as_string() {
+                            let rs = s.to_rust_string();
+                            match rs.as_str() {
+                                "shortest" | "longest" | "strict" => rs,
+                                _ => {
+                                    let err = interp.create_type_error(
+                                        "mode must be 'shortest', 'longest', or 'strict'",
+                                    );
+                                    return Completion::Throw(err);
+                                }
                             }
-                            Some(p)
+                        } else {
+                            let err = interp.create_type_error(
+                                "mode must be 'shortest', 'longest', or 'strict'",
+                            );
+                            return Completion::Throw(err);
+                        }
+                    } else {
+                        "shortest".to_string()
+                    };
+
+                    // Step 7: Get padding from options (for "longest" mode)
+                    let padding_option = if mode == "longest" {
+                        if let Some(options_id) = options.as_object_id() {
+                            let p =
+                                match interp.get_object_property(options_id, "padding", &options) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => JsValue::UNDEFINED,
+                                };
+                            if !p.is_undefined() {
+                                if !p.is_object() {
+                                    let err = interp.create_type_error(
+                                        "padding must be an object or undefined",
+                                    );
+                                    return Completion::Throw(err);
+                                }
+                                interp.gc_root_value(&p);
+                                Some(p)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
-                // Step 10: GetIterator(iterables, sync)
-                let (input_iter, input_next) = match get_iterator_getter(interp, &iterables_arg) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                    // Step 10: GetIterator(iterables, sync)
+                    let (input_iter, input_next) = match get_iterator_getter(interp, &iterables_arg)
+                    {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    interp.gc_root_value(&input_iter);
+                    interp.gc_root_value(&input_next);
 
-                // Step 12: Collect all iterables using GetIteratorFlattenable(next, reject-strings)
-                // Temp-root each inner iterator as it's collected (subsequent iterations can trigger GC)
-                let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
-                let mut collection_temp_ids: Vec<u64> = Vec::new();
+                    // Step 12: Collect all iterables using GetIteratorFlattenable(next, reject-strings)
+                    // Root each inner iterator as it's collected (subsequent iterations can trigger GC)
+                    let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
 
-                loop {
-                    match iterator_step_value_getter(interp, &input_iter, &input_next) {
-                        Ok(Some(next_val)) => {
-                            match get_iterator_flattenable(interp, &next_val, true) {
-                                Ok(pair) => {
-                                    if let Some(id) = pair.0.as_object_id() {
-                                        collection_temp_ids.push(id);
-                                        interp.gc_root_id(id);
-                                    }
-                                    if let Some(id) = pair.1.as_object_id() {
-                                        collection_temp_ids.push(id);
-                                        interp.gc_root_id(id);
-                                    }
-                                    iters.push(pair);
-                                }
-                                Err(e) => {
-                                    // IfAbruptCloseIterators(iter, « inputIter » + iters) — reverse order
-                                    let mut all = vec![(input_iter.clone(), input_next.clone())];
-                                    all.extend(iters.iter().cloned());
-                                    let _ = iterator_close_all(interp, &all, Err(e.clone()));
-                                    for id in &collection_temp_ids {
-                                        interp.gc_unroot_id(*id);
-                                    }
-                                    return Completion::Throw(e);
-                                }
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            // IfAbruptCloseIterators(next, iters) — just the collected iters
-                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                            for id in &collection_temp_ids {
-                                interp.gc_unroot_id(*id);
-                            }
-                            return Completion::Throw(e);
-                        }
-                    }
-                }
-
-                let iter_count = iters.len();
-
-                // Step 14: Collect padding values (exactly iter_count values)
-                let padding_values: Vec<JsValue> = if mode == "longest" {
-                    if let Some(pad_iterable) = padding_option {
-                        let (pi, pn) = match get_iterator_getter(interp, &pad_iterable) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let mut pads = Vec::with_capacity(iter_count);
-                        let mut using_iterator = true;
-                        for _ in 0..iter_count {
-                            if using_iterator {
-                                match iterator_step_value_getter(interp, &pi, &pn) {
-                                    Ok(Some(v)) => pads.push(v),
-                                    Ok(None) => {
-                                        using_iterator = false;
-                                        pads.push(JsValue::UNDEFINED);
+                    loop {
+                        match iterator_step_value_getter(interp, &input_iter, &input_next) {
+                            Ok(Some(next_val)) => {
+                                interp.gc_root_value(&next_val);
+                                match get_iterator_flattenable(interp, &next_val, true) {
+                                    Ok(pair) => {
+                                        interp.gc_root_value(&pair.0);
+                                        interp.gc_root_value(&pair.1);
+                                        iters.push(pair);
                                     }
                                     Err(e) => {
-                                        let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                        // IfAbruptCloseIterators(iter, « inputIter » + iters) — reverse order
+                                        let mut all =
+                                            vec![(input_iter.clone(), input_next.clone())];
+                                        all.extend(iters.iter().cloned());
+                                        let _ = iterator_close_all(interp, &all, Err(e.clone()));
                                         return Completion::Throw(e);
                                     }
                                 }
-                            } else {
-                                pads.push(JsValue::UNDEFINED);
                             }
-                        }
-                        if using_iterator && let Err(e) = iterator_close_getter(interp, &pi) {
-                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                            return Completion::Throw(e);
-                        }
-                        pads
-                    } else {
-                        vec![JsValue::UNDEFINED; iter_count]
-                    }
-                } else {
-                    vec![JsValue::UNDEFINED; iter_count]
-                };
-
-                // Also temp-root padding object ids during padding collection
-                for pad_val in &padding_values {
-                    if let Some(id) = pad_val.as_object_id() {
-                        collection_temp_ids.push(id);
-                        interp.gc_root_id(id);
-                    }
-                }
-
-                // State: (iters, exhausted, mode, padding, alive)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<
-                    RefCell<(
-                        Vec<(JsValue, JsValue)>,
-                        Vec<bool>,
-                        String,
-                        Vec<JsValue>,
-                        bool,
-                    )>,
-                > = Rc::new(RefCell::new((
-                    iters,
-                    vec![false; iter_count],
-                    mode,
-                    padding_values,
-                    true,
-                )));
-
-                let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        // Temp-root all inner iterators during next() execution
-                        let gc_ids: Vec<u64> = {
-                            let s = state_next.borrow();
-                            let mut ids = Vec::new();
-                            for (io, nm) in &s.0 {
-                                if let Some(id) = io.as_object_id() {
-                                    ids.push(id);
-                                }
-                                if let Some(id) = nm.as_object_id() {
-                                    ids.push(id);
-                                }
-                            }
-                            for pad in &s.3 {
-                                if let Some(id) = pad.as_object_id() {
-                                    ids.push(id);
-                                }
-                            }
-                            ids
-                        };
-                        for &id in &gc_ids {
-                            interp.gc_root_id(id);
-                        }
-
-                        let result = zip_next_inner(interp, &state_next);
-
-                        for id in &gc_ids {
-                            interp.gc_unroot_id(*id);
-                        }
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (ref iters, ref exhausted, alive) = {
-                            let s = state_ret.borrow();
-                            (s.0.clone(), s.1.clone(), s.4)
-                        };
-                        state_ret.borrow_mut().4 = false;
-                        if alive {
-                            let open: Vec<(JsValue, JsValue)> = iters
-                                .iter()
-                                .enumerate()
-                                .filter(|(i, _)| !exhausted[*i])
-                                .map(|(_, pair)| pair.clone())
-                                .collect();
-                            if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                            Ok(None) => break,
+                            Err(e) => {
+                                // IfAbruptCloseIterators(next, iters) — just the collected iters
+                                let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                                 return Completion::Throw(e);
                             }
                         }
-                        Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        )
-                    },
-                ));
+                    }
 
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    let mut roots = Vec::with_capacity(b.0.len() * 2 + b.3.len());
-                    for (io, nm) in &b.0 {
-                        roots.push(io.clone());
-                        roots.push(nm.clone());
+                    let iter_count = iters.len();
+
+                    // Step 14: Collect padding values (exactly iter_count values)
+                    let padding_values: Vec<JsValue> = if mode == "longest" {
+                        if let Some(pad_iterable) = padding_option {
+                            let (pi, pn) = match get_iterator_getter(interp, &pad_iterable) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                    return Completion::Throw(e);
+                                }
+                            };
+                            interp.gc_root_value(&pi);
+                            interp.gc_root_value(&pn);
+                            let mut pads = Vec::with_capacity(iter_count);
+                            let mut using_iterator = true;
+                            for _ in 0..iter_count {
+                                if using_iterator {
+                                    match iterator_step_value_getter(interp, &pi, &pn) {
+                                        Ok(Some(v)) => {
+                                            interp.gc_root_value(&v);
+                                            pads.push(v);
+                                        }
+                                        Ok(None) => {
+                                            using_iterator = false;
+                                            pads.push(JsValue::UNDEFINED);
+                                        }
+                                        Err(e) => {
+                                            let _ =
+                                                iterator_close_all(interp, &iters, Err(e.clone()));
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                } else {
+                                    pads.push(JsValue::UNDEFINED);
+                                }
+                            }
+                            if using_iterator && let Err(e) = iterator_close_getter(interp, &pi) {
+                                let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                return Completion::Throw(e);
+                            }
+                            pads
+                        } else {
+                            vec![JsValue::UNDEFINED; iter_count]
+                        }
+                    } else {
+                        vec![JsValue::UNDEFINED; iter_count]
+                    };
+
+                    // State: (iters, exhausted, mode, padding, alive)
+                    #[allow(clippy::type_complexity)]
+                    let state: Rc<
+                        RefCell<(
+                            Vec<(JsValue, JsValue)>,
+                            Vec<bool>,
+                            String,
+                            Vec<JsValue>,
+                            bool,
+                        )>,
+                    > = Rc::new(RefCell::new((
+                        iters,
+                        vec![false; iter_count],
+                        mode,
+                        padding_values,
+                        true,
+                    )));
+
+                    let state_next = state.clone();
+                    let next_fn = interp.create_function(JsFunction::native(
+                        "next".to_string(),
+                        0,
+                        move |interp, _this, _args| {
+                            interp.with_gc_root_scope(|interp| zip_next_inner(interp, &state_next))
+                        },
+                    ));
+
+                    let state_ret = state.clone();
+                    let return_fn = interp.create_function(JsFunction::native(
+                        "return".to_string(),
+                        0,
+                        move |interp, _this, _args| {
+                            let (ref iters, ref exhausted, alive) = {
+                                let s = state_ret.borrow();
+                                (s.0.clone(), s.1.clone(), s.4)
+                            };
+                            state_ret.borrow_mut().4 = false;
+                            if alive {
+                                let open: Vec<(JsValue, JsValue)> = iters
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| !exhausted[*i])
+                                    .map(|(_, pair)| pair.clone())
+                                    .collect();
+                                if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            Completion::Normal(
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                            )
+                        },
+                    ));
+
+                    let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                    {
+                        let b = state.borrow();
+                        let mut roots = Vec::with_capacity(b.0.len() * 2 + b.3.len());
+                        for (io, nm) in &b.0 {
+                            roots.push(io.clone());
+                            roots.push(nm.clone());
+                        }
+                        for pad in &b.3 {
+                            roots.push(pad.clone());
+                        }
+                        interp.set_helper_gc_roots(&helper, roots);
                     }
-                    for pad in &b.3 {
-                        roots.push(pad.clone());
-                    }
-                    interp.set_helper_gc_roots(&helper, roots);
-                }
-                // Remove all temp roots from collection and padding phases
-                for id in &collection_temp_ids {
-                    interp.gc_unroot_id(*id);
-                }
-                Completion::Normal(helper)
+                    Completion::Normal(helper)
+                })
             },
         ));
 
@@ -3718,291 +3690,257 @@ impl Interpreter {
             "zipKeyed".to_string(),
             1,
             |interp, _this, args| {
-                let iterables_obj = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                interp.with_gc_root_scope(|interp| {
+                    let iterables_obj = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
-                // Step 1: iterables must be an object
-                let Some(obj_id) = iterables_obj.as_object_id() else {
-                    let err = interp.create_type_error("iterables must be an object");
-                    return Completion::Throw(err);
-                };
-
-                // Step 2: GetOptionsObject(options)
-                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                if !options.is_undefined() && !options.is_object() {
-                    let err = interp.create_type_error("options must be an object or undefined");
-                    return Completion::Throw(err);
-                }
-
-                // Step 3: Get mode — direct string comparison, no ToString
-                let mode = if options.is_undefined() {
-                    "shortest".to_string()
-                } else if let Some(options_id) = options.as_object_id() {
-                    let mode_val = match interp.get_object_property(options_id, "mode", &options) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::UNDEFINED,
+                    // Step 1: iterables must be an object
+                    let Some(obj_id) = iterables_obj.as_object_id() else {
+                        let err = interp.create_type_error("iterables must be an object");
+                        return Completion::Throw(err);
                     };
-                    if mode_val.is_undefined() {
-                        "shortest".to_string()
-                    } else if let Some(s) = mode_val.as_string() {
-                        let rs = s.to_rust_string();
-                        match rs.as_str() {
-                            "shortest" | "longest" | "strict" => rs,
-                            _ => {
-                                let err = interp.create_type_error(
-                                    "mode must be 'shortest', 'longest', or 'strict'",
-                                );
-                                return Completion::Throw(err);
-                            }
-                        }
-                    } else {
-                        let err = interp
-                            .create_type_error("mode must be 'shortest', 'longest', or 'strict'");
+
+                    // Step 2: GetOptionsObject(options)
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    if !options.is_undefined() && !options.is_object() {
+                        let err =
+                            interp.create_type_error("options must be an object or undefined");
                         return Completion::Throw(err);
                     }
-                } else {
-                    "shortest".to_string()
-                };
 
-                // Step 7: Get padding from options (for "longest" mode)
-                let padding_option = if mode == "longest" {
-                    if let Some(options_id) = options.as_object_id() {
-                        let p = match interp.get_object_property(options_id, "padding", &options) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::UNDEFINED,
-                        };
-                        if !p.is_undefined() {
-                            if !p.is_object() {
-                                let err = interp
-                                    .create_type_error("padding must be an object or undefined");
-                                return Completion::Throw(err);
+                    // Step 3: Get mode — direct string comparison, no ToString
+                    let mode = if options.is_undefined() {
+                        "shortest".to_string()
+                    } else if let Some(options_id) = options.as_object_id() {
+                        let mode_val =
+                            match interp.get_object_property(options_id, "mode", &options) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::UNDEFINED,
+                            };
+                        if mode_val.is_undefined() {
+                            "shortest".to_string()
+                        } else if let Some(s) = mode_val.as_string() {
+                            let rs = s.to_rust_string();
+                            match rs.as_str() {
+                                "shortest" | "longest" | "strict" => rs,
+                                _ => {
+                                    let err = interp.create_type_error(
+                                        "mode must be 'shortest', 'longest', or 'strict'",
+                                    );
+                                    return Completion::Throw(err);
+                                }
                             }
-                            Some(p)
+                        } else {
+                            let err = interp.create_type_error(
+                                "mode must be 'shortest', 'longest', or 'strict'",
+                            );
+                            return Completion::Throw(err);
+                        }
+                    } else {
+                        "shortest".to_string()
+                    };
+
+                    // Step 7: Get padding from options (for "longest" mode)
+                    let padding_option = if mode == "longest" {
+                        if let Some(options_id) = options.as_object_id() {
+                            let p =
+                                match interp.get_object_property(options_id, "padding", &options) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => JsValue::UNDEFINED,
+                                };
+                            if !p.is_undefined() {
+                                if !p.is_object() {
+                                    let err = interp.create_type_error(
+                                        "padding must be an object or undefined",
+                                    );
+                                    return Completion::Throw(err);
+                                }
+                                interp.gc_root_value(&p);
+                                Some(p)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
-                // Step 10: allKeys = iterables.[[OwnPropertyKeys]]()
-                let all_keys = match interp.proxy_own_keys(obj_id) {
-                    Ok(keys) => keys,
-                    Err(e) => return Completion::Throw(e),
-                };
+                    // Step 10: allKeys = iterables.[[OwnPropertyKeys]]()
+                    let all_keys = match interp.proxy_own_keys(obj_id) {
+                        Ok(keys) => keys,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
-                // Step 11-12: For each key, [[GetOwnProperty]], check enumerable, Get value
-                // Temp-root each inner iterator as it's collected (subsequent iterations can trigger GC)
-                let mut key_names: Vec<JsPropertyKey> = Vec::new();
-                let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
-                let mut collection_temp_ids: Vec<u64> = Vec::new();
+                    // Step 11-12: For each key, [[GetOwnProperty]], check enumerable, Get value
+                    // Root each inner iterator as it's collected (subsequent iterations can trigger GC)
+                    let mut key_names: Vec<JsPropertyKey> = Vec::new();
+                    let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
 
-                for key_val in &all_keys {
-                    let key = crate::interpreter::helpers::to_property_key_string(key_val);
+                    for key_val in &all_keys {
+                        let key = crate::interpreter::helpers::to_property_key_string(key_val);
 
-                    // Step 12.a: desc = iterables.[[GetOwnProperty]](key)
-                    let is_enumerable = match interp.proxy_get_own_property_descriptor(obj_id, &key)
-                    {
-                        Ok(desc_val) => {
-                            if desc_val.is_undefined() {
-                                false
-                            } else if let Some(desc_id) = desc_val.as_object_id() {
-                                // Read enumerable from descriptor object
-                                match interp.get_object_property(desc_id, "enumerable", &desc_val) {
-                                    Completion::Normal(v) => {
-                                        crate::interpreter::helpers::to_boolean(&v)
+                        // Step 12.a: desc = iterables.[[GetOwnProperty]](key)
+                        let is_enumerable =
+                            match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                Ok(desc_val) => {
+                                    if desc_val.is_undefined() {
+                                        false
+                                    } else if let Some(desc_id) = desc_val.as_object_id() {
+                                        // Read enumerable from descriptor object
+                                        match interp.get_object_property(
+                                            desc_id,
+                                            "enumerable",
+                                            &desc_val,
+                                        ) {
+                                            Completion::Normal(v) => {
+                                                crate::interpreter::helpers::to_boolean(&v)
+                                            }
+                                            _ => false,
+                                        }
+                                    } else {
+                                        // Non-proxy: proxy_get_own_property_descriptor returns
+                                        // the descriptor directly for ordinary objects
+                                        false
                                     }
-                                    _ => false,
                                 }
+                                Err(e) => {
+                                    // Step 12.b: IfAbruptCloseIterators
+                                    let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                    return Completion::Throw(e);
+                                }
+                            };
+                        if !is_enumerable {
+                            continue;
+                        }
+
+                        // Step 12.c.i: value = Get(iterables, key)
+                        let iterable =
+                            match interp.get_object_property(obj_id, &key, &iterables_obj) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                    return Completion::Throw(e);
+                                }
+                                _ => JsValue::UNDEFINED,
+                            };
+
+                        // Step 12.c.iii: If value is not undefined
+                        if iterable.is_undefined() {
+                            continue;
+                        }
+
+                        interp.gc_root_value(&iterable);
+                        match get_iterator_flattenable(interp, &iterable, true) {
+                            Ok(pair) => {
+                                interp.gc_root_value(&pair.0);
+                                interp.gc_root_value(&pair.1);
+                                key_names.push(key.clone());
+                                iters.push(pair);
+                            }
+                            Err(e) => {
+                                let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+
+                    let iter_count = iters.len();
+
+                    // Step 14: Get padding values per key (for longest mode)
+                    let padding_values: Vec<JsValue> = if mode == "longest" {
+                        if let Some(ref pad_obj) = padding_option {
+                            if let Some(pad_id) = pad_obj.as_object_id() {
+                                let mut pads = Vec::with_capacity(iter_count);
+                                for key in &key_names {
+                                    let val = match interp.get_object_property(pad_id, key, pad_obj)
+                                    {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => {
+                                            let _ =
+                                                iterator_close_all(interp, &iters, Err(e.clone()));
+                                            return Completion::Throw(e);
+                                        }
+                                        _ => JsValue::UNDEFINED,
+                                    };
+                                    interp.gc_root_value(&val);
+                                    pads.push(val);
+                                }
+                                pads
                             } else {
-                                // Non-proxy: proxy_get_own_property_descriptor returns
-                                // the descriptor directly for ordinary objects
-                                false
+                                vec![JsValue::UNDEFINED; iter_count]
                             }
-                        }
-                        Err(e) => {
-                            // Step 12.b: IfAbruptCloseIterators
-                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                            for id in &collection_temp_ids {
-                                interp.gc_unroot_id(*id);
-                            }
-                            return Completion::Throw(e);
-                        }
-                    };
-                    if !is_enumerable {
-                        continue;
-                    }
-
-                    // Step 12.c.i: value = Get(iterables, key)
-                    let iterable = match interp.get_object_property(obj_id, &key, &iterables_obj) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                            for id in &collection_temp_ids {
-                                interp.gc_unroot_id(*id);
-                            }
-                            return Completion::Throw(e);
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
-
-                    // Step 12.c.iii: If value is not undefined
-                    if iterable.is_undefined() {
-                        continue;
-                    }
-
-                    match get_iterator_flattenable(interp, &iterable, true) {
-                        Ok(pair) => {
-                            if let Some(id) = pair.0.as_object_id() {
-                                collection_temp_ids.push(id);
-                                interp.gc_root_id(id);
-                            }
-                            if let Some(id) = pair.1.as_object_id() {
-                                collection_temp_ids.push(id);
-                                interp.gc_root_id(id);
-                            }
-                            key_names.push(key.clone());
-                            iters.push(pair);
-                        }
-                        Err(e) => {
-                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                            for id in &collection_temp_ids {
-                                interp.gc_unroot_id(*id);
-                            }
-                            return Completion::Throw(e);
-                        }
-                    }
-                }
-
-                let iter_count = iters.len();
-
-                // Step 14: Get padding values per key (for longest mode)
-                let padding_values: Vec<JsValue> = if mode == "longest" {
-                    if let Some(ref pad_obj) = padding_option {
-                        if let Some(pad_id) = pad_obj.as_object_id() {
-                            let mut pads = Vec::with_capacity(iter_count);
-                            for key in &key_names {
-                                let val = match interp.get_object_property(pad_id, key, pad_obj) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => {
-                                        let _ = iterator_close_all(interp, &iters, Err(e.clone()));
-                                        return Completion::Throw(e);
-                                    }
-                                    _ => JsValue::UNDEFINED,
-                                };
-                                pads.push(val);
-                            }
-                            pads
                         } else {
                             vec![JsValue::UNDEFINED; iter_count]
                         }
                     } else {
                         vec![JsValue::UNDEFINED; iter_count]
-                    }
-                } else {
-                    vec![JsValue::UNDEFINED; iter_count]
-                };
+                    };
 
-                // Also temp-root padding object ids
-                for pad_val in &padding_values {
-                    if let Some(id) = pad_val.as_object_id() {
-                        collection_temp_ids.push(id);
-                        interp.gc_root_id(id);
-                    }
-                }
+                    let state: ZipKeyedState = Rc::new(RefCell::new((
+                        key_names,
+                        iters,
+                        vec![false; iter_count],
+                        mode,
+                        padding_values,
+                        true,
+                    )));
 
-                let state: ZipKeyedState = Rc::new(RefCell::new((
-                    key_names,
-                    iters,
-                    vec![false; iter_count],
-                    mode,
-                    padding_values,
-                    true,
-                )));
+                    let state_next = state.clone();
+                    let next_fn = interp.create_function(JsFunction::native(
+                        "next".to_string(),
+                        0,
+                        move |interp, _this, _args| {
+                            interp.with_gc_root_scope(|interp| {
+                                zip_keyed_next_inner(interp, &state_next)
+                            })
+                        },
+                    ));
 
-                let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let gc_ids: Vec<u64> = {
-                            let s = state_next.borrow();
-                            let mut ids = Vec::new();
-                            for (io, nm) in &s.1 {
-                                if let Some(id) = io.as_object_id() {
-                                    ids.push(id);
-                                }
-                                if let Some(id) = nm.as_object_id() {
-                                    ids.push(id);
+                    let state_ret = state.clone();
+                    let return_fn = interp.create_function(JsFunction::native(
+                        "return".to_string(),
+                        0,
+                        move |interp, _this, _args| {
+                            let (ref iters, ref exhausted, alive) = {
+                                let s = state_ret.borrow();
+                                (s.1.clone(), s.2.clone(), s.5)
+                            };
+                            state_ret.borrow_mut().5 = false;
+                            if alive {
+                                let open: Vec<(JsValue, JsValue)> = iters
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| !exhausted[*i])
+                                    .map(|(_, pair)| pair.clone())
+                                    .collect();
+                                if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                                    return Completion::Throw(e);
                                 }
                             }
-                            for pad in &s.4 {
-                                if let Some(id) = pad.as_object_id() {
-                                    ids.push(id);
-                                }
-                            }
-                            ids
-                        };
-                        for &id in &gc_ids {
-                            interp.gc_root_id(id);
-                        }
-                        let result = zip_keyed_next_inner(interp, &state_next);
-                        for id in &gc_ids {
-                            interp.gc_unroot_id(*id);
-                        }
-                        result
-                    },
-                ));
+                            Completion::Normal(
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
+                            )
+                        },
+                    ));
 
-                let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (ref iters, ref exhausted, alive) = {
-                            let s = state_ret.borrow();
-                            (s.1.clone(), s.2.clone(), s.5)
-                        };
-                        state_ret.borrow_mut().5 = false;
-                        if alive {
-                            let open: Vec<(JsValue, JsValue)> = iters
-                                .iter()
-                                .enumerate()
-                                .filter(|(i, _)| !exhausted[*i])
-                                .map(|(_, pair)| pair.clone())
-                                .collect();
-                            if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                                return Completion::Throw(e);
-                            }
+                    let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                    {
+                        let b = state.borrow();
+                        let mut roots = Vec::with_capacity(b.1.len() * 2 + b.4.len());
+                        for (io, nm) in &b.1 {
+                            roots.push(io.clone());
+                            roots.push(nm.clone());
                         }
-                        Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        )
-                    },
-                ));
-
-                // collection_temp_ids already pushed during collection loop
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    let mut roots = Vec::with_capacity(b.1.len() * 2 + b.4.len());
-                    for (io, nm) in &b.1 {
-                        roots.push(io.clone());
-                        roots.push(nm.clone());
+                        for pad in &b.4 {
+                            roots.push(pad.clone());
+                        }
+                        interp.set_helper_gc_roots(&helper, roots);
                     }
-                    for pad in &b.4 {
-                        roots.push(pad.clone());
-                    }
-                    interp.set_helper_gc_roots(&helper, roots);
-                }
-                for id in &collection_temp_ids {
-                    interp.gc_unroot_id(*id);
-                }
-                Completion::Normal(helper)
+                    Completion::Normal(helper)
+                })
             },
         ));
 
