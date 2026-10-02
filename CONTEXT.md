@@ -128,7 +128,7 @@ _Avoid_: leaked try context, unpaired pop.
 ## Memory
 
 **Temp-Root Frame**:
-A saved depth marker into the interpreter's `gc_temp_roots` stack — the set of `JsValue`s pinned as GC roots only for the duration of one native operation, so a GC safepoint reached while they exist solely as Rust locals cannot collect them. `gc_root_frame` captures the current depth; `gc_unroot_frame` bulk-truncates back to it. A native that roots temporaries opens a frame, roots values into it, and truncates on exit.
+A saved depth marker into the interpreter's `gc_temp_roots` stack (a `RootStack`: push, remove-by-id and truncate are its only mutations, reached through `gc_root_id`/`gc_unroot_id`/the frame helpers) — the set of `JsValue`s pinned as GC roots only for the duration of one native operation, so a GC safepoint reached while they exist solely as Rust locals cannot collect them. `gc_root_frame` captures the current depth; `gc_unroot_frame` bulk-truncates back to it. A native that roots temporaries opens a frame, roots values into it, and truncates on exit.
 _Avoid_: root scope marker, gc stack pointer.
 
 **GC Root Scope**:
