@@ -71,6 +71,13 @@ already got this right for free, since it evaluates the intact
   across suspension states is materially larger (new interpreter-internal
   helpers to keep a `GetIterator`/`IteratorStep` record alive and
   closed-exactly-once across states) and is left as a follow-up.
+
+  **Superseded by ADR-2026-10-02-0000** (issue #788): the "new
+  interpreter-internal helpers" this bullet anticipated already existed by
+  the time #788 was triaged — built for the declaration-pattern case
+  (`ArrayPatternIterOp`, ADR-2026-09-30-2038) — so `lower_array_pattern_assignment`
+  reuses them directly. Array assignment patterns now get full state-machine
+  lowering, not just a correct value via the blocking fallback.
 - **Object rest beside a suspending sibling** (`{a = await 1, ...rest} = x`)
   stays unsupported by `pattern_lowering_supported`, same as the declaration
   form.
@@ -83,3 +90,13 @@ already got this right for free, since it evaluates the intact
   the `rewrite_expr` `Expression::Assign` arm this change narrows. The
   `for`-head repro in the issue body did not reproduce on this revision; see
   the issue comment left alongside this fix.
+
+  **Superseded by ADR-2026-10-02-0000** (issue #788): "never affected" was
+  true for *value* correctness only. An assignment-form head's `await`
+  default was still invisible to `contains_suspension` (ADR-2026-09-30-2230's
+  `for_in_of_variable_head_contains_await`'s `Pattern` arm stayed `false` for
+  `await`, by design, pending this follow-up), so the whole statement ran
+  through the blocking `await_value` fallback with no suspend/resume
+  awareness — observable via a concurrent `.return()` inside an async
+  generator settling early instead of queuing. #788 closes that gap for both
+  object and array for-head assignment-form patterns.
