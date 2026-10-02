@@ -1700,6 +1700,8 @@ impl Interpreter {
                         try_depth: current_try_stack.len(),
                         outer_env: term_env.clone(),
                         iteration_env: None,
+                        is_await: false,
+                        iterator_closed: false,
                     });
                     self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     current_id = *head_state;
@@ -1728,6 +1730,8 @@ impl Interpreter {
                                 try_depth: current_try_stack.len(),
                                 outer_env: term_env.clone(),
                                 iteration_env: None,
+                                is_await: false,
+                                iterator_closed: false,
                             });
                             for_of_stack.len() - 1
                         }
@@ -1942,6 +1946,8 @@ impl Interpreter {
                                 try_depth: current_try_stack.len(),
                                 outer_env: term_env.clone(),
                                 iteration_env: None,
+                                is_await: false,
+                                iterator_closed: false,
                             });
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = next_state;
@@ -5158,6 +5164,8 @@ impl Interpreter {
                         try_depth: current_try_stack.len(),
                         outer_env: term_env.clone(),
                         iteration_env: None,
+                        is_await: *is_await,
+                        iterator_closed: false,
                     });
                     self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     current_id = *head_state;
@@ -5186,6 +5194,8 @@ impl Interpreter {
                                 try_depth: current_try_stack.len(),
                                 outer_env: term_env.clone(),
                                 iteration_env: None,
+                                is_await: *is_await,
+                                iterator_closed: false,
                             });
                             for_of_stack.len() - 1
                         }
@@ -5519,6 +5529,8 @@ impl Interpreter {
                                 try_depth: current_try_stack.len(),
                                 outer_env: term_env.clone(),
                                 iteration_env: None,
+                                is_await: false,
+                                iterator_closed: false,
                             });
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = next_state;
@@ -6879,9 +6891,20 @@ impl Interpreter {
                 }
             }
 
-            let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
-            completion =
-                self.close_for_of_iterator(loop_state, func_env, completion, Some(generator_id));
+            completion = match self.close_for_of_iterator_parking(
+                &mut for_of_stack[loop_pos],
+                func_env,
+                completion,
+                Some(generator_id),
+                can_park,
+            ) {
+                ForOfUnwindOutcome::Done(c) => c,
+                parked @ ForOfUnwindOutcome::Parked { .. } => {
+                    self.sync_generator_for_of_stack(generator_id, for_of_stack);
+                    return parked;
+                }
+            };
+            for_of_stack.pop();
             if matches!(completion, Completion::Exit(_)) {
                 break;
             }
