@@ -1188,6 +1188,17 @@ pub(crate) fn await_using_for_head_scope(
     Some(vec![Statement::Variable(decl.clone()), labeled_loop])
 }
 
+/// Whether the list directly declares a `using` or `await using` binding, i.e.
+/// owns a DisposableResource stack that has to be disposed when its scope exits.
+pub(crate) fn block_declares_disposable(stmts: &[Statement]) -> bool {
+    stmts.iter().any(|s| {
+        matches!(
+            s,
+            Statement::Variable(decl) if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
+        )
+    })
+}
+
 pub(crate) fn block_has_await_using(stmts: &[Statement]) -> bool {
     stmts
         .iter()

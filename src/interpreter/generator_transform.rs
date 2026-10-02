@@ -414,6 +414,13 @@ struct TryInfo {
 }
 
 impl TransformContext {
+    /// Whether a block / clause list that directly declares `using` or
+    /// `await using` gets a real scope (`EnterScope`/`ExitScope`) in a plain
+    /// async function, so its resources dispose at its own exit.
+    fn scopes_disposables(&self, stmts: &[Statement]) -> bool {
+        self.is_async && self.detect_for_await && block_declares_disposable(stmts)
+    }
+
     fn new(analysis: GeneratorAnalysis, is_async: bool) -> Self {
         Self {
             states: Vec::new(),
@@ -979,12 +986,16 @@ fn hoist_class_suspensions(
 /// skip it: a destructuring pattern's own suspending default is lowered
 /// through a different path (`lower_pattern_binding`/`emit_pattern_binding`)
 /// that *does* bind into the block normally, so only the bare-identifier
-/// shortcut needs excluding.
-fn declarator_enters_block_env(d: &VariableDeclarator, is_async: bool) -> bool {
-    !(matches!(d.pattern, Pattern::Identifier(_))
-        && d.init
-            .as_ref()
-            .is_some_and(|init| expr_has_suspension(init, is_async)))
+/// shortcut needs excluding. A `using`/`await using` declarator never takes
+/// the shortcut — it needs a real declaration to register its resource — so
+/// its suspending initializer lands in a temp var and the declaration binds
+/// from that.
+fn declarator_enters_block_env(kind: VarKind, d: &VariableDeclarator, is_async: bool) -> bool {
+    matches!(kind, VarKind::Using | VarKind::AwaitUsing)
+        || !(matches!(d.pattern, Pattern::Identifier(_))
+            && d.init
+                .as_ref()
+                .is_some_and(|init| expr_has_suspension(init, is_async)))
 }
 
 /// `sec-static-semantics-lexicallyscopeddeclarations`: a block's own lexical
@@ -1007,7 +1018,7 @@ fn collect_block_lexical_decls(stmts: &[Statement], is_async: bool) -> Vec<(Stri
             {
                 let is_const = decl.kind != VarKind::Let;
                 for d in &decl.declarations {
-                    if !declarator_enters_block_env(d, is_async) {
+                    if !declarator_enters_block_env(decl.kind, d, is_async) {
                         continue;
                     }
                     let mut names = Vec::new();
@@ -1077,8 +1088,8 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Block(stmts) => {
-            if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
-                // A block with `await using`, in a plain async function: give
+            if ctx.scopes_disposables(stmts) {
+                // A block with `using`/`await using`, in a plain async function: give
                 // it a real scope (`EnterScope`/`ExitScope`) so its interior
                 // lowers through the ordinary per-statement pipeline instead
                 // of being tree-walked intact — see issue #683.
@@ -2582,6 +2593,20 @@ fn transform_variable_declaration(
         } else if let Some(init) = &declarator.init {
             if expr_has_suspension(init, ctx.is_async) {
                 match &declarator.pattern {
+                    Pattern::Identifier(name)
+                        if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) =>
+                    {
+                        let source = ctx.new_temp_var("using_src");
+                        let binding = SentValueBindingKind::Variable(source.clone());
+                        transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
+                        ctx.emit_statement(Statement::Variable(VariableDeclaration {
+                            kind: decl.kind,
+                            declarations: vec![VariableDeclarator {
+                                pattern: Pattern::Identifier(name.clone()),
+                                init: Some(Expression::Identifier(source)),
+                            }],
+                        }));
+                    }
                     Pattern::Identifier(name) => {
                         // Ensure the variable is declared as a temp var so it exists
                         // in strict mode (the original let/const/var decl is replaced
@@ -2921,7 +2946,7 @@ fn transform_for_statement(
             if let Some(ForInit::Variable(decl)) = &for_stmt.init {
                 decl.declarations
                     .iter()
-                    .filter(|d| declarator_enters_block_env(d, ctx.is_async))
+                    .filter(|d| declarator_enters_block_env(decl.kind, d, ctx.is_async))
                     .flat_map(|d| {
                         let is_const = decl.kind == VarKind::Const;
                         let mut names = Vec::new();
@@ -3239,7 +3264,7 @@ fn transform_for_in_of_loop(
 /// function exit (issue #683). Every other clause body lowers as it always
 /// has: flattened into the enclosing state graph.
 fn transform_clause_body(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
-    if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
+    if ctx.scopes_disposables(stmts) {
         transform_scope_block(stmts, ctx, after_state);
     } else {
         transform_statements(stmts, ctx, after_state);
@@ -3324,7 +3349,7 @@ fn transform_try_statement(
     // the generic `Statement::Block` case), so no bridge state is needed
     // here — just bump/restore `scope_depth` and mark the entry.
     ctx.current_state_id = try_body_state;
-    if ctx.is_async && ctx.detect_for_await && block_has_await_using(&try_stmt.block) {
+    if ctx.scopes_disposables(&try_stmt.block) {
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
         ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
@@ -3385,7 +3410,7 @@ fn transform_try_statement(
 
         ctx.current_state_id = finally_body_state;
         if let Some(finalizer) = &try_stmt.finalizer {
-            if ctx.is_async && ctx.detect_for_await && block_has_await_using(finalizer) {
+            if ctx.scopes_disposables(finalizer) {
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
