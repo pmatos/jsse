@@ -83,3 +83,18 @@ jobs:
       - name: Run test262-extra (bytecode VM)
         run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --bytecode --fail-on-failures
 
+      # The checked profile keeps debug assertions on at release speed, so the
+      # GC temp-root stack discipline (strict LIFO release, balanced native
+      # calls, jobs and runs; #331) is executed by real test262 workloads.
+      - name: Build (release-checked)
+        run: cargo build --profile release-checked
+
+      - name: Run test262-extra (GC root-stack assertions)
+        run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 test262-extra/ --fail-on-failures
+
+      - name: Run test262-extra (GC root-stack assertions, bytecode VM)
+        run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 test262-extra/ --bytecode --fail-on-failures
+
+      - name: Run test262 (10% sample, GC root-stack assertions)
+        run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 --sample 0.1 --seed "$TEST262_SAMPLE_SEED"
+

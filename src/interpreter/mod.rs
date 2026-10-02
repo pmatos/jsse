@@ -1459,6 +1459,19 @@ impl Interpreter {
         self.gc_temp_roots.truncate(frame);
     }
 
+    /// Debug-assert that the temp-root stack is exactly `depth` deep. Placed at
+    /// boundaries where every root pushed by the code in between must already
+    /// have been released: after a native call's operands are popped, after a
+    /// microtask or timer job, and after a nested run.
+    #[inline(always)]
+    pub(crate) fn gc_assert_root_depth(&self, depth: usize, boundary: &str) {
+        debug_assert_eq!(
+            self.gc_temp_roots.len(),
+            depth,
+            "GC temp-root stack unbalanced after {boundary}"
+        );
+    }
+
     /// Run `body` inside a fresh GC temp-root scope: capture the current
     /// temp-root depth, run the body, then bulk-unroot everything the body
     /// pushed. The truncate happens on every exit path of `body` — the tail,
@@ -2433,6 +2446,13 @@ impl Interpreter {
     }
 
     pub(crate) fn run(&mut self, program: &Program) -> Completion {
+        let depth = self.gc_root_frame();
+        let result = self.run_program(program);
+        self.gc_assert_root_depth(depth, "a program run");
+        result
+    }
+
+    fn run_program(&mut self, program: &Program) -> Completion {
         self.gc_safepoint();
         let result = match program.source_type {
             SourceType::Script => {
@@ -2455,6 +2475,13 @@ impl Interpreter {
     }
 
     pub(crate) fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
+        let depth = self.gc_root_frame();
+        let result = self.run_program_with_path(program, path);
+        self.gc_assert_root_depth(depth, "a program run");
+        result
+    }
+
+    fn run_program_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
@@ -5648,7 +5675,9 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
+                let rooted_depth = self.gc_root_frame();
                 let job_result = job(self);
+                self.gc_assert_root_depth(rooted_depth, "a microtask job");
                 self.gc_unroot_frame(mt_frame);
                 // A `__host_exit` inside the job (issue #242) surfaces as
                 // `Completion::Exit`; the drain loop is a `()`-returning
@@ -5771,7 +5800,9 @@ impl Interpreter {
             for arg in &args {
                 self.gc_root_value(arg);
             }
+            let rooted_depth = self.gc_root_frame();
             let result = self.call_function(&callback, &JsValue::UNDEFINED, &args);
+            self.gc_assert_root_depth(rooted_depth, "a timer callback");
             self.gc_unroot_frame(frame);
             if let Completion::Exit(code) = result {
                 self.pending_exit = Some(code);
@@ -5892,7 +5923,9 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
+                let rooted_depth = self.gc_root_frame();
                 let job_result = job(self);
+                self.gc_assert_root_depth(rooted_depth, "a microtask job");
                 self.gc_unroot_frame(mt_frame);
                 // A `__host_exit` inside the job (issue #242) latches the
                 // terminal sink and stops draining.

@@ -5201,19 +5201,23 @@ impl Interpreter {
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
                             self.current_realm_id = fn_realm;
                         }
+                        let operands_base = self.gc_root_frame();
                         self.gc_root_value(_this_val);
                         for a in args.iter() {
                             self.gc_root_value(a);
                         }
+                        let operands_depth = self.gc_root_frame();
                         let saved_this = self.last_call_this_value.take();
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
+                        self.gc_assert_root_depth(operands_depth, "a native call");
                         // Unroot the native call operands after the call returns.
                         for a in args.iter().rev() {
                             self.gc_unroot_value(a);
                         }
                         self.gc_unroot_value(_this_val);
+                        self.gc_assert_root_depth(operands_base, "a native call's operands");
                         self.current_realm_id = caller_realm;
                         result
                     }

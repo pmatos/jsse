@@ -48,6 +48,11 @@ impl RootStack {
 
     #[inline]
     pub(super) fn truncate(&mut self, depth: usize) {
+        debug_assert!(
+            depth <= self.ids.len(),
+            "root frame {depth} outlived its roots (stack is {} deep)",
+            self.ids.len()
+        );
         self.ids.truncate(depth);
     }
 
