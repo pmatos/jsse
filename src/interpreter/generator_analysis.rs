@@ -1070,19 +1070,20 @@ enum PatternLoweringForm {
 
 /// True when the state-machine transform can lower every part of the pattern
 /// that reaches a suspension into suspension states. Object patterns can, for
-/// both the declaration and assignment forms. Array patterns can too, for
-/// both the unconstrained and constrained declaration forms
-/// (`lower_array_pattern_binding`, reached either directly or via
-/// `ConstrainedDeclaration`'s hoist-to-temp desugar — see its doc comment) —
-/// but not for the assignment form, since `lower_pattern_assignment` has no
-/// array arm yet. An object rest beside a suspending sibling lowers too, but
-/// only for the unconstrained declaration form: `EnterCatch`/`ForOfHead`
-/// bind via a single non-suspending runtime call with no way to drive the
-/// `ObjectRestCopy` terminator, and (unlike a bare array pattern) there is no
-/// hoist-to-temp detour for a rest property specifically — the whole pattern
-/// containing it gets hoisted or not based on this same gate (see issue
-/// #771). A bare member-expression target is only supported for the
-/// assignment form — a declaration can never bind into one.
+/// both the declaration and assignment forms. Array patterns can too, for all
+/// three forms — the declaration forms via `lower_array_pattern_binding`
+/// (reached either directly or via `ConstrainedDeclaration`'s hoist-to-temp
+/// desugar — see its doc comment), the assignment form via
+/// `lower_array_pattern_assignment` (issue #788), which mirrors the same
+/// `ArrayPatternIterOp` terminators with assignment-form leaves. An object
+/// rest beside a suspending sibling lowers too, but only for the
+/// unconstrained declaration form: `EnterCatch`/`ForOfHead` bind via a single
+/// non-suspending runtime call with no way to drive the `ObjectRestCopy`
+/// terminator, and (unlike a bare array pattern) there is no hoist-to-temp
+/// detour for a rest property specifically — the whole pattern containing it
+/// gets hoisted or not based on this same gate (see issue #771). A bare
+/// member-expression target is only supported for the assignment form — a
+/// declaration can never bind into one.
 fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> bool {
     if !pattern_contains_suspension(pattern) {
         return true;
@@ -1098,7 +1099,9 @@ fn pattern_lowering_supported(pattern: &Pattern, form: PatternLoweringForm) -> b
         Pattern::Array(elements)
             if matches!(
                 form,
-                PatternLoweringForm::Declaration | PatternLoweringForm::ConstrainedDeclaration
+                PatternLoweringForm::Declaration
+                    | PatternLoweringForm::ConstrainedDeclaration
+                    | PatternLoweringForm::Assignment
             ) =>
         {
             elements.iter().all(|elem| match elem {
@@ -1126,13 +1129,9 @@ pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
         && pattern_lowering_supported(pattern, PatternLoweringForm::Declaration)
 }
 
-/// True for a destructuring-assignment pattern (`{..} = ..`) whose
-/// suspensions the transform lowers into states (see
-/// `lower_pattern_assignment`). Array patterns (`[..] = ..`) are excluded —
-/// `lower_pattern_assignment` has no array arm — so a suspending
-/// array-assignment pattern always stays on the tree-walker's replay path
-/// regardless of what this returns for its nested shapes; see
-/// `pattern_lowering_supported`'s `PatternLoweringForm` gate. Unlike the
+/// True for a destructuring-assignment pattern (`{..} = ..` or `[..] = ..`)
+/// whose suspensions the transform lowers into states (see
+/// `lower_pattern_assignment`, `lower_array_pattern_assignment`). Unlike the
 /// declaration form, a member-expression target (`o[await k]`) is supported: assignment can
 /// target one, a declaration cannot.
 pub(crate) fn pattern_needs_assignment_lowering(pattern: &Pattern) -> bool {
@@ -1898,22 +1897,23 @@ mod tests {
     }
 
     #[test]
-    fn array_pattern_lowering_is_declaration_only() {
-        // `lower_pattern_assignment` has no `Pattern::Array` arm yet, so the
-        // assignment form must stay ungated even though the declaration form
-        // (`pattern_needs_lowering`) now lowers array patterns (#725).
+    fn array_pattern_lowering_supports_assignment_form() {
+        // `lower_array_pattern_assignment` (#788) lowers a suspending
+        // array-assignment pattern the same way the declaration form
+        // (`pattern_needs_lowering`) already does for array patterns (#725).
         let pattern = assignment_pattern("[a = await 1] = [];");
         assert!(pattern_contains_suspension(&pattern));
         assert!(
-            !pattern_needs_assignment_lowering(&pattern),
-            "assignment-form array patterns must stay on the tree-walker \
-             until lower_pattern_assignment gains an Array arm"
+            pattern_needs_assignment_lowering(&pattern),
+            "assignment-form array patterns are lowered via \
+             lower_array_pattern_assignment"
         );
 
         // A suspending array pattern nested inside an object assignment
-        // target must stay ungated too.
+        // target is lowered too -- the same `form` threads through the
+        // recursive `pattern_lowering_supported` call.
         let nested = assignment_pattern("({ x: [a = await 1] } = {});");
-        assert!(!pattern_needs_assignment_lowering(&nested));
+        assert!(pattern_needs_assignment_lowering(&nested));
     }
 
     #[test]

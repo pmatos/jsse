@@ -2343,24 +2343,146 @@ fn lower_pattern_property(
 /// `KeyedDestructuringAssignmentEvaluation` step order. Callers only pass
 /// patterns `pattern_needs_assignment_lowering` accepts.
 fn lower_pattern_assignment(pattern: &Pattern, source: &str, ctx: &mut TransformContext) {
-    let Pattern::Object(props) = pattern.clone() else {
-        emit_pattern_assignment(pattern.clone(), source, ctx);
-        return;
-    };
     if !pattern_contains_suspension(pattern) {
         emit_pattern_assignment(pattern.clone(), source, ctx);
         return;
     }
-    // RequireObjectCoercible(source), same as the declaration form's `<kind> {} = src`.
-    emit_pattern_assignment(Pattern::Object(Vec::new()), source, ctx);
-    for prop in props {
-        match prop {
-            ObjectPatternProperty::KeyValue(key, value) => {
-                lower_pattern_assignment_property(key, value, source, ctx);
+    match pattern {
+        Pattern::Object(props) => {
+            // RequireObjectCoercible(source), same as the declaration form's `<kind> {} = src`.
+            emit_pattern_assignment(Pattern::Object(Vec::new()), source, ctx);
+            for prop in props.clone() {
+                match prop {
+                    ObjectPatternProperty::KeyValue(key, value) => {
+                        lower_pattern_assignment_property(key, value, source, ctx);
+                    }
+                    other => emit_pattern_assignment(Pattern::Object(vec![other]), source, ctx),
+                }
             }
-            other => emit_pattern_assignment(Pattern::Object(vec![other]), source, ctx),
+        }
+        Pattern::Array(elements) => lower_array_pattern_assignment(elements, source, ctx),
+        _ => emit_pattern_assignment(pattern.clone(), source, ctx),
+    }
+}
+
+/// Assignment-form twin of `lower_array_pattern_binding`: an
+/// `ArrayAssignmentPattern` left side of `=`. Every element still costs
+/// exactly one `Step` terminator regardless of suspension (`IteratorStepValue`
+/// order is itself observable, #725); only an element whose own target or
+/// default reaches a suspension is broken up further. Mirrors
+/// `lower_pattern_assignment_property`'s member-expression idiom: a
+/// member-expression leaf's reference (base, then computed key) is captured
+/// *before* that element's `Step`, per `IteratorDestructuringAssignmentEvaluation`'s
+/// `AssignmentElement` step order (spec.html:21172-21197 — "Left to right
+/// evaluation order is maintained by evaluating a DestructuringAssignmentTarget
+/// that is not a destructuring pattern prior to accessing the iterator or
+/// evaluating the Initializer"). A plain identifier or nested-pattern leaf
+/// needs no such capture: identifier resolution has no observable ordering
+/// effect, and a nested pattern defers entirely to the recursive
+/// `lower_pattern_assignment` call once its value is ready. Callers only pass
+/// patterns `pattern_needs_assignment_lowering` accepts.
+fn lower_array_pattern_assignment(
+    elements: &[Option<ArrayPatternElement>],
+    source: &str,
+    ctx: &mut TransformContext,
+) {
+    let iter_var = ctx.new_temp_var("dstr_iter");
+    let after_init = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+        op: ArrayPatternIterOp::Init {
+            iterable: Expression::Identifier(source.to_string()),
+        },
+        iter_var: iter_var.clone(),
+        next_state: after_init,
+    });
+    ctx.current_state_id = after_init;
+
+    // The parser rejects a rest element anywhere but last, so checking the
+    // final slot is equivalent to tracking it through the loop.
+    let ends_in_rest = matches!(elements.last(), Some(Some(ArrayPatternElement::Rest(_))));
+    let step_tmp = ctx.new_temp_var("dstr_elem");
+    for elem in elements {
+        match elem {
+            None => {
+                step_array_pattern_elem(&iter_var, None, ctx);
+            }
+            Some(ArrayPatternElement::Pattern(pattern)) => {
+                if !pattern_contains_suspension(pattern) {
+                    step_array_pattern_elem(&iter_var, Some(step_tmp.clone()), ctx);
+                    emit_pattern_assignment(pattern.clone(), &step_tmp, ctx);
+                    continue;
+                }
+                let (target, default) = match pattern {
+                    Pattern::Assign(target, default) => (target.as_ref(), Some(default.as_ref())),
+                    other => (other, None),
+                };
+                let captured_ref = match target {
+                    Pattern::MemberExpression(member_expr) => {
+                        Some(lower_reference_operand(member_expr, true, ctx))
+                    }
+                    _ => None,
+                };
+                step_array_pattern_elem(&iter_var, Some(step_tmp.clone()), ctx);
+                if let Some(default) = default {
+                    lower_conditional_default(&step_tmp, default, ctx);
+                }
+                match captured_ref {
+                    Some(captured_ref) => {
+                        ctx.emit_statement(Statement::Expression(Expression::Assign(
+                            AssignOp::Assign,
+                            ExprBox::new(captured_ref),
+                            ExprBox::new(Expression::Identifier(step_tmp.clone())),
+                        )));
+                    }
+                    None => lower_pattern_assignment(target, &step_tmp, ctx),
+                }
+            }
+            Some(ArrayPatternElement::Rest(pattern)) => {
+                let rest_tmp = ctx.new_temp_var("dstr_rest");
+                let next_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+                    op: ArrayPatternIterOp::Drain {
+                        dest_var: rest_tmp.clone(),
+                    },
+                    iter_var: iter_var.clone(),
+                    next_state,
+                });
+                ctx.current_state_id = next_state;
+                if !pattern_contains_suspension(pattern) {
+                    emit_pattern_assignment(pattern.clone(), &rest_tmp, ctx);
+                } else {
+                    lower_pattern_assignment(pattern, &rest_tmp, ctx);
+                }
+            }
         }
     }
+
+    // A rest element always drains the iterator to exhaustion itself
+    // ([[Done]] is already true by construction), so the pattern never
+    // reaches `Finish` when it ends in one.
+    if !ends_in_rest {
+        let next_state = ctx.new_state();
+        ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+            op: ArrayPatternIterOp::Finish,
+            iter_var: iter_var.clone(),
+            next_state,
+        });
+        ctx.current_state_id = next_state;
+    }
+}
+
+/// Emits one `ArrayPatternIterOp::Step` terminator, advancing `ctx`'s current
+/// state past it. Shared by `lower_array_pattern_assignment`'s elision,
+/// non-suspending, and suspending-element branches, which otherwise differ
+/// only in what (if anything) runs before and after the step.
+fn step_array_pattern_elem(iter_var: &str, dest_var: Option<String>, ctx: &mut TransformContext) {
+    let next_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
+        op: ArrayPatternIterOp::Step { dest_var },
+        iter_var: iter_var.to_string(),
+        next_state,
+    });
+    ctx.current_state_id = next_state;
 }
 
 fn emit_pattern_assignment(pattern: Pattern, source: &str, ctx: &mut TransformContext) {
