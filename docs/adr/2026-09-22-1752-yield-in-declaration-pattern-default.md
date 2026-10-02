@@ -181,11 +181,27 @@ gap for array patterns in a plain declaration.
   its own `await`-triggered rewrite, and since both triggers share the same
   code path, it closes the `yield` gap described here too — see
   ADR-2026-09-21-2143.
-- Multi-element loops whose head pattern default suspends and whose pattern
+- ~~Multi-element loops whose head pattern default suspends and whose pattern
   shape is *not* lowerable (array patterns) still hit the pre-existing #725
   replay-restarts-the-iterator gap — now reachable via `yield` in a loop
   head too, not just via a plain declaration. Not new: same root cause,
-  same tracking issue.
+  same tracking issue.~~ **Closed by #772, as a side effect**: the
+  catch-param/for-in-of-head hoist above re-homes the pattern into an
+  ordinary `let <pattern> = $tmp;` declaration, which `pattern_needs_lowering`
+  (the unconstrained `Declaration`-form gate, unaffected by the
+  `ConstrainedDeclaration` restriction these three sites are otherwise
+  subject to) already covers for array patterns once #772 taught
+  `pattern_lowering_supported` to accept `Pattern::Array` there — closing
+  this residual without #772 targeting these sites at all. Confirmed by
+  replaying the exact scenario (a `yield`-only array pattern at a for-of
+  head, multi-element, with a counting iterator) post-#772: the outer
+  iterator steps exactly once per element, no duplicate body executions.
+  `await` in the same position hit a related but distinct symptom instead —
+  not replay-restart, but the ordering bug #774 fixes (the default's
+  `await` blocked on the tree-walker's `await_value` rather than suspending
+  the function), because `pattern_needs_await_lowering`'s own shape gate
+  (`ConstrainedDeclaration`, distinct from the `Declaration` gate above)
+  still excluded arrays until #774 widened it too.
 - ~~`for (var {a = await 1} = ...)` and `catch ({a = await 1})` /
   `for (var {a = await 1} of x)`: issue #726 tracks the equivalent `await`
   gap, predating this PR. The desugar above is gated on
