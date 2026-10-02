@@ -20,6 +20,8 @@ enum Pending {
     Barrier,
     /// DisposeResources step 4: the single trailing `Await(undefined)`.
     Trailing,
+    /// AsyncIteratorClose step 3.d: the `Await` of `return()`'s result.
+    IteratorClose,
 }
 
 /// DisposeResources (proposal-explicit-resource-management, `sec-disposeresources`)
@@ -33,9 +35,24 @@ pub(crate) struct DisposeCursor {
     needs_await: bool,
     has_awaited: bool,
     pending: Pending,
+    /// AsyncIteratorClose mode: the iterator whose `return()` has yet to be
+    /// called. Reuses the cursor so a parked close resumes through every
+    /// driver's existing disposal continuation.
+    close_iterator: Option<JsValue>,
 }
 
 impl DisposeCursor {
+    /// AsyncIteratorClose (`sec-asynciteratorclose`) for `iterator` as a
+    /// resumable state machine: a throw completion survives any failure of
+    /// `return()`, any other completion is replaced by one.
+    pub(crate) fn iterator_close(iterator: JsValue, completion: Completion) -> Self {
+        let mut cursor = Self::new(Vec::new(), completion);
+        if !matches!(cursor.completion, Completion::Exit(_)) {
+            cursor.close_iterator = Some(iterator);
+        }
+        cursor
+    }
+
     pub(crate) fn new(stack: Vec<DisposableResource>, completion: Completion) -> Self {
         // A `Completion::Exit` (issue #242) makes the exit immediate: no
         // `Symbol.dispose`/`Symbol.asyncDispose` may run after `__host_exit`.
@@ -55,6 +72,7 @@ impl DisposeCursor {
             needs_await: false,
             has_awaited: false,
             pending: Pending::None,
+            close_iterator: None,
         }
     }
 
@@ -88,6 +106,11 @@ impl DisposeCursor {
                 }
             }
             Pending::Trailing => return DisposeStep::Done(self.finish()),
+            Pending::IteratorClose => return self.finish_iterator_close(interp, awaited),
+        }
+
+        if let Some(iterator) = self.close_iterator.take() {
+            return self.start_iterator_close(interp, &iterator);
         }
 
         while let Some(resource) = self.remaining.pop() {
@@ -129,8 +152,57 @@ impl DisposeCursor {
         DisposeStep::Done(self.finish())
     }
 
+    fn start_iterator_close(
+        &mut self,
+        interp: &mut Interpreter,
+        iterator: &JsValue,
+    ) -> DisposeStep {
+        let result = interp.iterator_return_call_raw(iterator);
+        if let Some(code) = interp.pending_exit {
+            return DisposeStep::Done(Completion::Exit(code));
+        }
+        match result {
+            Err(e) => {
+                self.record_close_error(e);
+                DisposeStep::Done(self.finish())
+            }
+            Ok(None) => DisposeStep::Done(self.finish()),
+            Ok(Some(value)) => {
+                self.pending = Pending::IteratorClose;
+                DisposeStep::Await(value)
+            }
+        }
+    }
+
+    fn finish_iterator_close(
+        &mut self,
+        interp: &mut Interpreter,
+        awaited: Option<Result<JsValue, JsValue>>,
+    ) -> DisposeStep {
+        match awaited {
+            Some(Err(e)) => self.record_close_error(e),
+            Some(Ok(value)) if !value.is_object() => {
+                let error = interp.create_type_error("Iterator result is not an object");
+                self.record_close_error(error);
+            }
+            _ => {}
+        }
+        DisposeStep::Done(self.finish())
+    }
+
+    /// AsyncIteratorClose keeps a throw completion over any failure of
+    /// `return()`; every other completion yields to the failure.
+    fn record_close_error(&mut self, error: JsValue) {
+        if self.current_error.is_none() && !matches!(self.completion, Completion::Throw(_)) {
+            self.current_error = Some(error);
+        }
+    }
+
     /// Every value the cursor keeps alive across a suspension, for GC rooting.
     pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
+        if let Some(iterator) = &self.close_iterator {
+            f(iterator);
+        }
         for resource in &self.remaining {
             f(&resource.value);
             f(&resource.dispose_method);
