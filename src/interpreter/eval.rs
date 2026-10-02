@@ -8725,7 +8725,7 @@ impl Interpreter {
                     let loop_state = for_of_stack.remove(pos);
                     let iterator = func_env.borrow().get(&loop_state.iter_var);
                     if let Some(iterator) = iterator {
-                        self.unroot_for_of_iterator(&iterator);
+                        self.forget_for_of_iterator(&iterator);
                     }
                 }
 
@@ -9295,7 +9295,6 @@ impl Interpreter {
                             }
                         }
                     };
-                    self.gc_root_value(&iterator);
                     self.env_set(&func_env, iter_var, iterator).ok();
                     for_of_stack.push(ForOfLoopState {
                         iter_var: iter_var.clone(),
@@ -9462,7 +9461,7 @@ impl Interpreter {
                             .borrow()
                             .get(iter_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        self.unroot_for_of_iterator(&iterator);
+                        self.forget_for_of_iterator(&iterator);
                         for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
@@ -9549,7 +9548,6 @@ impl Interpreter {
                                 continue;
                             }
                         };
-                        self.gc_root_value(&iterator);
                         self.env_set(&func_env, iter_var, iterator).ok();
                         for_of_stack.push(ForOfLoopState {
                             iter_var: iter_var.clone(),
@@ -9585,7 +9583,7 @@ impl Interpreter {
                                         }
                                     },
                                     Ok(None) => {
-                                        self.unroot_for_of_iterator(&iterator);
+                                        self.forget_for_of_iterator(&iterator);
                                         for_of_stack.remove(pos);
                                         JsValue::UNDEFINED
                                     }
@@ -9638,7 +9636,7 @@ impl Interpreter {
                                 if drain_failed {
                                     continue;
                                 }
-                                self.unroot_for_of_iterator(&iterator);
+                                self.forget_for_of_iterator(&iterator);
                                 for_of_stack.remove(pos);
                                 rest
                             }
@@ -9802,8 +9800,10 @@ impl Interpreter {
         head_env
     }
 
-    fn unroot_for_of_iterator(&mut self, iterator: &JsValue) {
-        self.gc_unroot_value(iterator);
+    /// A transformed for-of's iterator lives in the driver's environment, which
+    /// the collector already traces, so ending the loop only has to stop
+    /// tracking it for `return()` of the running activation.
+    fn forget_for_of_iterator(&mut self, iterator: &JsValue) {
         if let Some(iterator_id) = iterator.as_object_id() {
             self.forget_pending_iter_close(iterator_id);
         }
@@ -9865,7 +9865,7 @@ impl Interpreter {
         let iterator = func_env.borrow().get(&loop_state.iter_var);
         if matches!(completion, Completion::Exit(_)) {
             if let Some(iterator) = iterator {
-                self.unroot_for_of_iterator(&iterator);
+                self.forget_for_of_iterator(&iterator);
                 if let Some(generator_id) = generator_id {
                     self.remove_generator_inline_iterator(generator_id, &iterator);
                 }
@@ -9874,7 +9874,7 @@ impl Interpreter {
         }
         if let Some(iterator) = iterator {
             let close_result = self.iterator_close_result(&iterator);
-            self.unroot_for_of_iterator(&iterator);
+            self.forget_for_of_iterator(&iterator);
             if let Some(generator_id) = generator_id {
                 self.remove_generator_inline_iterator(generator_id, &iterator);
             }
@@ -9911,7 +9911,7 @@ impl Interpreter {
         if loop_state.iterator_closed || !(loop_state.is_await && can_park) || iterator.is_none() {
             let completion = if loop_state.iterator_closed {
                 if let Some(iterator) = &iterator {
-                    self.unroot_for_of_iterator(iterator);
+                    self.forget_for_of_iterator(iterator);
                     if let Some(generator_id) = generator_id {
                         self.remove_generator_inline_iterator(generator_id, iterator);
                     }
@@ -9930,7 +9930,7 @@ impl Interpreter {
                 ForOfUnwindOutcome::Parked { cursor, value }
             }
             DisposeStep::Done(completion) => {
-                self.unroot_for_of_iterator(&iterator);
+                self.forget_for_of_iterator(&iterator);
                 if let Some(generator_id) = generator_id {
                     self.remove_generator_inline_iterator(generator_id, &iterator);
                 }
