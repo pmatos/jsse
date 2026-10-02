@@ -1155,8 +1155,49 @@ pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
                     .is_some_and(|s| has_block_with_await_using(s))
         }
         Statement::Labeled(_, inner) => has_block_with_await_using(inner),
+        Statement::For(f) => f.disposes_at_head(),
         _ => false,
     }
+}
+
+/// The scope statement list a `for (await using x = init; test; update)` head
+/// is equivalent to: the declaration followed by the loop with an empty
+/// initializer. `using` bindings are const-like, so ForBodyEvaluation has no
+/// per-iteration copy to preserve and the loop environment's single
+/// DisposeResources at loop exit is exactly a block scope's disposal. The
+/// loop's own `labels` move onto the inner loop, where `continue label` has to
+/// resolve.
+pub(crate) fn await_using_for_head_scope(
+    f: &ForStatement,
+    labels: &[String],
+) -> Option<Vec<Statement>> {
+    let Some(ForInit::Variable(decl)) = &f.init else {
+        return None;
+    };
+    if !f.disposes_at_head() {
+        return None;
+    }
+    let inner_loop = Statement::For(ForStatement {
+        init: None,
+        test: f.test.clone(),
+        update: f.update.clone(),
+        body: f.body.clone(),
+    });
+    let labeled_loop = labels.iter().rev().fold(inner_loop, |stmt, label| {
+        Statement::Labeled(label.clone(), Box::new(stmt))
+    });
+    Some(vec![Statement::Variable(decl.clone()), labeled_loop])
+}
+
+/// Whether the list directly declares a `using` or `await using` binding, i.e.
+/// owns a DisposableResource stack that has to be disposed when its scope exits.
+pub(crate) fn block_declares_disposable(stmts: &[Statement]) -> bool {
+    stmts.iter().any(|s| {
+        matches!(
+            s,
+            Statement::Variable(decl) if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
+        )
+    })
 }
 
 pub(crate) fn block_has_await_using(stmts: &[Statement]) -> bool {
@@ -1218,6 +1259,16 @@ fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -
     }
 }
 
+/// A statement list that owns a scope frame of its own (a plain block or a
+/// `try` clause body: the transform opens `OpenBlock` for it), so a lexical
+/// declaration beside an isolatable block stays confined to that frame and
+/// does not block the lowering.
+fn scan_scoped_list<'a>(stmts: impl Iterator<Item = &'a Statement>) -> AwaitUsingScan {
+    stmts.fold(AwaitUsingScan::None, |acc, s| {
+        acc.combine(scan_await_using(s))
+    })
+}
+
 /// Scans a `try`/`catch`/`finally` clause's own statement list: if it
 /// directly declares `await using` (no extra `{ }`), the clause body itself
 /// is isolatable — its own scope is opened/closed around it, exactly like a
@@ -1227,14 +1278,14 @@ fn scan_clause_body(stmts: &[Statement]) -> AwaitUsingScan {
     if block_has_await_using(stmts) {
         AwaitUsingScan::Isolatable
     } else {
-        scan_flattened_list(stmts.iter())
+        scan_scoped_list(stmts.iter())
     }
 }
 
 fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
     match stmt {
         Statement::Block(stmts) if block_has_await_using(stmts) => AwaitUsingScan::Isolatable,
-        Statement::Block(stmts) => scan_flattened_list(stmts.iter()),
+        Statement::Block(stmts) => scan_scoped_list(stmts.iter()),
         Statement::If(i) => scan_await_using(&i.consequent).combine(
             i.alternate
                 .as_ref()
@@ -1244,6 +1295,12 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         Statement::While(w) => scan_await_using(&w.body),
         Statement::DoWhile(d) => scan_await_using(&d.body),
         Statement::For(f) => {
+            // Like a block that directly declares `await using`, the head's
+            // own scope is isolatable without scanning the body: nested
+            // containers are classified again when the body is lowered.
+            if f.disposes_at_head() {
+                return AwaitUsingScan::Isolatable;
+            }
             let body = scan_await_using(&f.body);
             match &f.init {
                 Some(ForInit::Variable(decl)) if decl.kind != VarKind::Var => {
@@ -1288,9 +1345,14 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// `try`/`catch`/`finally` bodies and `switch` cases. The block's disposal then
 /// suspends the function at its Awaits instead of draining the queue inline.
 ///
+/// A `for (await using ..;;)` head counts as such a block: its loop
+/// environment is lowered as a scope of its own.
+///
 /// Containers whose lowering would flatten an observable lexical scope
-/// (`for (let ..)`, `for-in`, `with`, a list declaring a binding beside the
-/// block) are excluded and keep running in the tree-walker.
+/// (`for (let ..)`, `for-in`, `with`, a `switch` case list declaring a
+/// binding beside the block) are excluded and keep running in the
+/// tree-walker. A plain block or `try` clause body owns a scope frame, so a
+/// declaration beside the block stays confined to it.
 pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
     scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
@@ -1484,6 +1546,20 @@ mod tests {
             "outer: while (c) { { await using a = null; } }",
             "switch (x) { case 1: { await using a = null; } break; }",
             "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
+            "for (await using a = null; c; i++) {}",
+            "for (await using a = null, b = null; ;) {}",
+            "l: for (await using a = null; ;) {}",
+            "if (c) { for (await using a = null; ;) {} }",
+            "while (c) { for (await using a = null; ;) {} }",
+            "try { for (await using a = null; ;) {} } finally {}",
+            "for (await using a = null; ;) { { await using b = null; } }",
+            "while (c) { let j = i; { await using a = null; } }",
+            "try { let x = 2; { await using a = null; } } finally {}",
+            "try {} catch (e) { const x = 1; { await using a = null; } }",
+            "try {} finally { class C {} { await using a = null; } }",
+            "{ let x = 1; { await using a = null; } }",
+            "{ let x = 1; for (await using a = null; ;) {} }",
+            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
         ];
         for src in isolatable {
             assert!(scan_first_statement(src), "expected isolatable: {src}");
@@ -1500,6 +1576,8 @@ mod tests {
             "while (c) { x(); }",
             "for await (const x of y) { z(); }",
             "for (let i = 0; i < 2; i++) { x(); }",
+            "for (using a = null; ;) {}",
+            "for (const a = null; ;) {}",
             "switch (x) { case 1: y(); }",
             "async function g() { { await using a = null; } }",
         ];
@@ -1509,20 +1587,14 @@ mod tests {
     }
 
     #[test]
-    fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
+    fn lowering_that_would_flatten_an_unscoped_lexical_scope_is_blocked() {
         let blocked = [
             "for (let i = 0; i < 3; i++) { { await using a = null; } }",
             "for (const i = 0; ;) { { await using a = null; } }",
-            "while (c) { let j = i; { await using a = null; } }",
             "for (k in o) { { await using a = null; } }",
-            "try { let x = 2; { await using a = null; } } finally {}",
-            "try {} catch (e) { const x = 1; { await using a = null; } }",
-            "try {} finally { class C {} { await using a = null; } }",
-            "{ let x = 1; { await using a = null; } }",
             "with (o) { { await using a = null; } }",
             "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
-            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
         ];
         for src in blocked {
             assert!(!scan_first_statement(src), "expected blocked: {src}");

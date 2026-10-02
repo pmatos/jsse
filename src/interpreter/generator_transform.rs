@@ -414,6 +414,13 @@ struct TryInfo {
 }
 
 impl TransformContext {
+    /// Whether a block / clause list that directly declares `using` or
+    /// `await using` gets a real scope (`EnterScope`/`ExitScope`) in a plain
+    /// async function, so its resources dispose at its own exit.
+    fn scopes_disposables(&self, stmts: &[Statement]) -> bool {
+        self.is_async && self.detect_for_await && block_declares_disposable(stmts)
+    }
+
     fn new(analysis: GeneratorAnalysis, is_async: bool) -> Self {
         Self {
             states: Vec::new(),
@@ -611,7 +618,7 @@ fn transform_generator_inner_opts(
         && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
-        && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
+        && !body.iter().any(has_suspendable_await_using_block)
     {
         return create_simple_machine(body, params, &analysis);
     }
@@ -757,7 +764,7 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
         return true;
     }
     if is_async {
-        contains_suspension(stmt) || (detect_for_await && has_suspendable_await_using_block(stmt))
+        contains_suspension(stmt) || has_suspendable_await_using_block(stmt)
     } else {
         contains_yield(stmt)
     }
@@ -1038,6 +1045,21 @@ fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_
     ctx.current_state_id = after_state;
 }
 
+/// `transform_scope_block` for a caller that may not have a join state yet
+/// (`usize::MAX`): allocates the state control resumes at once the scope exits.
+fn transform_scope_block_joined(
+    stmts: &[Statement],
+    ctx: &mut TransformContext,
+    after_state: usize,
+) {
+    let resume_state = if after_state == usize::MAX {
+        ctx.new_state()
+    } else {
+        after_state
+    };
+    transform_scope_block(stmts, ctx, resume_state);
+}
+
 fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, after_state: usize) {
     match stmt {
         Statement::Expression(expr) => {
@@ -1051,17 +1073,12 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Block(stmts) => {
-            if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
-                // A block with `await using`, in a plain async function: give
+            if ctx.scopes_disposables(stmts) {
+                // A block with `using`/`await using`, in a plain async function: give
                 // it a real scope (`EnterScope`/`ExitScope`) so its interior
                 // lowers through the ordinary per-statement pipeline instead
                 // of being tree-walked intact — see issue #683.
-                let resume_state = if after_state == usize::MAX {
-                    ctx.new_state()
-                } else {
-                    after_state
-                };
-                transform_scope_block(stmts, ctx, resume_state);
+                transform_scope_block_joined(stmts, ctx, after_state);
             } else {
                 // §14.2.2 Block Evaluation: a fresh declarative environment per
                 // entry, discarded on the way out. Force a state boundary
@@ -1113,7 +1130,18 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::For(for_stmt) => {
-            transform_for_statement(for_stmt, ctx, after_state);
+            let head_scope = if ctx.is_async {
+                await_using_for_head_scope(for_stmt, &ctx.iteration_labels)
+            } else {
+                None
+            };
+            if let Some(scope_stmts) = head_scope {
+                let labels = std::mem::take(&mut ctx.iteration_labels);
+                transform_yielding_statement(&Statement::Block(scope_stmts), ctx, after_state);
+                ctx.iteration_labels = labels;
+            } else {
+                transform_for_statement(for_stmt, ctx, after_state);
+            }
         }
 
         Statement::ForIn(for_in_stmt) => {
@@ -3206,7 +3234,7 @@ fn transform_for_in_of_loop(
 /// function exit (issue #683). Every other clause body lowers as it always
 /// has: flattened into the enclosing state graph.
 fn transform_clause_body(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
-    if ctx.is_async && ctx.detect_for_await && block_has_await_using(stmts) {
+    if ctx.scopes_disposables(stmts) {
         transform_scope_block(stmts, ctx, after_state);
     } else {
         transform_statements(stmts, ctx, after_state);
@@ -3291,7 +3319,7 @@ fn transform_try_statement(
     // the generic `Statement::Block` case), so no bridge state is needed
     // here — just bump/restore `scope_depth` and mark the entry.
     ctx.current_state_id = try_body_state;
-    if ctx.is_async && ctx.detect_for_await && block_has_await_using(&try_stmt.block) {
+    if ctx.scopes_disposables(&try_stmt.block) {
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
         ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
@@ -3352,7 +3380,7 @@ fn transform_try_statement(
 
         ctx.current_state_id = finally_body_state;
         if let Some(finalizer) = &try_stmt.finalizer {
-            if ctx.is_async && ctx.detect_for_await && block_has_await_using(finalizer) {
+            if ctx.scopes_disposables(finalizer) {
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(

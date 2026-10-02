@@ -445,6 +445,12 @@ pub(crate) struct ForOfLoopState {
     pub(crate) outer_env: EnvRef,
     /// The current lexical head's per-iteration environment, when any.
     pub(crate) iteration_env: Option<EnvRef>,
+    /// `for await`: closing the iterator is AsyncIteratorClose, which Awaits
+    /// the result of `return()`.
+    pub(crate) is_await: bool,
+    /// AsyncIteratorClose already called `return()` and is parked at its
+    /// Await; re-entering the unwind must not call it again.
+    pub(crate) iterator_closed: bool,
 }
 
 impl ForOfLoopState {

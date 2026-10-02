@@ -8266,9 +8266,26 @@ impl Interpreter {
                                 }
                             };
                     }
-                    let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
-                    unwind_completion =
-                        self.close_for_of_iterator(loop_state, &func_env, unwind_completion, None);
+                    unwind_completion = match self.close_for_of_iterator_parking(
+                        &mut for_of_stack[loop_pos],
+                        &func_env,
+                        unwind_completion,
+                        None,
+                        true,
+                    ) {
+                        ForOfUnwindOutcome::Done(c) => c,
+                        ForOfUnwindOutcome::Parked { cursor, value } => {
+                            park_dispose_at_await!(
+                                cursor,
+                                value,
+                                PendingDispose {
+                                    cursor,
+                                    then: $then,
+                                }
+                            );
+                        }
+                    };
+                    for_of_stack.pop();
                     match &unwind_completion {
                         Completion::Exit(code) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -9303,6 +9320,8 @@ impl Interpreter {
                         try_depth: try_stack.len(),
                         outer_env: term_env,
                         iteration_env: None,
+                        is_await,
+                        iterator_closed: false,
                     });
                     current_id = head_state;
                 }
@@ -9332,6 +9351,8 @@ impl Interpreter {
                                 try_depth: try_stack.len(),
                                 outer_env: term_env.clone(),
                                 iteration_env: None,
+                                is_await,
+                                iterator_closed: false,
                             });
                             for_of_stack.len() - 1
                         }
@@ -9553,6 +9574,8 @@ impl Interpreter {
                             try_depth: try_stack.len(),
                             outer_env: term_env.clone(),
                             iteration_env: None,
+                            is_await: false,
+                            iterator_closed: false,
                         });
                         current_id = next_state;
                     }
@@ -9885,6 +9908,52 @@ impl Interpreter {
         completion
     }
 
+    /// `close_for_of_iterator` for a driver that may suspend (`can_park`): a
+    /// `for await` loop's AsyncIteratorClose Awaits the result of `return()`, so the close
+    /// runs as a [`DisposeCursor`] and reports `Parked` while that Await is
+    /// pending. The loop stays on the caller's stack, flagged
+    /// `iterator_closed`, so the re-entered unwind releases it instead of
+    /// calling `return()` a second time; its resumed completion is the seed.
+    fn close_for_of_iterator_parking(
+        &mut self,
+        loop_state: &mut ForOfLoopState,
+        func_env: &EnvRef,
+        completion: Completion,
+        generator_id: Option<u64>,
+        can_park: bool,
+    ) -> ForOfUnwindOutcome {
+        let iterator = func_env.borrow().get(&loop_state.iter_var);
+        if loop_state.iterator_closed || !(loop_state.is_await && can_park) || iterator.is_none() {
+            let completion = if loop_state.iterator_closed {
+                if let Some(iterator) = &iterator {
+                    self.unroot_for_of_iterator(iterator);
+                    if let Some(generator_id) = generator_id {
+                        self.remove_generator_inline_iterator(generator_id, iterator);
+                    }
+                }
+                completion
+            } else {
+                self.close_for_of_iterator(loop_state.clone(), func_env, completion, generator_id)
+            };
+            return ForOfUnwindOutcome::Done(completion);
+        }
+        let iterator = iterator.expect("checked above");
+        let mut cursor = DisposeCursor::iterator_close(iterator.clone(), completion);
+        match cursor.step(self, None) {
+            DisposeStep::Await(value) => {
+                loop_state.iterator_closed = true;
+                ForOfUnwindOutcome::Parked { cursor, value }
+            }
+            DisposeStep::Done(completion) => {
+                self.unroot_for_of_iterator(&iterator);
+                if let Some(generator_id) = generator_id {
+                    self.remove_generator_inline_iterator(generator_id, &iterator);
+                }
+                ForOfUnwindOutcome::Done(completion)
+            }
+        }
+    }
+
     /// Closes every active for-of loop from `from` to the innermost, inner to
     /// outer, carrying each loop's resulting completion into the next outer
     /// iteration disposal. Mirrors `unwind_generator_for_of_loops`: the loop
@@ -9912,8 +9981,17 @@ impl Interpreter {
                     break;
                 }
             }
-            let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
-            completion = self.close_for_of_iterator(loop_state, func_env, completion, None);
+            completion = match self.close_for_of_iterator_parking(
+                &mut for_of_stack[loop_pos],
+                func_env,
+                completion,
+                None,
+                true,
+            ) {
+                ForOfUnwindOutcome::Done(c) => c,
+                parked @ ForOfUnwindOutcome::Parked { .. } => return parked,
+            };
+            for_of_stack.pop();
             if matches!(completion, Completion::Exit(_)) {
                 break;
             }
