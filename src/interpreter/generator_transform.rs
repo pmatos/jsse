@@ -2225,19 +2225,27 @@ fn lower_array_pattern_binding(
 /// shared by `KeyedBindingInitialization` and
 /// `KeyedDestructuringAssignmentEvaluation`. Used by both the declaration and
 /// assignment pattern-property lowerings.
+/// `typeof <name> === "undefined"` -- the "if Initializer is present and v is
+/// undefined" condition shared by every conditional-default site in this
+/// file (`lower_conditional_default` and the array-assignment identifier
+/// fast path in `lower_array_pattern_assignment`).
+fn undefined_check_condition(name: &str) -> Expression {
+    Expression::Binary(
+        BinaryOp::StrictEq,
+        ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
+            name.to_string(),
+        )))),
+        ExprBox::new(Expression::Literal(Literal::String(
+            "undefined".encode_utf16().collect(),
+        ))),
+    )
+}
+
 fn lower_conditional_default(value_temp: &str, default: &Expression, ctx: &mut TransformContext) {
     let default_state = ctx.new_state();
     let join_state = ctx.new_state();
     ctx.finalize_current_state(StateTerminator::ConditionalGoto {
-        condition: Expression::Binary(
-            BinaryOp::StrictEq,
-            ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
-                value_temp.to_string(),
-            )))),
-            ExprBox::new(Expression::Literal(Literal::String(
-                "undefined".encode_utf16().collect(),
-            ))),
-        ),
+        condition: undefined_check_condition(value_temp),
         true_state: default_state,
         false_state: join_state,
     });
@@ -2250,7 +2258,18 @@ fn lower_conditional_default(value_temp: &str, default: &Expression, ctx: &mut T
             Some(SentValueBindingKind::Variable(value_temp.to_string())),
         );
     } else {
-        emit_temp_assignment(value_temp, default.clone(), ctx);
+        // Not `emit_temp_assignment`: an anonymous function/class default
+        // assigned straight into `value_temp` would apply NamedEvaluation and
+        // leak the temp's own name as `.name` (or, once the real target is a
+        // nested/member-expression pattern that was never going to be named
+        // at all, wrongly name it anyway). `emit_expression_with_binding`
+        // already carries the guard that suppresses this for every other
+        // temp-binding site in this file.
+        emit_expression_with_binding(
+            default,
+            &Some(SentValueBindingKind::Variable(value_temp.to_string())),
+            ctx,
+        );
     }
     ctx.finalize_current_state(StateTerminator::Goto(join_state));
     ctx.current_state_id = join_state;
@@ -2373,19 +2392,21 @@ fn lower_pattern_assignment(pattern: &Pattern, source: &str, ctx: &mut Transform
 /// Assignment-form twin of `lower_array_pattern_binding`: an
 /// `ArrayAssignmentPattern` left side of `=`. Every element still costs
 /// exactly one `Step` terminator regardless of suspension (`IteratorStepValue`
-/// order is itself observable, #725); only an element whose own target or
-/// default reaches a suspension is broken up further. Mirrors
-/// `lower_pattern_assignment_property`'s member-expression idiom: a
-/// member-expression leaf's reference (base, then computed key) is captured
-/// *before* that element's `Step`, per `IteratorDestructuringAssignmentEvaluation`'s
+/// order is itself observable, #725). A leaf's default (if any) and a
+/// member-expression target's reference capture are applied unconditionally
+/// -- *not* only when that element's own target or default happens to
+/// contain a suspension -- because `IteratorDestructuringAssignmentEvaluation`'s
 /// `AssignmentElement` step order (spec.html:21172-21197 — "Left to right
 /// evaluation order is maintained by evaluating a DestructuringAssignmentTarget
 /// that is not a destructuring pattern prior to accessing the iterator or
-/// evaluating the Initializer"). A plain identifier or nested-pattern leaf
-/// needs no such capture: identifier resolution has no observable ordering
-/// effect, and a nested pattern defers entirely to the recursive
-/// `lower_pattern_assignment` call once its value is ready. Callers only pass
-/// patterns `pattern_needs_assignment_lowering` accepts.
+/// evaluating the Initializer") and the Initializer-only-if-undefined rule
+/// both apply regardless of which sibling element is the one that forced this
+/// whole pattern through the lowering. A plain identifier or nested-pattern
+/// leaf with no default needs neither: identifier resolution has no
+/// observable ordering effect, and a nested pattern defers entirely to the
+/// recursive `lower_pattern_assignment` call once its value is ready. The
+/// `Rest` arm mirrors the same unconditional-capture rule for its target.
+/// Callers only pass patterns `pattern_needs_assignment_lowering` accepts.
 fn lower_array_pattern_assignment(
     elements: &[Option<ArrayPatternElement>],
     source: &str,
@@ -2412,11 +2433,16 @@ fn lower_array_pattern_assignment(
                 step_array_pattern_elem(&iter_var, None, ctx);
             }
             Some(ArrayPatternElement::Pattern(pattern)) => {
-                if !pattern_contains_suspension(pattern) {
-                    step_array_pattern_elem(&iter_var, Some(step_tmp.clone()), ctx);
-                    emit_pattern_assignment(pattern.clone(), &step_tmp, ctx);
-                    continue;
-                }
+                // Always decompose into (target, default) and capture a
+                // MemberExpression target's reference *before* the `Step`,
+                // regardless of whether this element itself suspends --
+                // `IteratorDestructuringAssignmentEvaluation`'s `AssignmentElement`
+                // step order (lref, then IteratorStepValue, then Initializer)
+                // applies unconditionally, not just when a suspension forces
+                // this element through its own states. A plain identifier or
+                // nested-pattern leaf with no default takes the cheap path
+                // below (no `lower_conditional_default` state, no capture)
+                // since neither applies to it.
                 let (target, default) = match pattern {
                     Pattern::Assign(target, default) => (target.as_ref(), Some(default.as_ref())),
                     other => (other, None),
@@ -2427,6 +2453,49 @@ fn lower_array_pattern_assignment(
                     }
                     _ => None,
                 };
+                // A non-suspending default on a plain identifier target
+                // assigns straight into that identifier from each branch
+                // (default vs. stepped value) instead of through
+                // `lower_conditional_default`'s shared temp: `AssignmentElement`'s
+                // NamedEvaluation (an anonymous function/class default named
+                // after the target) only fires when the target IsIdentifierRef
+                // and the Initializer is evaluated as the direct RHS of that
+                // identifier's own assignment -- not when it's first routed
+                // through an internal temp. An identifier can't itself contain
+                // a suspension, so gating on `Pattern::Identifier` (rather than
+                // "not a MemberExpression", which would also match a nested
+                // pattern that *can* contain one) keeps this safe without an
+                // `expr_has_suspension` check on the target.
+                if let Pattern::Identifier(name) = target
+                    && let Some(default) = default
+                    && !expr_has_suspension(default, ctx.is_async)
+                {
+                    step_array_pattern_elem(&iter_var, Some(step_tmp.clone()), ctx);
+                    let default_state = ctx.new_state();
+                    let stepped_state = ctx.new_state();
+                    let next_state = ctx.new_state();
+                    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+                        condition: undefined_check_condition(&step_tmp),
+                        true_state: default_state,
+                        false_state: stepped_state,
+                    });
+                    ctx.current_state_id = default_state;
+                    ctx.emit_statement(Statement::Expression(Expression::Assign(
+                        AssignOp::Assign,
+                        ExprBox::new(Expression::Identifier(name.clone())),
+                        ExprBox::new(default.clone()),
+                    )));
+                    ctx.finalize_current_state(StateTerminator::Goto(next_state));
+                    ctx.current_state_id = stepped_state;
+                    ctx.emit_statement(Statement::Expression(Expression::Assign(
+                        AssignOp::Assign,
+                        ExprBox::new(Expression::Identifier(name.clone())),
+                        ExprBox::new(Expression::Identifier(step_tmp.clone())),
+                    )));
+                    ctx.finalize_current_state(StateTerminator::Goto(next_state));
+                    ctx.current_state_id = next_state;
+                    continue;
+                }
                 step_array_pattern_elem(&iter_var, Some(step_tmp.clone()), ctx);
                 if let Some(default) = default {
                     lower_conditional_default(&step_tmp, default, ctx);
@@ -2443,6 +2512,15 @@ fn lower_array_pattern_assignment(
                 }
             }
             Some(ArrayPatternElement::Rest(pattern)) => {
+                // Same unconditional-capture rationale as the `Pattern` arm
+                // above: a MemberExpression rest target's reference must be
+                // evaluated before the iterator is drained, not after.
+                let captured_ref = match pattern {
+                    Pattern::MemberExpression(member_expr) => {
+                        Some(lower_reference_operand(member_expr, true, ctx))
+                    }
+                    _ => None,
+                };
                 let rest_tmp = ctx.new_temp_var("dstr_rest");
                 let next_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::ArrayPatternIter {
@@ -2453,10 +2531,15 @@ fn lower_array_pattern_assignment(
                     next_state,
                 });
                 ctx.current_state_id = next_state;
-                if !pattern_contains_suspension(pattern) {
-                    emit_pattern_assignment(pattern.clone(), &rest_tmp, ctx);
-                } else {
-                    lower_pattern_assignment(pattern, &rest_tmp, ctx);
+                match captured_ref {
+                    Some(captured_ref) => {
+                        ctx.emit_statement(Statement::Expression(Expression::Assign(
+                            AssignOp::Assign,
+                            ExprBox::new(captured_ref),
+                            ExprBox::new(Expression::Identifier(rest_tmp.clone())),
+                        )));
+                    }
+                    None => lower_pattern_assignment(pattern, &rest_tmp, ctx),
                 }
             }
         }
@@ -2477,9 +2560,9 @@ fn lower_array_pattern_assignment(
 }
 
 /// Emits one `ArrayPatternIterOp::Step` terminator, advancing `ctx`'s current
-/// state past it. Shared by `lower_array_pattern_assignment`'s elision,
-/// non-suspending, and suspending-element branches, which otherwise differ
-/// only in what (if anything) runs before and after the step.
+/// state past it. Shared by `lower_array_pattern_assignment`'s elision and
+/// element branches, which otherwise differ only in what (if anything) runs
+/// before and after the step.
 fn step_array_pattern_elem(iter_var: &str, dest_var: Option<String>, ctx: &mut TransformContext) {
     let next_state = ctx.new_state();
     ctx.finalize_current_state(StateTerminator::ArrayPatternIter {

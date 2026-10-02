@@ -36,9 +36,13 @@ declaration form already has.** `lower_array_pattern_assignment`
 (`generator_transform.rs`) mirrors `lower_array_pattern_binding` element for
 element -- every element still costs exactly one `ArrayPatternIterOp::Step`
 regardless of whether it suspends (`IteratorStepValue` order is itself
-observable, issue #725), and only an element whose own target or default
-reaches a suspension is broken up further. It differs from the binding form
-in two ways that follow directly from `IteratorDestructuringAssignmentEvaluation`'s
+observable, issue #725). Unlike the binding form, a leaf's default and a
+member-expression target's reference capture are applied unconditionally --
+not only when that element's own target or default happens to contain a
+suspension -- since the step order and the Initializer-only-if-undefined rule
+both apply regardless of which sibling element is the one that forced the
+whole pattern through this lowering. It differs from the binding form in two
+ways that follow directly from `IteratorDestructuringAssignmentEvaluation`'s
 `AssignmentElement` step order (spec.html:21172-21197): a leaf binds through
 `lower_pattern_assignment` instead of `emit_pattern_binding` (no `kind`, no
 declaration), and a member-expression leaf's reference (base, then computed
