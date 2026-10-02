@@ -337,7 +337,7 @@ fn from_async_gc_root(interp: &mut Interpreter, state: &Rc<RefCell<FromAsyncStat
         &s.array_like,
     ] {
         if let Some(obj_id) = val.as_object_id() {
-            interp.gc_temp_roots.push(obj_id);
+            interp.gc_root_id(obj_id);
             roots.push(obj_id);
         }
     }

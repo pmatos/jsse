@@ -1430,9 +1430,14 @@ impl Interpreter {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn gc_root_id(&mut self, id: u64) {
+        self.gc_temp_roots.push(id);
+    }
+
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
-        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
-            self.gc_temp_roots.push(o.id);
+        if let Some(id) = val.as_object_id() {
+            self.gc_root_id(id);
         }
     }
 

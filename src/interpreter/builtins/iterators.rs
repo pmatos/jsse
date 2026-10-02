@@ -3521,11 +3521,11 @@ impl Interpreter {
                                 Ok(pair) => {
                                     if let Some(id) = pair.0.as_object_id() {
                                         collection_temp_ids.push(id);
-                                        interp.gc_temp_roots.push(id);
+                                        interp.gc_root_id(id);
                                     }
                                     if let Some(id) = pair.1.as_object_id() {
                                         collection_temp_ids.push(id);
-                                        interp.gc_temp_roots.push(id);
+                                        interp.gc_root_id(id);
                                     }
                                     iters.push(pair);
                                 }
@@ -3608,7 +3608,7 @@ impl Interpreter {
                 for pad_val in &padding_values {
                     if let Some(id) = pad_val.as_object_id() {
                         collection_temp_ids.push(id);
-                        interp.gc_temp_roots.push(id);
+                        interp.gc_root_id(id);
                     }
                 }
 
@@ -3655,7 +3655,7 @@ impl Interpreter {
                             ids
                         };
                         for &id in &gc_ids {
-                            interp.gc_temp_roots.push(id);
+                            interp.gc_root_id(id);
                         }
 
                         let result = zip_next_inner(interp, &state_next);
@@ -3879,11 +3879,11 @@ impl Interpreter {
                         Ok(pair) => {
                             if let Some(id) = pair.0.as_object_id() {
                                 collection_temp_ids.push(id);
-                                interp.gc_temp_roots.push(id);
+                                interp.gc_root_id(id);
                             }
                             if let Some(id) = pair.1.as_object_id() {
                                 collection_temp_ids.push(id);
-                                interp.gc_temp_roots.push(id);
+                                interp.gc_root_id(id);
                             }
                             key_names.push(key.clone());
                             iters.push(pair);
@@ -3935,7 +3935,7 @@ impl Interpreter {
                 for pad_val in &padding_values {
                     if let Some(id) = pad_val.as_object_id() {
                         collection_temp_ids.push(id);
-                        interp.gc_temp_roots.push(id);
+                        interp.gc_root_id(id);
                     }
                 }
 
@@ -3972,7 +3972,7 @@ impl Interpreter {
                             ids
                         };
                         for &id in &gc_ids {
-                            interp.gc_temp_roots.push(id);
+                            interp.gc_root_id(id);
                         }
                         let result = zip_keyed_next_inner(interp, &state_next);
                         for id in &gc_ids {

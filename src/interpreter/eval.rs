@@ -4183,12 +4183,7 @@ impl Interpreter {
             Ok(v) => v,
             Err(e) => return Completion::Throw(e),
         };
-        if let Some(o) = iterator
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            self.gc_temp_roots.push(o.id);
-        }
+        self.gc_root_value(&iterator);
         let mut done = false;
         let mut error: Option<JsValue> = None;
         let mut yield_val: Option<JsValue> = None;
