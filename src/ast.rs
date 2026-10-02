@@ -730,6 +730,17 @@ pub(crate) struct ForStatement {
     pub body: Box<Statement>,
 }
 
+impl ForStatement {
+    /// Whether the head is `for (await using ...;;)`, whose loop environment's
+    /// DisposeResources at loop exit may `Await`.
+    pub(crate) fn disposes_at_head(&self) -> bool {
+        matches!(
+            &self.init,
+            Some(ForInit::Variable(decl)) if decl.kind == VarKind::AwaitUsing
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ForInit {
     Variable(VariableDeclaration),

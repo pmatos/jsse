@@ -1159,10 +1159,6 @@ pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
     }
 }
 
-pub(crate) fn is_await_using_for_head(f: &ForStatement) -> bool {
-    matches!(&f.init, Some(ForInit::Variable(decl)) if decl.kind == VarKind::AwaitUsing)
-}
-
 /// The scope statement list a `for (await using x = init; test; update)` head
 /// is equivalent to: the declaration followed by the loop with an empty
 /// initializer. `using` bindings are const-like, so ForBodyEvaluation has no
@@ -1177,7 +1173,7 @@ pub(crate) fn await_using_for_head_scope(
     let Some(ForInit::Variable(decl)) = &f.init else {
         return None;
     };
-    if !is_await_using_for_head(f) {
+    if !f.disposes_at_head() {
         return None;
     }
     let inner_loop = Statement::For(ForStatement {
@@ -1280,7 +1276,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
             // Like a block that directly declares `await using`, the head's
             // own scope is isolatable without scanning the body: nested
             // containers are classified again when the body is lowered.
-            if is_await_using_for_head(f) {
+            if f.disposes_at_head() {
                 return AwaitUsingScan::Isolatable;
             }
             let body = scan_await_using(&f.body);
