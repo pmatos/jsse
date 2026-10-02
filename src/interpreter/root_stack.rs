@@ -1,5 +1,6 @@
 /// The temporary GC root stack: object ids that stay live across a native
-/// call's safepoints until they are popped or the enclosing frame truncates.
+/// call's safepoints until they are released by id or the enclosing frame
+/// truncates.
 ///
 /// The vocabulary is deliberately narrow — push, remove-by-id, truncate, and a
 /// read-only slice for the collector. There is no `retain`, `clear`, `extend`,
