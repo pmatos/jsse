@@ -32,3 +32,11 @@ writeable = "0.6"
 rustc-hash = "2"
 smallvec = "1"
 getrandom = "0.4"
+
+# Release-speed build with debug assertions on, so test262 runs execute the
+# GC root-stack discipline checks (issue #331). Build with
+# `cargo build --profile release-checked`; the binary lands in
+# target/release-checked/.
+[profile.release-checked]
+inherits = "release"
+debug-assertions = true
