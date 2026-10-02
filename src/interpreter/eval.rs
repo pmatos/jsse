@@ -4183,12 +4183,7 @@ impl Interpreter {
             Ok(v) => v,
             Err(e) => return Completion::Throw(e),
         };
-        if let Some(o) = iterator
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            self.gc_temp_roots.push(o.id);
-        }
+        self.gc_root_value(&iterator);
         let mut done = false;
         let mut error: Option<JsValue> = None;
         let mut yield_val: Option<JsValue> = None;
@@ -4350,22 +4345,12 @@ impl Interpreter {
             }
         }
 
-        let unroot = |s: &mut Self| {
-            if let Some(o) = iterator
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
-            {
-                s.gc_temp_roots.remove(pos);
-            }
-        };
-
         if let Some(yv) = yield_val {
             // §13.15.5.2: if iterator not done, track it for IteratorClose when generator returns
             if !done {
                 self.pending_iter_close.push(iterator.clone());
             }
-            unroot(self);
+            self.gc_unroot_value(&iterator);
             return Completion::Yield(yv);
         }
 
@@ -4373,18 +4358,18 @@ impl Interpreter {
         if !done {
             if let Some(err) = error {
                 let _ = self.iterator_close_result(&iterator);
-                unroot(self);
+                self.gc_unroot_value(&iterator);
                 return Completion::Throw(err);
             }
             let r = self.iterator_close_result(&iterator);
-            unroot(self);
+            self.gc_unroot_value(&iterator);
             return match r {
                 Ok(()) => Completion::Normal(JsValue::UNDEFINED),
                 Err(e) => Completion::Throw(e),
             };
         }
 
-        unroot(self);
+        self.gc_unroot_value(&iterator);
         if let Some(err) = error {
             return Completion::Throw(err);
         }
