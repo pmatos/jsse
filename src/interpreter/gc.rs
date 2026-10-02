@@ -34,15 +34,27 @@ pub(crate) struct GcPacer {
     /// Debug stress mode: force a collection every `stress_period` safepoints
     /// that would otherwise not collect. Zero disables it.
     stress_period: u32,
-    stress_tick: u32,
-    /// Stress collections alternate major (finds missing roots) and minor
-    /// (finds missing write barriers).
-    stress_next_major: bool,
+    /// Safepoints seen while stress mode is on. Every `stress_period`th one
+    /// collects, alternating major (finds missing roots) and minor (finds
+    /// missing write barriers).
+    stress_count: u64,
 }
 
 /// Environment variable that enables the GC stress mode: a collection is
 /// forced at every Nth safepoint. Unset, `0` or unparseable leaves it off.
 pub(crate) const GC_STRESS_ENV: &str = "JSSE_GC_STRESS";
+
+/// In-crate unit tests never read the variable, so their exact-result pacer
+/// assertions hold under `JSSE_GC_STRESS`; they opt in with `set_stress_period`.
+fn stress_period_from_env() -> u32 {
+    if cfg!(test) {
+        return 0;
+    }
+    std::env::var(GC_STRESS_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollectionKind {
@@ -62,20 +74,15 @@ impl GcPacer {
             major_requested: false,
             minor_suppressed: false,
             high_survival_minors: 0,
-            stress_period: std::env::var(GC_STRESS_ENV)
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .unwrap_or(0),
-            stress_tick: 0,
-            stress_next_major: true,
+            stress_period: stress_period_from_env(),
+            stress_count: 0,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn set_stress_period(&mut self, period: u32) {
         self.stress_period = period;
-        self.stress_tick = 0;
-        self.stress_next_major = true;
+        self.stress_count = 0;
     }
 
     /// Charge one object allocation. Reused logical slots still hold a full
@@ -130,18 +137,16 @@ impl GcPacer {
             self.minor_requested = false;
             Some(CollectionKind::Minor)
         } else if self.stress_period != 0 {
-            self.stress_tick += 1;
-            if self.stress_tick < self.stress_period {
+            self.stress_count += 1;
+            let period = u64::from(self.stress_period);
+            if !self.stress_count.is_multiple_of(period) {
                 return None;
             }
-            self.stress_tick = 0;
-            let kind = if self.stress_next_major {
+            Some(if (self.stress_count / period) % 2 == 1 {
                 CollectionKind::Major
             } else {
                 CollectionKind::Minor
-            };
-            self.stress_next_major = !self.stress_next_major;
-            Some(kind)
+            })
         } else {
             None
         }

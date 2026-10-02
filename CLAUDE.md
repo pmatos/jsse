@@ -79,7 +79,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 ## GC Stress Mode
 - `JSSE_GC_STRESS=N` (any release or debug binary; read once per interpreter) forces a collection at every Nth safepoint that would not otherwise collect, alternating major (finds missing roots) and minor (finds missing write barriers). Unset, `0` or unparseable leaves it off; the off path costs one predictable branch per safepoint.
 - Safepoints are statement boundaries and loop back-edges (the bytecode VM only has back-edge safepoints, so `--bytecode` stress is sparser). Collection never fires at allocation time.
-- The test262 runner and `cargo test` inherit the variable: `JSSE_GC_STRESS=1 uv run python scripts/run-test262.py test262-extra/ --timeout 300`. `N=1` is only practical on small directories; use `N=16..1000` with `--sample`/`--seed` for broad runs.
+- The test262 runner and integration tests that spawn the binary inherit the variable (in-crate unit tests ignore it and opt in with `GcPacer::set_stress_period`): `JSSE_GC_STRESS=1 uv run python scripts/run-test262.py test262-extra/ --timeout 300`. `N=1` is only practical on small directories; use `N=16..1000` with `--sample`/`--seed` for broad runs.
 - Triage: a stress-only failure means a live value was unreachable from `collect_gc_roots` at a safepoint (a freed object whose arena id was recycled usually shows up as a wrong-typed value or `TypeError`). Reproduce with a minimal script plus `$262.gc()`, then diff against the same run without the variable. Timeouts under stress are cost, not GC bugs. Never `--update-baseline` under stress.
 
 ## Long-Running Builds & Tests
