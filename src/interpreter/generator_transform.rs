@@ -618,7 +618,7 @@ fn transform_generator_inner_opts(
         && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
-        && !(detect_for_await && body.iter().any(has_suspendable_await_using_block))
+        && !body.iter().any(has_suspendable_await_using_block)
     {
         return create_simple_machine(body, params, &analysis);
     }
@@ -764,7 +764,7 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
         return true;
     }
     if is_async {
-        contains_suspension(stmt) || (detect_for_await && has_suspendable_await_using_block(stmt))
+        contains_suspension(stmt) || has_suspendable_await_using_block(stmt)
     } else {
         contains_yield(stmt)
     }

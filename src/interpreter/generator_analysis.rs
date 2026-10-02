@@ -1259,6 +1259,16 @@ fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -
     }
 }
 
+/// A statement list that owns a scope frame of its own (a plain block or a
+/// `try` clause body: the transform opens `OpenBlock` for it), so a lexical
+/// declaration beside an isolatable block stays confined to that frame and
+/// does not block the lowering.
+fn scan_scoped_list<'a>(stmts: impl Iterator<Item = &'a Statement>) -> AwaitUsingScan {
+    stmts.fold(AwaitUsingScan::None, |acc, s| {
+        acc.combine(scan_await_using(s))
+    })
+}
+
 /// Scans a `try`/`catch`/`finally` clause's own statement list: if it
 /// directly declares `await using` (no extra `{ }`), the clause body itself
 /// is isolatable — its own scope is opened/closed around it, exactly like a
@@ -1268,14 +1278,14 @@ fn scan_clause_body(stmts: &[Statement]) -> AwaitUsingScan {
     if block_has_await_using(stmts) {
         AwaitUsingScan::Isolatable
     } else {
-        scan_flattened_list(stmts.iter())
+        scan_scoped_list(stmts.iter())
     }
 }
 
 fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
     match stmt {
         Statement::Block(stmts) if block_has_await_using(stmts) => AwaitUsingScan::Isolatable,
-        Statement::Block(stmts) => scan_flattened_list(stmts.iter()),
+        Statement::Block(stmts) => scan_scoped_list(stmts.iter()),
         Statement::If(i) => scan_await_using(&i.consequent).combine(
             i.alternate
                 .as_ref()
@@ -1339,8 +1349,10 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// environment is lowered as a scope of its own.
 ///
 /// Containers whose lowering would flatten an observable lexical scope
-/// (`for (let ..)`, `for-in`, `with`, a list declaring a binding beside the
-/// block) are excluded and keep running in the tree-walker.
+/// (`for (let ..)`, `for-in`, `with`, a `switch` case list declaring a
+/// binding beside the block) are excluded and keep running in the
+/// tree-walker. A plain block or `try` clause body owns a scope frame, so a
+/// declaration beside the block stays confined to it.
 pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
     scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
@@ -1541,6 +1553,13 @@ mod tests {
             "while (c) { for (await using a = null; ;) {} }",
             "try { for (await using a = null; ;) {} } finally {}",
             "for (await using a = null; ;) { { await using b = null; } }",
+            "while (c) { let j = i; { await using a = null; } }",
+            "try { let x = 2; { await using a = null; } } finally {}",
+            "try {} catch (e) { const x = 1; { await using a = null; } }",
+            "try {} finally { class C {} { await using a = null; } }",
+            "{ let x = 1; { await using a = null; } }",
+            "{ let x = 1; for (await using a = null; ;) {} }",
+            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
         ];
         for src in isolatable {
             assert!(scan_first_statement(src), "expected isolatable: {src}");
@@ -1568,21 +1587,14 @@ mod tests {
     }
 
     #[test]
-    fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
+    fn lowering_that_would_flatten_an_unscoped_lexical_scope_is_blocked() {
         let blocked = [
             "for (let i = 0; i < 3; i++) { { await using a = null; } }",
             "for (const i = 0; ;) { { await using a = null; } }",
-            "while (c) { let j = i; { await using a = null; } }",
             "for (k in o) { { await using a = null; } }",
-            "try { let x = 2; { await using a = null; } } finally {}",
-            "try {} catch (e) { const x = 1; { await using a = null; } }",
-            "try {} finally { class C {} { await using a = null; } }",
-            "{ let x = 1; { await using a = null; } }",
-            "{ let x = 1; for (await using a = null; ;) {} }",
             "with (o) { { await using a = null; } }",
             "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
-            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
         ];
         for src in blocked {
             assert!(!scan_first_statement(src), "expected blocked: {src}");
