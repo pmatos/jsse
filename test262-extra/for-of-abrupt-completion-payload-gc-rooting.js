@@ -90,3 +90,26 @@ assert.sameValue(
   "continue-payload",
   "value threaded through a continue to an outer label survives the inner loop's IteratorClose return() call"
 );
+
+// (v) a continue to the loop's *own* label does not call IteratorClose at
+// all (LoopContinues is true), but the engine must still keep the running
+// value rooted across the next iteration's safepoint.
+var selfContinued = eval(
+  "outer: for (const o of [1, 2]) { ({ tag: 'self-continue-payload' }); continue outer; }"
+);
+assert.sameValue(
+  selfContinued.tag,
+  "self-continue-payload",
+  "value threaded through a continue to the loop's own label survives the next iteration's safepoint"
+);
+
+// (vi) the same shape repeated across several iterations, to catch a
+// GC-root-stack imbalance even without GC stress (see release-checked gate).
+var multiContinued = eval(
+  "outer: for (const o of [1, 2, 3]) { if (o === 2) { ({ t: 2 }); continue outer; } ({ t: o }); }"
+).t;
+assert.sameValue(
+  multiContinued,
+  3,
+  "running value survives repeated same-label continues"
+);

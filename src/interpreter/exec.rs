@@ -2537,7 +2537,9 @@ impl Interpreter {
                 Completion::Continue(Some(lbl), val) => {
                     if loop_label == Some(lbl.as_str()) {
                         if let Some(v2) = val {
+                            self.gc_unroot_value(&v);
                             v = v2;
+                            self.gc_root_value(&v);
                         }
                     } else {
                         let close_result = self.with_gc_root_scope(|interp| {
