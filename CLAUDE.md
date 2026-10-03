@@ -82,6 +82,10 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - The test262 runner and integration tests that spawn the binary inherit the variable (in-crate unit tests ignore it and opt in with `GcPacer::set_stress_period`): `JSSE_GC_STRESS=1 uv run python scripts/run-test262.py test262-extra/ --timeout 300`. `N=1` is only practical on small directories; use `N=16..1000` with `--sample`/`--seed` for broad runs.
 - Triage: a stress-only failure means a live value was unreachable from `collect_gc_roots` at a safepoint (a freed object whose arena id was recycled usually shows up as a wrong-typed value or `TypeError`). Reproduce with a minimal script plus `$262.gc()`, then diff against the same run without the variable. Timeouts under stress are cost, not GC bugs. Never `--update-baseline` under stress.
 
+## GC Root-Stack Discipline
+- `gc_temp_roots` is a strictly LIFO `RootStack`; roots are released in reverse order of push (`gc_unroot_id` debug-asserts the id is on top, frames truncate). Persistent captures belong in a Pinned Native Root or `RootedSlots`, never on the stack. Balance is also asserted after every native call, microtask/timer job and program run (`gc_assert_root_depth`).
+- These are `debug_assert!`s. Run them at release speed with `cargo build --profile release-checked` and `uv run python scripts/run-test262.py --binary target/release-checked/jsse ...`; CI does this for test262-extra (normal and `--bytecode`) and the 10% sample. The checked binary has debug-sized recursion/parse-depth limits (`cfg!(debug_assertions)`), so keep `tests/recursion-limit-*.js` on the plain release build. `cargo test` (debug) executes them too.
+
 ## Long-Running Builds & Tests
 - Never rebuild the binary while a test262 / full-suite run is in flight; snapshot the binary to a temp path first or wait for completion.
 - Never use `pkill -9 <pattern>` — patterns have matched Claude's own shell. Kill by recorded PID only, and clean up temp files explicitly.

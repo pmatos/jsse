@@ -5833,3 +5833,55 @@ fn delete_optional_call_releases_its_argument_roots() {
         interp.gc_temp_roots,
     );
 }
+
+#[cfg(debug_assertions)]
+mod root_stack_discipline {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "released out of LIFO order")]
+    fn unrooting_a_non_top_root_asserts() {
+        let mut interp = Interpreter::new();
+        let (first, second) = (interp.create_object_id(), interp.create_object_id());
+        interp.gc_root_id(first);
+        interp.gc_root_id(second);
+        interp.gc_unroot_id(first);
+    }
+
+    #[test]
+    #[should_panic(expected = "outlived its roots")]
+    fn truncating_to_a_depth_above_the_stack_asserts() {
+        let mut interp = Interpreter::new();
+        let id = interp.create_object_id();
+        interp.gc_root_id(id);
+        let frame = interp.gc_root_frame();
+        interp.gc_unroot_id(id);
+        interp.gc_unroot_frame(frame);
+    }
+
+    #[test]
+    #[should_panic(expected = "unbalanced after a native call")]
+    fn a_native_that_leaks_a_root_trips_the_balance_check() {
+        let mut interp = Interpreter::new();
+        let leaker = interp.create_function(JsFunction::native(
+            "leak".to_string(),
+            0,
+            |interp, _this, _args| {
+                let id = interp.create_object_id();
+                interp.gc_root_id(id);
+                Completion::Normal(JsValue::UNDEFINED)
+            },
+        ));
+        interp.call_function(&leaker, &JsValue::UNDEFINED, &[]);
+    }
+
+    #[test]
+    fn balanced_natives_and_nested_runs_do_not_trip_the_checks() {
+        let interp = run_script(
+            "var a = [1,2,3].map(function (x) { return x * 2; });
+             Promise.resolve(a).then(function (v) { return v.length; });
+             setTimeout(function () { [4, 5].forEach(function () {}); }, 0);",
+        );
+        assert!(interp.gc_temp_roots.is_empty());
+    }
+}
