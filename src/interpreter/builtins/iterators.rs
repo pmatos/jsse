@@ -1620,19 +1620,13 @@ impl Interpreter {
                         interp.gc_unroot_value(&result);
                         match value {
                             Ok(v) => values.push(v),
-                            Err(e) => {
-                                let _ = iterator_close_getter(interp, &iter);
-                                break Completion::Throw(e);
-                            }
+                            Err(e) => break Completion::Throw(e),
                         }
                     }
                     Ok(None) => {
                         break Completion::Normal(interp.create_array(values));
                     }
-                    Err(e) => {
-                        let _ = iterator_close_getter(interp, &iter);
-                        break Completion::Throw(e);
-                    }
+                    Err(e) => break Completion::Throw(e),
                 }
             };
             interp.gc_unroot_frame(frame);
