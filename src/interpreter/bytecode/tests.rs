@@ -2230,9 +2230,14 @@ fn multi_statement_script_completion_stays_balanced_under_bytecode() {
 fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
     use crate::parser::Parser;
 
-    let source = "var __r = (function(x) { \
-                  return x.y + (function() { throw new TypeError('boom'); })(); \
-                  })(Object());";
+    // `compile_call` only accepts a bare `Identifier` callee, so an IIFE
+    // callee (a `Function` expression) bails the whole script out of the
+    // bytecode VM before this scenario can be exercised. `Object()` and
+    // `decodeURIComponent` are both called by plain identifier, so this
+    // compiles and runs on the VM: `Object()`'s result is left live on the
+    // operand stack while `decodeURIComponent('%')` throws, reproducing
+    // issue #331's "outer in-progress expression operand" case for real.
+    let source = "var __r = Object() + decodeURIComponent('%');";
     let mut parser = Parser::new(source).expect("parser init");
     let program = parser.parse_program().expect("parse");
     let mut interp = Interpreter::new();
@@ -2240,12 +2245,16 @@ fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
 
     let completion = interp.run(&program);
     assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "this source must run through the bytecode VM for the test to be meaningful"
+    );
+    assert!(
         matches!(completion, Completion::Throw(_)),
         "unexpected completion: {completion:?}"
     );
     assert!(
         interp.gc_bytecode_roots.is_empty(),
         "the outer chunk's unconditional truncate must release the live \
-         `x` operand left on the stack by the inner call's abrupt throw"
+         `Object()` operand left on the stack by `decodeURIComponent`'s abrupt throw"
     );
 }
