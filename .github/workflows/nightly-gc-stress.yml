@@ -1,17 +1,14 @@
 name: Nightly GC Stress Sample
 
-# JSSE_GC_STRESS forces a GC collection at every Nth safepoint that would not
-# otherwise collect, turning missing-root/write-barrier bugs into
-# reproducible failures (#331). test262-extra/ is covered by a blocking gate
-# in ci.yml; this job samples the much larger full test262/ suite at a
-# higher stress intensity to keep hunting for new ones (#809). It is
-# non-blocking by trigger only (schedule/workflow_dispatch never gate
-# pull_request/push).
+# test262-extra/ is covered by a blocking JSSE_GC_STRESS gate in ci.yml;
+# this job samples the much larger full test262/ suite at a higher stress
+# intensity to keep hunting for new root bugs (#809). It is non-blocking by
+# trigger only (schedule/workflow_dispatch never gate pull_request/push).
 
 on:
   schedule:
-    - cron: "0 3 * * *" # Daily at 03:00 UTC.
-  workflow_dispatch: # Allow manual triggers.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +18,12 @@ env:
 
 permissions:
   contents: read
+
+# Cancel superseded runs on the same ref (a manual dispatch shouldn't
+# duplicate an in-flight scheduled run).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   gc-stress-sample:
