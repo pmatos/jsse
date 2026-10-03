@@ -206,6 +206,8 @@ impl Interpreter {
                         )
                     },
                 ));
+                interp.pin_native_root(&wrapper_fn, &value);
+                interp.pin_native_root(&wrapper_fn, &on_dispose);
                 let resource = DisposableResource {
                     value: JsValue::UNDEFINED,
                     hint: DisposeHint::Sync,
@@ -703,6 +705,8 @@ impl Interpreter {
                         )
                     },
                 ));
+                interp.pin_native_root(&wrapper_fn, &value);
+                interp.pin_native_root(&wrapper_fn, &on_dispose);
                 let resource = DisposableResource {
                     value: JsValue::UNDEFINED,
                     hint: DisposeHint::Async,
