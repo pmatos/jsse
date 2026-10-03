@@ -18,13 +18,17 @@ whole-body, single-frame native temp-root scoping. It is not a Drop-guard:
 that narrows its mutation vocabulary, #331), so there is no interior-mutability
 borrow tax (`RefCell`) on the GC hot path (`gc_root_value`, called from every
 allocation-adjacent site in the interpreter). The raw `gc_root_frame`/
-`gc_unroot_frame` primitive is retained for the one shape the combinator
-cannot express: two frames alive at once where an *inner* one must truncate
-independently while the *outer* one stays open across repeated early exits
-(`Array.from`'s nested `gc_frame`/`gc_frame_next`, see below). Plain LIFO
-nesting — one `with_gc_root_scope` call inside another, each owning its own
-local frame marker on the same stack — composes fine and is not what this
-primitive is reserved for.
+`gc_unroot_frame` primitive is retained for shapes the combinator genuinely
+cannot express — teardown by value identity interleaved with other live roots
+(see "Deliberately not migrated" below) — not for "two frames open at once"
+in general. Plain LIFO nesting — one `with_gc_root_scope` call inside
+another, each owning its own local frame marker on the same stack — composes
+fine. This ADR originally cited `Array.from`'s nested `gc_frame`/
+`gc_frame_next` pair as a case the combinator couldn't express; #806 found
+that framing wrong and converted it to nested `with_gc_root_scope` calls (see
+"Applied so far" below) — the inner frame always closes, normally or
+abruptly, strictly before the outer one does, which is exactly the LIFO shape
+the combinator was already designed for.
 
 An RAII `Drop`-guard is added only if a genuinely interleaved case with two
 or more real adapters later surfaces, decided where the variation is
@@ -41,8 +45,9 @@ zero real adapters in `array.rs`).
 - **`array.rs`** (PR #595): 8 whole-body natives — `concat`, `slice`, `map`,
   `filter`, `splice`, `flat`, `flatMap`, `Array.from`'s array-like path —
   collapsing 71 hand-threaded `gc_unroot_frame` teardowns to 9. The 9
-  remaining are `Array.from`'s nested iterator frames (`gc_frame` +
-  `gc_frame_next` held simultaneously), which correctly keep the raw
+  remaining were `Array.from`'s nested iterator frames (`gc_frame` +
+  `gc_frame_next` held simultaneously); #806 converted these too (see below),
+  retracting this ADR's original claim that the nesting needed the raw
   primitive.
 - **`eval.rs`'s `yield*` delegation** (this change): the concrete first slice
   of the `gc-root-scope-guard-eval` follow-up PR #595 proposed, and the
@@ -76,6 +81,29 @@ zero real adapters in `array.rs`).
   jsse#625 for the open question of whether/when this fallback fires and
   whether the legacy `self.generator_context`-driven branch is still load-
   bearing.
+
+- **Issue #806** converted the remaining multi-exit manual root frames named
+  there: `Object.fromEntries` (one frame, 7 unroot sites), `Array.from`'s
+  iterator path (the nested `gc_frame`/`gc_frame_next` pair above, now an
+  outer `with_gc_root_scope` spanning the loop with a nested
+  `with_gc_root_scope` per iteration returning `Option<Completion>` —
+  `None` to continue, `Some(c)` to propagate an abrupt completion), and
+  `call_async_function` (one frame spanning through the
+  `async_function_resume` kickoff call). `construct_from_evaluated`'s
+  conversion surfaced a real bug rather than pure bookkeeping cleanup: its
+  class-field-initializer pass had several naked `return other;` statements
+  that bypassed the hand-written teardown, leaking the constructor's rooted
+  callee value onto `gc_temp_roots` on a throwing field initializer. The
+  tree-walker's `eval_new` absorbed the leak by truncating its own
+  (depth-based) frame regardless of what was on top, but the bytecode VM's
+  `Op::Construct` has no such net — `release_construct_operands` only
+  manages the separate `gc_bytecode_roots` stack — so the leak was real
+  and reachable under `--bytecode`. Wrapping the whole function in
+  `with_gc_root_scope` makes every exit, including the naked returns,
+  truncate uniformly, closing the leak as a side effect. The two
+  perf-sensitive sites the issue flagged (the `super()` branch of
+  `eval_call`, and `eval_assign`'s `Expression::Member` branch) were
+  measured separately; see the PR for the outcome of that gate.
 
 ## Deliberately not migrated
 
