@@ -6436,405 +6436,399 @@ impl Interpreter {
         args: &[JsValue],
         env: &EnvRef,
     ) -> Completion {
-        let gc_frame = self.gc_root_frame();
-        let callee_val = callee_val.clone();
-        self.gc_root_value(&callee_val);
-        let evaluated_args = args.to_vec();
-        for arg in &evaluated_args {
-            self.gc_root_value(arg);
-        }
-        // Check if callee is a constructor
-        if let Some(co) = (callee_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            let is_proxy = self.get_proxy_info(co.id).is_some();
-            if !is_proxy && let Some(func_obj) = self.get_object_cell(co.id) {
-                let b = func_obj.borrow();
-                let is_ctor = match &b.callable {
-                    Some(JsFunction::User {
-                        is_arrow,
-                        is_generator,
-                        is_async,
-                        is_method,
-                        ..
-                    }) => !is_arrow && !is_method && !is_generator && !is_async,
-                    Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
-                    None => false,
-                };
-                if !is_ctor {
-                    let name = match &b.callable {
-                        Some(JsFunction::Native(n, _, _, _)) => n.clone(),
-                        Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
-                        None => String::new(),
-                    };
-                    drop(b);
-                    let name = if name.is_empty() {
-                        self.describe_non_callable(&callee_val)
-                    } else {
-                        name
-                    };
-                    self.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(
-                        self.create_type_error(&format!("{} is not a constructor", name)),
-                    );
-                }
+        self.with_gc_root_scope(|interp| {
+            let callee_val = callee_val.clone();
+            interp.gc_root_value(&callee_val);
+            let evaluated_args = args.to_vec();
+            for arg in &evaluated_args {
+                interp.gc_root_value(arg);
             }
-        } else {
-            self.gc_unroot_frame(gc_frame);
-            let desc = self.describe_non_callable(&callee_val);
-            return Completion::Throw(
-                self.create_type_error(&format!("{desc} is not a constructor")),
-            );
-        }
-        // Proxy construct trap
-        if let Some(co) = (callee_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && self.get_proxy_info(co.id).is_some()
-        {
-            let target_val = self.get_proxy_target_val(co.id);
-            let args_array = self.create_array(evaluated_args.clone());
-            let new_target = callee_val.clone();
-            self.gc_unroot_frame(gc_frame);
-            match self.invoke_proxy_trap(
-                co.id,
-                "construct",
-                vec![target_val.clone(), args_array, new_target.clone()],
-            ) {
-                Ok(Some(v)) => {
-                    if (v).is_object() {
-                        return Completion::Normal(v);
-                    }
-                    return Completion::Throw(
-                        self.create_type_error("'construct' on proxy: trap returned non-Object"),
-                    );
-                }
-                Ok(None) => {
-                    // No trap, forward to target with original newTarget
-                    return self.construct_with_new_target(
-                        &target_val,
-                        &evaluated_args,
-                        new_target,
-                    );
-                }
-                Err(e) => return Completion::Throw(e),
-            }
-        }
-        // Bound functions: delegate to construct_with_new_target which handles new_target resolution
-        if let Some(co) = (callee_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(co.id)
-            && func_obj.borrow().bound().is_some()
-        {
-            self.gc_unroot_frame(gc_frame);
-            return self.construct_with_new_target(
-                &callee_val,
-                &evaluated_args,
-                callee_val.clone(),
-            );
-        }
-        // Check if this is a derived class constructor
-        let is_derived = if let Some(o) = callee_val
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(o.id)
-        {
-            func_obj.borrow().is_derived_class_constructor()
-        } else {
-            false
-        };
-
-        // Fast path for default derived constructor: bypass the synthetic body to avoid
-        // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
-        if is_derived {
-            let is_default_derived = if let Some(o) = callee_val
+            // Check if callee is a constructor
+            if let Some(co) = (callee_val)
                 .as_object_id()
                 .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
             {
-                func_obj.borrow().is_default_derived_constructor()
-            } else {
-                false
-            };
-            if is_default_derived {
-                // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
-                let super_ctor = if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = self.get_object_cell(o.id)
-                {
-                    if let Some(id) = func_obj.borrow().prototype_id {
-                        JsValue::object(id)
-                    } else {
-                        JsValue::UNDEFINED
+                let is_proxy = interp.get_proxy_info(co.id).is_some();
+                if !is_proxy && let Some(func_obj) = interp.get_object_cell(co.id) {
+                    let b = func_obj.borrow();
+                    let is_ctor = match &b.callable {
+                        Some(JsFunction::User {
+                            is_arrow,
+                            is_generator,
+                            is_async,
+                            is_method,
+                            ..
+                        }) => !is_arrow && !is_method && !is_generator && !is_async,
+                        Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
+                        None => false,
+                    };
+                    if !is_ctor {
+                        let name = match &b.callable {
+                            Some(JsFunction::Native(n, _, _, _)) => n.clone(),
+                            Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
+                            None => String::new(),
+                        };
+                        drop(b);
+                        let name = if name.is_empty() {
+                            interp.describe_non_callable(&callee_val)
+                        } else {
+                            name
+                        };
+                        return Completion::Throw(
+                            interp.create_type_error(&format!("{} is not a constructor", name)),
+                        );
                     }
-                } else {
-                    JsValue::UNDEFINED
-                };
-                let prev_new_target = self.new_target.take();
-                self.new_target = Some(callee_val.clone());
-                self.gc_unroot_frame(gc_frame);
-                let result = self.construct_with_new_target(
-                    &super_ctor,
+                }
+            } else {
+                let desc = interp.describe_non_callable(&callee_val);
+                return Completion::Throw(
+                    interp.create_type_error(&format!("{desc} is not a constructor")),
+                );
+            }
+            // Proxy construct trap
+            if let Some(co) = (callee_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+                && interp.get_proxy_info(co.id).is_some()
+            {
+                let target_val = interp.get_proxy_target_val(co.id);
+                let args_array = interp.create_array(evaluated_args.clone());
+                let new_target = callee_val.clone();
+                match interp.invoke_proxy_trap(
+                    co.id,
+                    "construct",
+                    vec![target_val.clone(), args_array, new_target.clone()],
+                ) {
+                    Ok(Some(v)) => {
+                        if (v).is_object() {
+                            return Completion::Normal(v);
+                        }
+                        return Completion::Throw(
+                            interp.create_type_error("'construct' on proxy: trap returned non-Object"),
+                        );
+                    }
+                    Ok(None) => {
+                        // No trap, forward to target with original newTarget
+                        return interp.construct_with_new_target(
+                            &target_val,
+                            &evaluated_args,
+                            new_target,
+                        );
+                    }
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
+            // Bound functions: delegate to construct_with_new_target which handles new_target resolution
+            if let Some(co) = (callee_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+                && let Some(func_obj) = interp.get_object_cell(co.id)
+                && func_obj.borrow().bound().is_some()
+            {
+                return interp.construct_with_new_target(
+                    &callee_val,
                     &evaluated_args,
                     callee_val.clone(),
                 );
-                if let Completion::Normal(ref new_obj) = result {
-                    // initialize_instance_elements reads self.new_target to find class fields,
-                    // so keep new_target set to callee_val until after it returns.
-                    if let Err(e) = self.initialize_instance_elements(new_obj.clone(), env) {
-                        self.new_target = prev_new_target;
-                        return Completion::Throw(e);
-                    }
-                }
-                self.new_target = prev_new_target;
-                return result;
             }
-        }
+            // Check if this is a derived class constructor
+            let is_derived = if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+                && let Some(func_obj) = interp.get_object_cell(o.id)
+            {
+                func_obj.borrow().is_derived_class_constructor()
+            } else {
+                false
+            };
 
-        if is_derived {
-            // Derived constructor: don't create this, let super() handle it
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(callee_val.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
-            let prev_constructing_derived = self.constructing_derived;
-            self.constructing_derived = true;
-            self.calling_as_construct = true;
-            let (result, had_explicit_return, final_this) =
-                self.call_constructor_body(&callee_val, &JsValue::UNDEFINED, &evaluated_args);
-            self.gc_unroot_frame(gc_frame);
-            self.constructing_derived = prev_constructing_derived;
-            self.new_target = prev_new_target;
-            match result {
-                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                    Completion::Normal(v)
-                }
-                Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
-                    Completion::Throw(self.create_type_error(
-                        "Derived constructors may only return object or undefined",
-                    ))
-                }
-                Completion::Normal(_) | Completion::Empty => {
-                    match final_this {
-                        Some(v) if (v).is_object() => Completion::Normal(v),
-                        Some(v) if !(v).is_undefined() => Completion::Normal(v),
-                        _ => {
-                            Completion::Throw(self.create_reference_error(
-                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                            ))
+            // Fast path for default derived constructor: bypass the synthetic body to avoid
+            // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
+            if is_derived {
+                let is_default_derived = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    func_obj.borrow().is_default_derived_constructor()
+                } else {
+                    false
+                };
+                if is_default_derived {
+                    // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
+                    let super_ctor = if let Some(o) = callee_val
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                        && let Some(func_obj) = interp.get_object_cell(o.id)
+                    {
+                        if let Some(id) = func_obj.borrow().prototype_id {
+                            JsValue::object(id)
+                        } else {
+                            JsValue::UNDEFINED
                         }
-                    }
-                }
-                other => other,
-            }
-        } else {
-            // Base constructor: create this object as before
-            let new_obj_id = self.create_object_id();
-            if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-            {
-                let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
-                    self.get_object_cell_expect(new_obj_id)
-                        .borrow_mut()
-                        .prototype_id = Some(proto_id);
-                }
-            }
-            let instance_field_defs = if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-            {
-                func_obj.borrow().class_instance_field_defs.clone()
-            } else {
-                Vec::new()
-            };
-            let this_val = JsValue::object(new_obj_id);
-            // Use constructor's closure (class_env) so the class name binding
-            // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-            let init_parent = if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-                && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
-            {
-                closure.clone()
-            } else {
-                env.clone()
-            };
-            let init_env = Environment::new(Some(init_parent));
-            init_env.borrow_mut().declare("this", BindingKind::Const);
-            init_env
-                .borrow_mut()
-                .initialize_binding("this", this_val.clone());
-            init_env.borrow_mut().is_field_initializer = true;
-            if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-            {
-                if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                    let cls_env = closure.borrow();
-                    if let Some(ref names) = cls_env.class_private_names {
-                        init_env.borrow_mut().class_private_names = Some(names.clone());
-                    }
-                }
-                // Set __home_object__ for super property access in field initializers.
-                let func_obj_id = func_obj.borrow().id.unwrap();
-                let proto_val = self.get_property_on_id(func_obj_id, "prototype");
-                if proto_val.is_object() {
-                    init_env.borrow_mut().bindings.insert(
-                        "__home_object__".to_string(),
-                        Binding {
-                            value: proto_val,
-                            kind: BindingKind::Const,
-                            initialized: true,
-                            deletable: false,
-                        },
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    let prev_new_target = interp.new_target.take();
+                    interp.new_target = Some(callee_val.clone());
+                    let result = interp.construct_with_new_target(
+                        &super_ctor,
+                        &evaluated_args,
+                        callee_val.clone(),
                     );
-                }
-            }
-            // Pass 1: Install private methods and accessors first.
-            for idef in &instance_field_defs {
-                match idef {
-                    InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            if !obj.borrow().extensible {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot define private method on non-extensible object",
-                                ));
-                            }
-                            if obj.borrow().private_fields.contains_key(name) {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot add private method to object twice",
-                                ));
-                            }
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(name.clone(), PrivateElement::Method(value.clone()));
+                    if let Completion::Normal(ref new_obj) = result {
+                        // initialize_instance_elements reads interp.new_target to find class fields,
+                        // so keep new_target set to callee_val until after it returns.
+                        if let Err(e) = interp.initialize_instance_elements(new_obj.clone(), env) {
+                            interp.new_target = prev_new_target;
+                            return Completion::Throw(e);
                         }
                     }
-                    InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            if !obj.borrow().extensible {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot define private accessor on non-extensible object",
-                                ));
-                            }
-                            if obj.borrow().private_fields.contains_key(name) {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot add private accessor to object twice",
-                                ));
-                            }
-                            obj.borrow_mut().private_fields.insert(
-                                name.clone(),
-                                PrivateElement::Accessor {
-                                    get: get.clone(),
-                                    set: set.clone(),
-                                },
-                            );
-                        }
-                    }
-                    _ => {}
+                    interp.new_target = prev_new_target;
+                    return result;
                 }
             }
-            // Pass 2: Run field initializers in source order.
-            for idef in &instance_field_defs {
-                match idef {
-                    InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
-                        let source_name = name.split('#').next().unwrap_or(name);
-                        let display_name = format!("#{source_name}");
-                        let val = if let Some(init) = initializer {
-                            match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => {
-                                    if init.is_anonymous_function_definition() {
-                                        self.set_function_name(&v, &display_name);
-                                    }
-                                    v
+
+            if is_derived {
+                // Derived constructor: don't create this, let super() handle it
+                let prev_new_target = interp.new_target.take();
+                interp.new_target = Some(callee_val.clone());
+                interp.last_call_had_explicit_return = false;
+                interp.last_call_this_value = None;
+                let prev_constructing_derived = interp.constructing_derived;
+                interp.constructing_derived = true;
+                interp.calling_as_construct = true;
+                let (result, had_explicit_return, final_this) =
+                    interp.call_constructor_body(&callee_val, &JsValue::UNDEFINED, &evaluated_args);
+                interp.constructing_derived = prev_constructing_derived;
+                interp.new_target = prev_new_target;
+                match result {
+                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
+                        Completion::Normal(v)
+                    }
+                    Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
+                        Completion::Throw(interp.create_type_error(
+                            "Derived constructors may only return object or undefined",
+                        ))
+                    }
+                    Completion::Normal(_) | Completion::Empty => {
+                        match final_this {
+                            Some(v) if (v).is_object() => Completion::Normal(v),
+                            Some(v) if !(v).is_undefined() => Completion::Normal(v),
+                            _ => {
+                                Completion::Throw(interp.create_reference_error(
+                                    "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                                ))
+                            }
+                        }
+                    }
+                    other => other,
+                }
+            } else {
+                // Base constructor: create this object as before
+                let new_obj_id = interp.create_object_id();
+                if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    let proto = func_obj.borrow().get_property_value("prototype");
+                    if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
+                        interp.get_object_cell_expect(new_obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(proto_id);
+                    }
+                }
+                let instance_field_defs = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    func_obj.borrow().class_instance_field_defs.clone()
+                } else {
+                    Vec::new()
+                };
+                let this_val = JsValue::object(new_obj_id);
+                // Use constructor's closure (class_env) so the class name binding
+                // is accessible in field initializers (spec §15.7.14 step 28.e.i).
+                let init_parent = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                    && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
+                {
+                    closure.clone()
+                } else {
+                    env.clone()
+                };
+                let init_env = Environment::new(Some(init_parent));
+                init_env.borrow_mut().declare("this", BindingKind::Const);
+                init_env
+                    .borrow_mut()
+                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().is_field_initializer = true;
+                if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
+                        let cls_env = closure.borrow();
+                        if let Some(ref names) = cls_env.class_private_names {
+                            init_env.borrow_mut().class_private_names = Some(names.clone());
+                        }
+                    }
+                    // Set __home_object__ for super property access in field initializers.
+                    let func_obj_id = func_obj.borrow().id.unwrap();
+                    let proto_val = interp.get_property_on_id(func_obj_id, "prototype");
+                    if proto_val.is_object() {
+                        init_env.borrow_mut().bindings.insert(
+                            "__home_object__".to_string(),
+                            Binding {
+                                value: proto_val,
+                                kind: BindingKind::Const,
+                                initialized: true,
+                                deletable: false,
+                            },
+                        );
+                    }
+                }
+                // Pass 1: Install private methods and accessors first.
+                for idef in &instance_field_defs {
+                    match idef {
+                        InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                if !obj.borrow().extensible {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define private method on non-extensible object",
+                                    ));
                                 }
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            if !obj.borrow().extensible {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot define private field on non-extensible object",
-                                ));
-                            }
-                            if obj.borrow().private_fields.contains_key(name) {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot initialize private field twice on the same object",
-                                ));
-                            }
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(name.clone(), PrivateElement::Field(val));
-                        }
-                    }
-                    InstanceFieldDef::Public(key, initializer) => {
-                        let val = if let Some(init) = initializer {
-                            match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => {
-                                    if init.is_anonymous_function_definition() {
-                                        self.set_function_name(&v, key);
-                                    }
-                                    v
+                                if obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot add private method to object twice",
+                                    ));
                                 }
-                                other => return other,
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Method(value.clone()));
                             }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        match crate::interpreter::builtins::array::create_data_property_or_throw(
-                            self, &this_val, key, val,
-                        ) {
-                            Ok(()) => {}
-                            Err(e) => return Completion::Throw(e),
                         }
-                    }
-                    InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
-                        let val = if let Some(init) = initializer {
-                            match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => v,
-                                other => return other,
+                        InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                if !obj.borrow().extensible {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define private accessor on non-extensible object",
+                                    ));
+                                }
+                                if obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot add private accessor to object twice",
+                                    ));
+                                }
+                                obj.borrow_mut().private_fields.insert(
+                                    name.clone(),
+                                    PrivateElement::Accessor {
+                                        get: get.clone(),
+                                        set: set.clone(),
+                                    },
+                                );
                             }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(slot_name.clone(), PrivateElement::Field(val));
                         }
+                        _ => {}
                     }
-                    _ => {} // Methods/accessors handled in pass 1
+                }
+                // Pass 2: Run field initializers in source order.
+                for idef in &instance_field_defs {
+                    match idef {
+                        InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
+                            let source_name = name.split('#').next().unwrap_or(name);
+                            let display_name = format!("#{source_name}");
+                            let val = if let Some(init) = initializer {
+                                match interp.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => {
+                                        if init.is_anonymous_function_definition() {
+                                            interp.set_function_name(&v, &display_name);
+                                        }
+                                        v
+                                    }
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                if !obj.borrow().extensible {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define private field on non-extensible object",
+                                    ));
+                                }
+                                if obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot initialize private field twice on the same object",
+                                    ));
+                                }
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Field(val));
+                            }
+                        }
+                        InstanceFieldDef::Public(key, initializer) => {
+                            let val = if let Some(init) = initializer {
+                                match interp.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => {
+                                        if init.is_anonymous_function_definition() {
+                                            interp.set_function_name(&v, key);
+                                        }
+                                        v
+                                    }
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            match crate::interpreter::builtins::array::create_data_property_or_throw(
+                                interp, &this_val, key, val,
+                            ) {
+                                Ok(()) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
+                            let val = if let Some(init) = initializer {
+                                match interp.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(slot_name.clone(), PrivateElement::Field(val));
+                            }
+                        }
+                        _ => {} // Methods/accessors handled in pass 1
+                    }
+                }
+                let prev_new_target = interp.new_target.take();
+                interp.new_target = Some(callee_val.clone());
+                interp.last_call_had_explicit_return = false;
+                interp.last_call_this_value = None;
+                interp.calling_as_construct = true;
+                let (result, had_explicit_return, captured_this) =
+                    interp.call_constructor_body(&callee_val, &this_val, &evaluated_args);
+                let final_this = captured_this.unwrap_or(this_val.clone());
+                interp.new_target = prev_new_target;
+                match result {
+                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
+                        Completion::Normal(v)
+                    }
+                    Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
+                    other => other,
                 }
             }
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(callee_val.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
-            self.calling_as_construct = true;
-            let (result, had_explicit_return, captured_this) =
-                self.call_constructor_body(&callee_val, &this_val, &evaluated_args);
-            self.gc_unroot_frame(gc_frame);
-            let final_this = captured_this.unwrap_or(this_val.clone());
-            self.new_target = prev_new_target;
-            match result {
-                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                    Completion::Normal(v)
-                }
-                Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
-                other => other,
-            }
-        }
+        })
     }
 
     pub(crate) fn construct(&mut self, constructor: &JsValue, args: &[JsValue]) -> Completion {

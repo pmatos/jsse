@@ -5451,6 +5451,36 @@ fn with_gc_root_scope_truncates_on_every_exit() {
     assert!(interp.gc_temp_roots.contains(&9_001));
 }
 
+/// `construct_from_evaluated`'s field-initializer pass (class public fields)
+/// has several naked `return` statements that bypass its hand-written
+/// `gc_unroot_frame` on a throw. Pins that the temp-root stack is back to its
+/// pre-call depth immediately after the call returns, independent of any
+/// ancestor frame absorbing the leak.
+#[test]
+fn construct_from_evaluated_unroots_on_field_initializer_throw() {
+    let mut interp = run_script(
+        r#"
+        class C {
+            x = (() => { throw 1; })();
+        }
+        "#,
+    );
+    let env = interp.realm().global_env.clone();
+    let callee_val = env.borrow().get("C").expect("class C binding should exist");
+
+    let baseline = interp.gc_root_frame();
+    let result = interp.construct_from_evaluated(&callee_val, &[], &env);
+    assert!(
+        matches!(result, Completion::Throw(_)),
+        "unexpected completion: {result:?}"
+    );
+    assert_eq!(
+        interp.gc_root_frame(),
+        baseline,
+        "temp-root stack must be back to its pre-call depth right after the call returns"
+    );
+}
+
 /// `Array.fromAsync` keeps its call state alive through pinned `RootedSlots`, so
 /// no entry it pushed may remain on the temp-root stack once the call has
 /// settled — on fulfillment, on a rejecting `mapfn`, and on a rejecting
