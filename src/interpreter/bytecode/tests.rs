@@ -2390,6 +2390,31 @@ fn loop_free_allocating_calls_take_bytecode_path() {
     );
 }
 
+/// A braced loop body is a `Statement::Block`, which gets its own
+/// statement-boundary safepoint in addition to the loop's back-edge one —
+/// two safepoints per iteration, not one. This exactly matches the
+/// tree-walker's pre-existing (and unrelated to #808) behavior: `exec_for`'s
+/// per-iteration safepoint plus `exec_prepared_statements`'s per-statement
+/// safepoint for the block's single statement. It is deliberately *not* the
+/// same as `single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge`
+/// above, which covers a bare (unbraced) body instead.
+#[test]
+fn braced_single_statement_loop_body_adds_block_safepoint_per_iteration() {
+    let (three_count, three_chunks) =
+        run_script_safepoints_and_chunks("var sink = 0; for (var i = 0; i < 3; i++) { sink = i; }");
+    let (four_count, four_chunks) =
+        run_script_safepoints_and_chunks("var sink = 0; for (var i = 0; i < 4; i++) { sink = i; }");
+    assert_eq!(three_chunks, 1, "script body must take the bytecode path");
+    assert_eq!(four_chunks, 1, "script body must take the bytecode path");
+    assert_eq!(
+        four_count - three_count,
+        2,
+        "one extra iteration of a braced loop body must add two safepoints: \
+         the block's own statement-boundary one plus the back-edge one \
+         (three={three_count}, four={four_count})"
+    );
+}
+
 #[test]
 fn single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge() {
     let (three_count, three_chunks) =
