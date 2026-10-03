@@ -1649,6 +1649,153 @@ fn computed_member_destructuring_releases_temp_roots_after_abrupt_key_evaluation
     );
 }
 
+/// Calls `Iterator[method](iterables, options)` straight from Rust, because a
+/// JS call expression truncates the temp-root stack to its own frame and would
+/// mask a native that leaks roots on an early return.
+fn call_iterator_zip_native(interp: &mut Interpreter, method: &str, source: &str) -> Completion {
+    let ctor = interp.get_global_var("Iterator").expect("Iterator");
+    let ctor_id = ctor.as_object_id().expect("Iterator object");
+    let zip = match interp.get_object_property(ctor_id, method, &ctor) {
+        Completion::Normal(v) => v,
+        other => panic!("unexpected completion: {other:?}"),
+    };
+    let iterables = interp.get_global_var("iterables").expect("iterables");
+    let options = interp.get_global_var("options").expect("options");
+    let depth = interp.gc_root_frame();
+    let result = interp.call_function(&zip, &ctor, &[iterables, options]);
+    assert_eq!(
+        interp.gc_root_frame(),
+        depth,
+        "Iterator.{method} left temp roots behind for {source}"
+    );
+    result
+}
+
+#[test]
+fn iterator_zip_releases_temp_roots_after_abrupt_completion() {
+    // Every early exit from the constructor, after one or more inner
+    // iterators were collected, must leave the temp-root stack where it found
+    // it: a non-object inner iterable, a padding option that is not iterable,
+    // a padding iterator whose step throws, and one whose close throws.
+    let scenarios = [
+        r#"var iterables = [[1], 5]; var options = undefined;"#,
+        r#"var iterables = [[1], [2]]; var options = { mode: "longest", padding: {} };"#,
+        r#"var iterables = [[1], [2]];
+           var options = { mode: "longest", padding: {
+               [Symbol.iterator]: function () {
+                   return { next: function () { throw new Error("padding step"); } };
+               }
+           } };"#,
+        r#"var iterables = [[1], [2]];
+           var options = { mode: "longest", padding: {
+               [Symbol.iterator]: function () {
+                   return {
+                       next: function () { return { done: false, value: {} }; },
+                       return: function () { throw new Error("padding close"); }
+                   };
+               }
+           } };"#,
+    ];
+    for source in scenarios {
+        let mut interp = run_script(source);
+        let result = call_iterator_zip_native(&mut interp, "zip", source);
+        assert!(
+            matches!(result, Completion::Throw(_)),
+            "expected a throw for {source}, got {result:?}"
+        );
+        assert!(interp.gc_temp_roots.is_empty());
+    }
+}
+
+#[test]
+fn iterator_zip_keyed_releases_temp_roots_after_abrupt_completion() {
+    let scenarios = [
+        r#"var iterables = { a: [1], b: 5 }; var options = undefined;"#,
+        r#"var iterables = { a: [1], get b() { throw new Error("iterable getter"); } };
+           var options = undefined;"#,
+        r#"var iterables = { a: [1], b: [2] };
+           var options = { mode: "longest", padding: { a: {}, get b() { throw new Error("padding getter"); } } };"#,
+    ];
+    for source in scenarios {
+        let mut interp = run_script(source);
+        let result = call_iterator_zip_native(&mut interp, "zipKeyed", source);
+        assert!(
+            matches!(result, Completion::Throw(_)),
+            "expected a throw for {source}, got {result:?}"
+        );
+        assert!(interp.gc_temp_roots.is_empty());
+    }
+}
+
+/// Calls `helper.next()` or `helper.return()` straight from Rust and checks
+/// that the temp-root stack is back where it started once the call returns.
+fn call_zip_helper_method(interp: &mut Interpreter, helper: &str, method: &str) -> Completion {
+    let helper = interp.get_global_var(helper).expect("helper global");
+    let helper_id = helper.as_object_id().expect("helper object");
+    let func = match interp.get_object_property(helper_id, method, &helper) {
+        Completion::Normal(v) => v,
+        other => panic!("unexpected completion: {other:?}"),
+    };
+    let depth = interp.gc_root_frame();
+    let result = interp.call_function(&func, &helper, &[]);
+    assert_eq!(
+        interp.gc_root_frame(),
+        depth,
+        "helper.{method}() left temp roots behind"
+    );
+    result
+}
+
+#[test]
+fn iterator_zip_helpers_release_temp_roots_after_stepping() {
+    let mut interp = run_script(
+        r#"
+        var zipped = Iterator.zip([[1, 2], [3]], { mode: "longest", padding: [{}, {}] });
+        var keyed = Iterator.zipKeyed({ a: [1], b: [2, 3] }, { mode: "longest" });
+        var early = Iterator.zip([[1], [2]]);
+        var failing = Iterator.zip([[1], { next: function () { throw new Error("step"); } }]);
+        var strict = Iterator.zip([[1], [2, 3]], { mode: "strict" });
+        "#,
+    );
+
+    for helper in ["zipped", "keyed"] {
+        loop {
+            match call_zip_helper_method(&mut interp, helper, "next") {
+                Completion::Normal(result) => {
+                    let result_id = result.as_object_id().expect("iterator result");
+                    let done = interp.get_object_property(result_id, "done", &result);
+                    if matches!(done, Completion::Normal(ref v) if interp.to_boolean_val(v)) {
+                        break;
+                    }
+                }
+                other => panic!("unexpected completion: {other:?}"),
+            }
+        }
+    }
+
+    assert!(matches!(
+        call_zip_helper_method(&mut interp, "early", "next"),
+        Completion::Normal(_)
+    ));
+    assert!(matches!(
+        call_zip_helper_method(&mut interp, "early", "return"),
+        Completion::Normal(_)
+    ));
+    assert!(matches!(
+        call_zip_helper_method(&mut interp, "failing", "next"),
+        Completion::Throw(_)
+    ));
+    assert!(matches!(
+        call_zip_helper_method(&mut interp, "strict", "next"),
+        Completion::Normal(_)
+    ));
+    assert!(matches!(
+        call_zip_helper_method(&mut interp, "strict", "next"),
+        Completion::Throw(_)
+    ));
+    assert!(interp.gc_temp_roots.is_empty());
+}
+
 #[test]
 fn private_method_call_with_non_iterable_spread_throws() {
     // A spread argument that is not iterable must throw a TypeError, even when the
