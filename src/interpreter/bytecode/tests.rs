@@ -2285,59 +2285,66 @@ fn run_body_count_safepoints(body: &[Statement]) -> u64 {
     interp.gc.safepoint_calls()
 }
 
-#[test]
-fn statement_list_safepoint_count_scales_with_statement_count() {
-    let three = vec![
+/// Shared by the top-level and nested-block variants below: each wraps the
+/// same three-vs-four-statement bodies differently, but both must show that
+/// one extra statement adds exactly one safepoint.
+fn assert_one_statement_adds_one_safepoint(wrap: impl Fn(Vec<Statement>) -> Vec<Statement>) {
+    let three = wrap(vec![
         literal_expr_stmt(1.0),
         literal_expr_stmt(2.0),
         literal_return_stmt(3.0),
-    ];
-    let four = vec![
+    ]);
+    let four = wrap(vec![
         literal_expr_stmt(1.0),
         literal_expr_stmt(2.0),
         literal_expr_stmt(3.0),
         literal_return_stmt(4.0),
-    ];
+    ]);
     let three_count = run_body_count_safepoints(&three);
     let four_count = run_body_count_safepoints(&four);
     assert_eq!(
         four_count - three_count,
         1,
-        "one extra top-level statement must add exactly one safepoint \
+        "one extra statement must add exactly one safepoint \
          (three={three_count}, four={four_count})"
+    );
+}
+
+#[test]
+fn statement_list_safepoint_count_scales_with_statement_count() {
+    assert_one_statement_adds_one_safepoint(|body| body);
+}
+
+/// A statement that compiles to no bytecode (e.g. `;`) must not get its own
+/// safepoint either — nothing could have been allocated since the prior one,
+/// so emitting one would be a pure wasted VM dispatch.
+#[test]
+fn zero_byte_statement_adds_no_safepoint() {
+    let without_empty = vec![literal_return_stmt(1.0)];
+    let with_empty = vec![Statement::Empty, literal_return_stmt(1.0)];
+    let without_count = run_body_count_safepoints(&without_empty);
+    let with_count = run_body_count_safepoints(&with_empty);
+    assert_eq!(
+        with_count, without_count,
+        "an empty statement must not add a safepoint of its own \
+         (without={without_count}, with={with_count})"
     );
 }
 
 #[test]
 fn nested_block_statement_list_safepoint_count_scales_with_statement_count() {
-    let three = vec![Statement::Block(vec![
-        literal_expr_stmt(1.0),
-        literal_expr_stmt(2.0),
-        literal_return_stmt(3.0),
-    ])];
-    let four = vec![Statement::Block(vec![
-        literal_expr_stmt(1.0),
-        literal_expr_stmt(2.0),
-        literal_expr_stmt(3.0),
-        literal_return_stmt(4.0),
-    ])];
-    let three_count = run_body_count_safepoints(&three);
-    let four_count = run_body_count_safepoints(&four);
-    assert_eq!(
-        four_count - three_count,
-        1,
-        "one extra statement inside a nested block must add exactly one \
-         safepoint, proving Statement::Block has its own emission site \
-         (three={three_count}, four={four_count})"
-    );
+    // Wrapping in a block (rather than leaving the statements at top level)
+    // proves Statement::Block has its own emission site in
+    // `compile_statement_list`, not just the function/script top level.
+    assert_one_statement_adds_one_safepoint(|body| vec![Statement::Block(body)]);
 }
 
-/// Runs `source` as a full script and returns `(safepoint_calls,
-/// bytecode_chunks_executed)`. Unlike `run_body_count_safepoints`, this goes
-/// through the full `interp.run(&program)` pipeline, so callers must check
-/// `bytecode_chunks_executed` themselves to rule out a silent tree-walker
-/// fallback making the assertion pass vacuously.
-fn run_script_safepoints_and_chunks(source: &str) -> (u64, usize) {
+/// Runs `source` as a full script and returns its safepoint count, after
+/// asserting the script body took the bytecode path (not a silent
+/// tree-walker fallback, which would make the safepoint-count assertion
+/// pass vacuously). Unlike `run_body_count_safepoints`, this goes through
+/// the full `interp.run(&program)` pipeline.
+fn run_script_safepoints(source: &str) -> u64 {
     let mut parser = crate::parser::Parser::new(source).expect("parser init");
     let program = parser.parse_program().expect("parse");
     let mut interp = Interpreter::new();
@@ -2347,15 +2354,17 @@ fn run_script_safepoints_and_chunks(source: &str) -> (u64, usize) {
         matches!(completion, Completion::Normal(_) | Completion::Empty),
         "{completion:?}"
     );
-    (interp.gc.safepoint_calls(), interp.bytecode_chunks_executed)
+    assert_eq!(
+        interp.bytecode_chunks_executed, 1,
+        "script body must take the bytecode path"
+    );
+    interp.gc.safepoint_calls()
 }
 
 #[test]
 fn script_body_statement_list_safepoint_count_scales_with_statement_count() {
-    let (three_count, three_chunks) = run_script_safepoints_and_chunks("1; 2; 3;");
-    let (four_count, four_chunks) = run_script_safepoints_and_chunks("1; 2; 3; 4;");
-    assert_eq!(three_chunks, 1, "script body must take the bytecode path");
-    assert_eq!(four_chunks, 1, "script body must take the bytecode path");
+    let three_count = run_script_safepoints("1; 2; 3;");
+    let four_count = run_script_safepoints("1; 2; 3; 4;");
     assert_eq!(
         four_count - three_count,
         1,
@@ -2391,21 +2400,15 @@ fn loop_free_allocating_calls_take_bytecode_path() {
 }
 
 /// A braced loop body is a `Statement::Block`, which gets its own
-/// statement-boundary safepoint in addition to the loop's back-edge one —
-/// two safepoints per iteration, not one. This exactly matches the
-/// tree-walker's pre-existing (and unrelated to #808) behavior: `exec_for`'s
-/// per-iteration safepoint plus `exec_prepared_statements`'s per-statement
-/// safepoint for the block's single statement. It is deliberately *not* the
-/// same as `single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge`
-/// above, which covers a bare (unbraced) body instead.
+/// statement-boundary safepoint on top of the loop's back-edge one — two
+/// safepoints per iteration, not one. Contrast with the unbraced body in
+/// `single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge` below.
 #[test]
 fn braced_single_statement_loop_body_adds_block_safepoint_per_iteration() {
-    let (three_count, three_chunks) =
-        run_script_safepoints_and_chunks("var sink = 0; for (var i = 0; i < 3; i++) { sink = i; }");
-    let (four_count, four_chunks) =
-        run_script_safepoints_and_chunks("var sink = 0; for (var i = 0; i < 4; i++) { sink = i; }");
-    assert_eq!(three_chunks, 1, "script body must take the bytecode path");
-    assert_eq!(four_chunks, 1, "script body must take the bytecode path");
+    let three_count =
+        run_script_safepoints("var sink = 0; for (var i = 0; i < 3; i++) { sink = i; }");
+    let four_count =
+        run_script_safepoints("var sink = 0; for (var i = 0; i < 4; i++) { sink = i; }");
     assert_eq!(
         four_count - three_count,
         2,
@@ -2417,12 +2420,8 @@ fn braced_single_statement_loop_body_adds_block_safepoint_per_iteration() {
 
 #[test]
 fn single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge() {
-    let (three_count, three_chunks) =
-        run_script_safepoints_and_chunks("var sink = 0; for (var i = 0; i < 3; i++) sink = i;");
-    let (four_count, four_chunks) =
-        run_script_safepoints_and_chunks("var sink = 0; for (var i = 0; i < 4; i++) sink = i;");
-    assert_eq!(three_chunks, 1, "script body must take the bytecode path");
-    assert_eq!(four_chunks, 1, "script body must take the bytecode path");
+    let three_count = run_script_safepoints("var sink = 0; for (var i = 0; i < 3; i++) sink = i;");
+    let four_count = run_script_safepoints("var sink = 0; for (var i = 0; i < 4; i++) sink = i;");
     assert_eq!(
         four_count - three_count,
         1,

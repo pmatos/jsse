@@ -568,12 +568,19 @@ impl Compiler {
     /// position, matching the tree-walker's per-statement safepoint (issue
     /// #808). Every statement list a compiled chunk can hold runs through
     /// here: the function/script top level and `Statement::Block`'s body.
+    /// A statement that compiles to no bytecode (e.g. `;` or `var a;`) drops
+    /// its safepoint too — nothing could have been allocated since the prior
+    /// one, so it would just be a wasted dispatch.
     fn compile_statement_list(&mut self, body: &[Statement]) -> Result<(), CompileError> {
         for stmt in body {
             debug_assert_eq!(self.current_stack, 0);
             debug_assert_eq!(self.current_refs, 0);
+            let safepoint_at = self.code.len();
             self.emit(Op::Safepoint);
             self.compile_statement(stmt)?;
+            if self.code.len() == safepoint_at + 1 {
+                self.code.truncate(safepoint_at);
+            }
         }
         Ok(())
     }
