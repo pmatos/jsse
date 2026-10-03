@@ -30,7 +30,7 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
 /// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::Construct as usize) < OP_SLOTS);
+const _: () = assert!((Op::Safepoint as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.
@@ -121,6 +121,16 @@ impl Default for PerfCounters {
 
 impl PerfCounters {
     pub(crate) fn record_op(&mut self, op: Op) {
+        // `Op::Safepoint` is bookkeeping, not work: the tree-walker's
+        // equivalent per-statement `gc_safepoint()` call isn't counted into
+        // `ast_stmts`/`ast_exprs` either, and the `OP` table's `share` column
+        // divides by `vm_ops` and must sum to 100% (#524's published
+        // compiled/tree-walker split depends on both staying comparable).
+        // Counting it into `vm_op_hist` without `vm_ops` would push every
+        // row's shares (including its own) over 100%.
+        if op == Op::Safepoint {
+            return;
+        }
         self.vm_ops += 1;
         self.vm_op_hist[op as usize] += 1;
     }
@@ -344,6 +354,19 @@ mod tests {
         assert_eq!(p.vm_ops, 3);
         assert_eq!(p.vm_op_hist[Op::Add as usize], 2);
         assert_eq!(p.vm_op_hist[Op::Call as usize], 1);
+    }
+
+    /// `Op::Safepoint` is bookkeeping, not dispatched work: it must not move
+    /// `vm_ops` or `vm_op_hist`, or the `OP` table's per-row `share` (which
+    /// divides by `vm_ops`) would sum to more than 100%.
+    #[test]
+    fn record_op_excludes_safepoint_from_histogram_and_total() {
+        let mut p = PerfCounters::default();
+        p.record_op(Op::Add);
+        p.record_op(Op::Safepoint);
+        assert_eq!(p.vm_ops, 1);
+        assert_eq!(p.vm_op_hist[Op::Add as usize], 1);
+        assert_eq!(p.vm_op_hist[Op::Safepoint as usize], 0);
     }
 
     /// Two functions sharing a name must stay separate rows, and the id is

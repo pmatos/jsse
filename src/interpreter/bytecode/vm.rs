@@ -741,6 +741,14 @@ fn run_chunk_inner(
                     pc = (pc as i32 + offset) as usize;
                 }
             }
+            Op::Safepoint => {
+                debug_assert!(stack.is_empty(), "operand stack live at statement boundary");
+                debug_assert!(
+                    refs.is_empty(),
+                    "reference stack live at statement boundary"
+                );
+                interp.gc_safepoint();
+            }
         }
     }
 }
