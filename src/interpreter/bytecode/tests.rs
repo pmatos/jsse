@@ -2200,18 +2200,21 @@ fn unrooting_a_non_top_bytecode_root_asserts() {
     interp.gc_bytecode_roots.pop_expected(first);
 }
 
-#[test]
-fn multi_statement_script_completion_stays_balanced_under_bytecode() {
+fn run_bytecode_script(source: &str) -> (Completion, Interpreter) {
     use crate::parser::Parser;
-
-    let source =
-        "Object(); if (true) { Object(); } for (var i = 0; i < 2; i++) { Object(); } Object();";
     let mut parser = Parser::new(source).expect("parser init");
     let program = parser.parse_program().expect("parse");
     let mut interp = Interpreter::new();
     interp.bytecode_enabled = true;
-
     let completion = interp.run(&program);
+    (completion, interp)
+}
+
+#[test]
+fn multi_statement_script_completion_stays_balanced_under_bytecode() {
+    let source =
+        "Object(); if (true) { Object(); } for (var i = 0; i < 2; i++) { Object(); } Object();";
+    let (completion, interp) = run_bytecode_script(source);
     assert!(
         interp.bytecode_chunks_executed >= 1,
         "this source must run through the bytecode VM for the test to be meaningful"
@@ -2228,8 +2231,6 @@ fn multi_statement_script_completion_stays_balanced_under_bytecode() {
 
 #[test]
 fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
-    use crate::parser::Parser;
-
     // `compile_call` only accepts a bare `Identifier` callee, so an IIFE
     // callee (a `Function` expression) bails the whole script out of the
     // bytecode VM before this scenario can be exercised. `Object()` and
@@ -2238,12 +2239,7 @@ fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
     // operand stack while `decodeURIComponent('%')` throws, reproducing
     // issue #331's "outer in-progress expression operand" case for real.
     let source = "var __r = Object() + decodeURIComponent('%');";
-    let mut parser = Parser::new(source).expect("parser init");
-    let program = parser.parse_program().expect("parse");
-    let mut interp = Interpreter::new();
-    interp.bytecode_enabled = true;
-
-    let completion = interp.run(&program);
+    let (completion, interp) = run_bytecode_script(source);
     assert!(
         interp.bytecode_chunks_executed >= 1,
         "this source must run through the bytecode VM for the test to be meaningful"

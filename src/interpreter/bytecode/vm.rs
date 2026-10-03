@@ -213,11 +213,9 @@ fn run_chunk_with_var_prologue(
     // other completion is produced only after the chunk's own opcode
     // handlers have already popped/unrooted their one live value.
     if !matches!(result, Completion::Throw(_) | Completion::Exit(_)) {
-        debug_assert_eq!(
-            interp.gc_bytecode_roots.len(),
-            gc_frame,
-            "bytecode operand roots unbalanced at chunk exit"
-        );
+        interp
+            .gc_bytecode_roots
+            .assert_depth(gc_frame, "a bytecode chunk exit");
     }
     interp.gc_bytecode_roots.truncate(gc_frame);
     result

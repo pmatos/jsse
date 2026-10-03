@@ -59,6 +59,18 @@ impl RootStack {
         self.ids.truncate(depth);
     }
 
+    /// Debug-assert the stack is exactly `depth` deep. Placed at boundaries
+    /// where every root pushed by the code in between must already have been
+    /// released.
+    #[inline(always)]
+    pub(super) fn assert_depth(&self, depth: usize, boundary: &str) {
+        debug_assert_eq!(
+            self.ids.len(),
+            depth,
+            "root stack unbalanced after {boundary}"
+        );
+    }
+
     #[inline]
     pub(super) fn as_slice(&self) -> &[u64] {
         &self.ids

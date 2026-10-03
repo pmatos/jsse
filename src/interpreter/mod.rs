@@ -1465,11 +1465,7 @@ impl Interpreter {
     /// microtask or timer job, and after a nested run.
     #[inline(always)]
     pub(crate) fn gc_assert_root_depth(&self, depth: usize, boundary: &str) {
-        debug_assert_eq!(
-            self.gc_temp_roots.len(),
-            depth,
-            "GC temp-root stack unbalanced after {boundary}"
-        );
+        self.gc_temp_roots.assert_depth(depth, boundary);
     }
 
     /// Run `body` inside a fresh GC temp-root scope: capture the current
