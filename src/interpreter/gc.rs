@@ -1240,6 +1240,18 @@ impl Interpreter {
             if let Some(ref w) = borrowed.with_object {
                 worklist.push(w.obj_id);
             }
+            // A `using`/`await using` declaration's resources sit here between
+            // AddDisposableResource and the block's DisposeResources call.
+            // `value` is usually also reachable via `bindings`, but the
+            // synthetic sync-dispose-fallback wrapper `dispose_method`
+            // (`async_from_sync_dispose_method`) never is. Root both
+            // explicitly.
+            if let Some(ref stack) = borrowed.dispose_stack {
+                for resource in stack {
+                    Self::collect_value_roots(&resource.value, worklist);
+                    Self::collect_value_roots(&resource.dispose_method, worklist);
+                }
+            }
             current = borrowed.parent.clone();
         }
     }

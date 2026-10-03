@@ -4604,6 +4604,10 @@ impl Interpreter {
             JsValue::UNDEFINED
         };
 
+        let wrapper_value = JsValue::object(wrapper_id);
+        self.pin_native_root(&wrapper_value, &sync_iter);
+        self.pin_native_root(&wrapper_value, &cached_next);
+
         // §27.1.2.1 next()
         let sync_for_next = sync_iter.clone();
         self.define_method(wrapper_id, "next", 1, move |interp, _this, args| {
@@ -4726,8 +4730,7 @@ impl Interpreter {
             }
         });
 
-        let id = wrapper_id;
-        JsValue::object(id)
+        wrapper_value
     }
 
     /// §27.1.2.4 AsyncFromSyncIteratorContinuation(result, promiseCap, syncIterRec, closeOnRejection)
@@ -4782,12 +4785,13 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             },
         ));
+        self.pin_native_root(&on_fulfilled, &outer_promise);
 
         // onRejected: if !done && closeOnRejection → close iterator, then reject
         let outer_clone2 = outer_promise.clone();
         let on_rejected = if !done_bool && close_on_rejection {
             let sync_for_close = sync_iter.clone();
-            self.create_function(JsFunction::native(
+            let on_rejected = self.create_function(JsFunction::native(
                 "".to_string(),
                 1,
                 move |interp, _this, args| {
@@ -4798,9 +4802,12 @@ impl Interpreter {
                     }
                     Completion::Normal(JsValue::UNDEFINED)
                 },
-            ))
+            ));
+            self.pin_native_root(&on_rejected, &outer_promise);
+            self.pin_native_root(&on_rejected, &sync_iter);
+            on_rejected
         } else {
-            self.create_function(JsFunction::native(
+            let on_rejected = self.create_function(JsFunction::native(
                 "".to_string(),
                 1,
                 move |interp, _this, args| {
@@ -4810,7 +4817,9 @@ impl Interpreter {
                     }
                     Completion::Normal(JsValue::UNDEFINED)
                 },
-            ))
+            ));
+            self.pin_native_root(&on_rejected, &outer_promise);
+            on_rejected
         };
 
         let outer_id = outer_promise.as_object_id().unwrap_or(0);
