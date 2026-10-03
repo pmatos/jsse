@@ -5819,10 +5819,6 @@ fn build_quantified_parent_map(
     )
 }
 
-fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
-    build_regex_ex(source, flags).map(|(re, _, _)| re)
-}
-
 fn lookbehind_needs_custom_rtl(source: &str) -> bool {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
@@ -7487,10 +7483,6 @@ fn count_capture_groups(source: &str) -> usize {
         i += 1;
     }
     count
-}
-
-fn regex_captures(re: &CompiledRegex, text: &str) -> Option<RegexCaptures> {
-    regex_captures_at(re, text, 0)
 }
 
 /// Extract named groups from a lookbehind content string.
@@ -9779,14 +9771,6 @@ impl Interpreter {
                         .prototype_id = Some(rsi_proto_id);
                 }
 
-                // Store matcher ID for spec-compliant RegExpExec
-                interp
-                    .get_object_cell_expect(iter_obj_id)
-                    .borrow_mut()
-                    .insert_value(
-                        "__matcher__".to_string(),
-                        JsValue::number(matcher_id as f64),
-                    );
                 interp
                     .get_object_cell_expect(iter_obj_id)
                     .borrow_mut()
@@ -9804,6 +9788,7 @@ impl Interpreter {
                             global,
                             last_index: last_index as usize,
                             done: false,
+                            matcher_id,
                         },
                     );
 
@@ -9853,11 +9838,10 @@ impl Interpreter {
                     }
                 };
                 let state = obj.borrow().iterator_state().cloned();
-                let matcher_id_val = interp.get_property_on_id(o_id, "__matcher__");
                 let full_unicode_val = interp.get_property_on_id(o_id, "__full_unicode__");
                 let full_unicode = full_unicode_val.as_boolean() == Some(true);
 
-                let (source, flags, string, global, last_index, done) =
+                let (source, flags, string, global, last_index, done, mid) =
                     if let Some(IteratorState::RegExpStringIterator {
                         ref source,
                         ref flags,
@@ -9865,6 +9849,7 @@ impl Interpreter {
                         global,
                         last_index,
                         done,
+                        matcher_id,
                     }) = state
                     {
                         (
@@ -9874,6 +9859,7 @@ impl Interpreter {
                             global,
                             last_index,
                             done,
+                            matcher_id,
                         )
                     } else {
                         return Completion::Throw(interp.create_type_error(
@@ -9888,125 +9874,18 @@ impl Interpreter {
                 }
 
                 let regex_input = regex_input_for_subject(interp, string.clone());
-                let regex_string = regex_input.as_str(true);
 
-                // If we have a matcher object, use RegExpExec
-                if let Some(mid) = matcher_id_val.as_number() {
-                    let mid = mid as u64;
-                    let result = regexp_exec_abstract(interp, mid, &regex_input);
-                    let result_val = match result {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-
-                    if result_val.is_null() {
-                        if let Some(obj2) = interp.get_object_cell(o_id) {
-                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                    source, flags, string, global,
-                                    last_index, done: true,
-                                });
-                        }
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
-
-                    if !global {
-                        if let Some(obj2) = interp.get_object_cell(o_id) {
-                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                    source, flags, string, global,
-                                    last_index, done: true,
-                                });
-                        }
-                        return Completion::Normal(
-                            interp.create_iter_result_object(result_val, false),
-                        );
-                    }
-
-                    // Global: check for empty match, advance if needed
-                    let result_id = if let Some(ro_id) = result_val.as_object_id() {
-                        ro_id
-                    } else {
-                        if let Some(obj2) = interp.get_object_cell(o_id) {
-                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                    source, flags, string, global,
-                                    last_index, done: true,
-                                });
-                        }
-                        return Completion::Normal(
-                            interp.create_iter_result_object(result_val, false),
-                        );
-                    };
-                    let match_str_val = match interp.get_object_property(
-                        result_id, "0", &result_val,
-                    ) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let match_str = match interp.to_string_value(&match_str_val) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    if match_str.is_empty() {
-                        let matcher_val2 =
-                            JsValue::object(mid);
-                        let li_val = match interp.get_object_property(
-                            mid, "lastIndex", &matcher_val2,
-                        ) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        let li_num = match interp.to_number_value(&li_val) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let this_index = if li_num.is_nan() || li_num <= 0.0 {
-                            0
-                        } else {
-                            li_num.min(9007199254740991.0).floor() as usize
-                        };
-                        let next_index =
-                            advance_string_index(&regex_input, this_index, full_unicode);
-                        if let Err(e) = spec_set(
-                            interp, mid, "lastIndex",
-                            JsValue::number(next_index as f64), true,
-                        ) {
-                            return Completion::Throw(e);
-                        }
-                    }
-
-                    if let Some(obj2) = interp.get_object_cell(o_id) {
-                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                source, flags, string, global,
-                                last_index, done: false,
-                            });
-                    }
-                    return Completion::Normal(
-                        interp.create_iter_result_object(result_val, false),
-                    );
-                }
-
-                // Fallback: use raw regex (legacy path)
-                let re = match build_regex(&source, &flags) {
-                    Ok(r) => r,
-                    Err(_) => {
-                        if let Some(obj2) = interp.get_object_cell(o_id) {
-                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                    source, flags, string, global,
-                                    last_index, done: true,
-                                });
-                        }
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
+                let result = regexp_exec_abstract(interp, mid, &regex_input);
+                let result_val = match result {
+                    Completion::Normal(v) => v,
+                    other => return other,
                 };
 
-                if last_index > string.len() {
+                if result_val.is_null() {
                     if let Some(obj2) = interp.get_object_cell(o_id) {
                         obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
-                                last_index, done: true,
+                                last_index, done: true, matcher_id: mid,
                             });
                     }
                     return Completion::Normal(
@@ -10014,80 +9893,79 @@ impl Interpreter {
                     );
                 }
 
-                match regex_captures(&re, &regex_string[last_index..]) {
-                    None => {
-                        if let Some(obj2) = interp.get_object_cell(o_id) {
-                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                    source, flags, string, global,
-                                    last_index, done: true,
-                                });
-                        }
-                        Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        )
+                if !global {
+                    if let Some(obj2) = interp.get_object_cell(o_id) {
+                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
+                                source, flags, string, global,
+                                last_index, done: true, matcher_id: mid,
+                            });
                     }
-                    Some(mut caps) => {
-                        ensure_capture_slots(&mut caps, count_capture_groups(&source));
-                        let full = caps.get(0).unwrap();
-                        let match_start = last_index + full.start;
-                        let match_end = last_index + full.end;
+                    return Completion::Normal(
+                        interp.create_iter_result_object(result_val, false),
+                    );
+                }
 
-                        let mut elements: Vec<JsValue> = Vec::new();
-                        elements.push(JsValue::string(JsString::from_str(
-                            &regex_string[match_start..match_end],
-                        )));
-                        for i in 1..caps.len() {
-                            match caps.get(i) {
-                                Some(m) => elements.push(JsValue::string(JsString::from_str(
-                                    &regex_string
-                                        [last_index + m.start..last_index + m.end],
-                                ))),
-                                None => elements.push(JsValue::UNDEFINED),
-                            }
-                        }
-
-                        let result_arr = interp.create_array(elements);
-                        if let Some(ro_id) = result_arr.as_object_id()
-                            && let Some(robj) = interp.get_object_cell(ro_id)
-                        {
-                            robj.borrow_mut().insert_value(
-                                "index".to_string(),
-                                JsValue::number(match_start as f64),
-                            );
-                            robj.borrow_mut().insert_value(
-                                "input".to_string(),
-                                JsValue::string(string.clone()),
-                            );
-                            robj.borrow_mut().insert_value(
-                                "groups".to_string(),
-                                JsValue::UNDEFINED,
-                            );
-                        }
-
-                        let new_last_index = if global {
-                            if full.start == full.end {
-                                match_end + 1
-                            } else {
-                                match_end
-                            }
-                        } else {
-                            last_index
-                        };
-                        let new_done = !global;
-
-                        if let Some(obj2) = interp.get_object_cell(o_id) {
-                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                    source, flags, string, global,
-                                    last_index: new_last_index,
-                                    done: new_done,
-                                });
-                        }
-
-                        Completion::Normal(
-                            interp.create_iter_result_object(result_arr, false),
-                        )
+                // Global: check for empty match, advance if needed
+                let result_id = if let Some(ro_id) = result_val.as_object_id() {
+                    ro_id
+                } else {
+                    if let Some(obj2) = interp.get_object_cell(o_id) {
+                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
+                                source, flags, string, global,
+                                last_index, done: true, matcher_id: mid,
+                            });
+                    }
+                    return Completion::Normal(
+                        interp.create_iter_result_object(result_val, false),
+                    );
+                };
+                let match_str_val = match interp.get_object_property(
+                    result_id, "0", &result_val,
+                ) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let match_str = match interp.to_string_value(&match_str_val) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+                if match_str.is_empty() {
+                    let matcher_val2 =
+                        JsValue::object(mid);
+                    let li_val = match interp.get_object_property(
+                        mid, "lastIndex", &matcher_val2,
+                    ) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let li_num = match interp.to_number_value(&li_val) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let this_index = if li_num.is_nan() || li_num <= 0.0 {
+                        0
+                    } else {
+                        li_num.min(9007199254740991.0).floor() as usize
+                    };
+                    let next_index =
+                        advance_string_index(&regex_input, this_index, full_unicode);
+                    if let Err(e) = spec_set(
+                        interp, mid, "lastIndex",
+                        JsValue::number(next_index as f64), true,
+                    ) {
+                        return Completion::Throw(e);
                     }
                 }
+
+                if let Some(obj2) = interp.get_object_cell(o_id) {
+                    obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
+                            source, flags, string, global,
+                            last_index, done: false, matcher_id: mid,
+                        });
+                }
+                Completion::Normal(
+                    interp.create_iter_result_object(result_val, false),
+                )
             },
         ));
         self.get_object_cell_expect(rsi_proto_id)
