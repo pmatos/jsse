@@ -57,8 +57,14 @@ decisions fire at points they were previously unable to reach.
   vs. AST-unit totals staying comparable (#524's published split). Counting
   the new opcode into `vm_ops` would inflate bytecode "work" relative to the
   tree-walker for no semantic reason.
-- `src/interpreter/gc.rs` — add a `#[cfg(test)] pub(crate) fn stress_hits(&self) -> u64 { self.stress_count }`
-  getter on `GcPacer`, alongside the existing `#[cfg(test)] set_stress_period`.
+- `src/interpreter/gc.rs` — add a `#[cfg(test)] pub(crate) safepoint_calls: u64`
+  field on `GcPacer`, incremented unconditionally at the very top of
+  `begin_collection` (before the `major_requested`/`minor_requested`/
+  `stress_period` branches), plus a `#[cfg(test)] pub(crate) fn safepoint_calls(&self) -> u64`
+  getter. This must be unconditional and never reset: `stress_count` (the
+  existing field) is the wrong thing to read here because `begin_collection`
+  skips incrementing it whenever a major/minor collection is already
+  pending, so it undercounts relative to actual `gc_safepoint()` calls.
   Test-only, zero production cost.
 - `src/interpreter/bytecode/tests.rs` — new unit tests (see §4).
 - `tests/gc_stress.rs` — extend with a `--bytecode` variant (see §4).
@@ -83,56 +89,114 @@ decisions fire at points they were previously unable to reach.
 
 ## 4. TDD slices
 
+All counting slices (1-4) use the new unconditional `GcPacer.safepoint_calls`
+counter from §3, and all of them assert **deltas between two runs**, not
+absolute counts — `Interpreter::new()` plus whatever entry path a test uses
+(`run_chunk` directly vs. `interp.run(&program)`) can itself cross a
+safepoint (e.g. `mod.rs:843`'s program-entry safepoint, or tree-walker
+declaration-instantiation safepoints when going through a full `interp.run`)
+before the chunk under test ever executes, so an absolute-count assertion is
+fragile to unrelated call-path changes. A delta between "N statements" and
+"N+1 statements" (or "N iterations" vs "N+1 iterations") isolates exactly
+the thing being tested.
+
+Test bodies must only use constructs the bytecode compiler already accepts
+(`compile_statement`'s `Empty`/`Expression`/`Block`/`Variable`/`If`/`While`/
+`For`/`Return`, `compile_expr`'s accepted expressions). Object/array
+*literals* are **not** compiled (`Expression::Object`/`Expression::Array`
+only exist in `compiler.rs`'s bail-reason naming table, not in
+`compile_expr`'s match arms) — `var a = {}` bails to the tree-walker and
+would make these tests pass vacuously. Use scalar statements
+(`var a = 1; var b = 2; ...`) for pure safepoint-counting slices, and
+`new Object()` (compiles via `Expression::New` → `Op::Construct`) plus
+`SetProp` (`o.n = n`) where an actual allocation needs to be observed.
+
 1. **Red:** in `src/interpreter/bytecode/tests.rs`, add
-   `straight_line_chunk_gets_zero_safepoints_today` (or similar) that: builds
-   an `Interpreter`, calls `interp.gc.set_stress_period(1)`, compiles a
-   loop-free, multi-statement function body (e.g. three `var` declarations
-   each initialized from a fresh object literal, no `while`/`for`) via
-   `compile_body`, runs it with `run_chunk`, and asserts
-   `interp.gc.stress_hits() == <statement count>`. This fails today at
-   `stress_hits() == 0` (no safepoint exists anywhere in the chunk).
+   `statement_list_safepoint_count_scales_with_statement_count`: compile two
+   function bodies via `compile_body` that differ by exactly one trailing
+   scalar statement (e.g. `var a=1; var b=2; return b;` vs.
+   `var a=1; var b=2; var c=3; return c;`), run each with `run_chunk` against
+   a fresh `Interpreter`, and assert
+   `(calls after 4-statement body) - (calls after 3-statement body) == 1`.
+   This fails today at a delta of `0` (no safepoint exists anywhere in a
+   loop-free chunk, so adding a statement changes nothing).
    **Green:** add `Op::Safepoint` (op.rs), emit it before each statement in
-   `compile_body`'s loop (compiler.rs), add the VM dispatch arm (vm.rs). This
-   slice alone makes the test pass for top-level function bodies.
+   `compile_body`'s loop (compiler.rs), add the VM dispatch arm (vm.rs).
 2. **Red→Green, same pattern, `compile_script_body`:** add a script-body
-   variant of the same test (reusing `eval_script_completion_with_mode`'s
-   pattern already in `tests.rs`) proving a straight-line *script* (not just
-   a function) now safepoints per statement. Emit `Op::Safepoint` in
-   `compile_script_body`'s loop.
-3. **Red→Green, nested `Statement::Block`:** add a test with a function body
-   containing an explicit `{ ... }` block with multiple statements (no
-   loop), asserting the inner block's statements each get their own
-   safepoint too (statement count across both nesting levels). Emit
-   `Op::Safepoint` in `Statement::Block`'s loop in `compile_statement`.
-4. **Green (no new red needed — existing invariant):** add
-   `single_statement_loop_body_keeps_one_safepoint_per_iteration`: compile a
-   `while`/`for` whose body is a *single* non-block statement (e.g.
-   `for (var i = 0; i < 3; i++) sink = i;`), run it with
-   `stress_period(1)`, and assert `stress_hits()` equals the iteration count
-   — *not* double that. This locks in the deliberate scope decision (§6):
-   loop bodies that aren't blocks get no additional statement-boundary
-   safepoint beyond the existing back-edge one, exactly matching
-   `exec_while`/`exec_for`'s tree-walker behavior (verified directly against
-   `exec.rs:1079-1097`, `1804-1825`: the tree-walker's `If`/`While`/`For`
-   arms never safepoint around a single-statement body, only around
-   statement-*list* entries and loop iterations).
+   variant (reusing `eval_script_completion_with_mode`'s pattern already in
+   `tests.rs`) proving a straight-line *script* now safepoints per
+   statement, via the same delta-across-one-extra-statement technique. Emit
+   `Op::Safepoint` in `compile_script_body`'s loop.
+3. **Red→Green, nested `Statement::Block`:** add a function body containing
+   an explicit `{ ... }` block, and assert the delta from adding one extra
+   scalar statement *inside* the block is also `1` (confirms
+   `Statement::Block`'s loop gets its own emission site, not just the
+   top-level `compile_body` loop). Emit `Op::Safepoint` in
+   `Statement::Block`'s loop in `compile_statement`.
+4. **Green (locks in the scope decision, §6):**
+   `single_statement_loop_body_adds_no_extra_safepoint_per_iteration`:
+   compile a `for` loop whose body is a *single* non-block statement (e.g.
+   `for (var i = 0; i < N; i++) sink = i;`) for two values of `N` differing
+   by one (e.g. 3 and 4), and assert the delta is exactly `1` per extra
+   iteration — i.e. only the existing back-edge safepoint fires, the new
+   statement-boundary mechanism adds nothing extra for a non-block loop
+   body. (The `for` statement itself is still one list-position entry in
+   `compile_body`, contributing one constant safepoint on top of the
+   per-iteration ones in both variants — which is why this slice compares
+   two loop lengths against each other rather than asserting an absolute
+   count.) This matches `exec_while`/`exec_for`'s tree-walker behavior,
+   verified directly against `exec.rs:1079-1097`, `1804-1825`: the
+   tree-walker's `If`/`While`/`For` arms never safepoint around a
+   single-statement body, only around statement-*list* entries and loop
+   iterations.
 5. **perf_counters green:** extend the existing `record_op`/`OP` table unit
    tests in `perf_counters.rs` with a case exercising `Op::Safepoint`,
    asserting it appears in `vm_op_hist` / the `OP` table but is excluded from
    `vm_ops`'s denominator.
-6. **Integration green:** extend `tests/gc_stress.rs` with a `--bytecode`
-   invocation of the binary (`cmd.args(["--bytecode", "-e", PROGRAM])`) using
-   a *loop-free* program (new `const`, since the existing `PROGRAM` is
-   loop-heavy and already gets back-edge coverage) at
-   `JSSE_GC_STRESS` periods `1`, `2`, `7`, asserting identical output to the
-   unstressed baseline — this is the end-to-end proof that the issue's
-   literal premise ("`--bytecode` stress barely covers straight-line code")
-   is closed.
+6. **Integration green, two parts:**
+   - In `src/interpreter/bytecode/tests.rs`, add a test on a program shaped
+     as top-level calls to small, bytecode-eligible, allocating functions
+     (e.g. `function make(n) { var o = new Object(); o.n = n; return o; }`
+     called a few times at top level, summing a field off each result) that
+     asserts `interp.bytecode_chunks_executed >= 1` — this is the guard
+     against the integration test below passing vacuously because the
+     program silently fell back to the tree-walker (a top-level function
+     *declaration* makes the whole script body bail per
+     `compile_statement`'s `_ => Err(...)` catch-all; the call sites and the
+     called function bodies are compiled separately and are what must take
+     the bytecode path here).
+   - Extend `tests/gc_stress.rs` with a `--bytecode` invocation of the
+     binary (`cmd.args(["--bytecode", "-e", PROGRAM_STRAIGHT_LINE])`) using
+     that same loop-free, call-based program (the existing `PROGRAM` is
+     loop-heavy and already gets back-edge coverage, so it doesn't exercise
+     the gap) at `JSSE_GC_STRESS` periods `1`, `2`, `7`, asserting identical
+     output to the unstressed baseline — the end-to-end proof that the
+     issue's literal premise ("`--bytecode` stress barely covers
+     straight-line code") is closed.
 
 ## 5. Test surface
 
 - `cargo test --release` — all new unit tests (slices 1-5) and the extended
   `tests/gc_stress.rs` integration test (slice 6).
+- `./scripts/lint.sh` — required before calling the implementation done,
+  per CLAUDE.md.
+- `uv run python scripts/run-test262.py` (full default suite, no
+  `--bytecode`, no `JSSE_GC_STRESS`) — the forward-progress gate CLAUDE.md
+  mandates after any implementation work; confirms `test262-pass.txt`
+  (read from `origin/main`, not rewritten) is unaffected, as expected since
+  this path doesn't touch the changed code at all (§6).
+- `cargo build --release --features perf-counters`, then a deterministic
+  before/after comparison of `compile_ok` and the `BAIL` table's
+  `"jump offset overflow"` count on a large real-world body (the mandreel
+  phase driver from `scripts/gen-mandreel-phases.py`, or `bench_opmix.js`)
+  under `--bytecode`. This count must not increase: the new `Op::Safepoint`
+  bytes add to every statement-list entry's size, which can push a large
+  function's backward-jump delta past the compiler's existing `i16` range
+  check (`compiler.rs:109`, `:122`, already returns
+  `CompileError::Unsupported("jump offset overflow")` rather than
+  miscompiling) — an increase here is a silent coverage loss (more bodies
+  quietly falling back to the tree-walker), not a crash, so it needs an
+  explicit before/after number rather than relying on a test to fail.
 - `cargo build --profile release-checked` +
   `uv run python scripts/run-test262.py test262-extra/ --binary target/release-checked/jsse --bytecode`
   and the same with `--bytecode` omitted — confirms the new statement/refs
@@ -155,19 +219,24 @@ decisions fire at points they were previously unable to reach.
   surface (§6) is real and is covered by the stress run above plus the new
   unit/integration tests in §4, not by test262 content.
 - Perf validation (not pass/fail against a suite, but a required check
-  before calling this done): run `target/release/jsse --bytecode benchmarks/scripts/bench_opmix.js`
-  before and after, several times each, and compare wall-clock output
-  against the existing baseline recorded in
-  `docs/perf/2026-09-25/engine-comparison.json`
-  (`jsse-v0.9.0-bytecode/bench_opmix: 1.82s` vs. tree-walker `3.08s`). The
-  `arith` loop body in that benchmark is a 6-statement block, so this change
-  is *expected* to add up to 6 new (off-path, single-branch) safepoint calls
-  per loop iteration there — bringing bytecode's per-statement cost toward,
-  not past, the tree-walker's existing cost for the same shape. Acceptance:
-  `--bytecode` must stay faster than the tree-walker baseline on
-  `bench_opmix`; it is explicitly not required to stay at today's
-  `--bytecode` number, since today's number is partly an artifact of the gap
-  this issue closes.
+  before calling this done): snapshot a `target/release/jsse` binary built
+  *before* this change, build the *after* binary, and run both several
+  times each against `benchmarks/scripts/bench_opmix.js` and
+  `benchmarks/scripts/bench_loop.js`, with and without `--bytecode`, on
+  this host. Compare the two snapshotted binaries against each other —
+  **not** against the numbers in `docs/perf/2026-09-25/engine-comparison.json`,
+  which come from a different build and a different host and are not a
+  valid before/after baseline for this change. The `arith` loop body in
+  `bench_opmix.js` is a 6-statement block, so this change is *expected* to
+  add up to 6 new (off-path, single-branch) safepoint calls per loop
+  iteration there — bringing bytecode's per-statement cost toward, not
+  past, the tree-walker's existing cost for the same shape; `bench_loop.js`'s
+  single-statement loop bodies, by contrast, should show ~no change (slice
+  4 in §4 is the correctness lock-in for exactly that shape). Acceptance:
+  on this host's own before/after comparison, `--bytecode` must stay faster
+  than its own tree-walker run on both benchmarks; it is explicitly not
+  required to match today's `--bytecode` wall-clock number, since today's
+  number is partly an artifact of the gap this issue closes.
 
 ## 6. Regression risk
 
