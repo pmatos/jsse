@@ -1,0 +1,51 @@
+name: Nightly GC Stress Sample
+
+# JSSE_GC_STRESS forces a GC collection at every Nth safepoint that would not
+# otherwise collect, turning missing-root/write-barrier bugs into
+# reproducible failures (#331). test262-extra/ is covered by a blocking gate
+# in ci.yml; this job samples the much larger full test262/ suite at a
+# higher stress intensity to keep hunting for new ones (#809). It is
+# non-blocking by trigger only (schedule/workflow_dispatch never gate
+# pull_request/push).
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # Daily at 03:00 UTC.
+  workflow_dispatch: # Allow manual triggers.
+
+env:
+  CARGO_TERM_COLOR: always
+  # Varies the sample every run (broader coverage over time) while keeping a
+  # given run's failure reproducible from its logged run id.
+  GC_STRESS_SEED: ${{ github.run_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  gc-stress-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: GC stress sample (JSSE_GC_STRESS=2)
+        run: JSSE_GC_STRESS=2 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.003 --seed "$GC_STRESS_SEED" --timeout 300
+
+      - name: GC stress sample (JSSE_GC_STRESS=2, bytecode VM)
+        if: ${{ !cancelled() }}
+        run: JSSE_GC_STRESS=2 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.003 --seed "$GC_STRESS_SEED" --bytecode --timeout 300
