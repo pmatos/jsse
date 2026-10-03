@@ -563,6 +563,28 @@ impl Compiler {
         }
     }
 
+    /// Compiles a statement list, emitting an `Op::Safepoint` before each
+    /// entry so the VM can reach a GC safepoint at every statement-list
+    /// position, matching the tree-walker's per-statement safepoint (issue
+    /// #808). Every statement list a compiled chunk can hold runs through
+    /// here: the function/script top level and `Statement::Block`'s body.
+    /// A statement that compiles to no bytecode (e.g. `;` or `var a;`) drops
+    /// its safepoint too — nothing could have been allocated since the prior
+    /// one, so it would just be a wasted dispatch.
+    fn compile_statement_list(&mut self, body: &[Statement]) -> Result<(), CompileError> {
+        for stmt in body {
+            debug_assert_eq!(self.current_stack, 0);
+            debug_assert_eq!(self.current_refs, 0);
+            let safepoint_at = self.code.len();
+            self.emit(Op::Safepoint);
+            self.compile_statement(stmt)?;
+            if self.code.len() == safepoint_at + 1 {
+                self.code.truncate(safepoint_at);
+            }
+        }
+        Ok(())
+    }
+
     fn compile_statement(&mut self, stmt: &Statement) -> Result<(), CompileError> {
         match stmt {
             Statement::Empty => Ok(()),
@@ -580,10 +602,7 @@ impl Compiler {
                 // A block is statement-level and net-zero on the stack; each
                 // contained statement balances itself. Any unsupported nested
                 // statement propagates the error so the whole body bails.
-                for s in body {
-                    self.compile_statement(s)?;
-                }
-                Ok(())
+                self.compile_statement_list(body)
             }
             Statement::Variable(decl) => self.compile_var_declaration(decl),
             Statement::If(if_stmt) => {
@@ -815,16 +834,12 @@ fn expression_kind(node: &Expression) -> &'static str {
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
     let mut c = Compiler::new(CompileGoal::Function);
-    for stmt in body {
-        c.compile_statement(stmt)?;
-    }
+    c.compile_statement_list(body)?;
     Ok(c.finish())
 }
 
 pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileError> {
     let mut c = Compiler::new(CompileGoal::Script);
-    for stmt in body {
-        c.compile_statement(stmt)?;
-    }
+    c.compile_statement_list(body)?;
     Ok(c.finish())
 }

@@ -221,6 +221,20 @@ fn run_chunk_with_var_prologue(
     result
 }
 
+/// Hits a GC safepoint, asserting the VM's two scratch stacks are empty —
+/// both safepoint sites (a loop back-edge, a statement boundary) land
+/// between statements, where the compiler guarantees a net-zero stack.
+fn safepoint_with_empty_stacks(
+    interp: &mut Interpreter,
+    stack: &[JsValue],
+    refs: &[IdentifierRef],
+    context: &str,
+) {
+    debug_assert!(stack.is_empty(), "operand stack live at {context}");
+    debug_assert!(refs.is_empty(), "reference stack live at {context}");
+    interp.gc_safepoint();
+}
+
 fn run_chunk_inner(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -657,9 +671,7 @@ fn run_chunk_inner(
             Op::Jump => {
                 let offset = decode_i16(chunk, pc) as i32;
                 if offset < 0 {
-                    debug_assert!(stack.is_empty(), "operand stack live at loop backedge");
-                    debug_assert!(refs.is_empty(), "reference stack live at loop backedge");
-                    interp.gc_safepoint();
+                    safepoint_with_empty_stacks(interp, &stack, &refs, "loop backedge");
                 }
                 pc = (pc as i32 + 2 + offset) as usize;
             }
@@ -740,6 +752,9 @@ fn run_chunk_inner(
                 if !v.is_nullish() {
                     pc = (pc as i32 + offset) as usize;
                 }
+            }
+            Op::Safepoint => {
+                safepoint_with_empty_stacks(interp, &stack, &refs, "statement boundary");
             }
         }
     }

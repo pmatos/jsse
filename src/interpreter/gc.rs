@@ -38,6 +38,14 @@ pub(crate) struct GcPacer {
     /// collects, alternating major (finds missing roots) and minor (finds
     /// missing write barriers).
     stress_count: u64,
+    /// Every `begin_collection()` call, unconditionally — one per production
+    /// `Interpreter::gc_safepoint()`, plus one per direct `begin_collection()`
+    /// call from this module's own unit tests below. Unlike `stress_count`
+    /// (which `begin_collection` skips incrementing whenever a major/minor
+    /// collection is already pending), this never resets and is never
+    /// skipped, so tests can assert exact deltas across calls. Test-only.
+    #[cfg(test)]
+    safepoint_calls: u64,
 }
 
 /// Environment variable that enables the GC stress mode: a collection is
@@ -76,6 +84,8 @@ impl GcPacer {
             high_survival_minors: 0,
             stress_period: stress_period_from_env(),
             stress_count: 0,
+            #[cfg(test)]
+            safepoint_calls: 0,
         }
     }
 
@@ -129,6 +139,10 @@ impl GcPacer {
 
     /// Consume the highest-priority pending request at a safepoint.
     pub(crate) fn begin_collection(&mut self) -> Option<CollectionKind> {
+        #[cfg(test)]
+        {
+            self.safepoint_calls += 1;
+        }
         if self.major_requested {
             self.major_requested = false;
             self.minor_requested = false;
@@ -190,6 +204,11 @@ impl GcPacer {
     #[cfg(test)]
     pub(crate) fn is_requested(&self) -> bool {
         self.minor_requested || self.major_requested
+    }
+
+    #[cfg(test)]
+    pub(crate) fn safepoint_calls(&self) -> u64 {
+        self.safepoint_calls
     }
 
     #[cfg(test)]
