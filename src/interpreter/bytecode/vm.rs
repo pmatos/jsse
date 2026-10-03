@@ -49,13 +49,8 @@ fn root_stack_value(interp: &mut Interpreter, value: &JsValue) {
 }
 
 fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
-    if let Some(object_id) = value.as_object_id()
-        && let Some(pos) = interp
-            .gc_bytecode_roots
-            .iter()
-            .rposition(|&id| id == object_id)
-    {
-        interp.gc_bytecode_roots.remove(pos);
+    if let Some(object_id) = value.as_object_id() {
+        interp.gc_bytecode_roots.pop_expected(object_id);
     }
 }
 
@@ -213,6 +208,17 @@ fn run_chunk_with_var_prologue(
 ) -> Completion {
     let gc_frame = interp.gc_bytecode_roots.len();
     let result = run_chunk_inner(interp, chunk, env, this_value, declare_chunk_vars);
+    // `Throw`/`Exit` are abrupt and can leave operands from an
+    // outer-in-progress expression still on the stack (issue #331) — every
+    // other completion is produced only after the chunk's own opcode
+    // handlers have already popped/unrooted their one live value.
+    if !matches!(result, Completion::Throw(_) | Completion::Exit(_)) {
+        debug_assert_eq!(
+            interp.gc_bytecode_roots.len(),
+            gc_frame,
+            "bytecode operand roots unbalanced at chunk exit"
+        );
+    }
     interp.gc_bytecode_roots.truncate(gc_frame);
     result
 }

@@ -479,7 +479,7 @@ impl Interpreter {
         }
         roots.extend_from_slice(self.gc_temp_roots.as_slice());
         // Values held by active bytecode operand stacks
-        roots.extend_from_slice(&self.gc_bytecode_roots);
+        roots.extend_from_slice(self.gc_bytecode_roots.as_slice());
         // Queued microtasks, pending async-generator requests and armed timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));

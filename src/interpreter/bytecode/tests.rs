@@ -2188,3 +2188,64 @@ fn strict_tail_calls_are_counted_as_vm_issued_calls() {
         interp.perf.calls_from_vm
     );
 }
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "released out of LIFO order")]
+fn unrooting_a_non_top_bytecode_root_asserts() {
+    let mut interp = Interpreter::new();
+    let (first, second) = (interp.create_object_id(), interp.create_object_id());
+    interp.gc_bytecode_roots.push(first);
+    interp.gc_bytecode_roots.push(second);
+    interp.gc_bytecode_roots.pop_expected(first);
+}
+
+#[test]
+fn multi_statement_script_completion_stays_balanced_under_bytecode() {
+    use crate::parser::Parser;
+
+    let source =
+        "Object(); if (true) { Object(); } for (var i = 0; i < 2; i++) { Object(); } Object();";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+
+    let completion = interp.run(&program);
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "this source must run through the bytecode VM for the test to be meaningful"
+    );
+    assert!(
+        matches!(completion, Completion::Normal(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "bytecode operand roots must be released at every statement boundary"
+    );
+}
+
+#[test]
+fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
+    use crate::parser::Parser;
+
+    let source = "var __r = (function(x) { \
+                  return x.y + (function() { throw new TypeError('boom'); })(); \
+                  })(Object());";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+
+    let completion = interp.run(&program);
+    assert!(
+        matches!(completion, Completion::Throw(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "the outer chunk's unconditional truncate must release the live \
+         `x` operand left on the stack by the inner call's abrupt throw"
+    );
+}
