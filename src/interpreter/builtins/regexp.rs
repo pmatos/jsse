@@ -9519,162 +9519,176 @@ impl Interpreter {
                     }
                 };
 
-                // 8. Let A be ! ArrayCreate(0).
-                let mut a: Vec<JsValue> = Vec::new();
-                // 9. Let lengthA = 0.
-                let mut length_a: u32 = 0;
+                // The splitter is reachable only through this bare id until the
+                // function returns (it is never stored into any traced root or
+                // object field) — step 10's ToUint32(limit) coercion and steps
+                // 15.a/15.b inside the loop can all run arbitrary user JS (a
+                // valueOf, a lastIndex setter, or an overridden exec), so root
+                // the splitter across the whole remaining body to survive a GC
+                // cycle triggered from any of them.
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_id(splitter_id);
 
-                // 10. Let lim = limit is undefined ? 2^32-1 : ToUint32(limit).
-                let limit = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let lim: u32 = if limit.is_undefined() {
-                    0xFFFFFFFF
-                } else {
-                    match interp.to_number_value(&limit) {
-                        Ok(n) => crate::types::number_ops::to_uint32(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
+                    // 8. Let A be ! ArrayCreate(0).
+                    let mut a: Vec<JsValue> = Vec::new();
+                    // 9. Let lengthA = 0.
+                    let mut length_a: u32 = 0;
 
-                // 11. If lim = 0, return A.
-                if lim == 0 {
-                    return Completion::Normal(interp.create_array(a));
-                }
-
-                let size = regex_input.subject.len();
-
-                // 12. If size = 0, then
-                if size == 0 {
-                    // a. Let z be ? RegExpExec(splitter, S).
-                    let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
-                    match z {
-                        Completion::Normal(ref v) if v.is_null() => {
-                            a.push(JsValue::string(regex_input.subject.clone()));
-                        }
-                        Completion::Normal(_) => {}
-                        other => return other,
-                    }
-                    return Completion::Normal(interp.create_array(a));
-                }
-
-                // 13. Let p = 0.
-                let mut p: usize = 0;
-                // 14. Let q = p.
-                let mut q: usize = p;
-
-                // 15. Repeat, while q < size,
-                while q < size {
-                    // a. Perform ? Set(splitter, "lastIndex", 𝔽(q), true).
-                    if let Err(e) = spec_set(
-                        interp,
-                        splitter_id,
-                        "lastIndex",
-                        JsValue::number(q as f64),
-                        true,
-                    ) {
-                        return Completion::Throw(e);
-                    }
-
-                    // b. Let z be ? RegExpExec(splitter, S).
-                    let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
-                    let z_val = match z {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-
-                    // c. If z is null, set q to AdvanceStringIndex(S, q, unicodeMatching).
-                    if z_val.is_null() {
-                        q = advance_string_index(&regex_input, q, unicode_matching);
-                        continue;
-                    }
-
-                    // d. Else,
-                    //   i. Let e be ℝ(? ToLength(? Get(splitter, "lastIndex"))).
-                    let splitter_val2 = JsValue::object(splitter_id);
-                    let e_val = match interp.get_object_property(
-                        splitter_id,
-                        "lastIndex",
-                        &splitter_val2,
-                    ) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let e_num = match interp.to_number_value(&e_val) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let e_length = if e_num.is_nan() || e_num <= 0.0 {
-                        0usize
+                    // 10. Let lim = limit is undefined ? 2^32-1 : ToUint32(limit).
+                    let limit = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let lim: u32 = if limit.is_undefined() {
+                        0xFFFFFFFF
                     } else {
-                        (e_num.min(9007199254740991.0).floor() as usize).min(size)
+                        match interp.to_number_value(&limit) {
+                            Ok(n) => crate::types::number_ops::to_uint32(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     };
 
-                    //   ii. If e = p, set q to AdvanceStringIndex(S, q, unicodeMatching).
-                    if e_length == p {
-                        q = advance_string_index(&regex_input, q, unicode_matching);
-                        continue;
-                    }
-
-                    //   iii. Else,
-                    // Push the substring of the original S from p to q.
-                    a.push(JsValue::string(JsString::from_vec(
-                        regex_input.subject.code_units[p..q].to_vec(),
-                    )));
-                    length_a += 1;
-                    if length_a == lim {
+                    // 11. If lim = 0, return A.
+                    if lim == 0 {
                         return Completion::Normal(interp.create_array(a));
                     }
 
-                    // Set p = e
-                    p = e_length;
+                    let size = regex_input.subject.len();
 
-                    // Get captures from z
-                    let z_id = match z_val.as_object_id() {
-                        Some(id) => id,
-                        None => {
-                            q = advance_string_index(&regex_input, q, unicode_matching);
-                            continue;
+                    // 12. If size = 0, then
+                    if size == 0 {
+                        // a. Let z be ? RegExpExec(splitter, S).
+                        let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
+                        match z {
+                            Completion::Normal(ref v) if v.is_null() => {
+                                a.push(JsValue::string(regex_input.subject.clone()));
+                            }
+                            Completion::Normal(_) => {}
+                            other => return other,
                         }
-                    };
-                    // numberOfCaptures
-                    let z_val_ref = z_val.clone();
-                    let len_val = match interp.get_object_property(z_id, "length", &z_val_ref) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let len_num = match interp.to_number_value(&len_val) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let number_of_captures = if len_num.is_nan() || len_num <= 0.0 {
-                        0usize
-                    } else {
-                        (len_num.floor() as usize).max(1) - 1
-                    };
+                        return Completion::Normal(interp.create_array(a));
+                    }
 
-                    let mut i = 1usize;
-                    while i <= number_of_captures {
-                        let cap = match interp.get_object_property(z_id, &i.to_string(), &z_val_ref)
-                        {
+                    // 13. Let p = 0.
+                    let mut p: usize = 0;
+                    // 14. Let q = p.
+                    let mut q: usize = p;
+
+                    // 15. Repeat, while q < size,
+                    while q < size {
+                        // a. Perform ? Set(splitter, "lastIndex", 𝔽(q), true).
+                        if let Err(e) = spec_set(
+                            interp,
+                            splitter_id,
+                            "lastIndex",
+                            JsValue::number(q as f64),
+                            true,
+                        ) {
+                            return Completion::Throw(e);
+                        }
+
+                        // b. Let z be ? RegExpExec(splitter, S).
+                        let z = regexp_exec_abstract(interp, splitter_id, &regex_input);
+                        let z_val = match z {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        a.push(cap);
+
+                        // c. If z is null, set q to AdvanceStringIndex(S, q, unicodeMatching).
+                        if z_val.is_null() {
+                            q = advance_string_index(&regex_input, q, unicode_matching);
+                            continue;
+                        }
+
+                        // d. Else,
+                        //   i. Let e be ℝ(? ToLength(? Get(splitter, "lastIndex"))).
+                        let splitter_val2 = JsValue::object(splitter_id);
+                        let e_val = match interp.get_object_property(
+                            splitter_id,
+                            "lastIndex",
+                            &splitter_val2,
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let e_num = match interp.to_number_value(&e_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let e_length = if e_num.is_nan() || e_num <= 0.0 {
+                            0usize
+                        } else {
+                            (e_num.min(9007199254740991.0).floor() as usize).min(size)
+                        };
+
+                        //   ii. If e = p, set q to AdvanceStringIndex(S, q, unicodeMatching).
+                        if e_length == p {
+                            q = advance_string_index(&regex_input, q, unicode_matching);
+                            continue;
+                        }
+
+                        //   iii. Else,
+                        // Push the substring of the original S from p to q.
+                        a.push(JsValue::string(JsString::from_vec(
+                            regex_input.subject.code_units[p..q].to_vec(),
+                        )));
                         length_a += 1;
                         if length_a == lim {
                             return Completion::Normal(interp.create_array(a));
                         }
-                        i += 1;
+
+                        // Set p = e
+                        p = e_length;
+
+                        // Get captures from z
+                        let z_id = match z_val.as_object_id() {
+                            Some(id) => id,
+                            None => {
+                                q = advance_string_index(&regex_input, q, unicode_matching);
+                                continue;
+                            }
+                        };
+                        // numberOfCaptures
+                        let z_val_ref = z_val.clone();
+                        let len_val = match interp.get_object_property(z_id, "length", &z_val_ref) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let len_num = match interp.to_number_value(&len_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let number_of_captures = if len_num.is_nan() || len_num <= 0.0 {
+                            0usize
+                        } else {
+                            (len_num.floor() as usize).max(1) - 1
+                        };
+
+                        let mut i = 1usize;
+                        while i <= number_of_captures {
+                            let cap = match interp.get_object_property(
+                                z_id,
+                                &i.to_string(),
+                                &z_val_ref,
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            a.push(cap);
+                            length_a += 1;
+                            if length_a == lim {
+                                return Completion::Normal(interp.create_array(a));
+                            }
+                            i += 1;
+                        }
+
+                        // Set q = p
+                        q = p;
                     }
 
-                    // Set q = p
-                    q = p;
-                }
-
-                // 16. Push remaining substring
-                a.push(JsValue::string(JsString::from_vec(
-                    regex_input.subject.code_units[p..].to_vec(),
-                )));
-                Completion::Normal(interp.create_array(a))
+                    // 16. Push remaining substring
+                    a.push(JsValue::string(JsString::from_vec(
+                        regex_input.subject.code_units[p..].to_vec(),
+                    )));
+                    Completion::Normal(interp.create_array(a))
+                })
             },
         ));
         if let Some(key) = get_symbol_key(self, "split") {
