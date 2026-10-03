@@ -2574,15 +2574,13 @@ impl Interpreter {
                     let value = match interp.iterator_value(&next) {
                         Ok(v) => v,
                         Err(e) => {
-                            interp.iterator_close(&iterator, e.clone());
-                            return Completion::Throw(e);
+                            return Completion::Throw(interp.iterator_close(&iterator, e));
                         }
                     };
                     let Some(n) = value.as_number() else {
                         let err = interp
                             .create_type_error("Math.sumPrecise requires all values to be Numbers");
-                        interp.iterator_close(&iterator, err.clone());
-                        return Completion::Throw(err);
+                        return Completion::Throw(interp.iterator_close(&iterator, err));
                     };
                     if n.is_nan() {
                         has_nan = true;

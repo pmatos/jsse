@@ -1549,11 +1549,17 @@ impl Interpreter {
                             ArrayPatternElement::Rest(p) => {
                                 let mut rest = Vec::new();
                                 if !done {
+                                    // Later steps run user code; the Vec is
+                                    // invisible to the GC (issue #794).
+                                    let rest_frame = self.gc_root_frame();
                                     loop {
                                         match self.iterator_step(&iterator) {
                                             Ok(Some(result)) => {
                                                 match self.iterator_value(&result) {
-                                                    Ok(v) => rest.push(v),
+                                                    Ok(v) => {
+                                                        self.gc_root_value(&v);
+                                                        rest.push(v);
+                                                    }
                                                     Err(e) => {
                                                         done = true;
                                                         error = Some(e);
@@ -1572,6 +1578,7 @@ impl Interpreter {
                                             }
                                         }
                                     }
+                                    self.gc_unroot_frame(rest_frame);
                                 }
                                 if error.is_none() {
                                     let arr = self.create_array(rest);
@@ -1621,14 +1628,14 @@ impl Interpreter {
                     return Completion::Yield(yv);
                 }
                 if let Some(err) = error {
-                    if !done {
-                        // `err` must survive `return()`, which can run
-                        // arbitrary user code (issue #794).
-                        let _ = self.with_gc_root_scope(|interp| {
-                            interp.gc_root_value(&err);
-                            interp.iterator_close_result(&iterator)
-                        });
-                    }
+                    // `iterator_close` roots `err` across `return()`, which can
+                    // run arbitrary user code (issue #794), and hands it back
+                    // unchanged regardless of what `return()` does.
+                    let err = if !done {
+                        self.iterator_close(&iterator, err)
+                    } else {
+                        err
+                    };
                     self.gc_unroot_value(&iterator);
                     return Completion::Throw(err);
                 }
@@ -2369,10 +2376,13 @@ impl Interpreter {
         loop_label: Option<&str>,
     ) -> Completion {
         let mut v = JsValue::UNDEFINED;
+        // `v` (the loop's running completion value) must stay rooted for as
+        // long as it's live: `iterator_next()` below and the loop body run
+        // arbitrary user code that can collect (issue #794). Re-rooted in
+        // place wherever `v` is replaced.
+        self.gc_root_value(&v);
         loop {
-            self.gc_root_value(&v);
             self.gc_safepoint();
-            self.gc_unroot_value(&v);
             let step_result = match self.iterator_next(iterator) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
@@ -2469,17 +2479,23 @@ impl Interpreter {
             let body_result = self.dispose_resources(&for_env, body_result);
             match body_result {
                 Completion::Normal(val) => {
+                    self.gc_unroot_value(&v);
                     v = val;
+                    self.gc_root_value(&v);
                 }
                 Completion::Empty => {}
                 Completion::Continue(None, cont_val) => {
                     if let Some(val) = cont_val {
+                        self.gc_unroot_value(&v);
                         v = val;
+                        self.gc_root_value(&v);
                     }
                 }
                 Completion::Break(None, break_val) => {
                     if let Some(val) = break_val {
+                        self.gc_unroot_value(&v);
                         v = val;
+                        self.gc_root_value(&v);
                     }
                     // `v` (the loop-carried completion value) must survive
                     // `return()`, which can run arbitrary user code (issue #794).

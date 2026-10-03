@@ -4357,12 +4357,10 @@ impl Interpreter {
         // §13.15.5.2: IteratorClose when done is false
         if !done {
             if let Some(err) = error {
-                // `err` must survive `return()`, which can run arbitrary
-                // user code (issue #794).
-                let _ = self.with_gc_root_scope(|interp| {
-                    interp.gc_root_value(&err);
-                    interp.iterator_close_result(&iterator)
-                });
+                // `iterator_close` roots `err` across `return()`, which can
+                // run arbitrary user code (issue #794), and hands it back
+                // unchanged regardless of what `return()` does.
+                let err = self.iterator_close(&iterator, err);
                 self.gc_unroot_value(&iterator);
                 return Completion::Throw(err);
             }

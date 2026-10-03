@@ -3040,7 +3040,7 @@ impl Interpreter {
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
                         {
-                            let _ = interp.iterator_close(&iterator, e.clone());
+                            let e = interp.iterator_close(&iterator, e);
                             interp.gc_unroot_frame(gc_frame);
                             return Completion::Throw(e);
                         }
