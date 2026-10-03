@@ -7863,6 +7863,32 @@ fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usiz
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn set_rsi_state(
+    interp: &mut Interpreter,
+    o_id: u64,
+    source: String,
+    flags: String,
+    string: JsString,
+    global: bool,
+    last_index: usize,
+    done: bool,
+    matcher_id: u64,
+) {
+    if let Some(obj2) = interp.get_object_cell(o_id) {
+        obj2.borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
+                source,
+                flags,
+                string,
+                global,
+                last_index,
+                done,
+                matcher_id,
+            });
+    }
+}
+
 fn get_substitution(
     interp: &mut Interpreter,
     matched: &[u16],
@@ -9891,24 +9917,14 @@ impl Interpreter {
                 };
 
                 if result_val.is_null() {
-                    if let Some(obj2) = interp.get_object_cell(o_id) {
-                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                source, flags, string, global,
-                                last_index, done: true, matcher_id: mid,
-                            });
-                    }
+                    set_rsi_state(interp, o_id, source, flags, string, global, last_index, true, mid);
                     return Completion::Normal(
                         interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 }
 
                 if !global {
-                    if let Some(obj2) = interp.get_object_cell(o_id) {
-                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                source, flags, string, global,
-                                last_index, done: true, matcher_id: mid,
-                            });
-                    }
+                    set_rsi_state(interp, o_id, source, flags, string, global, last_index, true, mid);
                     return Completion::Normal(
                         interp.create_iter_result_object(result_val, false),
                     );
@@ -9918,12 +9934,7 @@ impl Interpreter {
                 let result_id = if let Some(ro_id) = result_val.as_object_id() {
                     ro_id
                 } else {
-                    if let Some(obj2) = interp.get_object_cell(o_id) {
-                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                                source, flags, string, global,
-                                last_index, done: true, matcher_id: mid,
-                            });
-                    }
+                    set_rsi_state(interp, o_id, source, flags, string, global, last_index, true, mid);
                     return Completion::Normal(
                         interp.create_iter_result_object(result_val, false),
                     );
@@ -9966,12 +9977,7 @@ impl Interpreter {
                     }
                 }
 
-                if let Some(obj2) = interp.get_object_cell(o_id) {
-                    obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
-                            source, flags, string, global,
-                            last_index, done: false, matcher_id: mid,
-                        });
-                }
+                set_rsi_state(interp, o_id, source, flags, string, global, last_index, false, mid);
                 Completion::Normal(
                     interp.create_iter_result_object(result_val, false),
                 )
