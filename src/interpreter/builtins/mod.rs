@@ -5742,75 +5742,79 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let result_obj_id = interp.create_object_id();
-                    interp
-                        .get_object_cell_expect(result_obj_id)
-                        .borrow_mut()
-                        .prototype_id = None;
-                    let result_id = result_obj_id;
-                    let result_val = JsValue::object(result_id);
-                    let mut k: u64 = 0;
-                    loop {
-                        let next = match interp.iterator_step(&iterator) {
-                            Ok(Some(v)) => v,
-                            Ok(None) => break,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let value = match interp.iterator_value(&next) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let key_val = match interp.call_function(
-                            &callback,
-                            &JsValue::UNDEFINED,
-                            &[value.clone(), JsValue::number(k as f64)],
-                        ) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::UNDEFINED,
-                        };
-                        // ToPropertyKey (with error propagation)
-                        let key_str = match interp.to_property_key(&key_val) {
-                            Ok(k) => k,
-                            Err(e) => {
-                                // IfAbruptCloseIterator
-                                let _ = interp.iterator_close(&iterator, e.clone());
-                                return Completion::Throw(e);
+                    interp.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&iterator);
+                        let result_obj_id = interp.create_object_id();
+                        interp
+                            .get_object_cell_expect(result_obj_id)
+                            .borrow_mut()
+                            .prototype_id = None;
+                        let result_id = result_obj_id;
+                        let result_val = JsValue::object(result_id);
+                        interp.gc_root_value(&result_val);
+                        let mut k: u64 = 0;
+                        loop {
+                            let next = match interp.iterator_step(&iterator) {
+                                Ok(Some(v)) => v,
+                                Ok(None) => break,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let value = match interp.iterator_value(&next) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let key_val = match interp.call_function(
+                                &callback,
+                                &JsValue::UNDEFINED,
+                                &[value.clone(), JsValue::number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::UNDEFINED,
+                            };
+                            // ToPropertyKey (with error propagation)
+                            let key_str = match interp.to_property_key(&key_val) {
+                                Ok(k) => k,
+                                Err(e) => {
+                                    // IfAbruptCloseIterator
+                                    let _ = interp.iterator_close(&iterator, e.clone());
+                                    return Completion::Throw(e);
+                                }
+                            };
+                            if let Some(obj) = interp.get_object(result_id) {
+                                let existing = interp.get_property_on_id(result_id, &key_str);
+                                if let Some(array_id) = existing.as_object_id()
+                                    && let Some(arr) = interp.get_object(array_id)
+                                {
+                                    let len_val = interp.get_property_on_id(array_id, "length");
+                                    let len = to_number(&len_val) as usize;
+                                    // Use enumerable property insertion
+                                    arr.borrow_mut().insert_property(
+                                        len.to_string(),
+                                        PropertyDescriptor::data(value, true, true, true),
+                                    );
+                                    arr.borrow_mut().insert_property(
+                                        "length".to_string(),
+                                        PropertyDescriptor::data(
+                                            JsValue::number((len + 1) as f64),
+                                            true,
+                                            false,
+                                            false,
+                                        ),
+                                    );
+                                } else {
+                                    let new_arr = interp.create_array(vec![value]);
+                                    // Create enumerable property
+                                    obj.borrow_mut().insert_property(
+                                        key_str,
+                                        PropertyDescriptor::data(new_arr, true, true, true),
+                                    );
+                                }
                             }
-                        };
-                        if let Some(obj) = interp.get_object(result_id) {
-                            let existing = interp.get_property_on_id(result_id, &key_str);
-                            if let Some(array_id) = existing.as_object_id()
-                                && let Some(arr) = interp.get_object(array_id)
-                            {
-                                let len_val = interp.get_property_on_id(array_id, "length");
-                                let len = to_number(&len_val) as usize;
-                                // Use enumerable property insertion
-                                arr.borrow_mut().insert_property(
-                                    len.to_string(),
-                                    PropertyDescriptor::data(value, true, true, true),
-                                );
-                                arr.borrow_mut().insert_property(
-                                    "length".to_string(),
-                                    PropertyDescriptor::data(
-                                        JsValue::number((len + 1) as f64),
-                                        true,
-                                        false,
-                                        false,
-                                    ),
-                                );
-                            } else {
-                                let new_arr = interp.create_array(vec![value]);
-                                // Create enumerable property
-                                obj.borrow_mut().insert_property(
-                                    key_str,
-                                    PropertyDescriptor::data(new_arr, true, true, true),
-                                );
-                            }
+                            k += 1;
                         }
-                        k += 1;
-                    }
-                    Completion::Normal(result_val)
+                        Completion::Normal(result_val)
+                    })
                 },
             ));
             obj_func
