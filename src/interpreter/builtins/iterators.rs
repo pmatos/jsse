@@ -4236,122 +4236,137 @@ impl Interpreter {
                 };
                 let cap_promise_id = cap.promise.as_object_id().unwrap_or(0);
 
-                // 3. Let return be GetMethod(O, "return").
-                // 4. IfAbruptRejectPromise(return, promiseCapability).
-                let return_method = match interp.obj_get(this, "return") {
-                    Ok(v) => v,
-                    Err(e) => {
-                        interp.reject_promise(cap_promise_id, e);
-                        return Completion::Normal(cap.promise);
-                    }
-                };
-                let return_method = if interp.is_callable(&return_method) {
-                    Some(return_method)
-                } else if return_method.is_nullish() {
-                    None
-                } else if !return_method.is_nullish() {
-                    let e = interp.create_type_error("return is not a function");
-                    interp.reject_promise(cap_promise_id, e);
-                    return Completion::Normal(cap.promise);
-                } else {
-                    None
-                };
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&cap.promise);
+                    interp.gc_root_value(&cap.resolve);
+                    interp.gc_root_value(&cap.reject);
 
-                // 5. If return is undefined, then
-                //   a. Perform ! Call(promiseCapability.[[Resolve]], undefined, « undefined »).
-                if return_method.is_none() {
-                    let _ = interp.call_function(
-                        &cap.resolve,
-                        &JsValue::UNDEFINED,
-                        &[JsValue::UNDEFINED],
-                    );
-                    return Completion::Normal(cap.promise);
-                }
-
-                // 6. Else,
-                let return_method = return_method.unwrap();
-                //   a. Let result be Call(return, O, « »).
-                //   b. IfAbruptRejectPromise(result, promiseCapability).
-                let result = match interp.call_function(&return_method, this, &[]) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        interp.reject_promise(cap_promise_id, e);
-                        return Completion::Normal(cap.promise);
-                    }
-                    c => return c,
-                };
-
-                //   c. Let resultWrapper be Completion(PromiseResolve(%Promise%, result)).
-                //   d. IfAbruptRejectPromise(resultWrapper, promiseCapability).
-                let result_wrapper =
-                    match interp.promise_resolve_with_constructor(&promise_ctor, &result) {
+                    // 3. Let return be GetMethod(O, "return").
+                    // 4. IfAbruptRejectPromise(return, promiseCapability).
+                    let return_method = match interp.obj_get(this, "return") {
                         Ok(v) => v,
                         Err(e) => {
+                            interp.gc_root_value(&e);
                             interp.reject_promise(cap_promise_id, e);
-                            return Completion::Normal(cap.promise);
+                            return Completion::Normal(cap.promise.clone());
                         }
                     };
+                    interp.gc_root_value(&return_method);
+                    let return_method = if interp.is_callable(&return_method) {
+                        Some(return_method)
+                    } else if return_method.is_nullish() {
+                        None
+                    } else if !return_method.is_nullish() {
+                        let e = interp.create_type_error("return is not a function");
+                        interp.gc_root_value(&e);
+                        interp.reject_promise(cap_promise_id, e);
+                        return Completion::Normal(cap.promise.clone());
+                    } else {
+                        None
+                    };
 
-                //   e-f. Let onFulfilled be a function that returns undefined.
-                let on_fulfilled = interp.create_function(JsFunction::native(
-                    "".to_string(),
-                    1,
-                    |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
-                ));
+                    // 5. If return is undefined, then
+                    //   a. Perform ! Call(promiseCapability.[[Resolve]], undefined, « undefined »).
+                    if return_method.is_none() {
+                        let _ = interp.call_function(
+                            &cap.resolve,
+                            &JsValue::UNDEFINED,
+                            &[JsValue::UNDEFINED],
+                        );
+                        return Completion::Normal(cap.promise.clone());
+                    }
 
-                //   g. Perform PerformPromiseThen(resultWrapper, onFulfilled, undefined, promiseCapability).
-                let wrapper_id = result_wrapper.as_object_id().unwrap_or(0);
-                let fulfill_reaction = crate::interpreter::types::PromiseReaction {
-                    handler: Some(on_fulfilled),
-                    promise_id: Some(cap_promise_id),
-                    resolve: cap.resolve.clone(),
-                    reject: cap.reject.clone(),
-                    reaction_type: crate::interpreter::types::PromiseReactionType::Fulfill,
-                };
-                let reject_reaction = crate::interpreter::types::PromiseReaction {
-                    handler: None,
-                    promise_id: Some(cap_promise_id),
-                    resolve: cap.resolve,
-                    reject: cap.reject,
-                    reaction_type: crate::interpreter::types::PromiseReactionType::Reject,
-                };
+                    // 6. Else,
+                    let return_method = return_method.unwrap();
+                    //   a. Let result be Call(return, O, « »).
+                    //   b. IfAbruptRejectPromise(result, promiseCapability).
+                    let result = match interp.call_function(&return_method, this, &[]) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            interp.gc_root_value(&e);
+                            interp.reject_promise(cap_promise_id, e);
+                            return Completion::Normal(cap.promise.clone());
+                        }
+                        c => return c,
+                    };
+                    interp.gc_root_value(&result);
 
-                let fulfill_reaction2 = fulfill_reaction.clone();
-                let reject_reaction2 = reject_reaction.clone();
-                let state = if let Some(obj) = interp.get_object_cell(wrapper_id) {
-                    let mut o = obj.borrow_mut();
-                    if let Some(pd) = o.promise_data_mut() {
-                        pd.is_handled = true;
-                        match &pd.state {
-                            crate::interpreter::types::PromiseState::Pending => {
-                                pd.fulfill_reactions.push(fulfill_reaction);
-                                pd.reject_reactions.push(reject_reaction);
-                                None
+                    //   c. Let resultWrapper be Completion(PromiseResolve(%Promise%, result)).
+                    //   d. IfAbruptRejectPromise(resultWrapper, promiseCapability).
+                    let result_wrapper =
+                        match interp.promise_resolve_with_constructor(&promise_ctor, &result) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                interp.gc_root_value(&e);
+                                interp.reject_promise(cap_promise_id, e);
+                                return Completion::Normal(cap.promise.clone());
                             }
-                            crate::interpreter::types::PromiseState::Fulfilled(v) => {
-                                Some((true, v.clone()))
+                        };
+                    interp.gc_root_value(&result_wrapper);
+
+                    //   e-f. Let onFulfilled be a function that returns undefined.
+                    let on_fulfilled = interp.create_function(JsFunction::native(
+                        "".to_string(),
+                        1,
+                        |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
+                    ));
+                    interp.gc_root_value(&on_fulfilled);
+
+                    //   g. Perform PerformPromiseThen(resultWrapper, onFulfilled, undefined, promiseCapability).
+                    let wrapper_id = result_wrapper.as_object_id().unwrap_or(0);
+                    let fulfill_reaction = crate::interpreter::types::PromiseReaction {
+                        handler: Some(on_fulfilled),
+                        promise_id: Some(cap_promise_id),
+                        resolve: cap.resolve.clone(),
+                        reject: cap.reject.clone(),
+                        reaction_type: crate::interpreter::types::PromiseReactionType::Fulfill,
+                    };
+                    let reject_reaction = crate::interpreter::types::PromiseReaction {
+                        handler: None,
+                        promise_id: Some(cap_promise_id),
+                        resolve: cap.resolve.clone(),
+                        reject: cap.reject.clone(),
+                        reaction_type: crate::interpreter::types::PromiseReactionType::Reject,
+                    };
+
+                    let fulfill_reaction2 = fulfill_reaction.clone();
+                    let reject_reaction2 = reject_reaction.clone();
+                    let state = if let Some(obj) = interp.get_object_cell(wrapper_id) {
+                        let mut o = obj.borrow_mut();
+                        if let Some(pd) = o.promise_data_mut() {
+                            pd.is_handled = true;
+                            match &pd.state {
+                                crate::interpreter::types::PromiseState::Pending => {
+                                    pd.fulfill_reactions.push(fulfill_reaction);
+                                    pd.reject_reactions.push(reject_reaction);
+                                    None
+                                }
+                                crate::interpreter::types::PromiseState::Fulfilled(v) => {
+                                    Some((true, v.clone()))
+                                }
+                                crate::interpreter::types::PromiseState::Rejected(r) => {
+                                    Some((false, r.clone()))
+                                }
                             }
-                            crate::interpreter::types::PromiseState::Rejected(r) => {
-                                Some((false, r.clone()))
-                            }
+                        } else {
+                            None
                         }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
-                if let Some((is_fulfilled, value)) = state {
-                    if is_fulfilled {
-                        interp.trigger_promise_reactions(vec![fulfill_reaction2], value);
-                    } else {
-                        interp.trigger_promise_reactions(vec![reject_reaction2], value);
+                    if let Some((is_fulfilled, value)) = state {
+                        interp.gc_root_value(&value);
+                        if is_fulfilled {
+                            interp.trigger_promise_reactions(vec![fulfill_reaction2], value);
+                        } else {
+                            interp.trigger_promise_reactions(vec![reject_reaction2], value);
+                        }
                     }
-                }
 
-                // 7. Return promiseCapability.[[Promise]].
-                Completion::Normal(cap.promise)
+                    // 7. Return promiseCapability.[[Promise]].
+                    Completion::Normal(cap.promise.clone())
+                })
             },
         ));
         if let Some(key) = self.get_symbol_key("asyncDispose") {
