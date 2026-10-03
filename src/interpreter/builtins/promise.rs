@@ -1302,6 +1302,7 @@ impl Interpreter {
                 }
                 _ => JsValue::UNDEFINED,
             };
+            self.gc_root_value(&promise_resolve);
             if !self.is_callable(&promise_resolve) {
                 let err = self.create_type_error("Promise resolve is not a function");
                 return self.if_abrupt_reject_promise(err, &cap);
@@ -1312,6 +1313,7 @@ impl Interpreter {
                 Ok(iter) => iter,
                 Err(e) => return self.if_abrupt_reject_promise(e, &cap),
             };
+            self.gc_root_value(&iterator);
 
             // Accumulated element values live in these slots rather than being
             // pinned on the capability function. A custom constructor may hand the
@@ -1444,6 +1446,7 @@ impl Interpreter {
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
                 _ => JsValue::UNDEFINED,
             };
+            self.gc_root_value(&promise_resolve);
             if !self.is_callable(&promise_resolve) {
                 let err = self.create_type_error("Promise resolve is not a function");
                 return self.if_abrupt_reject_promise(err, &cap);
@@ -1453,6 +1456,7 @@ impl Interpreter {
                 Ok(iter) => iter,
                 Err(e) => return self.if_abrupt_reject_promise(e, &cap),
             };
+            self.gc_root_value(&iterator);
 
             // Slots for the accumulated records; see promise_all for why they must
             // not hang off the capability function.
@@ -2011,6 +2015,7 @@ impl Interpreter {
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
                 _ => JsValue::UNDEFINED,
             };
+            self.gc_root_value(&promise_resolve);
             if !self.is_callable(&promise_resolve) {
                 let err = self.create_type_error("Promise resolve is not a function");
                 return self.if_abrupt_reject_promise(err, &cap);
@@ -2020,6 +2025,7 @@ impl Interpreter {
                 Ok(iter) => iter,
                 Err(e) => return self.if_abrupt_reject_promise(e, &cap),
             };
+            self.gc_root_value(&iterator);
 
             loop {
                 // IteratorStep — no IteratorClose on error (done = true)
@@ -2086,6 +2092,7 @@ impl Interpreter {
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
                 _ => JsValue::UNDEFINED,
             };
+            self.gc_root_value(&promise_resolve);
             if !self.is_callable(&promise_resolve) {
                 let err = self.create_type_error("Promise resolve is not a function");
                 return self.if_abrupt_reject_promise(err, &cap);
@@ -2095,6 +2102,7 @@ impl Interpreter {
                 Ok(iter) => iter,
                 Err(e) => return self.if_abrupt_reject_promise(e, &cap),
             };
+            self.gc_root_value(&iterator);
 
             // Slots for the accumulated errors; see promise_all for why they must
             // not hang off the capability function.
