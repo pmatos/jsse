@@ -4969,7 +4969,7 @@ impl Interpreter {
 
     /// IteratorClose per §7.4.6 - called during abrupt completion (e.g., break/throw in for-of).
     /// The original completion takes priority over errors from return().
-    pub(crate) fn iterator_close(&mut self, iterator: &JsValue, _completion: JsValue) -> JsValue {
+    pub(crate) fn iterator_close(&mut self, iterator: &JsValue, completion: JsValue) -> JsValue {
         // Note (issue #242): when a for-of *body* calls `__host_exit`, its
         // `Completion::Exit` takes the loop's `other` arm and never reaches
         // here, so the iterator's `return()` is not run. This path only runs
@@ -4977,26 +4977,34 @@ impl Interpreter {
         // itself calls `__host_exit`, that boundary returns a `JsValue` and so
         // cannot carry the exit — record it in the terminal `pending_exit`
         // sink instead. Inert unless the node host floor is enabled.
-        if let Some(iter_id) = iterator.as_object_id() {
+        let Some(iter_id) = iterator.as_object_id() else {
+            return completion;
+        };
+        // `completion` is the payload (issue #794) that must survive both
+        // the `return` lookup and the `return()` call below, either of
+        // which can run arbitrary user code (a getter/Proxy trap, or
+        // `return()` itself) and trigger a collection.
+        self.with_gc_root_scope(|interp| {
+            interp.gc_root_value(&completion);
             // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
-            let return_val = match self.get_object_property(iter_id, "return", iterator) {
+            let return_val = match interp.get_object_property(iter_id, "return", iterator) {
                 Completion::Normal(v) => v,
-                Completion::Throw(_e) => return _completion, // original completion takes priority
-                _ => return _completion,
+                Completion::Throw(_e) => return completion, // original completion takes priority
+                _ => return completion,
             };
             if return_val.is_undefined() || return_val.is_null() {
-                return _completion;
+                return completion;
             }
-            if !self.is_callable(&return_val) {
+            if !interp.is_callable(&return_val) {
                 // Non-callable return: throw TypeError, but original completion takes priority
-                return _completion;
+                return completion;
             }
             // Call return(), but original completion takes priority over errors
-            if let Completion::Exit(code) = self.call_function(&return_val, iterator, &[]) {
-                self.pending_exit = Some(code);
+            if let Completion::Exit(code) = interp.call_function(&return_val, iterator, &[]) {
+                interp.pending_exit = Some(code);
             }
-        }
-        _completion
+            completion
+        })
     }
 
     /// IteratorClose for normal completion paths (no abrupt completion to prioritize).

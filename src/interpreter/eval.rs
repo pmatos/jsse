@@ -4357,7 +4357,10 @@ impl Interpreter {
         // §13.15.5.2: IteratorClose when done is false
         if !done {
             if let Some(err) = error {
-                let _ = self.iterator_close_result(&iterator);
+                // `iterator_close` roots `err` across `return()`, which can
+                // run arbitrary user code (issue #794), and hands it back
+                // unchanged regardless of what `return()` does.
+                let err = self.iterator_close(&iterator, err);
                 self.gc_unroot_value(&iterator);
                 return Completion::Throw(err);
             }
@@ -9877,7 +9880,12 @@ impl Interpreter {
             return completion;
         }
         if let Some(iterator) = iterator {
-            let close_result = self.iterator_close_result(&iterator);
+            // `completion`'s payload must survive `return()`, which can run
+            // arbitrary user code (issue #794).
+            let close_result = self.with_gc_root_scope(|interp| {
+                completion.root_payload(|v| interp.gc_root_value(v));
+                interp.iterator_close_result(&iterator)
+            });
             self.forget_for_of_iterator(&iterator);
             if let Some(generator_id) = generator_id {
                 self.remove_generator_inline_iterator(generator_id, &iterator);

@@ -3021,7 +3021,15 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => v,
                                 other => {
-                                    let _ = interp.iterator_close(&iterator, JsValue::UNDEFINED);
+                                    // Pass the real payload (when the abrupt
+                                    // completion carries one) rather than
+                                    // UNDEFINED so `iterator_close` roots it
+                                    // across `return()` (issue #794).
+                                    let payload = match &other {
+                                        Completion::Throw(v) => v.clone(),
+                                        _ => JsValue::UNDEFINED,
+                                    };
+                                    let _ = interp.iterator_close(&iterator, payload);
                                     interp.gc_unroot_frame(gc_frame);
                                     return other;
                                 }
@@ -3032,7 +3040,7 @@ impl Interpreter {
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
                         {
-                            let _ = interp.iterator_close(&iterator, JsValue::UNDEFINED);
+                            let e = interp.iterator_close(&iterator, e);
                             interp.gc_unroot_frame(gc_frame);
                             return Completion::Throw(e);
                         }

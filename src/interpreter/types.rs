@@ -263,6 +263,27 @@ impl Completion {
             _ => default,
         }
     }
+    /// Every `JsValue` this completion carries as a payload, for GC-rooting
+    /// across a call (`finally`, `IteratorClose`'s `return()`) that can run
+    /// user code and trigger a collection while the completion is still a
+    /// bare Rust local. Mirrors `DisposeCursor::for_each_value`'s match.
+    pub(crate) fn root_payload(&self, mut f: impl FnMut(&JsValue)) {
+        match self {
+            Completion::Normal(v)
+            | Completion::Return(v)
+            | Completion::Throw(v)
+            | Completion::Yield(v) => f(v),
+            Completion::Break(_, Some(v)) | Completion::Continue(_, Some(v)) => f(v),
+            Completion::TailCall { func, this, args } => {
+                f(func);
+                f(this);
+                for a in args {
+                    f(a);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Convert a fallible or control-flow-carrying value into the interpreter's
