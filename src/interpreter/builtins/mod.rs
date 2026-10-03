@@ -6524,66 +6524,58 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let gc_frame = interp.gc_root_frame();
-                    interp.gc_root_value(&iterator);
-                    loop {
-                        let step = match interp.iterator_step(&iterator) {
-                            Ok(Some(result)) => result,
-                            Ok(None) => break,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
+                    interp.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&iterator);
+                        loop {
+                            let step = match interp.iterator_step(&iterator) {
+                                Ok(Some(result)) => result,
+                                Ok(None) => break,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let next_item = match interp.iterator_value(&step) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            // Step d: If Type(nextItem) is not Object, close and throw TypeError
+                            let Some(item_id) = next_item.as_object_id() else {
+                                let err =
+                                    interp.create_type_error("Iterator value is not an object");
+                                interp.iterator_close(&iterator, err.clone());
+                                return Completion::Throw(err);
+                            };
+                            // Step e: Get key from entry[0]
+                            let key_raw = match interp.get_object_property(item_id, "0", &next_item)
+                            {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    interp.iterator_close(&iterator, e.clone());
+                                    return Completion::Throw(e);
+                                }
+                                _ => JsValue::UNDEFINED,
+                            };
+                            // Step g: Get value from entry[1]
+                            let value = match interp.get_object_property(item_id, "1", &next_item) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    interp.iterator_close(&iterator, e.clone());
+                                    return Completion::Throw(e);
+                                }
+                                _ => JsValue::UNDEFINED,
+                            };
+                            // Step f: ToPropertyKey(key)
+                            let key = match interp.to_property_key(&key_raw) {
+                                Ok(k) => k,
+                                Err(e) => {
+                                    interp.iterator_close(&iterator, e.clone());
+                                    return Completion::Throw(e);
+                                }
+                            };
+                            if let Some(obj_data) = interp.get_object_cell(obj_id) {
+                                obj_data.borrow_mut().insert_value(key, value);
                             }
-                        };
-                        let next_item = match interp.iterator_value(&step) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        // Step d: If Type(nextItem) is not Object, close and throw TypeError
-                        let Some(item_id) = next_item.as_object_id() else {
-                            interp.gc_unroot_frame(gc_frame);
-                            let err = interp.create_type_error("Iterator value is not an object");
-                            interp.iterator_close(&iterator, err.clone());
-                            return Completion::Throw(err);
-                        };
-                        // Step e: Get key from entry[0]
-                        let key_raw = match interp.get_object_property(item_id, "0", &next_item) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                interp.iterator_close(&iterator, e.clone());
-                                return Completion::Throw(e);
-                            }
-                            _ => JsValue::UNDEFINED,
-                        };
-                        // Step g: Get value from entry[1]
-                        let value = match interp.get_object_property(item_id, "1", &next_item) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                interp.iterator_close(&iterator, e.clone());
-                                return Completion::Throw(e);
-                            }
-                            _ => JsValue::UNDEFINED,
-                        };
-                        // Step f: ToPropertyKey(key)
-                        let key = match interp.to_property_key(&key_raw) {
-                            Ok(k) => k,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                interp.iterator_close(&iterator, e.clone());
-                                return Completion::Throw(e);
-                            }
-                        };
-                        if let Some(obj_data) = interp.get_object_cell(obj_id) {
-                            obj_data.borrow_mut().insert_value(key, value);
                         }
-                    }
-                    interp.gc_unroot_frame(gc_frame);
-                    Completion::Normal(obj_val)
+                        Completion::Normal(obj_val)
+                    })
                 },
             ));
             obj_func

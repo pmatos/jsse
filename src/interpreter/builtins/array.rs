@@ -2969,84 +2969,81 @@ impl Interpreter {
                     } else {
                         interp.create_array(Vec::new())
                     };
-                    let gc_frame = interp.gc_root_frame();
-                    interp.gc_root_value(&a);
+                    interp.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&a);
 
-                    let iterator = match interp.call_function(&iter_method, &source, &[]) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                        other => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return other;
-                        }
-                    };
-                    interp.gc_root_value(&iterator);
-                    let mut k: usize = 0;
-                    loop {
-                        let next = match interp.iterator_step(&iterator) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
+                        let iterator = match interp.call_function(&iter_method, &source, &[]) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
                         };
-                        let next = match next {
-                            Some(result) => result,
-                            None => {
-                                if let Err(e) = set_length_throw(interp, &a, k) {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return Completion::Throw(e);
+                        interp.gc_root_value(&iterator);
+                        let mut k: usize = 0;
+                        loop {
+                            let next = match interp.iterator_step(&iterator) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let next = match next {
+                                Some(result) => result,
+                                None => {
+                                    if let Err(e) = set_length_throw(interp, &a, k) {
+                                        return Completion::Throw(e);
+                                    }
+                                    return Completion::Normal(a);
                                 }
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Normal(a);
-                            }
-                        };
-                        let gc_frame_next = interp.gc_root_frame();
-                        interp.gc_root_value(&next);
-                        let value = match interp.iterator_value(&next) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let mapped_value = if mapping {
-                            match interp.call_function(
-                                map_fn.as_ref().unwrap(),
-                                &this_arg,
-                                &[value, JsValue::number(k as f64)],
-                            ) {
-                                Completion::Normal(v) => v,
-                                other => {
-                                    // Pass the real payload (when the abrupt
-                                    // completion carries one) rather than
-                                    // UNDEFINED so `iterator_close` roots it
-                                    // across `return()` (issue #794).
-                                    let payload = match &other {
-                                        Completion::Throw(v) => v.clone(),
-                                        _ => JsValue::UNDEFINED,
+                            };
+                            // Nested scope: `next` only needs to stay rooted for this
+                            // one iteration's value/map/property-set, mirroring the
+                            // old gc_frame_next idiom without accumulating roots
+                            // across iterations.
+                            let abrupt =
+                                interp.with_gc_root_scope(|interp| -> Option<Completion> {
+                                    interp.gc_root_value(&next);
+                                    let value = match interp.iterator_value(&next) {
+                                        Ok(v) => v,
+                                        Err(e) => return Some(Completion::Throw(e)),
                                     };
-                                    let _ = interp.iterator_close(&iterator, payload);
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return other;
-                                }
+                                    let mapped_value = if mapping {
+                                        match interp.call_function(
+                                            map_fn.as_ref().unwrap(),
+                                            &this_arg,
+                                            &[value, JsValue::number(k as f64)],
+                                        ) {
+                                            Completion::Normal(v) => v,
+                                            other => {
+                                                // Pass the real payload (when the abrupt
+                                                // completion carries one) rather than
+                                                // UNDEFINED so `iterator_close` roots it
+                                                // across `return()` (issue #794).
+                                                let payload = match &other {
+                                                    Completion::Throw(v) => v.clone(),
+                                                    _ => JsValue::UNDEFINED,
+                                                };
+                                                let _ = interp.iterator_close(&iterator, payload);
+                                                return Some(other);
+                                            }
+                                        }
+                                    } else {
+                                        value
+                                    };
+                                    if let Err(e) = create_data_property_or_throw(
+                                        interp,
+                                        &a,
+                                        &k.to_string(),
+                                        mapped_value,
+                                    ) {
+                                        let e = interp.iterator_close(&iterator, e);
+                                        return Some(Completion::Throw(e));
+                                    }
+                                    None
+                                });
+                            if let Some(c) = abrupt {
+                                return c;
                             }
-                        } else {
-                            value
-                        };
-                        if let Err(e) =
-                            create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
-                        {
-                            let e = interp.iterator_close(&iterator, e);
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
+                            k += 1;
                         }
-                        interp.gc_unroot_frame(gc_frame_next);
-                        k += 1;
-                    }
+                    })
                 } else {
                     // Array-like path
                     interp.with_gc_root_scope(|interp| {
