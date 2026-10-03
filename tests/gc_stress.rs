@@ -16,14 +16,38 @@ log.push(JSON.stringify([...new Set([3, 3, 4])].map(function (x) { return x * 2;
 Promise.all([1, Promise.resolve(2)]).then(function (xs) { console.log(log.join(","), xs.join("+")); });
 "#;
 
-fn run(stress: Option<&str>) -> Output {
+/// Loop-free: every statement is a straight-line call to an allocating
+/// function. `PROGRAM` above is loop-heavy and already gets back-edge
+/// safepoint coverage under `--bytecode`; this program instead exercises the
+/// statement-boundary safepoints added for issue #808, which a loop-free
+/// compiled chunk previously had none of.
+const PROGRAM_STRAIGHT_LINE: &str = r#"
+function make(n) { var o = new Object(); o.n = n; return o; }
+var results = [];
+results.push(make(1).n);
+results.push(make(2).n);
+results.push(make(3).n);
+results.push(make(4).n);
+results.push(make(5).n);
+console.log(results.join(","));
+"#;
+
+fn run_with(program: &str, bytecode: bool, stress: Option<&str>) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_jsse"));
-    cmd.args(["-e", PROGRAM]);
+    if bytecode {
+        cmd.args(["--bytecode", "-e", program]);
+    } else {
+        cmd.args(["-e", program]);
+    }
     cmd.env_remove("JSSE_GC_STRESS");
     if let Some(v) = stress {
         cmd.env("JSSE_GC_STRESS", v);
     }
     cmd.output().expect("failed to spawn jsse")
+}
+
+fn run(stress: Option<&str>) -> Output {
+    run_with(PROGRAM, false, stress)
 }
 
 fn stdout(output: &Output) -> String {
@@ -42,6 +66,23 @@ fn stress_collection_at_every_safepoint_preserves_program_results() {
     for period in ["1", "2", "7"] {
         assert_eq!(
             stdout(&run(Some(period))),
+            baseline,
+            "JSSE_GC_STRESS={period}"
+        );
+    }
+}
+
+/// Direct regression coverage for issue #808: before statement-boundary
+/// safepoints existed, `--bytecode` stress on a loop-free program forced
+/// zero collections no matter the period, since the only safepoint the VM
+/// could reach was a backward `Op::Jump` and this program has none.
+#[test]
+fn bytecode_stress_collection_on_straight_line_program_preserves_results() {
+    let baseline = stdout(&run_with(PROGRAM_STRAIGHT_LINE, true, None));
+    assert_eq!(baseline.trim(), "1,2,3,4,5");
+    for period in ["1", "2", "7"] {
+        assert_eq!(
+            stdout(&run_with(PROGRAM_STRAIGHT_LINE, true, Some(period))),
             baseline,
             "JSSE_GC_STRESS={period}"
         );
