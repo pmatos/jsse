@@ -2579,7 +2579,10 @@ impl Interpreter {
             // after it), so it must keep whatever ambient suppression applies
             // but add none of its own — depth is already `saved_tco` here.
             let fin_env = Environment::new(Some(env.clone()));
-            let fin_result = self.exec_statements(finalizer, &fin_env);
+            let fin_result = self.with_gc_root_scope(|interp| {
+                result.root_payload(|v| interp.gc_root_value(v));
+                interp.exec_statements(finalizer, &fin_env)
+            });
             if fin_result.is_abrupt() {
                 return fin_result;
             }
