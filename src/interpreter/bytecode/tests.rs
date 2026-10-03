@@ -2188,3 +2188,69 @@ fn strict_tail_calls_are_counted_as_vm_issued_calls() {
         interp.perf.calls_from_vm
     );
 }
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "released out of LIFO order")]
+fn unrooting_a_non_top_bytecode_root_asserts() {
+    let mut interp = Interpreter::new();
+    let (first, second) = (interp.create_object_id(), interp.create_object_id());
+    interp.gc_bytecode_roots.push(first);
+    interp.gc_bytecode_roots.push(second);
+    interp.gc_bytecode_roots.pop_expected(first);
+}
+
+fn run_bytecode_script(source: &str) -> (Completion, Interpreter) {
+    use crate::parser::Parser;
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let completion = interp.run(&program);
+    (completion, interp)
+}
+
+#[test]
+fn multi_statement_script_completion_stays_balanced_under_bytecode() {
+    let source =
+        "Object(); if (true) { Object(); } for (var i = 0; i < 2; i++) { Object(); } Object();";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "this source must run through the bytecode VM for the test to be meaningful"
+    );
+    assert!(
+        matches!(completion, Completion::Normal(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "bytecode operand roots must be released at every statement boundary"
+    );
+}
+
+#[test]
+fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
+    // `compile_call` only accepts a bare `Identifier` callee, so an IIFE
+    // callee (a `Function` expression) bails the whole script out of the
+    // bytecode VM before this scenario can be exercised. `Object()` and
+    // `decodeURIComponent` are both called by plain identifier, so this
+    // compiles and runs on the VM: `Object()`'s result is left live on the
+    // operand stack while `decodeURIComponent('%')` throws, reproducing
+    // issue #331's "outer in-progress expression operand" case for real.
+    let source = "var __r = Object() + decodeURIComponent('%');";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "this source must run through the bytecode VM for the test to be meaningful"
+    );
+    assert!(
+        matches!(completion, Completion::Throw(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "the outer chunk's unconditional truncate must release the live \
+         `Object()` operand left on the stack by `decodeURIComponent`'s abrupt throw"
+    );
+}

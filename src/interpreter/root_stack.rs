@@ -1,12 +1,15 @@
-/// The temporary GC root stack: object ids that stay live across a native
-/// call's safepoints until they are released by id or the enclosing frame
-/// truncates.
+/// A GC root stack: object ids that stay live until they are released by id
+/// or the enclosing frame truncates. Backs both `Interpreter::gc_temp_roots`
+/// (object ids that stay live across a native call's safepoints) and
+/// `Interpreter::gc_bytecode_roots` (the bytecode VM's operand-stack roots).
 ///
 /// The vocabulary is deliberately narrow — push, pop-expected, truncate, and a
 /// read-only slice for the collector. There is no `retain`, `clear`, `extend`,
 /// `swap_remove` or index mutation, so every production mutation goes through
 /// [`Interpreter::gc_root_id`]/[`Interpreter::gc_unroot_id`] or the frame
-/// helpers, and a stack-discipline check has one place to hook.
+/// helpers for `gc_temp_roots`, and through `bytecode::vm`'s own push/pop
+/// helpers for `gc_bytecode_roots` — each stack has one place to hook a
+/// stack-discipline check.
 #[derive(Debug, Default)]
 pub(crate) struct RootStack {
     ids: Vec<u64>,
@@ -33,7 +36,7 @@ impl RootStack {
         }
         debug_assert!(
             false,
-            "temp root {id} released out of LIFO order (top of {:?})",
+            "root {id} released out of LIFO order (top of {:?})",
             self.ids.last()
         );
         if let Some(pos) = self.ids.iter().rposition(|&rid| rid == id) {
@@ -54,6 +57,18 @@ impl RootStack {
             self.ids.len()
         );
         self.ids.truncate(depth);
+    }
+
+    /// Debug-assert the stack is exactly `depth` deep. Placed at boundaries
+    /// where every root pushed by the code in between must already have been
+    /// released.
+    #[inline(always)]
+    pub(super) fn assert_depth(&self, depth: usize, boundary: &str) {
+        debug_assert_eq!(
+            self.ids.len(),
+            depth,
+            "root stack unbalanced after {boundary}"
+        );
     }
 
     #[inline]
