@@ -1007,10 +1007,15 @@ impl Interpreter {
             | ObjectKind::RegExp(_)
             | ObjectKind::ArrayBuffer(_)
             | ObjectKind::ShadowRealm(_)
-            | ObjectKind::DisposableStack(_)
             | ObjectKind::Temporal(_)
             | ObjectKind::Intl(_)
             | ObjectKind::PrimitiveWrapper(_) => {}
+            ObjectKind::DisposableStack(d) => {
+                for resource in &d.stack {
+                    Self::collect_value_roots(&resource.value, worklist);
+                    Self::collect_value_roots(&resource.dispose_method, worklist);
+                }
+            }
             ObjectKind::Proxy(p) => {
                 if let Some(tid) = p.target_id {
                     worklist.push(tid);
@@ -1339,6 +1344,23 @@ mod tests {
         let mut worklist = Vec::new();
         Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
         assert_eq!(as_set(worklist), vec![20, 21, 22]);
+    }
+
+    #[test]
+    fn trace_object_fields_roots_disposable_stack_resources() {
+        let mut data = JsObjectData::new();
+        data.kind = ObjectKind::DisposableStack(DisposableStackData {
+            stack: vec![DisposableResource {
+                value: obj(30),
+                hint: DisposeHint::Sync,
+                dispose_method: obj(31),
+            }],
+            disposed: false,
+        });
+
+        let mut worklist = Vec::new();
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
+        assert_eq!(as_set(worklist), vec![30, 31]);
     }
 
     #[test]
