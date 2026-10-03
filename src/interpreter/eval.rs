@@ -7880,178 +7880,178 @@ impl Interpreter {
         uses_arguments: bool,
         has_simple_params: bool,
     ) -> Completion {
-        let gc_frame = self.gc_root_frame();
-        let promise = self.create_promise_object();
-        let promise_id = if let Some(o) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            o.id
-        } else {
-            0
-        };
-        self.gc_root_value(&promise);
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        self.gc_root_value(&resolve_fn);
-        self.gc_root_value(&reject_fn);
+        self.with_gc_root_scope(|interp| {
+            let promise = interp.create_promise_object();
+            let promise_id = if let Some(o) = (promise)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
+                o.id
+            } else {
+                0
+            };
+            interp.gc_root_value(&promise);
+            let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
+            interp.gc_root_value(&resolve_fn);
+            interp.gc_root_value(&reject_fn);
 
-        let closure_strict = closure.borrow().strict;
-        let func_env = Environment::new_function_scope_with_capacity(
-            Some(closure),
-            params.len().saturating_add(2),
-        );
-        if is_arrow {
-            func_env.borrow_mut().is_arrow_scope = true;
-        }
-        // Set up `this` and `arguments` before binding parameters so that
-        // default parameter expressions can reference `arguments`.
-        if !is_arrow {
-            let effective_this = if !is_strict && !closure_strict {
-                if (this_val).is_nullish() {
-                    self.realm()
-                        .global_env
-                        .borrow()
-                        .get("this")
-                        .unwrap_or(this_val.clone())
-                } else if !(this_val).is_object() {
-                    match self.to_object(this_val) {
-                        Completion::Normal(v) => v,
-                        _ => this_val.clone(),
+            let closure_strict = closure.borrow().strict;
+            let func_env = Environment::new_function_scope_with_capacity(
+                Some(closure),
+                params.len().saturating_add(2),
+            );
+            if is_arrow {
+                func_env.borrow_mut().is_arrow_scope = true;
+            }
+            // Set up `this` and `arguments` before binding parameters so that
+            // default parameter expressions can reference `arguments`.
+            if !is_arrow {
+                let effective_this = if !is_strict && !closure_strict {
+                    if (this_val).is_nullish() {
+                        interp
+                            .realm()
+                            .global_env
+                            .borrow()
+                            .get("this")
+                            .unwrap_or(this_val.clone())
+                    } else if !(this_val).is_object() {
+                        match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            _ => this_val.clone(),
+                        }
+                    } else {
+                        this_val.clone()
                     }
                 } else {
                     this_val.clone()
+                };
+                func_env.borrow_mut().bindings.insert(
+                    "this".to_string(),
+                    Binding {
+                        value: effective_this,
+                        kind: BindingKind::Const,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+                if uses_arguments {
+                    let is_simple = has_simple_params;
+                    let env_strict = func_env.borrow().strict;
+                    let use_mapped = is_simple && !is_strict && !env_strict;
+                    let param_names: Vec<String> = if use_mapped {
+                        params
+                            .iter()
+                            .filter_map(|p| {
+                                if let Pattern::Identifier(name) = p {
+                                    Some(name.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let mapped_env = if use_mapped { Some(&func_env) } else { None };
+                    let arguments_obj = interp.create_arguments_object(
+                        args,
+                        func_val.clone(),
+                        is_strict,
+                        mapped_env,
+                        &param_names,
+                    );
+                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                    let _ = interp.env_set(&func_env, "arguments", arguments_obj);
+                    if is_strict || !is_simple {
+                        func_env.borrow_mut().arguments_immutable = true;
+                    }
+                } else {
+                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
                 }
-            } else {
-                this_val.clone()
+            }
+            {
+                let is_simple_p = has_simple_params;
+                if !is_simple_p {
+                    func_env.borrow_mut().has_parameter_expressions = true;
+                }
+            }
+            if let Err(error) =
+                interp.bind_function_parameters(params, args, &func_env, has_simple_params)
+            {
+                let _ = interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                // A default-param expression may have called `__host_exit`
+                // (issue #229): return abrupt so the caller unwinds.
+                if interp.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::UNDEFINED);
+                }
+                return Completion::Normal(promise);
+            }
+
+            func_env.borrow_mut().strict = is_strict;
+            interp.in_tail_position = false;
+
+            let sm = crate::interpreter::generator_transform::transform_async_function(
+                body.as_slice(),
+                params,
+            );
+            #[cfg(feature = "perf-counters")]
+            let sm = {
+                let mut sm = sm;
+                sm.perf_key = Some(interp.perf_body_name(_func_obj_id));
+                sm
             };
-            func_env.borrow_mut().bindings.insert(
-                "this".to_string(),
-                Binding {
-                    value: effective_this,
-                    kind: BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
+            let sm = Rc::new(sm);
+
+            for tv in &sm.temp_vars {
+                func_env.borrow_mut().declare(tv, BindingKind::Var);
+            }
+            for lv in &sm.local_vars {
+                if matches!(
+                    lv.kind,
+                    VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+                ) && lv.scope_depth > 0
+                {
+                    // Nested lexical bindings are created by their transformed
+                    // runtime scopes and must not leak into the function scope.
+                    continue;
+                }
+                if !func_env.borrow().bindings.contains_key(&lv.name) {
+                    func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                }
+            }
+
+            let async_id = interp.scheduler.alloc_async_function_id();
+
+            interp.scheduler.insert_async_function_state(
+                async_id,
+                AsyncFunctionState {
+                    pending_dispose: None,
+                    state_machine: sm,
+                    func_env,
+                    is_strict,
+                    current_state: 0,
+                    try_stack: vec![],
+                    pending_binding: None,
+                    pending_for_of_unwind: None,
+                    resolve_fn,
+                    reject_fn,
+                    for_of_stack: vec![],
+                    module_path: None,
+                    scope_stack: vec![],
                 },
             );
-            if uses_arguments {
-                let is_simple = has_simple_params;
-                let env_strict = func_env.borrow().strict;
-                let use_mapped = is_simple && !is_strict && !env_strict;
-                let param_names: Vec<String> = if use_mapped {
-                    params
-                        .iter()
-                        .filter_map(|p| {
-                            if let Pattern::Identifier(name) = p {
-                                Some(name.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let mapped_env = if use_mapped { Some(&func_env) } else { None };
-                let arguments_obj = self.create_arguments_object(
-                    args,
-                    func_val.clone(),
-                    is_strict,
-                    mapped_env,
-                    &param_names,
-                );
-                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                let _ = self.env_set(&func_env, "arguments", arguments_obj);
-                if is_strict || !is_simple {
-                    func_env.borrow_mut().arguments_immutable = true;
-                }
-            } else {
-                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+
+            let resume = interp.async_function_resume(async_id, JsValue::UNDEFINED, false);
+
+            // If the body ran `__host_exit` synchronously (before any await, issue
+            // #242), propagate the exit as this call's completion — in expression
+            // position too (`f(), g()`; `h(f())`), which a statement-level check
+            // cannot reach — instead of returning the never-to-settle promise.
+            if let Completion::Exit(code) = resume {
+                return Completion::Exit(code);
             }
-        }
-        {
-            let is_simple_p = has_simple_params;
-            if !is_simple_p {
-                func_env.borrow_mut().has_parameter_expressions = true;
-            }
-        }
-        if let Err(error) =
-            self.bind_function_parameters(params, args, &func_env, has_simple_params)
-        {
-            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-            self.gc_unroot_frame(gc_frame);
-            // A default-param expression may have called `__host_exit`
-            // (issue #229): return abrupt so the caller unwinds.
-            if self.pending_exit.is_some() {
-                return Completion::Throw(JsValue::UNDEFINED);
-            }
-            return Completion::Normal(promise);
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        self.in_tail_position = false;
-
-        let sm = crate::interpreter::generator_transform::transform_async_function(
-            body.as_slice(),
-            params,
-        );
-        #[cfg(feature = "perf-counters")]
-        let sm = {
-            let mut sm = sm;
-            sm.perf_key = Some(self.perf_body_name(_func_obj_id));
-            sm
-        };
-        let sm = Rc::new(sm);
-
-        for tv in &sm.temp_vars {
-            func_env.borrow_mut().declare(tv, BindingKind::Var);
-        }
-        for lv in &sm.local_vars {
-            if matches!(
-                lv.kind,
-                VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-            ) && lv.scope_depth > 0
-            {
-                // Nested lexical bindings are created by their transformed
-                // runtime scopes and must not leak into the function scope.
-                continue;
-            }
-            if !func_env.borrow().bindings.contains_key(&lv.name) {
-                func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
-            }
-        }
-
-        let async_id = self.scheduler.alloc_async_function_id();
-
-        self.scheduler.insert_async_function_state(
-            async_id,
-            AsyncFunctionState {
-                pending_dispose: None,
-                state_machine: sm,
-                func_env,
-                is_strict,
-                current_state: 0,
-                try_stack: vec![],
-                pending_binding: None,
-                pending_for_of_unwind: None,
-                resolve_fn,
-                reject_fn,
-                for_of_stack: vec![],
-                module_path: None,
-                scope_stack: vec![],
-            },
-        );
-
-        let resume = self.async_function_resume(async_id, JsValue::UNDEFINED, false);
-
-        self.gc_unroot_frame(gc_frame);
-        // If the body ran `__host_exit` synchronously (before any await, issue
-        // #242), propagate the exit as this call's completion — in expression
-        // position too (`f(), g()`; `h(f())`), which a statement-level check
-        // cannot reach — instead of returning the never-to-settle promise.
-        if let Completion::Exit(code) = resume {
-            return Completion::Exit(code);
-        }
-        Completion::Normal(promise)
+            Completion::Normal(promise)
+        })
     }
 
     /// Drives an async function's state machine. Returns `Completion::Exit`
