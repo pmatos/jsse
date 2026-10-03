@@ -2855,9 +2855,8 @@ impl Interpreter {
                 // and PutValue. Those operations can hit GC safepoints while
                 // `obj_val` otherwise exists only as a Rust local, invisible to
                 // the tracing collector.
-                let gc_frame = self.gc_root_frame();
-                self.gc_root_value(&obj_val);
-                let result = (|| {
+                self.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&obj_val);
                     if let MemberProperty::Private(name) = prop {
                         // The RHS is evaluated first (preserving jsse's existing
                         // evaluation order). A plain `= ` performs PrivateSet with
@@ -2865,28 +2864,28 @@ impl Interpreter {
                         // to PrivateGet -> op -> PrivateSet, so accessor-backed
                         // privates read through the getter and write through the
                         // setter exactly as a data field does.
-                        let rval = match self.eval_expr(right, env) {
+                        let rval = match interp.eval_expr(right, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         if op == AssignOp::Assign {
                             if let Err(e) =
-                                self.set_private_field(&obj_val, name, rval.clone(), env)
+                                interp.set_private_field(&obj_val, name, rval.clone(), env)
                             {
                                 return Completion::Throw(e);
                             }
                             return Completion::Normal(rval);
                         }
-                        let lval = match self.private_get(&obj_val, name, env) {
+                        let lval = match interp.private_get(&obj_val, name, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let final_val = match self.apply_compound_assign(op, lval, rval) {
+                        let final_val = match interp.apply_compound_assign(op, lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         if let Err(e) =
-                            self.set_private_field(&obj_val, name, final_val.clone(), env)
+                            interp.set_private_field(&obj_val, name, final_val.clone(), env)
                         {
                             return Completion::Throw(e);
                         }
@@ -2895,7 +2894,7 @@ impl Interpreter {
                     // Evaluate computed key expression before RHS
                     let key_val = match prop {
                         MemberProperty::Computed(expr) => {
-                            let v = match self.eval_expr(expr, env) {
+                            let v = match interp.eval_expr(expr, env) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -2914,14 +2913,14 @@ impl Interpreter {
                             } else {
                                 "undefined"
                             };
-                            return Completion::Throw(self.create_type_error(&format!(
+                            return Completion::Throw(interp.create_type_error(&format!(
                                 "Cannot read properties of {base_str}"
                             )));
                         }
                         let key = match prop {
                             MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
-                                match self.to_property_key(key_val.as_ref().unwrap()) {
+                                match interp.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
                                     Err(e) => return Completion::Throw(e),
                                 }
@@ -2932,18 +2931,18 @@ impl Interpreter {
                             .as_object_id()
                             .map(|id| crate::types::JsObject { id })
                         {
-                            match self.get_object_property(o.id, &key, &obj_val) {
+                            match interp.get_object_property(o.id, &key, &obj_val) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             }
                         } else {
-                            match self.to_object(&obj_val) {
+                            match interp.to_object(&obj_val) {
                                 Completion::Normal(wrapped) => {
                                     if let Some(o) = (wrapped)
                                         .as_object_id()
                                         .map(|id| crate::types::JsObject { id })
                                     {
-                                        match self.get_object_property(o.id, &key, &obj_val) {
+                                        match interp.get_object_property(o.id, &key, &obj_val) {
                                             Completion::Normal(v) => v,
                                             other => return other,
                                         }
@@ -2960,7 +2959,7 @@ impl Interpreter {
                         (JsPropertyKey::from_str(""), None) // key computed after RHS for simple assign
                     };
                     // Now evaluate RHS
-                    let rval = match self.eval_expr(right, env) {
+                    let rval = match interp.eval_expr(right, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
@@ -2969,7 +2968,7 @@ impl Interpreter {
                         match prop {
                             MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
-                                match self.to_property_key(key_val.as_ref().unwrap()) {
+                                match interp.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
                                     Err(e) => return Completion::Throw(e),
                                 }
@@ -2982,7 +2981,7 @@ impl Interpreter {
                     // Note: super[key] = val is handled by the early return above
                     // Throw for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
-                        return Completion::Throw(self.create_type_error(&format!(
+                        return Completion::Throw(interp.create_type_error(&format!(
                             "Cannot set properties of {} (setting '{}')",
                             if obj_val.is_null() {
                                 "null"
@@ -2995,7 +2994,7 @@ impl Interpreter {
                     let final_val = if op == AssignOp::Assign {
                         rval
                     } else {
-                        match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
+                        match interp.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
@@ -3022,7 +3021,7 @@ impl Interpreter {
                     if !(final_val).is_undefined()
                         && let Some(idx_u32) = parse_array_index(&key)
                         && let Some(obj_id) = obj_val.as_object_id()
-                        && let Some(obj) = self.get_object(obj_id)
+                        && let Some(obj) = interp.get_object(obj_id)
                     {
                         let fast = {
                             let b = obj.borrow();
@@ -3086,8 +3085,8 @@ impl Interpreter {
                             // OrdinarySet/proxy_set — a bare Proxy exposes no
                             // own descriptor here, so check it explicitly.
                             && !proto_id.is_some_and(|pid| {
-                                self.has_proxy_in_prototype_chain(pid)
-                                    || self.get_property_descriptor_on_id(pid, &key).is_some()
+                                interp.has_proxy_in_prototype_chain(pid)
+                                    || interp.get_property_descriptor_on_id(pid, &key).is_some()
                             }) {
                                 // Append at end: push and bump length + shape.
                                 let mut b = obj.borrow_mut();
@@ -3104,7 +3103,7 @@ impl Interpreter {
                         }
                     }
                     let strict = env.borrow().strict;
-                    let set_outcome = match self.set_object_with_key_result(
+                    let set_outcome = match interp.set_object_with_key_result(
                         obj_val.clone(),
                         &key,
                         final_val.clone(),
@@ -3114,22 +3113,20 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if !set_outcome.succeeded() && strict {
-                        return Completion::Throw(self.member_assignment_error(&obj_val, &key));
+                        return Completion::Throw(interp.member_assignment_error(&obj_val, &key));
                     }
                     // The realm test comes before `as_str`, which validates the
                     // whole key as UTF-8: it is both cheaper and false for
                     // essentially every write in a real program.
                     if let Some(obj_id) = obj_val.as_object_id()
                         && set_outcome.wrote_own_data_property_on(obj_id)
-                        && self.is_realm_global_object(obj_id)
+                        && interp.is_realm_global_object(obj_id)
                         && let Some(key_str) = key.as_str()
                     {
-                        self.sync_global_object_binding(obj_id, key_str, &final_val);
+                        interp.sync_global_object_binding(obj_id, key_str, &final_val);
                     }
                     Completion::Normal(final_val)
-                })();
-                self.gc_unroot_frame(gc_frame);
-                result
+                })
             }
             Expression::Array(elements, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
@@ -4559,43 +4556,47 @@ impl Interpreter {
             } else {
                 env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED)
             };
-            let gc_frame = self.gc_root_frame();
-            let arg_vals = match self.eval_spread_args(args, env) {
-                Ok(v) => v,
-                Err(e) => {
-                    self.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(e);
-                }
-            };
-            let this_in_tdz = Self::this_is_in_tdz(env);
-            if this_in_tdz {
-                let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
-                let saved_new_target = self.new_target.clone();
-                let result =
-                    self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
-                self.new_target = saved_new_target;
-                self.gc_unroot_frame(gc_frame);
-                if let Completion::Normal(ref v) = result {
-                    Self::initialize_this_binding(env, v.clone());
-                    if let Err(e) = self.initialize_instance_elements(v.clone(), env) {
-                        return Completion::Throw(e);
+            return self.with_gc_root_scope(|interp| {
+                let arg_vals = match interp.eval_spread_args(args, env) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this_in_tdz = Self::this_is_in_tdz(env);
+                if this_in_tdz {
+                    let current_new_target =
+                        interp.new_target.clone().unwrap_or(super_ctor.clone());
+                    let saved_new_target = interp.new_target.clone();
+                    let result = interp.construct_with_new_target(
+                        &super_ctor,
+                        &arg_vals,
+                        current_new_target,
+                    );
+                    interp.new_target = saved_new_target;
+                    if let Completion::Normal(ref v) = result {
+                        Self::initialize_this_binding(env, v.clone());
+                        if let Err(e) = interp.initialize_instance_elements(v.clone(), env) {
+                            return Completion::Throw(e);
+                        }
                     }
+                    result
+                } else {
+                    let current_new_target =
+                        interp.new_target.clone().unwrap_or(super_ctor.clone());
+                    let saved_new_target = interp.new_target.clone();
+                    let result = interp.construct_with_new_target(
+                        &super_ctor,
+                        &arg_vals,
+                        current_new_target,
+                    );
+                    interp.new_target = saved_new_target;
+                    if let Completion::Throw(_) = result {
+                        return result;
+                    }
+                    Completion::Throw(interp.create_reference_error(
+                        "'super()' has already been called in this derived constructor",
+                    ))
                 }
-                return result;
-            } else {
-                let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
-                let saved_new_target = self.new_target.clone();
-                let result =
-                    self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
-                self.new_target = saved_new_target;
-                self.gc_unroot_frame(gc_frame);
-                if let Completion::Throw(_) = result {
-                    return result;
-                }
-                return Completion::Throw(self.create_reference_error(
-                    "'super()' has already been called in this derived constructor",
-                ));
-            }
+            });
         }
 
         // Handle member calls: obj.method()

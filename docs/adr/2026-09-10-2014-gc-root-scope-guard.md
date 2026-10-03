@@ -102,8 +102,18 @@ zero real adapters in `array.rs`).
   `with_gc_root_scope` makes every exit, including the naked returns,
   truncate uniformly, closing the leak as a side effect. The two
   perf-sensitive sites the issue flagged (the `super()` branch of
-  `eval_call`, and `eval_assign`'s `Expression::Member` branch) were
-  measured separately; see the PR for the outcome of that gate.
+  `eval_call`, and `eval_assign`'s `Expression::Member` branch, the latter
+  already an equivalent hand-rolled closure IIFE before this change) were
+  measured separately on a loop-heavy microbenchmark for each, using
+  minimum-of-21 interleaved runs rather than the mean/median — the shared
+  build host's load made single-run and even median timings swing by double
+  digits in either direction between back-to-back measurements of the same
+  two binaries, so the minimum (closest to an uncontended run) was the only
+  stable signal. Both converted sites came out at parity with their
+  pre-conversion binary (within a few percent, inside the noise floor even
+  at minimum), consistent with `with_gc_root_scope` being `#[inline]` and
+  doing the same O(1) depth-capture/truncate work the manual frame did; both
+  conversions were kept.
 
 ## Deliberately not migrated
 
