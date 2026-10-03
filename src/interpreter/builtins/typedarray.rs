@@ -2894,35 +2894,37 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                interp.gc_root_value(&new_ta_val);
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&new_ta_val);
 
-                let new_ta = if let Some(o) = new_ta_val.as_object_id()
-                    && let Some(obj) = interp.get_object_cell(o)
-                {
-                    obj.borrow().typed_array_info().unwrap().clone()
-                } else {
-                    return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                };
-                // TypedArrayCreateFromConstructor(..., accessMode=~write~):
-                // result must not be backed by an immutable buffer.
-                if let Err(c) = check_ta_buffer_writable(interp, &new_ta) {
-                    return c;
-                }
-
-                for i in 0..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            typed_array_set_index(&new_ta, i, &result);
-                        }
-                        other => return other,
+                    let new_ta = if let Some(o) = new_ta_val.as_object_id()
+                        && let Some(obj) = interp.get_object_cell(o)
+                    {
+                        obj.borrow().typed_array_info().unwrap().clone()
+                    } else {
+                        return Completion::Throw(interp.create_type_error("not a TypedArray"));
+                    };
+                    // TypedArrayCreateFromConstructor(..., accessMode=~write~):
+                    // result must not be backed by an immutable buffer.
+                    if let Err(c) = check_ta_buffer_writable(interp, &new_ta) {
+                        return c;
                     }
-                }
-                Completion::Normal(new_ta_val)
+
+                    for i in 0..len {
+                        let val = typed_array_get_index(&ta, i);
+                        match interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[val, JsValue::number(i as f64), this_val.clone()],
+                        ) {
+                            Completion::Normal(result) => {
+                                typed_array_set_index(&new_ta, i, &result);
+                            }
+                            other => return other,
+                        }
+                    }
+                    Completion::Normal(new_ta_val)
+                })
             },
         ));
         self.get_object_cell_expect(proto_id)

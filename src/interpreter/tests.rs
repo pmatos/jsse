@@ -1796,6 +1796,181 @@ fn iterator_zip_helpers_release_temp_roots_after_stepping() {
     assert!(interp.gc_temp_roots.is_empty());
 }
 
+/// Calls `object[method](...args)` straight from Rust and asserts the call
+/// leaves the temp-root stack at the depth it found it. A JS call expression
+/// truncates to its own frame and would mask a native that leaves roots behind.
+fn call_method_balanced(
+    interp: &mut Interpreter,
+    object: &str,
+    method: &str,
+    args: &[JsValue],
+) -> Completion {
+    let receiver = interp.get_global_var(object).expect("receiver global");
+    let receiver_id = receiver.as_object_id().expect("receiver object");
+    let func = match interp.get_object_property(receiver_id, method, &receiver) {
+        Completion::Normal(v) => v,
+        other => panic!("unexpected completion: {other:?}"),
+    };
+    let depth = interp.gc_root_frame();
+    let result = interp.call_function(&func, &receiver, args);
+    assert_eq!(
+        interp.gc_root_frame(),
+        depth,
+        "{object}.{method}() left temp roots behind"
+    );
+    result
+}
+
+fn drain_balanced(interp: &mut Interpreter) {
+    let depth = interp.gc_root_frame();
+    interp.drain_microtasks();
+    assert_eq!(
+        interp.gc_root_frame(),
+        depth,
+        "microtask drain left temp roots behind"
+    );
+}
+
+#[test]
+fn generator_for_of_leaves_no_temp_roots_across_activations() {
+    // The iterator of a transformed generator for-of lives in the generator's
+    // environment, so no activation may push a temp root that a later one pops.
+    let mut interp = run_script(
+        r#"
+        function* loop() { for (const x of [1, 2, 3]) yield x; }
+        function* early() { for (const x of [1, 2, 3]) { yield x; break; } }
+        function* nested() {
+            for (const a of [1, 2]) for (const b of [3, 4]) yield a + b;
+        }
+        function* pattern() { const [a, b, ...rest] = [1, 2, 3, 4]; yield a; yield b; yield rest; }
+        function* withFinally() {
+            try { for (const x of [1, 2]) yield x; } finally { yield "done"; }
+        }
+        function* custom() {
+            const iterable = {
+                [Symbol.iterator]() {
+                    return { next() { return { done: false, value: 1 }; }, return() { return {}; } };
+                }
+            };
+            for (const x of iterable) yield x;
+        }
+        var loopGen = loop(), earlyGen = early(), nestedGen = nested(),
+            patternGen = pattern(), finallyGen = withFinally(), customGen = custom();
+        "#,
+    );
+    for name in ["loopGen", "nestedGen", "patternGen", "finallyGen"] {
+        loop {
+            let result = call_method_balanced(&mut interp, name, "next", &[]);
+            let Completion::Normal(result) = result else {
+                panic!("unexpected completion: {result:?}");
+            };
+            let result_id = result.as_object_id().expect("iterator result");
+            let done = interp.get_object_property(result_id, "done", &result);
+            if matches!(done, Completion::Normal(ref v) if interp.to_boolean_val(v)) {
+                break;
+            }
+        }
+    }
+    call_method_balanced(&mut interp, "earlyGen", "next", &[]);
+    call_method_balanced(&mut interp, "earlyGen", "return", &[]);
+    call_method_balanced(&mut interp, "customGen", "next", &[]);
+    call_method_balanced(&mut interp, "customGen", "next", &[]);
+    call_method_balanced(&mut interp, "customGen", "return", &[]);
+    assert!(interp.gc_temp_roots.is_empty());
+}
+
+#[test]
+fn async_generator_for_of_leaves_no_temp_roots_across_activations() {
+    let mut interp = run_script(
+        r#"
+        var log = [];
+        async function* g() {
+            for (const x of [1, 2]) { await null; yield x; }
+            for await (const y of [3, 4]) yield y;
+            const [a, b] = [5, 6];
+            yield a + b;
+        }
+        var it = g();
+        "#,
+    );
+    for _ in 0..8 {
+        call_method_balanced(&mut interp, "it", "next", &[]);
+        drain_balanced(&mut interp);
+    }
+    assert!(interp.gc_temp_roots.is_empty());
+}
+
+#[test]
+fn async_function_for_of_leaves_no_temp_roots_across_awaits() {
+    let mut interp = run_script(
+        r#"
+        function* gen() { for (const x of [1, 2]) yield x; }
+        async function f() {
+            for (const x of [1, 2]) await null;
+            for await (const y of [3]) await null;
+            const [a, ...rest] = [1, 2, 3];
+            for (const z of gen()) await null;
+            await null;
+            return rest;
+        }
+        var holder = { f };
+        "#,
+    );
+    call_method_balanced(&mut interp, "holder", "f", &[]);
+    for _ in 0..4 {
+        drain_balanced(&mut interp);
+    }
+    assert!(interp.gc_temp_roots.is_empty());
+}
+
+#[test]
+fn module_top_level_await_for_of_leaves_no_temp_roots() {
+    let dir = temp_case_dir("tla-for-of-roots");
+    let main_path = write_case_file(
+        &dir,
+        "main.js",
+        r#"
+        let seen = 0;
+        for (const x of [1, 2]) {
+            await null;
+            seen += x;
+            await Promise.resolve({ value: x });
+        }
+        for await (const y of [3]) seen += y;
+        globalThis.seen = seen;
+        "#,
+    );
+    let interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
+    assert_eq!(global_number(&interp, "seen"), 6.0);
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "module evaluation left temp roots behind: {:?}",
+        interp.gc_temp_roots
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn typed_array_map_leaves_no_temp_roots() {
+    let mut interp = run_script(
+        r#"
+        var ta = new Uint8Array([1, 2, 3]);
+        var cb = function (x) { return x * 2; };
+        var thrower = function () { throw new Error("callback"); };
+        "#,
+    );
+    let cb = interp.get_global_var("cb").expect("cb");
+    let thrower = interp.get_global_var("thrower").expect("thrower");
+    assert!(matches!(
+        call_method_balanced(&mut interp, "ta", "map", &[cb]),
+        Completion::Normal(_)
+    ));
+    assert!(matches!(
+        call_method_balanced(&mut interp, "ta", "map", &[thrower]),
+        Completion::Throw(_)
+    ));
+    assert!(interp.gc_temp_roots.is_empty());
+}
 #[test]
 fn private_method_call_with_non_iterable_spread_throws() {
     // A spread argument that is not iterable must throw a TypeError, even when the

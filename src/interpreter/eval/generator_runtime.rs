@@ -1682,7 +1682,6 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     };
-                    self.gc_root_value(&iterator);
                     func_env.borrow_mut().bindings.insert(
                         iter_var.clone(),
                         crate::interpreter::types::Binding {
@@ -1751,7 +1750,6 @@ impl Interpreter {
                             // still closes and the generator's handlers see it.
                             Completion::Throw(e) => {
                                 self.iterator_close(&iterator, e.clone());
-                                self.gc_unroot_value(&iterator);
                                 for_of_stack.remove(loop_pos);
                                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                 let e = route_exception!(e);
@@ -1790,7 +1788,7 @@ impl Interpreter {
                     };
                     match self.iterator_complete(&step_result) {
                         Ok(true) => {
-                            self.unroot_for_of_iterator(&iterator);
+                            self.forget_for_of_iterator(&iterator);
                             for_of_stack.remove(loop_pos);
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
@@ -1928,7 +1926,6 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             };
-                            self.gc_root_value(&iterator);
                             func_env.borrow_mut().bindings.insert(
                                 iter_var.clone(),
                                 crate::interpreter::types::Binding {
@@ -1981,7 +1978,7 @@ impl Interpreter {
                                             }
                                         },
                                         Ok(None) => {
-                                            self.unroot_for_of_iterator(&iterator);
+                                            self.forget_for_of_iterator(&iterator);
                                             for_of_stack.remove(pos);
                                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                             JsValue::UNDEFINED
@@ -2049,7 +2046,7 @@ impl Interpreter {
                                         self.retire_generator(o.id);
                                         return Completion::Throw(e);
                                     }
-                                    self.unroot_for_of_iterator(&iterator);
+                                    self.forget_for_of_iterator(&iterator);
                                     for_of_stack.remove(pos);
                                     self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                     rest
@@ -4164,7 +4161,7 @@ impl Interpreter {
                         let loop_state = for_of_stack.remove(pos);
                         let iterator = func_env.borrow().get(&loop_state.iter_var);
                         if let Some(iterator) = iterator {
-                            self.unroot_for_of_iterator(&iterator);
+                            self.forget_for_of_iterator(&iterator);
                             self.remove_generator_inline_iterator(o.id, &iterator);
                         }
                         self.sync_generator_for_of_stack(o.id, &for_of_stack);
@@ -5146,7 +5143,6 @@ impl Interpreter {
                             }
                         }
                     };
-                    self.gc_root_value(&iterator);
                     func_env.borrow_mut().bindings.insert(
                         iter_var.clone(),
                         crate::interpreter::types::Binding {
@@ -5355,7 +5351,7 @@ impl Interpreter {
                     };
                     match self.iterator_complete(&step_result) {
                         Ok(true) => {
-                            self.unroot_for_of_iterator(&iterator);
+                            self.forget_for_of_iterator(&iterator);
                             for_of_stack.remove(loop_pos);
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
@@ -5511,7 +5507,6 @@ impl Interpreter {
                                     );
                                 }
                             };
-                            self.gc_root_value(&iterator);
                             func_env.borrow_mut().bindings.insert(
                                 iter_var.clone(),
                                 crate::interpreter::types::Binding {
@@ -5565,7 +5560,7 @@ impl Interpreter {
                                             }
                                         },
                                         Ok(None) => {
-                                            self.unroot_for_of_iterator(&iterator);
+                                            self.forget_for_of_iterator(&iterator);
                                             for_of_stack.remove(pos);
                                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                             JsValue::UNDEFINED
@@ -5635,7 +5630,7 @@ impl Interpreter {
                                             o.id, promise, &reject_fn, e,
                                         );
                                     }
-                                    self.unroot_for_of_iterator(&iterator);
+                                    self.forget_for_of_iterator(&iterator);
                                     for_of_stack.remove(pos);
                                     self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                     rest
@@ -6666,7 +6661,7 @@ impl Interpreter {
         iterator: &JsValue,
     ) {
         for_of_stack.remove(loop_pos);
-        self.unroot_for_of_iterator(iterator);
+        self.forget_for_of_iterator(iterator);
         self.remove_generator_inline_iterator(generator_id, iterator);
         self.sync_generator_for_of_stack(generator_id, for_of_stack);
     }
@@ -6683,7 +6678,7 @@ impl Interpreter {
         for loop_state in for_of_stack.drain(..).rev() {
             let iterator = func_env.borrow().get(&loop_state.iter_var);
             if let Some(iterator) = iterator {
-                self.unroot_for_of_iterator(&iterator);
+                self.forget_for_of_iterator(&iterator);
             }
         }
         self.generator_inline_iters.remove(&generator_id);
