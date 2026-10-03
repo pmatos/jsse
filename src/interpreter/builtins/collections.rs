@@ -489,12 +489,19 @@ impl Interpreter {
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !iterable.is_undefined() && !iterable.is_null() {
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&this_val);
+
                     // Step 7a: Get adder = Get(map, "set") — must invoke getters
                     let adder = match interp.get_object_property(obj_id, "set", &this_val) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    interp.gc_root_value(&adder);
                     if !adder.as_object_id().is_some_and(|adder_id| {
                         interp
                             .get_object_cell(adder_id)
@@ -509,6 +516,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
+                    interp.gc_root_value(&iterator);
 
                     // Iterate
                     loop {
@@ -547,8 +555,14 @@ impl Interpreter {
                             }
                             other => return other,
                         };
-                        // Get(nextItem, "1") — invoke getters, close on abrupt
-                        let v = match interp.get_object_property(val_id, "1", &value) {
+                        // Get(nextItem, "1") — invoke getters, close on abrupt.
+                        // `k` is rooted for the duration: it's otherwise only a
+                        // Rust local, and this Get can run arbitrary user code
+                        // (a getter) that triggers a collection.
+                        let v = match interp.with_gc_root_scope(|interp| {
+                            interp.gc_root_value(&k);
+                            interp.get_object_property(val_id, "1", &value)
+                        }) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 let _ = interp.iterator_close(&iterator, e.clone());
@@ -567,9 +581,9 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                }
 
-                Completion::Normal(this_val)
+                    Completion::Normal(this_val)
+                })
             },
         ));
 
@@ -640,104 +654,110 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    // 3. Create result Map
-                    let result_map_id = interp.create_object_id();
-                    interp
-                        .get_object_cell_expect(result_map_id)
-                        .borrow_mut()
-                        .prototype_id = Some(map_proto_for_groupby);
-                    interp
-                        .get_object_cell_expect(result_map_id)
-                        .borrow_mut()
-                        .class_name = "Map".to_string();
-                    interp
-                        .get_object_cell_expect(result_map_id)
-                        .borrow_mut()
-                        .kind = crate::interpreter::types::ObjectKind::Map(Vec::new());
-                    let result_id = result_map_id;
-                    let result_val = JsValue::object(result_id);
+                    interp.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&iterator);
 
-                    // 4. Iterate and group
-                    let mut k: u64 = 0;
-                    loop {
-                        let next = match interp.iterator_step(&iterator) {
-                            Ok(Some(v)) => v,
-                            Ok(None) => break,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let value = match interp.iterator_value(&next) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
+                        // 3. Create result Map
+                        let result_map_id = interp.create_object_id();
+                        interp
+                            .get_object_cell_expect(result_map_id)
+                            .borrow_mut()
+                            .prototype_id = Some(map_proto_for_groupby);
+                        interp
+                            .get_object_cell_expect(result_map_id)
+                            .borrow_mut()
+                            .class_name = "Map".to_string();
+                        interp
+                            .get_object_cell_expect(result_map_id)
+                            .borrow_mut()
+                            .kind = crate::interpreter::types::ObjectKind::Map(Vec::new());
+                        let result_id = result_map_id;
+                        let result_val = JsValue::object(result_id);
+                        interp.gc_root_value(&result_val);
 
-                        // Call callback with (value, index)
-                        let key_val = match interp.call_function(
-                            &callback,
-                            &JsValue::UNDEFINED,
-                            &[value.clone(), JsValue::number(k as f64)],
-                        ) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::UNDEFINED,
-                        };
+                        // 4. Iterate and group
+                        let mut k: u64 = 0;
+                        loop {
+                            let next = match interp.iterator_step(&iterator) {
+                                Ok(Some(v)) => v,
+                                Ok(None) => break,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let value = match interp.iterator_value(&next) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
 
-                        // Per spec: If key is -0, set key to +0
-                        let key_val = if let Some(number) = key_val.as_number() {
-                            if number == 0.0 {
-                                JsValue::number(0.0)
+                            // Call callback with (value, index)
+                            let key_val = match interp.call_function(
+                                &callback,
+                                &JsValue::UNDEFINED,
+                                &[value.clone(), JsValue::number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::UNDEFINED,
+                            };
+
+                            // Per spec: If key is -0, set key to +0
+                            let key_val = if let Some(number) = key_val.as_number() {
+                                if number == 0.0 {
+                                    JsValue::number(0.0)
+                                } else {
+                                    key_val
+                                }
                             } else {
                                 key_val
-                            }
-                        } else {
-                            key_val
-                        };
+                            };
 
-                        // Add value to the group for this key (using Map's SameValueZero semantics)
-                        if let Some(map_obj) = interp.get_object_cell(result_id) {
-                            let mut borrowed = map_obj.borrow_mut();
-                            let entries = borrowed.map_data_mut().unwrap();
+                            // Add value to the group for this key (using Map's SameValueZero semantics)
+                            if let Some(map_obj) = interp.get_object_cell(result_id) {
+                                let mut borrowed = map_obj.borrow_mut();
+                                let entries = borrowed.map_data_mut().unwrap();
 
-                            // Find existing entry with SameValueZero key equality
-                            let existing_idx = entries.iter().position(|entry| {
-                                if let Some((k, _)) = entry {
-                                    same_value_zero(k, &key_val)
+                                // Find existing entry with SameValueZero key equality
+                                let existing_idx = entries.iter().position(|entry| {
+                                    if let Some((k, _)) = entry {
+                                        same_value_zero(k, &key_val)
+                                    } else {
+                                        false
+                                    }
+                                });
+
+                                if let Some(idx) = existing_idx {
+                                    // Append to existing array
+                                    if let Some((_, arr_val)) = entries[idx].as_ref()
+                                        && let Some(arr_obj) = (arr_val).as_object_id()
+                                    {
+                                        let arr_id = arr_obj;
+                                        drop(borrowed);
+                                        if let Some(arr) = interp.get_object(arr_id) {
+                                            let len_val =
+                                                interp.get_property_on_id(arr_id, "length");
+                                            let len = interp.to_number_coerce(&len_val) as usize;
+                                            arr.borrow_mut().insert_builtin(len.to_string(), value);
+                                            arr.borrow_mut().insert_builtin(
+                                                "length".to_string(),
+                                                JsValue::number((len + 1) as f64),
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    false
-                                }
-                            });
-
-                            if let Some(idx) = existing_idx {
-                                // Append to existing array
-                                if let Some((_, arr_val)) = entries[idx].as_ref()
-                                    && let Some(arr_obj) = (arr_val).as_object_id()
-                                {
-                                    let arr_id = arr_obj;
+                                    // Create new array and add entry
                                     drop(borrowed);
-                                    if let Some(arr) = interp.get_object(arr_id) {
-                                        let len_val = interp.get_property_on_id(arr_id, "length");
-                                        let len = interp.to_number_coerce(&len_val) as usize;
-                                        arr.borrow_mut().insert_builtin(len.to_string(), value);
-                                        arr.borrow_mut().insert_builtin(
-                                            "length".to_string(),
-                                            JsValue::number((len + 1) as f64),
-                                        );
+                                    let new_arr = interp.create_array(vec![value]);
+                                    if let Some(map_obj) = interp.get_object_cell(result_id) {
+                                        let mut borrowed = map_obj.borrow_mut();
+                                        let entries = borrowed.map_data_mut().unwrap();
+                                        entries.push(Some((key_val, new_arr)));
                                     }
                                 }
-                            } else {
-                                // Create new array and add entry
-                                drop(borrowed);
-                                let new_arr = interp.create_array(vec![value]);
-                                if let Some(map_obj) = interp.get_object_cell(result_id) {
-                                    let mut borrowed = map_obj.borrow_mut();
-                                    let entries = borrowed.map_data_mut().unwrap();
-                                    entries.push(Some((key_val, new_arr)));
-                                }
                             }
+                            k += 1;
                         }
-                        k += 1;
-                    }
 
-                    Completion::Normal(result_val)
+                        Completion::Normal(result_val)
+                    })
                 },
             ));
             ctor_obj
@@ -1545,12 +1565,19 @@ impl Interpreter {
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !iterable.is_undefined() && !iterable.is_null() {
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&this_val);
+
                     // §24.2.1.1 step 7a: Let adder be ? Get(set, "add").
                     let adder = match interp.get_object_property(obj_id, "add", &this_val) {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
+                    interp.gc_root_value(&adder);
                     if !adder.as_object_id().is_some_and(|adder_id| {
                         interp
                             .get_object_cell(adder_id)
@@ -1585,6 +1612,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    interp.gc_root_value(&iterator);
 
                     loop {
                         let next_fn = if let Some(io) = iterator.as_object_id() {
@@ -1632,9 +1660,9 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                }
 
-                Completion::Normal(this_val)
+                    Completion::Normal(this_val)
+                })
             },
         ));
 
@@ -1934,12 +1962,19 @@ impl Interpreter {
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !iterable.is_undefined() && !iterable.is_null() {
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&this_val);
+
                     // §24.3.1.1 step 7a: Let adder be ? Get(map, "set").
                     let adder = match interp.get_object_property(obj_id, "set", &this_val) {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
+                    interp.gc_root_value(&adder);
                     if !adder.as_object_id().is_some_and(|adder_id| {
                         interp
                             .get_object_cell(adder_id)
@@ -1975,6 +2010,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    interp.gc_root_value(&iterator);
 
                     loop {
                         let next_fn = if let Some(io) = iterator.as_object_id() {
@@ -2034,7 +2070,13 @@ impl Interpreter {
                                 }
                                 other => return other,
                             };
-                            let v = match interp.get_object_property(vo, "1", &value) {
+                            // `k` is rooted for the duration: it's otherwise only
+                            // a Rust local, and this Get can run arbitrary user
+                            // code (a getter) that triggers a collection.
+                            let v = match interp.with_gc_root_scope(|interp| {
+                                interp.gc_root_value(&k);
+                                interp.get_object_property(vo, "1", &value)
+                            }) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
                                     let e2 = interp.iterator_close(&iterator, e);
@@ -2057,9 +2099,9 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                }
 
-                Completion::Normal(this_val)
+                    Completion::Normal(this_val)
+                })
             },
         ));
 
@@ -2215,12 +2257,19 @@ impl Interpreter {
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !iterable.is_undefined() && !iterable.is_null() {
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&this_val);
+
                     // §24.4.1.1 step 7a: Let adder be ? Get(set, "add").
                     let adder = match interp.get_object_property(obj_id, "add", &this_val) {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
+                    interp.gc_root_value(&adder);
                     if !adder.as_object_id().is_some_and(|adder_id| {
                         interp
                             .get_object_cell(adder_id)
@@ -2256,6 +2305,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    interp.gc_root_value(&iterator);
 
                     loop {
                         let next_fn = if let Some(io) = iterator.as_object_id() {
@@ -2311,9 +2361,9 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                }
 
-                Completion::Normal(this_val)
+                    Completion::Normal(this_val)
+                })
             },
         ));
 
