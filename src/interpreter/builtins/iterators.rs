@@ -1619,7 +1619,10 @@ impl Interpreter {
                         let value = interp.iterator_value(&result);
                         interp.gc_unroot_value(&result);
                         match value {
-                            Ok(v) => values.push(v),
+                            Ok(v) => {
+                                interp.gc_root_value(&v);
+                                values.push(v);
+                            }
                             Err(e) => break Completion::Throw(e),
                         }
                     }
