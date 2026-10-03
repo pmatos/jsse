@@ -1133,6 +1133,7 @@ impl Interpreter {
             IteratorState::ForInEnumerator { obj_id, .. } => worklist.extend(*obj_id),
             IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
             IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
+            IteratorState::RegExpStringIterator { matcher_id, .. } => worklist.push(*matcher_id),
             IteratorState::Generator {
                 func_env,
                 execution_state,

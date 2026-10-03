@@ -1522,6 +1522,7 @@ pub(crate) enum IteratorState {
         global: bool,
         last_index: usize,
         done: bool,
+        matcher_id: u64,
     },
     TypedArrayIterator {
         typed_array_id: u64,
