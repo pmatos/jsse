@@ -488,97 +488,97 @@ impl Interpreter {
                     crate::interpreter::types::ObjectKind::Map(Vec::new());
                 let this_val = JsValue::object(obj_id);
 
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
                 interp.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&this_val);
 
-                    let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if !iterable.is_undefined() && !iterable.is_null() {
-                        // Step 7a: Get adder = Get(map, "set") — must invoke getters
-                        let adder = match interp.get_object_property(obj_id, "set", &this_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        interp.gc_root_value(&adder);
-                        if !adder.as_object_id().is_some_and(|adder_id| {
-                            interp
-                                .get_object_cell(adder_id)
-                                .is_some_and(|object| object.borrow().callable.is_some())
-                        }) {
-                            let err =
-                                interp.create_type_error("Map.prototype.set is not a function");
-                            return Completion::Throw(err);
-                        }
+                    // Step 7a: Get adder = Get(map, "set") — must invoke getters
+                    let adder = match interp.get_object_property(obj_id, "set", &this_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    interp.gc_root_value(&adder);
+                    if !adder.as_object_id().is_some_and(|adder_id| {
+                        interp
+                            .get_object_cell(adder_id)
+                            .is_some_and(|object| object.borrow().callable.is_some())
+                    }) {
+                        let err = interp.create_type_error("Map.prototype.set is not a function");
+                        return Completion::Throw(err);
+                    }
 
-                        // Get iterator from iterable
-                        let iterator = match interp.get_iterator(&iterable) {
+                    // Get iterator from iterable
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    interp.gc_root_value(&iterator);
+
+                    // Iterate
+                    loop {
+                        let next = match interp.iterator_step(&iterator) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
-                        interp.gc_root_value(&iterator);
+                        let next = match next {
+                            Some(v) => v,
+                            None => break,
+                        };
 
-                        // Iterate
-                        loop {
-                            let next = match interp.iterator_step(&iterator) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            let next = match next {
-                                Some(v) => v,
-                                None => break,
-                            };
+                        let value = match interp.iterator_value(&next) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
 
-                            let value = match interp.iterator_value(&next) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                        // value should be [key, value] — must be Object
+                        if !value.is_object() {
+                            let err = interp.create_type_error("Iterator value is not an object");
+                            let _ = interp.iterator_close(&iterator, err.clone());
+                            return Completion::Throw(err);
+                        }
 
-                            // value should be [key, value] — must be Object
-                            if !value.is_object() {
-                                let err =
-                                    interp.create_type_error("Iterator value is not an object");
-                                let _ = interp.iterator_close(&iterator, err.clone());
-                                return Completion::Throw(err);
+                        // Get(nextItem, "0") — invoke getters, close on abrupt
+                        let val_id = if let Some(vo) = value.as_object_id() {
+                            vo
+                        } else {
+                            unreachable!()
+                        };
+                        let k = match interp.get_object_property(val_id, "0", &value) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
                             }
-
-                            // Get(nextItem, "0") — invoke getters, close on abrupt
-                            let val_id = if let Some(vo) = value.as_object_id() {
-                                vo
-                            } else {
-                                unreachable!()
-                            };
-                            let k = match interp.get_object_property(val_id, "0", &value) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.iterator_close(&iterator, e.clone());
-                                    return Completion::Throw(e);
-                                }
-                                other => return other,
-                            };
-                            // Get(nextItem, "1") — invoke getters, close on abrupt.
-                            // `k` is rooted for the duration: it's otherwise only a
-                            // Rust local, and this Get can run arbitrary user code
-                            // (a getter) that triggers a collection.
-                            let v = match interp.with_gc_root_scope(|interp| {
-                                interp.gc_root_value(&k);
-                                interp.get_object_property(val_id, "1", &value)
-                            }) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.iterator_close(&iterator, e.clone());
-                                    return Completion::Throw(e);
-                                }
-                                other => return other,
-                            };
-
-                            // Call(adder, map, « k, v ») — close on abrupt
-                            match interp.call_function(&adder, &this_val, &[k, v]) {
-                                Completion::Normal(_) => {}
-                                Completion::Throw(e) => {
-                                    let _ = interp.iterator_close(&iterator, e.clone());
-                                    return Completion::Throw(e);
-                                }
-                                other => return other,
+                            other => return other,
+                        };
+                        // Get(nextItem, "1") — invoke getters, close on abrupt.
+                        // `k` is rooted for the duration: it's otherwise only a
+                        // Rust local, and this Get can run arbitrary user code
+                        // (a getter) that triggers a collection.
+                        let v = match interp.with_gc_root_scope(|interp| {
+                            interp.gc_root_value(&k);
+                            interp.get_object_property(val_id, "1", &value)
+                        }) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
                             }
+                            other => return other,
+                        };
+
+                        // Call(adder, map, « k, v ») — close on abrupt
+                        match interp.call_function(&adder, &this_val, &[k, v]) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
                         }
                     }
 
@@ -1564,99 +1564,100 @@ impl Interpreter {
                     crate::interpreter::types::ObjectKind::Set(Vec::new());
                 let this_val = JsValue::object(obj_id);
 
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
                 interp.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&this_val);
 
-                    let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if !iterable.is_undefined() && !iterable.is_null() {
-                        // §24.2.1.1 step 7a: Let adder be ? Get(set, "add").
-                        let adder = match interp.get_object_property(obj_id, "add", &this_val) {
-                            Completion::Normal(v) => v,
-                            c => return c,
-                        };
-                        interp.gc_root_value(&adder);
-                        if !adder.as_object_id().is_some_and(|adder_id| {
-                            interp
-                                .get_object_cell(adder_id)
-                                .is_some_and(|object| object.borrow().callable.is_some())
-                        }) {
-                            let err =
-                                interp.create_type_error("Set.prototype.add is not a function");
-                            return Completion::Throw(err);
-                        }
+                    // §24.2.1.1 step 7a: Let adder be ? Get(set, "add").
+                    let adder = match interp.get_object_property(obj_id, "add", &this_val) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
+                    interp.gc_root_value(&adder);
+                    if !adder.as_object_id().is_some_and(|adder_id| {
+                        interp
+                            .get_object_cell(adder_id)
+                            .is_some_and(|object| object.borrow().callable.is_some())
+                    }) {
+                        let err = interp.create_type_error("Set.prototype.add is not a function");
+                        return Completion::Throw(err);
+                    }
 
-                        let iter_key = interp.get_symbol_iterator_key();
-                        let iterator_fn = if let Some(ref key) = iter_key {
-                            if let Some(io) = iterable.as_object_id() {
-                                let v = interp.get_property_on_id(io, key);
-                                if v.is_undefined() {
-                                    JsValue::UNDEFINED
-                                } else {
-                                    v
-                                }
-                            } else {
+                    let iter_key = interp.get_symbol_iterator_key();
+                    let iterator_fn = if let Some(ref key) = iter_key {
+                        if let Some(io) = iterable.as_object_id() {
+                            let v = interp.get_property_on_id(io, key);
+                            if v.is_undefined() {
                                 JsValue::UNDEFINED
+                            } else {
+                                v
+                            }
+                        } else {
+                            JsValue::UNDEFINED
+                        }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+
+                    if iterator_fn.is_undefined() {
+                        let err = interp.create_type_error("object is not iterable");
+                        return Completion::Throw(err);
+                    }
+
+                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    interp.gc_root_value(&iterator);
+
+                    loop {
+                        let next_fn = if let Some(io) = iterator.as_object_id() {
+                            interp.get_property_on_id(io, "next")
+                        } else {
+                            JsValue::UNDEFINED
+                        };
+
+                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+
+                        // Use getter-aware property access for done/value
+                        let done = if let Some(ro) = next_result.as_object_id() {
+                            match interp.get_object_property(ro, "done", &next_result) {
+                                Completion::Normal(v) => interp.to_boolean_val(&v),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            }
+                        } else {
+                            false
+                        };
+                        if done {
+                            break;
+                        }
+                        // Per IteratorStepValue, if accessing .value throws, the error
+                        // propagates directly without closing the iterator.
+                        let value = if let Some(ro) = next_result.as_object_id() {
+                            match interp.get_object_property(ro, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
                             }
                         } else {
                             JsValue::UNDEFINED
                         };
 
-                        if iterator_fn.is_undefined() {
-                            let err = interp.create_type_error("object is not iterable");
-                            return Completion::Throw(err);
-                        }
-
-                        let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                            Completion::Normal(v) => v,
+                        match interp.call_function(&adder, &this_val, &[value]) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
                             other => return other,
-                        };
-                        interp.gc_root_value(&iterator);
-
-                        loop {
-                            let next_fn = if let Some(io) = iterator.as_object_id() {
-                                interp.get_property_on_id(io, "next")
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-
-                            let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-
-                            // Use getter-aware property access for done/value
-                            let done = if let Some(ro) = next_result.as_object_id() {
-                                match interp.get_object_property(ro, "done", &next_result) {
-                                    Completion::Normal(v) => interp.to_boolean_val(&v),
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                false
-                            };
-                            if done {
-                                break;
-                            }
-                            // Per IteratorStepValue, if accessing .value throws, the error
-                            // propagates directly without closing the iterator.
-                            let value = if let Some(ro) = next_result.as_object_id() {
-                                match interp.get_object_property(ro, "value", &next_result) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-
-                            match interp.call_function(&adder, &this_val, &[value]) {
-                                Completion::Normal(_) => {}
-                                Completion::Throw(e) => {
-                                    interp.iterator_close(&iterator, e.clone());
-                                    return Completion::Throw(e);
-                                }
-                                other => return other,
-                            }
                         }
                     }
 
@@ -1960,141 +1961,142 @@ impl Interpreter {
                     crate::interpreter::types::ObjectKind::Map(Vec::new());
                 let this_val = JsValue::object(obj_id);
 
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
                 interp.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&this_val);
 
-                    let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if !iterable.is_undefined() && !iterable.is_null() {
-                        // §24.3.1.1 step 7a: Let adder be ? Get(map, "set").
-                        let adder = match interp.get_object_property(obj_id, "set", &this_val) {
-                            Completion::Normal(v) => v,
-                            c => return c,
+                    // §24.3.1.1 step 7a: Let adder be ? Get(map, "set").
+                    let adder = match interp.get_object_property(obj_id, "set", &this_val) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
+                    interp.gc_root_value(&adder);
+                    if !adder.as_object_id().is_some_and(|adder_id| {
+                        interp
+                            .get_object_cell(adder_id)
+                            .is_some_and(|object| object.borrow().callable.is_some())
+                    }) {
+                        let err =
+                            interp.create_type_error("WeakMap.prototype.set is not a function");
+                        return Completion::Throw(err);
+                    }
+
+                    let iter_key = interp.get_symbol_iterator_key();
+                    let iterator_fn = if let Some(ref key) = iter_key {
+                        if let Some(io) = iterable.as_object_id() {
+                            let v = interp.get_property_on_id(io, key);
+                            if v.is_undefined() {
+                                JsValue::UNDEFINED
+                            } else {
+                                v
+                            }
+                        } else {
+                            JsValue::UNDEFINED
+                        }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+
+                    if iterator_fn.is_undefined() {
+                        let err = interp.create_type_error("object is not iterable");
+                        return Completion::Throw(err);
+                    }
+
+                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    interp.gc_root_value(&iterator);
+
+                    loop {
+                        let next_fn = if let Some(io) = iterator.as_object_id() {
+                            interp.get_property_on_id(io, "next")
+                        } else {
+                            JsValue::UNDEFINED
                         };
-                        interp.gc_root_value(&adder);
-                        if !adder.as_object_id().is_some_and(|adder_id| {
-                            interp
-                                .get_object_cell(adder_id)
-                                .is_some_and(|object| object.borrow().callable.is_some())
-                        }) {
-                            let err =
-                                interp.create_type_error("WeakMap.prototype.set is not a function");
-                            return Completion::Throw(err);
+
+                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+
+                        // IteratorStep: access .done via getter-aware Get (not raw get_property)
+                        // Per spec, if accessing .done throws, the error propagates directly
+                        // without closing the iterator.
+                        let done = if let Some(ro) = next_result.as_object_id() {
+                            match interp.get_object_property(ro, "done", &next_result) {
+                                Completion::Normal(d) => interp.to_boolean_val(&d),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        };
+
+                        if done {
+                            break;
                         }
 
-                        let iter_key = interp.get_symbol_iterator_key();
-                        let iterator_fn = if let Some(ref key) = iter_key {
-                            if let Some(io) = iterable.as_object_id() {
-                                let v = interp.get_property_on_id(io, key);
-                                if v.is_undefined() {
-                                    JsValue::UNDEFINED
-                                } else {
-                                    v
-                                }
-                            } else {
-                                JsValue::UNDEFINED
+                        // §24.3.1.1 step 9d: Get value via Get (invokes getters).
+                        // If accessing .value throws, the error propagates without closing the iterator.
+                        let value = if let Some(ro) = next_result.as_object_id() {
+                            match interp.get_object_property(ro, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
                             }
                         } else {
                             JsValue::UNDEFINED
                         };
 
-                        if iterator_fn.is_undefined() {
-                            let err = interp.create_type_error("object is not iterable");
-                            return Completion::Throw(err);
+                        // §24.3.1.1 step 9e: If value is not Object, close iterator + throw
+                        if !value.is_object() {
+                            let err = interp.create_type_error("Iterator value is not an object");
+                            let e2 = interp.iterator_close(&iterator, err);
+                            return Completion::Throw(e2);
                         }
 
-                        let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        interp.gc_root_value(&iterator);
-
-                        loop {
-                            let next_fn = if let Some(io) = iterator.as_object_id() {
-                                interp.get_property_on_id(io, "next")
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-
-                            let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+                        // Get key and value from the [key, value] pair
+                        let (k, v) = if let Some(vo) = value.as_object_id() {
+                            let k = match interp.get_object_property(vo, "0", &value) {
                                 Completion::Normal(v) => v,
-                                other => return other,
-                            };
-
-                            // IteratorStep: access .done via getter-aware Get (not raw get_property)
-                            // Per spec, if accessing .done throws, the error propagates directly
-                            // without closing the iterator.
-                            let done = if let Some(ro) = next_result.as_object_id() {
-                                match interp.get_object_property(ro, "done", &next_result) {
-                                    Completion::Normal(d) => interp.to_boolean_val(&d),
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => false,
-                                }
-                            } else {
-                                false
-                            };
-
-                            if done {
-                                break;
-                            }
-
-                            // §24.3.1.1 step 9d: Get value via Get (invokes getters).
-                            // If accessing .value throws, the error propagates without closing the iterator.
-                            let value = if let Some(ro) = next_result.as_object_id() {
-                                match interp.get_object_property(ro, "value", &next_result) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-
-                            // §24.3.1.1 step 9e: If value is not Object, close iterator + throw
-                            if !value.is_object() {
-                                let err =
-                                    interp.create_type_error("Iterator value is not an object");
-                                let e2 = interp.iterator_close(&iterator, err);
-                                return Completion::Throw(e2);
-                            }
-
-                            // Get key and value from the [key, value] pair
-                            let (k, v) = if let Some(vo) = value.as_object_id() {
-                                let k = match interp.get_object_property(vo, "0", &value) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => {
-                                        let e2 = interp.iterator_close(&iterator, e);
-                                        return Completion::Throw(e2);
-                                    }
-                                    other => return other,
-                                };
-                                // `k` is rooted for the duration: it's otherwise only
-                                // a Rust local, and this Get can run arbitrary user
-                                // code (a getter) that triggers a collection.
-                                let v = match interp.with_gc_root_scope(|interp| {
-                                    interp.gc_root_value(&k);
-                                    interp.get_object_property(vo, "1", &value)
-                                }) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => {
-                                        let e2 = interp.iterator_close(&iterator, e);
-                                        return Completion::Throw(e2);
-                                    }
-                                    other => return other,
-                                };
-                                (k, v)
-                            } else {
-                                unreachable!()
-                            };
-
-                            // §24.3.1.1 step 9f-g: Call adder, IteratorClose on failure
-                            match interp.call_function(&adder, &this_val, &[k, v]) {
-                                Completion::Normal(_) => {}
                                 Completion::Throw(e) => {
                                     let e2 = interp.iterator_close(&iterator, e);
                                     return Completion::Throw(e2);
                                 }
                                 other => return other,
+                            };
+                            // `k` is rooted for the duration: it's otherwise only
+                            // a Rust local, and this Get can run arbitrary user
+                            // code (a getter) that triggers a collection.
+                            let v = match interp.with_gc_root_scope(|interp| {
+                                interp.gc_root_value(&k);
+                                interp.get_object_property(vo, "1", &value)
+                            }) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let e2 = interp.iterator_close(&iterator, e);
+                                    return Completion::Throw(e2);
+                                }
+                                other => return other,
+                            };
+                            (k, v)
+                        } else {
+                            unreachable!()
+                        };
+
+                        // §24.3.1.1 step 9f-g: Call adder, IteratorClose on failure
+                        match interp.call_function(&adder, &this_val, &[k, v]) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                let e2 = interp.iterator_close(&iterator, e);
+                                return Completion::Throw(e2);
                             }
+                            other => return other,
                         }
                     }
 
@@ -2254,107 +2256,109 @@ impl Interpreter {
                     crate::interpreter::types::ObjectKind::Set(Vec::new());
                 let this_val = JsValue::object(obj_id);
 
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if iterable.is_undefined() || iterable.is_null() {
+                    return Completion::Normal(this_val);
+                }
+
                 interp.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&this_val);
 
-                    let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if !iterable.is_undefined() && !iterable.is_null() {
-                        // §24.4.1.1 step 7a: Let adder be ? Get(set, "add").
-                        let adder = match interp.get_object_property(obj_id, "add", &this_val) {
-                            Completion::Normal(v) => v,
-                            c => return c,
+                    // §24.4.1.1 step 7a: Let adder be ? Get(set, "add").
+                    let adder = match interp.get_object_property(obj_id, "add", &this_val) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
+                    interp.gc_root_value(&adder);
+                    if !adder.as_object_id().is_some_and(|adder_id| {
+                        interp
+                            .get_object_cell(adder_id)
+                            .is_some_and(|object| object.borrow().callable.is_some())
+                    }) {
+                        let err =
+                            interp.create_type_error("WeakSet.prototype.add is not a function");
+                        return Completion::Throw(err);
+                    }
+
+                    let iter_key = interp.get_symbol_iterator_key();
+                    let iterator_fn = if let Some(ref key) = iter_key {
+                        if let Some(io) = iterable.as_object_id() {
+                            let v = interp.get_property_on_id(io, key);
+                            if v.is_undefined() {
+                                JsValue::UNDEFINED
+                            } else {
+                                v
+                            }
+                        } else {
+                            JsValue::UNDEFINED
+                        }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+
+                    if iterator_fn.is_undefined() {
+                        let err = interp.create_type_error("object is not iterable");
+                        return Completion::Throw(err);
+                    }
+
+                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    interp.gc_root_value(&iterator);
+
+                    loop {
+                        let next_fn = if let Some(io) = iterator.as_object_id() {
+                            interp.get_property_on_id(io, "next")
+                        } else {
+                            JsValue::UNDEFINED
                         };
-                        interp.gc_root_value(&adder);
-                        if !adder.as_object_id().is_some_and(|adder_id| {
-                            interp
-                                .get_object_cell(adder_id)
-                                .is_some_and(|object| object.borrow().callable.is_some())
-                        }) {
-                            let err =
-                                interp.create_type_error("WeakSet.prototype.add is not a function");
-                            return Completion::Throw(err);
+
+                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+
+                        if !(next_result).is_object() {
+                            return Completion::Throw(
+                                interp.create_type_error("Iterator result is not an object"),
+                            );
                         }
 
-                        let iter_key = interp.get_symbol_iterator_key();
-                        let iterator_fn = if let Some(ref key) = iter_key {
-                            if let Some(io) = iterable.as_object_id() {
-                                let v = interp.get_property_on_id(io, key);
-                                if v.is_undefined() {
-                                    JsValue::UNDEFINED
-                                } else {
-                                    v
-                                }
-                            } else {
-                                JsValue::UNDEFINED
+                        // Use getter-aware property access for done/value.
+                        // Per IteratorStepValue, errors from .done/.value propagate
+                        // directly without closing the iterator.
+                        let done = if let Some(ro) = next_result.as_object_id() {
+                            match interp.get_object_property(ro, "done", &next_result) {
+                                Completion::Normal(d) => interp.to_boolean_val(&d),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        };
+                        if done {
+                            break;
+                        }
+
+                        let value = if let Some(ro) = next_result.as_object_id() {
+                            match interp.get_object_property(ro, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
                             }
                         } else {
                             JsValue::UNDEFINED
                         };
 
-                        if iterator_fn.is_undefined() {
-                            let err = interp.create_type_error("object is not iterable");
-                            return Completion::Throw(err);
-                        }
-
-                        let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                            Completion::Normal(v) => v,
+                        // §24.4.1.1 step 9f-g: Call adder, IteratorClose on failure
+                        match interp.call_function(&adder, &this_val, &[value]) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                let e2 = interp.iterator_close(&iterator, e);
+                                return Completion::Throw(e2);
+                            }
                             other => return other,
-                        };
-                        interp.gc_root_value(&iterator);
-
-                        loop {
-                            let next_fn = if let Some(io) = iterator.as_object_id() {
-                                interp.get_property_on_id(io, "next")
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-
-                            let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-
-                            if !(next_result).is_object() {
-                                return Completion::Throw(
-                                    interp.create_type_error("Iterator result is not an object"),
-                                );
-                            }
-
-                            // Use getter-aware property access for done/value.
-                            // Per IteratorStepValue, errors from .done/.value propagate
-                            // directly without closing the iterator.
-                            let done = if let Some(ro) = next_result.as_object_id() {
-                                match interp.get_object_property(ro, "done", &next_result) {
-                                    Completion::Normal(d) => interp.to_boolean_val(&d),
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => false,
-                                }
-                            } else {
-                                false
-                            };
-                            if done {
-                                break;
-                            }
-
-                            let value = if let Some(ro) = next_result.as_object_id() {
-                                match interp.get_object_property(ro, "value", &next_result) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-
-                            // §24.4.1.1 step 9f-g: Call adder, IteratorClose on failure
-                            match interp.call_function(&adder, &this_val, &[value]) {
-                                Completion::Normal(_) => {}
-                                Completion::Throw(e) => {
-                                    let e2 = interp.iterator_close(&iterator, e);
-                                    return Completion::Throw(e2);
-                                }
-                                other => return other,
-                            }
                         }
                     }
 
