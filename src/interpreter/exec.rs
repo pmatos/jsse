@@ -1622,7 +1622,12 @@ impl Interpreter {
                 }
                 if let Some(err) = error {
                     if !done {
-                        let _ = self.iterator_close_result(&iterator);
+                        // `err` must survive `return()`, which can run
+                        // arbitrary user code (issue #794).
+                        let _ = self.with_gc_root_scope(|interp| {
+                            interp.gc_root_value(&err);
+                            interp.iterator_close_result(&iterator)
+                        });
                     }
                     self.gc_unroot_value(&iterator);
                     return Completion::Throw(err);
@@ -2476,13 +2481,23 @@ impl Interpreter {
                     if let Some(val) = break_val {
                         v = val;
                     }
-                    if let Err(e) = self.iterator_close_result(iterator) {
+                    // `v` (the loop-carried completion value) must survive
+                    // `return()`, which can run arbitrary user code (issue #794).
+                    let close_result = self.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&v);
+                        interp.iterator_close_result(iterator)
+                    });
+                    if let Err(e) = close_result {
                         return Completion::Throw(e);
                     }
                     return Completion::Normal(v);
                 }
                 Completion::Return(ret_v) => {
-                    if let Err(e) = self.iterator_close_result(iterator) {
+                    let close_result = self.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&ret_v);
+                        interp.iterator_close_result(iterator)
+                    });
+                    if let Err(e) = close_result {
                         return Completion::Throw(e);
                     }
                     return Completion::Return(ret_v);
@@ -2492,7 +2507,13 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
                 Completion::Break(Some(label), val) => {
-                    if let Err(e) = self.iterator_close_result(iterator) {
+                    let close_result = self.with_gc_root_scope(|interp| {
+                        if let Some(bv) = &val {
+                            interp.gc_root_value(bv);
+                        }
+                        interp.iterator_close_result(iterator)
+                    });
+                    if let Err(e) = close_result {
                         return Completion::Throw(e);
                     }
                     return Completion::Break(Some(label), val);
@@ -2503,7 +2524,13 @@ impl Interpreter {
                             v = v2;
                         }
                     } else {
-                        if let Err(e) = self.iterator_close_result(iterator) {
+                        let close_result = self.with_gc_root_scope(|interp| {
+                            if let Some(cv) = &val {
+                                interp.gc_root_value(cv);
+                            }
+                            interp.iterator_close_result(iterator)
+                        });
+                        if let Err(e) = close_result {
                             return Completion::Throw(e);
                         }
                         return Completion::Continue(Some(lbl), val);
