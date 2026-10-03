@@ -9719,81 +9719,90 @@ impl Interpreter {
                     }
                 };
 
-                // 6. Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
-                let li_val = match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let li_num = match interp.to_number_value(&li_val) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                };
-                let last_index = if li_num.is_nan() || li_num <= 0.0 {
-                    0.0
-                } else {
-                    li_num.min(9007199254740991.0).floor()
-                };
+                // Root the freshly constructed matcher before steps 6-7: Get(R,
+                // "lastIndex") and Set(matcher, "lastIndex", ...) can both run
+                // arbitrary user JS (a getter/setter), and until matcher_id is
+                // stored into the iterator's traced state below, it is reachable
+                // only through this bare id — a GC cycle in that window would
+                // otherwise collect it out from under us.
+                interp.with_gc_root_scope(|interp| {
+                    interp.gc_root_id(matcher_id);
 
-                // 7. Perform ? Set(matcher, "lastIndex", lastIndex, true).
-                if let Err(e) = spec_set(
-                    interp,
-                    matcher_id,
-                    "lastIndex",
-                    JsValue::number(last_index),
-                    true,
-                ) {
-                    return Completion::Throw(e);
-                }
+                    // 6. Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
+                    let li_val = match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let li_num = match interp.to_number_value(&li_val) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let last_index = if li_num.is_nan() || li_num <= 0.0 {
+                        0.0
+                    } else {
+                        li_num.min(9007199254740991.0).floor()
+                    };
 
-                // 8-10. global, fullUnicode flags
-                let global = flags.contains('g');
-                let full_unicode = flags.contains('u') || flags.contains('v');
-
-                // Extract source/flags from the matcher for the iterator state
-                let (m_source, m_flags, _) = match extract_source_flags(interp, &matcher_val) {
-                    Some(v) => v,
-                    None => {
-                        // Use empty pattern if matcher has no source/flags
-                        (String::new(), String::new(), matcher_id)
+                    // 7. Perform ? Set(matcher, "lastIndex", lastIndex, true).
+                    if let Err(e) = spec_set(
+                        interp,
+                        matcher_id,
+                        "lastIndex",
+                        JsValue::number(last_index),
+                        true,
+                    ) {
+                        return Completion::Throw(e);
                     }
-                };
 
-                // Create iterator with %RegExpStringIteratorPrototype%
-                let iter_obj_id = interp.create_object_id();
-                interp
-                    .get_object_cell_expect(iter_obj_id)
-                    .borrow_mut()
-                    .class_name = "RegExp String Iterator".to_string();
-                if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
+                    // 8-10. global, fullUnicode flags
+                    let global = flags.contains('g');
+                    let full_unicode = flags.contains('u') || flags.contains('v');
+
+                    // Extract source/flags from the matcher for the iterator state
+                    let (m_source, m_flags, _) = match extract_source_flags(interp, &matcher_val) {
+                        Some(v) => v,
+                        None => {
+                            // Use empty pattern if matcher has no source/flags
+                            (String::new(), String::new(), matcher_id)
+                        }
+                    };
+
+                    // Create iterator with %RegExpStringIteratorPrototype%
+                    let iter_obj_id = interp.create_object_id();
                     interp
                         .get_object_cell_expect(iter_obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(rsi_proto_id);
-                }
+                        .class_name = "RegExp String Iterator".to_string();
+                    if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
+                        interp
+                            .get_object_cell_expect(iter_obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(rsi_proto_id);
+                    }
 
-                interp
-                    .get_object_cell_expect(iter_obj_id)
-                    .borrow_mut()
-                    .insert_value(
-                        "__full_unicode__".to_string(),
-                        JsValue::boolean(full_unicode),
-                    );
+                    interp
+                        .get_object_cell_expect(iter_obj_id)
+                        .borrow_mut()
+                        .insert_value(
+                            "__full_unicode__".to_string(),
+                            JsValue::boolean(full_unicode),
+                        );
 
-                interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::RegExpStringIterator {
-                            source: m_source,
-                            flags: m_flags,
-                            string: regex_input.subject.clone(),
-                            global,
-                            last_index: last_index as usize,
-                            done: false,
-                            matcher_id,
-                        },
-                    );
+                    interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
+                        crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::RegExpStringIterator {
+                                source: m_source,
+                                flags: m_flags,
+                                string: regex_input.subject.clone(),
+                                global,
+                                last_index: last_index as usize,
+                                done: false,
+                                matcher_id,
+                            },
+                        );
 
-                let id = iter_obj_id;
-                Completion::Normal(JsValue::object(id))
+                    Completion::Normal(JsValue::object(iter_obj_id))
+                })
             },
         ));
         if let Some(key) = get_symbol_key(self, "matchAll") {
