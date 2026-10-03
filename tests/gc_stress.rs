@@ -17,10 +17,12 @@ Promise.all([1, Promise.resolve(2)]).then(function (xs) { console.log(log.join("
 "#;
 
 /// Loop-free: every statement is a straight-line call to an allocating
-/// function. `PROGRAM` above is loop-heavy and already gets back-edge
-/// safepoint coverage under `--bytecode`; this program instead exercises the
-/// statement-boundary safepoints added for issue #808, which a loop-free
-/// compiled chunk previously had none of.
+/// function. The top-level `function make` declaration makes the script body
+/// bail to the tree-walker (compiled chunks don't support function
+/// declarations), but `make`'s own body still compiles to bytecode, and it
+/// has no loop — so before issue #808, its compiled chunk had no safepoint at
+/// all, meaning `--bytecode` stress could never collect inside it and never
+/// checked that `o` stays rooted between its allocation and `return o`.
 const PROGRAM_STRAIGHT_LINE: &str = r#"
 function make(n) { var o = new Object(); o.n = n; return o; }
 var results = [];
@@ -73,9 +75,14 @@ fn stress_collection_at_every_safepoint_preserves_program_results() {
 }
 
 /// Direct regression coverage for issue #808: before statement-boundary
-/// safepoints existed, `--bytecode` stress on a loop-free program forced
-/// zero collections no matter the period, since the only safepoint the VM
-/// could reach was a backward `Op::Jump` and this program has none.
+/// safepoints existed, `make`'s compiled body (no loop, so no back-edge
+/// safepoint either) had no safepoint for the VM to reach, so `--bytecode`
+/// stress could never collect while `o` was live inside it. The top-level
+/// script itself already ran on the tree-walker (see the comment on
+/// `PROGRAM_STRAIGHT_LINE`) and was already safepointed there regardless of
+/// this PR; `bytecode/tests.rs::loop_free_allocating_calls_take_bytecode_path`
+/// guards that `make`'s body is the part actually exercised under
+/// `--bytecode`.
 #[test]
 fn bytecode_stress_collection_on_straight_line_program_preserves_results() {
     let baseline = stdout(&run_with(PROGRAM_STRAIGHT_LINE, true, None));

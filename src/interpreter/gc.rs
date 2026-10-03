@@ -38,7 +38,9 @@ pub(crate) struct GcPacer {
     /// collects, alternating major (finds missing roots) and minor (finds
     /// missing write barriers).
     stress_count: u64,
-    /// Every `gc_safepoint()` call, unconditionally. Unlike `stress_count`
+    /// Every `begin_collection()` call, unconditionally — one per production
+    /// `Interpreter::gc_safepoint()`, plus one per direct `begin_collection()`
+    /// call from this module's own unit tests below. Unlike `stress_count`
     /// (which `begin_collection` skips incrementing whenever a major/minor
     /// collection is already pending), this never resets and is never
     /// skipped, so tests can assert exact deltas across calls. Test-only.
