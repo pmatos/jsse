@@ -88,21 +88,14 @@ zero real adapters in `array.rs`).
   `with_gc_root_scope`'s single bulk-truncating frame risks unrooting a
   value a sibling branch still needs. These stay on the raw primitive until
   that interaction is worked out on its own, not bundled into this slice.
-- **`array.rs`'s `from_async_gc_root`/`from_async_gc_unroot`** (`Array.fromAsync`)
-  pin a `FromAsyncState`'s object fields for the life of a multi-tick async
-  continuation, which spans suspend points `with_gc_root_scope`'s single
-  synchronous closure cannot cover. `pin_native_root`/`gc_native_roots` (the
-  anchor-object pinning PR #473 introduced, and `RootedPair` in
-  `iterators.rs` already builds on) is the right target mechanism for this
-  case — but migrating `from_async_gc_root` onto it is #331's item 3 (split
-  frame-roots from independently-registered roots) applied to a specific
-  call site, not this ADR's concern. Left as follow-up.
-- **`exec.rs`'s destructuring-pattern iterator root**, **`array.rs`'s
-  `from_async_gc_root`** loop (see above), and **`regexp.rs`'s global-match
-  result loop** still use the raw `gc_temp_roots.push(id)` / manual-frame
-  idiom #290 and #331 catalogued as remaining mechanical-sweep sites. None
-  are touched here; they are unrelated to the `with_gc_root_scope` seam
-  decision and remain future opportunistic cleanup.
+- **`Array.fromAsync`** used to pin its state on `gc_temp_roots` across a
+  multi-tick continuation. It now holds its values in a `RootedSlots` pinned on
+  its await handlers (`pin_native_root`/`gc_native_roots`, the mechanism
+  `RootedPair` builds on), which is the shape for any root that must outlive
+  one synchronous native call.
+- **Remaining raw `gc_temp_roots` pushes** were folded into `gc_root_id`/
+  `gc_root_value` (#290, #331), and the stack itself is now a `RootStack`
+  newtype that only supports push, pop-of-the-top and truncate.
 
 ## Consequences
 
@@ -111,12 +104,11 @@ zero real adapters in `array.rs`).
   future site is evaluated individually against the same criterion applied
   here (single frame, no cross-branch identity removal, no continuation
   spanning multiple ticks).
-- #331's item 4 (root-stack balance assertions at evaluation boundaries) is
-  **not** unblocked by this change. `gc_temp_roots` still conflates
-  frame-scoped roots (what this ADR's combinator manages) with
-  independently-registered ones — the exact hazard #465 found and fixed for
-  promise-resolver roots sharing the same truncatable stack as an enclosing
-  `eval_call` frame. Until #331's item 3 separates the two root kinds,
-  neither `==` nor `>=` holds at a call boundary while `Array.fromAsync` or
-  an `Atomics.waitAsync`-style continuation is pending, so balance
-  assertions would false-positive. Revisit once item 3 lands.
+- `gc_temp_roots` is **strictly LIFO**: a root is released in reverse order of
+  its push, by `gc_unroot_id` (which debug-asserts the id is on top) or by
+  truncating a frame. Nothing deliberately persistent lives on it any more —
+  values captured across ticks belong in a Pinned Native Root or `RootedSlots`,
+  and transformed generator/async for-of iterators live in the driver's
+  environment, which the collector traces. That is what makes root-stack
+  balance assertions (#331 item 4) sound, which is why they were deferred
+  until the identity-removed roots were gone.

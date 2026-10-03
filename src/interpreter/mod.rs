@@ -1443,7 +1443,7 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_unroot_id(&mut self, id: u64) {
-        self.gc_temp_roots.remove_last(id);
+        self.gc_temp_roots.pop_expected(id);
     }
 
     /// Save the current GC temp-root stack depth. Call gc_unroot_frame()
@@ -1522,13 +1522,6 @@ impl Interpreter {
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
         if let Some(id) = val.as_object_id() {
             self.gc_unroot_id(id);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn gc_unroot_args(&mut self, args: &[JsValue]) {
-        for v in args {
-            self.gc_unroot_value(v);
         }
     }
 

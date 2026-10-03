@@ -5819,3 +5819,17 @@ fn deep_expression_nesting_raises_error_before_native_overflow() {
         );
     }
 }
+
+#[test]
+fn delete_optional_call_releases_its_argument_roots() {
+    let interp = run_script(
+        "({}); var o = { m() {} };
+         delete o?.m({}, {});
+         var s = ({}) + delete o?.m({});",
+    );
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "temp-root stack fully unwound, got {:?}",
+        interp.gc_temp_roots,
+    );
+}
