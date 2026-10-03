@@ -394,7 +394,8 @@ impl Interpreter {
     /// wrapper calls `method` and discards its result, so a promise returned
     /// by a synchronous disposer is never awaited.
     pub(crate) fn async_from_sync_dispose_method(&mut self, method: JsValue) -> JsValue {
-        self.create_function(JsFunction::native(
+        let pinned_method = method.clone();
+        let wrapper = self.create_function(JsFunction::native(
             String::new(),
             0,
             move |interp, this, _args| match interp.call_function(&method, this, &[]) {
@@ -402,7 +403,9 @@ impl Interpreter {
                 Completion::Exit(code) => Completion::Exit(code),
                 _ => interp.create_resolved_promise(JsValue::UNDEFINED),
             },
-        ))
+        ));
+        self.pin_native_root(&wrapper, &pinned_method);
+        wrapper
     }
 
     /// Drive `cursor` to completion, draining the microtask queue inline at
