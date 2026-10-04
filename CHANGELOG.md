@@ -1,3 +1,39 @@
+# [0.10.0](https://github.com/pmatos/jsse/compare/v0.9.1...v0.10.0) (2026-10-04)
+
+
+### Bug Fixes
+
+* **gc:** root @[@split](https://github.com/split)'s species-constructed splitter ([#833](https://github.com/pmatos/jsse/issues/833)) ([18704be](https://github.com/pmatos/jsse/commit/18704bed7fc0a9e85c356e33aa0c57785c752ef1))
+* **gc:** root async-dispose's promise capability and intermediates ([#835](https://github.com/pmatos/jsse/issues/835)) ([44b78be](https://github.com/pmatos/jsse/commit/44b78bef903af4308ea68cbf464ff8a448b48927))
+* **gc:** root AsyncFromSyncIterator wrapper and dispose-fallback captures ([#812](https://github.com/pmatos/jsse/issues/812)) ([7246d7f](https://github.com/pmatos/jsse/commit/7246d7f66e0daa046ce50d437cb01e57ae4affec))
+* **gc:** root for-of running value across same-label continue ([#834](https://github.com/pmatos/jsse/issues/834)) ([a0998d6](https://github.com/pmatos/jsse/commit/a0998d6e434ef6c1e4d04d92514f9f66f42fe15f))
+* **gc:** root in-flight Throw/Return completion payloads across finally/IteratorClose ([#815](https://github.com/pmatos/jsse/issues/815)) ([eacee8d](https://github.com/pmatos/jsse/commit/eacee8d62858dfac132c96173cde3b9a8a5f2fa6))
+* **gc:** root Iterator.prototype.toArray's thrown value and accumulated values ([#836](https://github.com/pmatos/jsse/issues/836)) ([e937ef0](https://github.com/pmatos/jsse/commit/e937ef0dc851237b327f9a718325cfbbb0888e86))
+* **gc:** root Map/Set/WeakMap/WeakSet constructors' under-construction object ([#832](https://github.com/pmatos/jsse/issues/832)) ([35a490e](https://github.com/pmatos/jsse/commit/35a490e33844f851ad51725fc76fcb099b837d81))
+* **gc:** root RegExp String Iterator matcher through a typed field ([#817](https://github.com/pmatos/jsse/issues/817)) ([b2140c1](https://github.com/pmatos/jsse/commit/b2140c117bbd00adb5591e01956abc0ccb62c6bc))
+* **gc:** root resolve fn and iterator in Promise.all/allSettled/any/race ([#816](https://github.com/pmatos/jsse/issues/816)) ([3c190cb](https://github.com/pmatos/jsse/commit/3c190cbb58adcf48224536763d514b82e0034e2b))
+* **gc:** trace DisposableStack resources and dispose-loop state ([#818](https://github.com/pmatos/jsse/issues/818)) ([06bb5c9](https://github.com/pmatos/jsse/commit/06bb5c9f95ddc1eef584e3b25030ef0859c37b59))
+* **generators:** deliver yield* abrupt exits into the body, fix return Await order ([#781](https://github.com/pmatos/jsse/issues/781)) ([af8f570](https://github.com/pmatos/jsse/commit/af8f5703ff816fe0a103890513b7f8045ec45413))
+* **generators:** give a suspending own-initializer let/const a real block binding ([#790](https://github.com/pmatos/jsse/issues/790)) ([396fd62](https://github.com/pmatos/jsse/commit/396fd6299eb475b7d4d785d96010e759594b018c))
+* **generators:** keep block let/const TDZ intact across suspension points ([#777](https://github.com/pmatos/jsse/issues/777)) ([e3cadc9](https://github.com/pmatos/jsse/commit/e3cadc91876646e313897763ac61ad1492fc15f3))
+* **generators:** lower await in array-pattern defaults at catch/for-head/for-init sites ([#789](https://github.com/pmatos/jsse/issues/789)) ([c666612](https://github.com/pmatos/jsse/commit/c666612018dd86ea8f7dad77d376bbc87d14b8d3))
+* **generators:** lower await in array/for-head assignment patterns ([#801](https://github.com/pmatos/jsse/issues/801)) ([b647da2](https://github.com/pmatos/jsse/commit/b647da2d20e60281ca14f2c9b233fcf9f8d60898))
+* **generators:** lower await in catch-param and for-in/of-head destructuring defaults ([#773](https://github.com/pmatos/jsse/issues/773)) ([154db0f](https://github.com/pmatos/jsse/commit/154db0f96a9d28a3d62c28338d9f0a4aed674660))
+* **generators:** lower await/yield in array-pattern defaults to states ([#772](https://github.com/pmatos/jsse/issues/772)) ([d1b1213](https://github.com/pmatos/jsse/commit/d1b12137a79cf5714497f654d4328b89da4afc6e))
+* **generators:** lower object rest beside a suspending sibling ([#783](https://github.com/pmatos/jsse/issues/783)) ([e19e677](https://github.com/pmatos/jsse/commit/e19e6775a5987fef13188c471c8cb79b4b5508f1))
+* **generators:** preserve iteration across head-pattern yield ([#760](https://github.com/pmatos/jsse/issues/760)) ([1227c8c](https://github.com/pmatos/jsse/commit/1227c8c845ad6bdc79e0fc62b73d764f2121326d))
+* **generators:** run AsyncIteratorClose before yield* no-throw-method TypeError ([#785](https://github.com/pmatos/jsse/issues/785)) ([7c60330](https://github.com/pmatos/jsse/commit/7c60330b48cce19c3d4de1695faad391daa2e13c))
+* **generators:** scope pending throw/return/loop-control to owning try context ([#778](https://github.com/pmatos/jsse/issues/778)) ([af01cdb](https://github.com/pmatos/jsse/commit/af01cdbe7aac9cd32c2351b603df6e2d52ccbd0b))
+* **generators:** suspend async functions' for-of unwind disposal at its own Await ([#784](https://github.com/pmatos/jsse/issues/784)) ([a815480](https://github.com/pmatos/jsse/commit/a815480e19d51fff22b06821320eb69783ffa984))
+* **generators:** suspend C-style for (await using ...) head disposal in async functions ([#787](https://github.com/pmatos/jsse/issues/787)) ([c4bb651](https://github.com/pmatos/jsse/commit/c4bb65119d6983b6b7b390d0e80e24722a5eed85))
+* **generators:** suspend yield in for-await assignment-head patterns ([#775](https://github.com/pmatos/jsse/issues/775)) ([67e6515](https://github.com/pmatos/jsse/commit/67e6515512e3b8da55a3d4cbd0a46754539f1414))
+
+
+### Features
+
+* **bytecode:** add statement-boundary GC safepoints to the VM ([#830](https://github.com/pmatos/jsse/issues/830)) ([b7e63ac](https://github.com/pmatos/jsse/commit/b7e63ac272a863ba6c5b1dda966c14a79537d681))
+* **gc:** add JSSE_GC_STRESS safepoint stress mode ([#799](https://github.com/pmatos/jsse/issues/799)) ([5e01209](https://github.com/pmatos/jsse/commit/5e012099f092de94a55e1a591301a33ca4c99b6c))
+
 ## [0.9.1](https://github.com/pmatos/jsse/compare/v0.9.0...v0.9.1) (2026-09-27)
 
 
