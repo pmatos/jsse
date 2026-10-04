@@ -270,7 +270,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
 | `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
-| `tweetnacl-js` | 1.0.3 | ✅ 7,362 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; scalarmult/box at full upstream count, sign.spec.js still sampled (256/1024) — see below |
+| `tweetnacl-js` | 1.0.3 | ✅ 7,362 (cross-checked) | ~50 min; tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; scalarmult/box at full upstream count, sign.spec.js still sampled (256/1024) — see below |
 
 ### Zod normal and jitless corpus
 
@@ -371,8 +371,9 @@ file alone, so it stays sampled. Raised-corpus measured wall time (`--clean`,
 cold cache): **50m15s**. This build host runs several concurrent agent
 sessions, so that figure includes some incidental CPU contention — a
 quieter run would likely be faster — but it's the real number this PR ships
-against, and `LIB_TIMEOUT` below is sized with margin above it rather than
-against a best-case figure. All three files are still stride-sampled where
+against, and the config's `LIB_TIMEOUT` (raised from 3600s to 6000s) is sized
+with margin above it rather than against a best-case figure. All three files
+are still stride-sampled where
 sampled (not a prefix), so each subset spans the original vector space;
 every non-curve file (secretbox, hash, onetimeauth) already ran its full
 upstream count and is unaffected either way. This remains the only corpus

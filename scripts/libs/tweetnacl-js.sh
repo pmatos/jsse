@@ -56,7 +56,7 @@
 # further engine throughput rather than another sampling-cap bump. The
 # bytecode VM still doesn't help here: `car25519`'s `Math.floor(...)` call
 # bails the compiler (`compile_call` only accepts an `Identifier` callee),
-# which keeps 98.9% of the remaining tree-walked work off the VM — tracked in
+# which keeps 98.63% of the remaining tree-walked work off the VM — tracked in
 # #839. Numbers, counter dumps and method:
 # docs/perf/2026-10-04/tweetnacl-recheck.md.
 LIB_REPO="https://github.com/dchest/tweetnacl-js.git"

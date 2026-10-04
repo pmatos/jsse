@@ -25,22 +25,37 @@ The 9m25.7s figure alone already falsifies the old ~22min projection — by
 ~2.3x — confirming the engine is faster than even the projection assumed,
 before any caps changed.
 
-**The 50m15.2s figure includes incidental CPU contention.** This build host
-runs several concurrent agent sessions. Two confirmed sources overlapped
-this validation run: this session's own `./scripts/lint.sh` (a `cargo clippy`
-pass, run concurrently by mistake while checking in on progress) completed
-during the `scalarmult.random.js` phase, which measured 18m1s against the
-~13m52s (256 × 3.25s/vector) the contention-free per-vector rate predicts —
-a ~4min, ~30% overshoot consistent with that interference; `box.random.js`
-and `sign.spec.js`, timed after that lint run had finished, matched their
-predicted per-vector costs closely. Separately, a `ps aux` snapshot taken
-near the end of the run found an unrelated worktree (a different issue's
-session) running a full `test262 -j32` pass with 32+ concurrent jsse
-processes — present for at least part of the run, though its exact overlap
-with specific phases wasn't captured. 50m15.2s is reported as-measured
-rather than corrected for either source — it's what actually happened and it
-still passed — but it should be read as this workload's wall time on a busy
-shared host, not its floor.
+**The 50m15.2s figure includes some incidental CPU contention, isolated to
+two of the four measured curve-heavy phases.** This build host runs several concurrent agent
+sessions; a `ps aux` snapshot taken near the end of the run found an
+unrelated worktree (a different issue's session) running a full
+`test262 -j32` pass with 32+ concurrent jsse processes. Per-phase timing
+(from this run's own TAP headers) shows which phases that affected:
+
+| phase | measured | per-op (n=256) | n=20 baseline per-op | delta |
+| --- | --- | --- | --- | --- |
+| `scalarMult.base` KAT (200 fixed iters) | 258s | 1.29 s/op | 0.72 s/op | +79% |
+| `scalarmult.random.js` vectors | 823s | 0.80 s/op | 0.81 s/op | ~0% |
+| `box.random.js` vectors | 426s | 0.83 s/op | 0.80 s/op | +4% |
+| `sign.spec.js` vectors (test 1) | 1248s | 2.44 s/op | 2.15 s/op | +13% |
+
+`scalarmult.random.js` and `box.random.js` land within normal run-to-run
+noise of the n=20 baseline — no detectable contention there. The KAT phase
+and `sign.spec.js` both ran measurably slower. This session's own concurrent
+work (a `--features perf-counters` build and an 18-rep microbench, run
+earlier while waiting on this validation) finished *before* the KAT phase
+started, by timestamp, so it isn't the cause. Two more plausible
+explanations, not distinguished further here: (1) the n=20 baseline's own
+KAT timing has an uncertain start point (its header had already printed by
+this session's first check of that run, so 144s/0.72s-op is a lower bound,
+not an exact measurement — see the Method section), which alone could
+account for most of the KAT gap; (2) the unrelated `test262 -j32` session
+confirmed above, whose start time relative to this run's phases wasn't
+captured, plausibly accounts for the `sign.spec.js` gap. Either way,
+50m15.2s is reported as-measured, not corrected — it's what actually
+happened and it still passed comfortably inside the raised `LIB_TIMEOUT`
+(see below) — but it should be read as this workload's wall time on a busy
+shared host, not a clean-host floor.
 
 ## Where the speedup comes from
 
@@ -52,24 +67,33 @@ Two independent things changed since 2026-09-05:
 2. **General tree-walker throughput improved** — unrelated to `--bytecode`;
    this is what the *default* path (what the harness actually runs) rides on.
 
-Real per-operation costs, read directly off each run's own timestamped TAP
-test blocks (not a separate isolated microbench — this is exactly the code
-path the harness executes). The pre-change (20-vector) run gives a clean,
-uncontended baseline; the raised-corpus (256-vector) run gives a second,
-independent sample at 12.8x the vector count, measured under the contention
-noted above — included to show it's in the same range, not to re-derive the
-per-op cost from it:
+Two independent per-op measurements corroborate the speedup. The isolated
+microbench the planning pass ran on this same `origin/main` commit, in a
+scratch worktree with exact start/stop timing (no header-print ambiguity),
+gives the cleanest number: **`scalarMult.base` 739.8 ms/op, `scalarMult`
+739.2 ms/op, `sign.detached.verify` 2.54 s/op** — vs. 2026-09-05's 2.98s,
+3.01s, 10.83s respectively, a **4.0-4.25x** speedup.
 
-| phase | 2026-09-05 (min of 3 reps) | 2026-10-04, n=20 (this PR's baseline run) | 2026-10-04, n=256 (raised-corpus run) | speedup (20-vector) |
-| --- | --- | --- | --- | --- |
-| `scalarMult.base` (200-iter KAT, fixed cost) | 2.98 s/op | 0.72 s/op | 0.72 s/op (same fixed loop) | **4.1x** |
-| `scalarmult.random.js` vectors (scalarMult.base + scalarMult mix) | — | 0.81 s/op | 1.06 s/op (contended, see above) | — |
-| `box.random.js` vectors (box + box.open) | — | 0.80 s/op | 0.83 s/op | — |
-| `sign.spec.js` vectors (sign + open) | — | 2.15 s/op | 2.44 s/op | — |
+This session's own per-vector costs, read off this PR's n=20 baseline run's
+timestamped TAP headers (not a separate microbench — exactly the code path
+the harness executes), land in the same range but run a composite of
+multiple operations per vector, so they aren't directly comparable
+row-for-row to the isolated numbers above:
 
-The n=256 column is consistently a bit higher across all three — expected,
-given the confirmed contention — rather than scaling non-linearly, which is
-what would indicate the per-op cost model itself breaking down at a larger N.
+| phase | 2026-09-05 (min of 3 reps) | this PR's n=20 baseline run |
+| --- | --- | --- |
+| `scalarMult.base` (200-iter KAT) | 2.98 s/op | 0.72 s/op *(lower bound — see Method)* |
+| `scalarmult.random.js` vectors (scalarMult.base + scalarMult mix) | — | 0.81 s/op |
+| `box.random.js` vectors (box + box.open) | — | 0.80 s/op |
+| `sign.spec.js` vectors (sign + open) | — | 2.15 s/op |
+
+The KAT row is flagged as a lower bound because this session's first check
+of that run found the KAT header already printed with the loop still in
+progress — the true elapsed time at that point is unknown, so 144s (and the
+implied 0.72 s/op) may understate the real figure. The isolated microbench
+above doesn't have this problem and is the more trustworthy `scalarMult.base`
+number; the two are consistent (0.72-0.74s/op either way, both far below
+2026-09-05's 2.98s).
 
 ## The two #603 gaps are closed — a third, narrower one remains
 
@@ -160,7 +184,8 @@ headers' timestamps gives real per-file wall time, which divided by that
 file's vector count gives real per-vector cost. Wall times are from a
 **default** `cargo build --release` binary; counters are from a separate
 `--features perf-counters` build, timed never (per `AGENTS.md`: an
-instrumented build is never timed). The counter dumps were captured
+instrumented build is never timed). Raw dumps: `counters-default.txt`,
+`counters-bytecode.txt` (this directory). The counter dumps were captured
 concurrently with the raised-corpus harness validation on this shared host —
 safe because counts are deterministic and load-independent, unlike wall
 times (which is why the n=20 baseline run, not the contended n=256 run, is
