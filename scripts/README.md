@@ -270,7 +270,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
 | `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
-| `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
+| `tweetnacl-js` | 1.0.3 | ✅ 7,362 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; scalarmult/box at full upstream count, sign.spec.js still sampled (256/1024) — see below |
 
 ### Zod normal and jitless corpus
 
@@ -349,43 +349,52 @@ mechanism as upstream's unmodified browser path. `node-test-harness.js`
 supplies the tape assertion adapter on jsse; Node loads real tape as an
 independent framework oracle.
 
-Curve25519/Ed25519 point arithmetic runs roughly 140-390x slower on the
-tree-walker than on V8, per operation (re-measured 2026-09-05 on this shared
-buildbox, min of 3 reps: `scalarMult.base` 2.98s here vs 14ms on Node;
-`sign.detached.verify` 10.8s vs 70ms). At the full upstream vector counts
-(256 scalarmult, 256 box, 1024 Ed25519 sign vectors) the complete suite
-projects to ~6h, which isn't practical to run as part of landing the harness —
-a correctness smoke test first confirmed all 13 files pass 1233/1233 with
-truncated vectors, byte-identical to Node, so this is pure interpretation
-overhead rather than an engine bug.
-`lib_prepare` therefore evenly samples the three curve-heavy vector files
-(`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
-each (stride-sampled across the full array, not a prefix, so the subset still
-spans the vector space); every other data file (secretbox, hash,
-onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
-the only corpus here reduced by *sampling a data set*; where other configs
-drop cases they do it case-by-case (lodash's `skipAssert` list, UglifyJS's
-`expect_stdout` stage), never by thinning a vector file.
+Curve25519/Ed25519 point arithmetic runs ~140-390x slower on the tree-walker
+than on V8, per operation. On 2026-09-05 that put the full upstream vector
+counts (256 scalarmult, 256 box, 1024 Ed25519 sign) at a *projected* ~6h — a
+correctness smoke test first confirmed all 13 files pass 1233/1233 with
+truncated vectors, byte-identical to Node, so this was interpretation
+overhead, not an engine bug — and `lib_prepare` sampled all three curve-heavy
+vector files (`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to
+20 entries each.
 
-Exhaustive coverage is tracked in
-[#361](https://github.com/pmatos/jsse/issues/361), and was measured against the
-bytecode VM on 2026-09-05: `--bytecode` does not move this workload (1.00-1.07x
-across the four curve operations, with several `--bytecode` reps slower than the
-default). The `perf-counters` build says why — three functions, `M` (the
-GF(2^255-19) multiply), `car25519` and `sel25519`, carry 96% of the tree-walker's
-work and all three bail out of the compiler, `M` on `new Float64Array(31)` and
-the other two on compound assignment to a member target (`o[i] += x`; only plain
-`o[i] = x` compiles). Their work-unit counts are identical with and without
-`--bytecode`, which is the direct evidence the VM never reaches the field
-arithmetic. Both gaps are
-[#603](https://github.com/pmatos/jsse/issues/603).
+Issue #603 (bytecode `new` expressions and compound member-target assignment)
+has since landed, and general tree-walker throughput is independently ~4x
+faster. Re-measured end to end (not re-projected) on 2026-10-04: today's
+20/20/20-capped corpus runs in **9m25.7s**, real wall time — already ~2.3x
+under the old ~22min projection before any cap changed. `scalarmult.random.js`
+and `box.random.js` now run their full upstream 256-vector counts outright
+(unsampled); `sign.spec.js` is raised from 20 to 256 of 1024 — its per-vector
+cost (a sign *and* an open/verify, scaling linearly with vector count) still
+makes the full 1024 the long pole, projecting well past an hour for that one
+file alone, so it stays sampled. Raised-corpus measured wall time (`--clean`,
+cold cache): **50m15s**. This build host runs several concurrent agent
+sessions, so that figure includes some incidental CPU contention — a
+quieter run would likely be faster — but it's the real number this PR ships
+against, and `LIB_TIMEOUT` below is sized with margin above it rather than
+against a best-case figure. All three files are still stride-sampled where
+sampled (not a prefix), so each subset spans the original vector space;
+every non-curve file (secretbox, hash, onetimeauth) already ran its full
+upstream count and is unaffected either way. This remains the only corpus
+here reduced by *sampling a data set*; where other configs drop cases they
+do it case-by-case (lodash's `skipAssert` list, UglifyJS's `expect_stdout`
+stage), never by thinning a vector file.
 
-Raising the caps therefore needs a large multiplier, not merely the VM being
-enabled: ~17x to hold today's projected ~22min, or ~6x to stay inside the 1h
-`LIB_TIMEOUT`. Closing #603 is a precondition for that, not a demonstration of
-it — what the VM delivers on typed-array field arithmetic is still unmeasured.
-Full numbers, counter dumps and method:
-[`docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md`](../docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md).
+Exhaustive coverage (all three files at full upstream counts) is tracked in
+[#361](https://github.com/pmatos/jsse/issues/361) and stays open — closing it
+needs further engine throughput, not another cap bump, since `sign.spec.js`
+alone would exceed the harness's time budget at 1024. The bytecode VM still
+doesn't help here, though the picture has changed: `--bytecode` now displaces
+77.6% of this workload's tree-walker work (was 3.3% on 2026-09-05) since `M`
+and `sel25519` compile cleanly post-#603. What's left is concentrated almost
+entirely in one function: `car25519` alone now holds 98.63% of the remaining
+tree-walked work, bailing on its one `Math.floor(...)` call —
+`compile_call` only accepts an `Identifier` callee. Tracked in
+[#839](https://github.com/pmatos/jsse/issues/839). Full numbers, counter
+dumps and method:
+[`docs/perf/2026-10-04/tweetnacl-recheck.md`](../docs/perf/2026-10-04/tweetnacl-recheck.md)
+(prior measurement:
+[`docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md`](../docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md)).
 
 ### PrismJS token-stream fixtures
 

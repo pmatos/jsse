@@ -36,15 +36,20 @@
 # #603 (bytecode `new`/compound-member-assignment support) has since landed,
 # and general tree-walker throughput is also ~4x faster than that baseline
 # (docs/perf/2026-10-04/tweetnacl-recheck.md) — re-measured end to end rather
-# than re-projected. scalarmult.random.js and box.random.js now run their full
-# upstream 256-vector counts outright (sample()'s `arr.length <= n` guard makes
-# the call for them a no-op). sign.spec.js is raised from 20 to 256 (of 1024
+# than re-projected: today's (then-)20/20/20 corpus runs in 9m25.7s real.
+# scalarmult.random.js and box.random.js now run their full upstream
+# 256-vector counts outright (sample()'s `arr.length <= n` guard makes the
+# call for them a no-op). sign.spec.js is raised from 20 to 256 (of 1024
 # upstream) — its per-vector cost (a sign + an open/verify, scaling linearly
 # with vector count) is what keeps the total harness run inside LIB_TIMEOUT;
-# 1024 projects to ~74 min for that one file alone. It is still
+# 1024 projects to well over an hour for that one file alone. It is still
 # stride-sampled (not a prefix) so the 256-vector subset spans the original
 # vector space; every non-curve file (secretbox, hash, onetimeauth) already
-# ran its full upstream count and is unaffected.
+# ran its full upstream count and is unaffected. Validated end to end
+# (--clean, cold cache) at 50m15s real — this build host runs several
+# concurrent agent sessions, so that figure includes some incidental
+# contention (see the perf doc); LIB_TIMEOUT below is sized with real
+# margin above it rather than against a best-case number.
 #
 # Exhaustive coverage (all three at full upstream counts) remains issue #361 —
 # sign.spec.js is the long pole, not scalarmult/box, so closing it needs
@@ -62,8 +67,8 @@ LIB_ESBUILD_EXTRA=(
     --alias:tape=./test/jsse-tape.js
 )
 LIB_SHIMS=("node-crypto-shim.js" "node-test-harness.js")
-LIB_EXPECT_COUNT=""   # re-locked once the raised corpus (#361) is validated end to end
-LIB_TIMEOUT="3600"        # 1h: projected ~44min at today's caps (docs/perf/2026-10-04/tweetnacl-recheck.md)
+LIB_EXPECT_COUNT="7362"   # locked: raised corpus (#361), equal on jsse and Node
+LIB_TIMEOUT="6000"        # 100min: measured 50m15s real on a loaded shared host (~2x margin)
 
 lib_prepare() {
     # Retain only the dependencies the test files themselves import; the
