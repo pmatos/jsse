@@ -890,6 +890,18 @@ impl AwaitUsingScan {
             _ => Self::Blocked,
         }
     }
+
+    /// Downgrades `Isolatable` to `Blocked` when `cond` holds, otherwise passes
+    /// `self` through unchanged. Shared by every "an Annex-B function
+    /// declaration sibling still blocks this otherwise-isolatable container"
+    /// check below.
+    fn blocked_if(self, cond: bool) -> Self {
+        if self == Self::Isolatable && cond {
+            Self::Blocked
+        } else {
+            self
+        }
+    }
 }
 
 fn declares_lexical_binding(stmt: &Statement) -> bool {
@@ -939,7 +951,15 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
                 .any(contains_annexb_function_declaration)
         }),
         Statement::With(_, body) => contains_annexb_function_declaration(body),
-        _ => false,
+        Statement::Empty
+        | Statement::Expression(_)
+        | Statement::Variable(_)
+        | Statement::Return(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Throw(_)
+        | Statement::Debugger
+        | Statement::ClassDeclaration(_) => false,
     }
 }
 
@@ -960,13 +980,7 @@ fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -
     let combined = stmts.clone().fold(AwaitUsingScan::None, |acc, s| {
         acc.combine(scan_await_using(s))
     });
-    if combined == AwaitUsingScan::Isolatable
-        && stmts.into_iter().any(contains_annexb_function_declaration)
-    {
-        AwaitUsingScan::Blocked
-    } else {
-        combined
-    }
+    combined.blocked_if(stmts.into_iter().any(contains_annexb_function_declaration))
 }
 
 /// A `switch` statement's `CaseBlock` is one lexical scope spanning every
@@ -977,12 +991,7 @@ fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -
 /// treatment `#703` gave those. A lexical declaration next to an isolatable
 /// block here can't be flattened safely as a result.
 fn scan_switch_body<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
-    let combined = scan_flattened_list(stmts.clone());
-    if combined == AwaitUsingScan::Isolatable && stmts.into_iter().any(declares_lexical_binding) {
-        AwaitUsingScan::Blocked
-    } else {
-        combined
-    }
+    scan_flattened_list(stmts.clone()).blocked_if(stmts.into_iter().any(declares_lexical_binding))
 }
 
 /// Scans a `try`/`catch`/`finally` clause's own statement list: if it
@@ -1012,37 +1021,30 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         Statement::DoWhile(d) => scan_await_using(&d.body),
         Statement::For(f) => {
             let body = scan_await_using(&f.body);
-            let using_init = matches!(
-                &f.init,
+            match &f.init {
+                // A `using`/`await using` head has no per-entry scope treatment
+                // (`transform_for_statement`'s `CopyForward` only handles
+                // `let`/`const`), so it blocks regardless of the body's shape.
                 Some(ForInit::Variable(decl))
-                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
-            );
-            // A `var`/no-declaration head was already isolatable before this
-            // fix (main never downgraded it), so the Annex-B guard below only
-            // applies to the `let`/`const` heads this fix is relaxing —
-            // otherwise it would newly block (and so newly drain inline) a
-            // `for (var ...)` body that was already suspending correctly.
-            let lexical_init = matches!(
-                &f.init,
-                Some(ForInit::Variable(decl)) if matches!(decl.kind, VarKind::Let | VarKind::Const)
-            );
-            if using_init
-                || (lexical_init
-                    && body == AwaitUsingScan::Isolatable
-                    && contains_annexb_function_declaration(&f.body))
-            {
-                body.blocked_unless_none()
-            } else {
-                body
+                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) =>
+                {
+                    body.blocked_unless_none()
+                }
+                // A `let`/`const` head is `#703`-covered, so only an Annex-B
+                // function-declaration sibling still blocks it. A `var`/no-
+                // declaration head has no observable per-iteration binding to
+                // protect, so it stays exempt from the Annex-B guard and
+                // keeps suspending regardless of the body's shape.
+                Some(ForInit::Variable(decl))
+                    if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
+                {
+                    body.blocked_if(contains_annexb_function_declaration(&f.body))
+                }
+                _ => body,
             }
         }
         Statement::ForIn(f) => {
-            let body = scan_await_using(&f.body);
-            if body == AwaitUsingScan::Isolatable && contains_annexb_function_declaration(&f.body) {
-                AwaitUsingScan::Blocked
-            } else {
-                body
-            }
+            scan_await_using(&f.body).blocked_if(contains_annexb_function_declaration(&f.body))
         }
         Statement::ForOf(f) => {
             let body = scan_await_using(&f.body);
@@ -1067,7 +1069,16 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         }
         Statement::Switch(s) => scan_switch_body(s.cases.iter().flat_map(|c| c.consequent.iter())),
         Statement::With(_, body) => scan_await_using(body).blocked_unless_none(),
-        _ => AwaitUsingScan::None,
+        Statement::Empty
+        | Statement::Expression(_)
+        | Statement::Variable(_)
+        | Statement::Return(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Throw(_)
+        | Statement::Debugger
+        | Statement::FunctionDeclaration(_)
+        | Statement::ClassDeclaration(_) => AwaitUsingScan::None,
     }
 }
 
