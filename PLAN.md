@@ -101,7 +101,7 @@ simultaneously restores spec-compliant behavior.
 
   This is the only change. Do not swap in `route_exception!` /
   `reject_async_generator_request` here even though the sibling call sites
-  listed below use those — see §7 for why that's a separate, larger change
+  listed below use those — see §9 for why that's a separate, larger change
   this issue does not take on. The sibling sites are cited only to show that
   "propagate `get_async_iterator`'s `Err` without retrying" is already the
   established pattern elsewhere: `src/interpreter/exec.rs:2352-2356`,
@@ -250,7 +250,74 @@ simultaneously restores spec-compliant behavior.
   `yield*` position as part of their normal control flow; no re-run planned
   beyond the standard CI gate.
 
-## 7. Out of scope
+## 7. Prior-attempt workspace state (verified, not re-done)
+
+This workspace already carries uncommitted progress toward this exact plan,
+left by an earlier attempt. Verified by reading (no edits made in this
+planning stage):
+
+- `src/interpreter/eval/generator_runtime.rs` has an **uncommitted** working-tree
+  diff that is precisely the §3 fix: the inner `match self.get_iterator(&yield_val)`
+  retry is deleted and its `Err` body moved into the outer `Err(e)` arm. Nothing
+  else in the file is touched.
+- `test262-extra/async-generator-yield-star-getiter-async-method-must-not-retry-sync-gc-rooting.js`
+  exists as an **untracked** file and matches §5 exactly: both scenarios (A:
+  non-callable `%Symbol.asyncIterator%`, asserts `getterCallsA === 0` and
+  `resultA.value.constructor === TypeError`; B: `%Symbol.asyncIterator%`
+  `undefined` with a throwing `%Symbol.iterator%` getter, asserts
+  `getterCallsB === 1` and `resultB.value === sentinel`), the `$262.gc()` +
+  64-iteration allocation-churn technique, `esid: sec-getmethod`, and
+  `features: [host-gc-required]`.
+- Both are untouched by this planning stage per the exit contract. The
+  implementation stage inherits them as-is.
+- **Slice-1 ("red") caveat:** because the fix is already applied in the
+  working tree, running the new test now would pass immediately and never
+  demonstrate failure against the unfixed code. Before trusting the test as a
+  real regression guard, the implementation stage must first prove it fails
+  pre-fix: `git stash push -u -m 828-prefix-check -- src/interpreter/eval/generator_runtime.rs`
+  (or save/restore via `git diff ... > $TMPDIR/828.patch` + `git apply -R`),
+  rebuild, run the new `test262-extra/` file, confirm scenario A's
+  `getterCallsA` assertion (or scenario B's double-invocation) fails, then
+  restore the fix and re-run to confirm green.
+
+## 8. Fix-safety verification (read-only checks performed during planning)
+
+Three claims the §6 regression-risk argument depends on were checked directly
+against the current source (all read-only; no files edited):
+
+- **`get_async_iterator` already resolves the "method is undefined" case
+  internally and never routes it through the retry being deleted** —
+  confirmed at `src/interpreter/builtins/iterators.rs:4567-4605`. When the
+  `%Symbol.asyncIterator%` property read is nullish, `iter_fn` is `None` and
+  the function falls through to its own `self.get_iterator(obj)?` fallback
+  (line 4603), returning `Ok(create_async_from_sync_iterator(...))`. This path
+  never returns `Err`, so it can never reach the generator_runtime.rs retry
+  being deleted.
+- **A non-callable `%Symbol.asyncIterator%` value (scenario A) already
+  produces `Err` from inside `get_async_iterator` itself, without any
+  internal sync fallback** — `get_async_iterator` calls
+  `self.call_function(&iter_fn, obj, &[])` directly (no `IsCallable` guard of
+  its own); `call_function_inner_impl`'s terminal fallthrough for a
+  non-callable value (`src/interpreter/eval.rs:5814-5816`) constructs a
+  `TypeError` ("... is not a function") and returns `Completion::Throw(err)`,
+  which `get_async_iterator` maps to `Err(e)` at line 4597. So the deleted
+  retry's `Err(e)` arm in scenario A was already unreachable-via-fallback at
+  the `get_async_iterator` layer — the bug was purely the outer retry
+  needlessly firing anyway.
+- **The retry pattern being deleted is the only one of its kind** — every
+  call site of `get_async_iterator` was enumerated
+  (`grep -rn "get_async_iterator(" src/`): `src/interpreter/eval.rs:9284`
+  (tree-walker `for await`), `src/interpreter/exec.rs:2353` (tree-walker
+  `for await`), `src/interpreter/eval/generator_runtime.rs:5124` (async
+  generator's own `for await`), and the one being fixed at
+  `generator_runtime.rs:4543` (`yield*`). The other three already match the
+  "propagate `Err` directly, no `get_iterator` retry" pattern the fix adopts
+  (`exec.rs:2353-2356` returns `Completion::Throw(e)` directly; `eval.rs:9284-9290`
+  and `generator_runtime.rs:5124-5135` both assign `pending_exception`/call
+  `reject_async_generator_request` directly). No other occurrence of this bug
+  exists in the engine.
+
+## 9. Out of scope
 
 - Refactoring the ad hoc `GetMethod`/`GetV` inlining duplicated across
   `get_iterator`, `get_async_iterator`, and other call sites in
