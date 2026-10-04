@@ -901,14 +901,6 @@ fn declares_lexical_binding(stmt: &Statement) -> bool {
     }
 }
 
-fn declares_annexb_function(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::FunctionDeclaration(_) => true,
-        Statement::Labeled(_, inner) => declares_annexb_function(inner),
-        _ => false,
-    }
-}
-
 /// Does this subtree, reached through the same containers `scan_await_using`
 /// walks, declare a plain `function` at statement position anywhere inside?
 /// Annex B hoists such a declaration to the nearest function/script scope in
@@ -959,12 +951,18 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
 /// into its own nested state. A sibling `function` declaration is
 /// different: it hits the Annex-B gap
 /// (`contains_annexb_function_declaration`), so that one sibling kind still
-/// blocks. `switch` does not share this fold at all (see `scan_switch_body`).
+/// blocks. The check must reach a function declaration nested inside a
+/// *sibling* container in this same list (e.g. `{ { function g(){} } {
+/// await using a = null; } }`), not just a direct `FunctionDeclaration`
+/// item, so it uses the deep walker rather than a shallow one. `switch`
+/// does not share this fold at all (see `scan_switch_body`).
 fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
     let combined = stmts.clone().fold(AwaitUsingScan::None, |acc, s| {
         acc.combine(scan_await_using(s))
     });
-    if combined == AwaitUsingScan::Isolatable && stmts.into_iter().any(declares_annexb_function) {
+    if combined == AwaitUsingScan::Isolatable
+        && stmts.into_iter().any(contains_annexb_function_declaration)
+    {
         AwaitUsingScan::Blocked
     } else {
         combined
@@ -1241,6 +1239,12 @@ mod tests {
             "do { await using a = null; } while (c);",
             "for (;;) { await using a = null; }",
             "for (var i = 0; i < 2; i++) { await using a = null; }",
+            // Annex B hoisting for `g` is still broken here (jsse prints
+            // `undefined` where node prints `function`) because the
+            // `for (var ...)` head is exempt from the Annex-B guard below —
+            // a pre-existing gap, not a regression from this scan, tracked
+            // as jsse#842. This assertion is about the *scan's*
+            // classification, not about `g` actually being hoisted correctly.
             "for (var i = 0; i < 2; i++) { await using a = null; function g() {} }",
             "for (x of y) { await using a = null; }",
             "for (var x of y) { await using a = null; }",
@@ -1306,6 +1310,13 @@ mod tests {
             "try { function g() {} { await using a = null; } } finally {}",
             "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
             "for (k in o) { await using a = null; function g() {} }",
+            // The function declaration here is not a direct sibling of the
+            // flattened list's own items (it's nested inside one of them),
+            // so the check needs to walk into sibling containers rather than
+            // just matching a direct `FunctionDeclaration` item.
+            "{ let x = 1; { await using a = null; function g() {} } }",
+            "try { let y = 1; { await using a = null; function g() {} } } finally {}",
+            "{ { function g() {} } { await using a = null; } }",
         ];
         for src in blocked {
             assert!(!scan_first_statement(src), "expected blocked: {src}");

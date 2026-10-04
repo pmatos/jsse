@@ -50,4 +50,45 @@ asyncTest(async function () {
     function j() {}
   }
   assert.sameValue(typeof j, 'function', 'function declared in a for-in body with await using');
+
+  {
+    let m = 1;
+    {
+      await using a = null;
+      function n() {}
+    }
+  }
+  assert.sameValue(
+    typeof n,
+    'function',
+    'function declared beside an await-using declaration inside a block that itself sits beside a lexical sibling'
+  );
+
+  try {
+    let p = 1;
+    {
+      await using a = null;
+      function q() {}
+    }
+  } finally {
+  }
+  assert.sameValue(
+    typeof q,
+    'function',
+    'function declared beside an await-using declaration inside a try block that itself sits beside a lexical sibling'
+  );
+
+  {
+    {
+      function r() {}
+    }
+    {
+      await using a = null;
+    }
+  }
+  assert.sameValue(
+    typeof r,
+    'function',
+    'function declared in a block that is itself a sibling of the await-using block'
+  );
 });
