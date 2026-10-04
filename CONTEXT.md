@@ -44,6 +44,12 @@ _Avoid_: boundary, layer.
 How the `differential` fuzz target (`fuzz/fuzz_targets/differential.rs`) classifies a jsse-vs-node run. Tier 1: jsse crashed (signal or the interpreter-panic exit code) while node didn't — an engine bug by definition. Tier 2: exactly one side rejects the source as a syntax error — a real coverage gap. Tier 3: both sides threw (possibly a different error class) or both timed out — expected noise (usually an unimplemented feature), recorded but not a fuzzer finding. See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`.
 _Avoid_: divergence class, mismatch level.
 
+## Parsing
+
+**Lookahead Cursor**:
+A read-only fork of the parser's token stream used to classify ambiguous grammar prefixes. `Parser::lookahead` exposes only the current token, the line-terminator boundary before it, and forward advancement on a cloned `Lexer`; the live parser's token, source spans, and lexer position never change during a probe. Once a branch is selected, the parser consumes that branch normally.
+_Avoid_: parser checkpoint, pushback token, parser transaction.
+
 ## Control flow
 
 **Completion Propagation**:
@@ -54,13 +60,25 @@ _Avoid_: try macro, error unwrap, ReturnIfAbrupt helper.
 A `Block`, or a `try`/`catch`/`finally` clause's own statement list, that directly declares `await using` in a plain async function, lowered through `EnterScope`/`ExitScope` `StateTerminator`s (`generator_transform.rs`'s `transform_scope_block`/`transform_clause_body`) instead of being flattened. `EnterScope` creates the scope's own `Environment` and pushes a `ScopeFrame { env, try_depth, for_of_depth }` onto `AsyncFunctionState::scope_stack`; every subsequent state body in that scope runs against it (`async_function_resume`'s `term_env`, picking whichever of the innermost scope frame or the innermost `for_of_stack` entry was opened more recently). `ExitScope` pops the frame and disposes its `dispose_stack` suspendably at each DisposeResources `Await`, exactly like the function-level disposal and `for_of_stack`'s own disposals already do. `route_return!`/`route_loop_control!`/the throw-routing block dispose any frames a `return`/`break`/`continue`/throw crosses (`unwind_scopes_to!`) before continuing to route it. Because `scope_stack` is a stack, nested scopes and a scope directly in a try/catch/finally list need no separate mechanism. Gated to plain async functions (`ctx.detect_for_await`) — see ADR-2026-09-21-1007.
 _Avoid_: dispose block, await-using state.
 
-**Isolated Block**:
-A `Block` that directly declares `await using`, in an *async generator* only, emitted intact as the last statement of its own state (`generator_transform.rs`, `Statement::Block` arm's async-generator branch). Its block environment and dispose stack stay whole, so `async_function_resume`'s async-generator counterpart can park the block's `DisposeCursor` and suspend at each DisposeResources `Await` instead of draining the microtask queue inline. A plain async function uses a **Scope Frame** for the same shape instead (ADR-2026-09-21-1007); `has_suspendable_await_using_block` (`generator_analysis.rs`) decides which containers (`try`/`catch`/`finally` bodies, loop bodies, `switch` cases, `if`, labeled statements, plain blocks) the transform lowers to reach an isolatable block.
-_Avoid_: dispose block, await-using state.
+**Pattern Lowering**:
+How an async function or async generator (or a sync/async generator, for `yield`) suspends at an `await`/`yield` inside a `var`/`let`/`const` object binding pattern (a default initializer or a computed key) instead of letting the tree-walker drain the microtask queue through its blocking `await_value`. `generator_transform.rs`'s `lower_pattern_binding` breaks the pattern into states over temps (`$dstr_src`, `$dstr_key`, `$dstr_val`): one `RequireObjectCoercible`, then per property its computed key at its own position, exactly one property read, and a `ConditionalGoto` on `typeof $val === "undefined"` around the default. Only the parts of a pattern that reach a suspension are broken up; siblings are bound by the tree-walker through a sub-pattern. `generator_analysis.rs`'s `pattern_needs_lowering` gates it (both `await` and `yield` trigger it, as of #744), so detection and lowering agree. Catch parameters, for-in/of heads, and C-style for-init patterns bind through a single non-suspending runtime call (`EnterCatch`/`ForOfHead`) with no state boundary of their own, so a suspending pattern there is instead rewritten to a trivial `Pattern::Identifier($tmp)` at the call site, with the real pattern re-homed as a synthesized `let <pattern> = $tmp;` prepended to the catch/loop body (`hoist_suspending_pattern`) — the ordinary lowering above then picks it up from there. `ForOfInit`'s own `left` is never rewritten (only `ForOfHead`'s is), since `ForOfInit.left` exists solely to supply `BoundNames` for the head's pre-iterable TDZ environment and must keep seeing the real names. An object rest beside a suspending sibling (`{a = await 1, ...rest}`) lowers too, at the unconstrained `Declaration` form only, via two more terminators: `ToPropertyKey` converts a computed key's raw value to its canonical property key exactly once (re-running it on the now-primitive result is a safe no-op), and `ObjectRestCopy` performs `RestBindingInitialization`'s `CopyDataProperties` against an accumulated exclusion-key list, reusing the same already-converted `$dstr_key` temp rather than converting twice — see ADR-2026-10-01-0233. Array patterns still aren't lowered at catch-param/for-in/of-head/C-style for-init sites, same restriction as the object-rest case — see ADR-2026-09-21-2143, ADR-2026-09-22-1752.
+_Avoid_: pattern hoisting, destructuring desugar.
 
-**Block Exits**:
-The transform-time table (`GeneratorState.block_exits`, `BlockExits`) of `break`/`continue` targets, keyed by label, in scope where an **Isolated Block** was emitted (async generators only — a plain async function's **Scope Frame** routes crossed `break`/`continue` through `route_loop_control!` directly, using `LoopControlTarget.scope_depth`). The block runs verbatim, so a jump leaving it surfaces as a raw `Completion::Break`/`Continue` after its disposal; the driver resolves it through this table into `route_loop_control!`, which runs intervening `finally` blocks and closes crossed `for-of` iterators. A side table rather than a `StateTerminator` variant so the generator executors stay untouched.
-_Avoid_: jump table, loop targets.
+**Destructuring Reference Scope**:
+The evaluator seam that owns a captured destructuring assignment Reference from target evaluation through final PutValue. `with_destruct_lref` roots the ordinary/private/super reference while its callback performs iterator, source-property, and default-initializer work; `Completion::Normal(value)` enters finalization, while every other completion bypasses the write unchanged. Finalization roots the value, defers an ordinary member's `ToPropertyKey`, dispatches the ordinary/private/super or recursive fallback write, and releases all scoped roots on return.
+_Avoid_: destructuring write switch, lRef cleanup.
+
+**Frame-Exit Disposal**:
+How an *async generator* disposes an `await using` block scope. Unlike a plain async function's **Scope Frame** (`EnterScope`/`ExitScope`), a generator lowers such a block, or a `try`/`catch`/`finally` clause's own statement list, through the ordinary `OpenBlock` scope-depth mechanism (`reconcile_scope_stack`, `generator_scope_stacks`), so the resource registers on that frame's environment. The async-generator driver disposes any frame a state transition leaves (`scope_stack.len() > state.scope_depth`), innermost first, before reconciliation drops it: the request parks at each DisposeResources `Await` (`GeneratorDisposal` in `Interpreter::generator_pending_dispose`, `GeneratorDisposeThen::Reenter`) and re-enters the driver at the state it was about to run. Every exit shape (fall-through, `break`/`continue`, jumps out of `if`/loops/`switch`) from a lowered block is a state transition, so none needs routing of its own (a container with no `await`/`yield` inside is not lowered and still disposes inline, see the ADR); a `return`/throw that completes the generator, or a `.return()`/`.throw()` at a `yield`, disposes all open frames together with the function-level resources (`take_generator_dispose_stack`), and a `for-of` unwind disposes frames nested in the loop before it closes the iterator (`dispose_scopes_inside_for_of`). A disposal reached while a throw or return is already in flight parks like any other: the `DisposeCursor` carries that completion and `async_gen_reenter` restores it. A `.return()` parked in `yield*` disposes the same way, and a `for (await using x of …)` head parks at its iteration environment's disposal. The `for-of` *unwind* (closing loops a `throw`/`break`/`continue`/`return` crosses, `unwind_generator_for_of_loops`/`dispose_scopes_inside_for_of`) is resumable on every caller (`route_generator_exception`, `pending_return`, the two `Return` terminator arms, and loop-control/`Goto` via `GeneratorReentry::{LoopControl, Goto}`, all using `can_park: bool`/`ForOfUnwindOutcome`, as of #761) but still blocks on inline-yield replay. ADR-2026-09-21-2015, ADR-2026-09-22-2326, ADR-2026-09-22-2340.
+_Avoid_: isolated block, block exits, dispose block, await-using state.
+
+**Generator Disposal Continuation**:
+The ownership unit for an async generator parked inside DisposeResources: `GeneratorDisposal` keeps the `DisposeCursor`, front request capability, and `GeneratorDisposeThen::Reenter(GeneratorReentry)` action together in `Interpreter::generator_pending_dispose`. `Completion::Return` and `Completion::Throw` carry their own retry through `GeneratorReentry::State`; completion-free control transfers use `LoopControl` or `Goto`. Re-entry consumes that action before executing another state, while the request remains at the queue head.
+_Avoid_: disposal retry side table, iterator-state retry flag.
+
+**Inline Yield**:
+The degraded fallback for a `yield`/`yield*` the transform leaves inside an expression it does not decompose (a destructuring-assignment default or target, `for (a[yield] of …)`, `super[yield]`). The tree-walker returns `Completion::Yield` out of the state body; the async driver turns it into a synthetic `StateTerminator::Yield` carrying `SentValueBindingKind::InlineYield { yield_target, prev_sent }`, so it suspends through the same terminator tail as a lowered yield — one `Await`, settled from a later job — and an inline `yield*` is handed to the delegate machinery (`inline_yield_delegates`). The resume re-enters the *same* state with `generator_context` fast-forwarding past the yields already taken, so the state's preceding statements and yield operands still run again on every resume (a `yield*` operand does not). A backstop for constructs not yet lowered (#625), not the primary mechanism. ADR-2026-09-21-2157.
+_Avoid_: replay yield, fallback yield.
 
 **Terminator Operand**:
 An expression a `StateTerminator` carries and the state-machine driver evaluates
@@ -78,10 +96,39 @@ loop — so what the seam owns is the classification, the part that had no busin
 differing.
 _Avoid_: terminator expression, operand completion, state operand.
 
+**Generator Retirement**:
+The transition a generator object makes when it is finished and nothing will
+resume it: every per-generator side table the drivers root for it
+(`generator_inline_iters`, `generator_for_of_stacks`, `generator_scope_stacks`)
+is dropped, and its `IteratorState` is latched into the Completed terminal state
+of the flavour it already is. `retire_generator`
+(`interpreter/eval/generator_runtime.rs`) owns it for all three entry paths —
+sync driver, async-generator driver, and a parked disposal finishing in
+`async_gen_finish_disposal`. The flavour and the state machine, function
+environment and strictness a finished generator still carries are read back out
+of the live `IteratorState`, which every driver writes when it latches
+`Executing`, so a caller cannot latch the wrong flavour. Retiring runs no user
+code, so the order of table release against the latch is unobservable; a caller
+that still needs a side table after finishing — `generator_return_state_machine`,
+which drains `generator_inline_iters` to run each stashed iterator's `return()` —
+keeps its own teardown.
+_Avoid_: generator cleanup, completing the generator, generator disposal (that is
+`await using` disposal, a different thing).
+
+**Loop Control**:
+A `break`/`continue` the transform lowers to `StateTerminator::LoopControl(LoopControlTarget)` instead of a bare `Goto`. The target records where the jump lands (`target_state`) and how many `try` contexts (`try_depth`), `for-of` loops (`for_of_depth`) and block scopes (`scope_depth`) remain active there, so routing never depends on state-id equality. The driver routes it through the innermost un-entered `finally` between the jump and its target, closing the `for-of` iterators it crosses first, and resumes the jump when that finalizer's `TryExit` runs (`route_loop_control!` for async functions, `route_generator_loop_control` for sync and async generators).
+
+**Completion Ownership**: All three drivers (sync generators, async generators, plain async functions) park a throw, return, or loop-control jump a running `finally` is handling on that finalizer's own `TryContextInfo.pending_completion: Option<PendingCompletion>` (`PendingCompletion::Throw`/`Return`/`LoopControl`) — never on a driver-global slot. Ownership on the context, not the driver, is what makes a nested `try`/`finally` entered inside that finally's own body (or a suspension in between) structurally unable to see or consume it: `TryExit` reads only the context it just popped. A completion escaping a running finalizer (a new throw, a new return, or a jump leaving it) replaces the earlier one by dropping that finalizer's context — truncating `try_stack` to the routed depth, unconditionally, is what makes the replacement structural rather than a separate clear of driver-global state. One kind of state remains legitimately off the context: a fresh, not-yet-routed resume input — an external `.throw()`/`.return()` injection (`IteratorState::pending_exception`/`pending_return`) or an in-flight exception a `Throw` operand just produced — which is consumed into a `pending_completion` at the point it is actually intercepted, not before. See ADR-2026-10-01-0011.
+_Avoid_: pending_loop_control (renamed to pending_completion), driver-global completion, goto, jump state.
+
+**Try Context Pairing**:
+The invariant that every `TryEnter` push of a runtime `TryContextInfo` gets exactly one matching `TryExit` pop, on every completion path out of the `try`/`catch` — including a finally-less try/catch's normal completion, which the transform routes through a synthetic `no_finally_exit_state` (`transform_try_statement`) rather than jumping straight to `after_try`. Every depth later computed from the runtime `try_stack` — `LoopControlTarget.try_depth`/`for_of_depth`, and exception-handler search — assumes this pairing; skipping a pop for any path desyncs those depths from the transform's own `try_stack` bookkeeping.
+_Avoid_: leaked try context, unpaired pop.
+
 ## Memory
 
 **Temp-Root Frame**:
-A saved depth marker into the interpreter's `gc_temp_roots` stack — the set of `JsValue`s pinned as GC roots only for the duration of one native operation, so a GC safepoint reached while they exist solely as Rust locals cannot collect them. `gc_root_frame` captures the current depth; `gc_unroot_frame` bulk-truncates back to it. A native that roots temporaries opens a frame, roots values into it, and truncates on exit.
+A saved depth marker into the interpreter's `gc_temp_roots` stack — the set of `JsValue`s pinned as GC roots only for the duration of one native operation, so a GC safepoint reached while they exist solely as Rust locals cannot collect them. The stack is a `RootStack` and is strictly LIFO: push, pop-of-the-top and truncate are its only mutations, reached through `gc_root_id`/`gc_unroot_id`/the frame helpers. Anything that must outlive the native call belongs in a Pinned Native Root or `RootedSlots` instead. `gc_root_frame` captures the current depth; `gc_unroot_frame` bulk-truncates back to it. A native that roots temporaries opens a frame, roots values into it, and truncates on exit.
 _Avoid_: root scope marker, gc stack pointer.
 
 **GC Root Scope**:

@@ -57,6 +57,10 @@ pub(crate) enum Op {
     DupN = 53,
     ToPrimitiveKey = 54,
     Construct = 55,
+    /// Marks a statement-list position so the VM can reach a GC safepoint
+    /// there, matching the tree-walker's per-statement safepoint (issue
+    /// #808). No operand bytes.
+    Safepoint = 56,
 }
 
 impl Op {
@@ -118,6 +122,7 @@ impl Op {
             53 => Some(Op::DupN),
             54 => Some(Op::ToPrimitiveKey),
             55 => Some(Op::Construct),
+            56 => Some(Op::Safepoint),
             _ => None,
         }
     }

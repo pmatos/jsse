@@ -206,6 +206,8 @@ impl Interpreter {
                         )
                     },
                 ));
+                interp.pin_native_root(&wrapper_fn, &value);
+                interp.pin_native_root(&wrapper_fn, &on_dispose);
                 let resource = DisposableResource {
                     value: JsValue::UNDEFINED,
                     hint: DisposeHint::Sync,
@@ -454,30 +456,46 @@ impl Interpreter {
                 Probe::Active(s) => s,
             };
 
-            let mut current_error: Option<JsValue> = None;
-            for resource in stack.iter().rev() {
-                let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
-                // A disposer that called `__host_exit` (issue #242) makes the
-                // exit immediate: propagate the `Completion::Exit` before
-                // running further disposers or `wrap_suppressed_error` (a
-                // user-replaceable `SuppressedError`). Inert off-path.
-                if let Completion::Exit(code) = result {
-                    return Completion::Exit(code);
+            self.with_gc_root_scope(|interp| {
+                // The resources were already taken out of the object into
+                // `stack`, a bare Rust local invisible to the tracer; without
+                // these roots a disposer that triggers a GC (directly, or via
+                // a nested dispose/microtask) can free a not-yet-called
+                // resource still waiting later in this loop.
+                for resource in &stack {
+                    interp.gc_root_value(&resource.value);
+                    interp.gc_root_value(&resource.dispose_method);
                 }
-                match result {
-                    Completion::Normal(_) => {}
-                    Completion::Throw(e) => {
-                        current_error = Some(self.wrap_suppressed_error(e, current_error));
-                    }
-                    _ => {}
-                }
-            }
 
-            if let Some(err) = current_error {
-                Completion::Throw(err)
-            } else {
-                Completion::Normal(JsValue::UNDEFINED)
-            }
+                let mut current_error: Option<JsValue> = None;
+                for resource in stack.iter().rev() {
+                    let result =
+                        interp.call_function(&resource.dispose_method, &resource.value, &[]);
+                    // A disposer that called `__host_exit` (issue #242) makes the
+                    // exit immediate: propagate the `Completion::Exit` before
+                    // running further disposers or `wrap_suppressed_error` (a
+                    // user-replaceable `SuppressedError`). Inert off-path.
+                    if let Completion::Exit(code) = result {
+                        return Completion::Exit(code);
+                    }
+                    match result {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => {
+                            interp.gc_root_value(&e);
+                            let wrapped = interp.wrap_suppressed_error(e, current_error.take());
+                            interp.gc_root_value(&wrapped);
+                            current_error = Some(wrapped);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Some(err) = current_error {
+                    Completion::Throw(err)
+                } else {
+                    Completion::Normal(JsValue::UNDEFINED)
+                }
+            })
         } else {
             Completion::Throw(self.create_type_error(
                 "DisposableStack.prototype.dispose called on non-DisposableStack",
@@ -703,6 +721,8 @@ impl Interpreter {
                         )
                     },
                 ));
+                interp.pin_native_root(&wrapper_fn, &value);
+                interp.pin_native_root(&wrapper_fn, &on_dispose);
                 let resource = DisposableResource {
                     value: JsValue::UNDEFINED,
                     hint: DisposeHint::Async,

@@ -28,13 +28,13 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
           components: clippy, rustfmt
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: nextest
 
@@ -55,7 +55,7 @@ jobs:
       - name: Run unit tests
         run: cargo nextest run --release
 
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run Python script tests
         run: uv run python -m unittest discover -s scripts -p 'test_*.py'
@@ -82,4 +82,32 @@ jobs:
 
       - name: Run test262-extra (bytecode VM)
         run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --bytecode --fail-on-failures
+
+      # The checked profile keeps debug assertions on at release speed, so the
+      # GC temp-root stack discipline (strict LIFO release, balanced native
+      # calls, jobs and runs; #331) is executed by real test262 workloads.
+      - name: Build (release-checked)
+        run: cargo build --profile release-checked
+
+      - name: Run unit tests (release-checked, debug assertions on)
+        run: cargo nextest run --cargo-profile release-checked
+
+      - name: Run test262-extra (GC root-stack assertions)
+        run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 test262-extra/ --fail-on-failures
+
+      - name: Run test262-extra (GC root-stack assertions, bytecode VM)
+        run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 test262-extra/ --bytecode --fail-on-failures
+
+      - name: Run test262 (10% sample, GC root-stack assertions)
+        run: uv run python scripts/run-test262.py --jsse ./target/release-checked/jsse --test262 ./test262 --sample 0.1 --seed "$TEST262_SAMPLE_SEED"
+
+      # JSSE_GC_STRESS forces a collection at every Nth safepoint that would
+      # not otherwise collect, turning missing-root/write-barrier bugs into
+      # reproducible test262-extra failures (#331, #809). Reuses the plain
+      # release binary built above.
+      - name: Run test262-extra (GC stress, JSSE_GC_STRESS=7)
+        run: JSSE_GC_STRESS=7 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --timeout 300 --fail-on-failures
+
+      - name: Run test262-extra (GC stress, JSSE_GC_STRESS=7, bytecode VM)
+        run: JSSE_GC_STRESS=7 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --bytecode --timeout 300 --fail-on-failures
 

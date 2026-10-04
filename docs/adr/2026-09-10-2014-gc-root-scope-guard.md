@@ -14,16 +14,21 @@ records the decision for the frame-scoping half of that question, now that
 captures the current temp-root depth, runs `body`, and bulk-unroots on every
 exit path the closure takes (tail, early `return`, `?`) — is the seam for
 whole-body, single-frame native temp-root scoping. It is not a Drop-guard:
-`gc_temp_roots` stays a plain `Vec<u64>`, so there is no interior-mutability
+`gc_temp_roots` stays a plain owned `Vec<u64>` (wrapped by the `RootStack` newtype
+that narrows its mutation vocabulary, #331), so there is no interior-mutability
 borrow tax (`RefCell`) on the GC hot path (`gc_root_value`, called from every
 allocation-adjacent site in the interpreter). The raw `gc_root_frame`/
-`gc_unroot_frame` primitive is retained for the one shape the combinator
-cannot express: two frames alive at once where an *inner* one must truncate
-independently while the *outer* one stays open across repeated early exits
-(`Array.from`'s nested `gc_frame`/`gc_frame_next`, see below). Plain LIFO
-nesting — one `with_gc_root_scope` call inside another, each owning its own
-local frame marker on the same stack — composes fine and is not what this
-primitive is reserved for.
+`gc_unroot_frame` primitive is retained for shapes the combinator genuinely
+cannot express — teardown by value identity interleaved with other live roots
+(see "Deliberately not migrated" below) — not for "two frames open at once"
+in general. Plain LIFO nesting — one `with_gc_root_scope` call inside
+another, each owning its own local frame marker on the same stack — composes
+fine. This ADR originally cited `Array.from`'s nested `gc_frame`/
+`gc_frame_next` pair as a case the combinator couldn't express; #806 found
+that framing wrong and converted it to nested `with_gc_root_scope` calls (see
+"Applied so far" below) — the inner frame always closes, normally or
+abruptly, strictly before the outer one does, which is exactly the LIFO shape
+the combinator was already designed for.
 
 An RAII `Drop`-guard is added only if a genuinely interleaved case with two
 or more real adapters later surfaces, decided where the variation is
@@ -40,8 +45,9 @@ zero real adapters in `array.rs`).
 - **`array.rs`** (PR #595): 8 whole-body natives — `concat`, `slice`, `map`,
   `filter`, `splice`, `flat`, `flatMap`, `Array.from`'s array-like path —
   collapsing 71 hand-threaded `gc_unroot_frame` teardowns to 9. The 9
-  remaining are `Array.from`'s nested iterator frames (`gc_frame` +
-  `gc_frame_next` held simultaneously), which correctly keep the raw
+  remaining were `Array.from`'s nested iterator frames (`gc_frame` +
+  `gc_frame_next` held simultaneously); #806 converted these too (see below),
+  retracting this ADR's original claim that the nesting needed the raw
   primitive.
 - **`eval.rs`'s `yield*` delegation** (this change): the concrete first slice
   of the `gc-root-scope-guard-eval` follow-up PR #595 proposed, and the
@@ -76,6 +82,39 @@ zero real adapters in `array.rs`).
   whether the legacy `self.generator_context`-driven branch is still load-
   bearing.
 
+- **Issue #806** converted the remaining multi-exit manual root frames named
+  there: `Object.fromEntries` (one frame, 7 unroot sites), `Array.from`'s
+  iterator path (the nested `gc_frame`/`gc_frame_next` pair above, now an
+  outer `with_gc_root_scope` spanning the loop with a nested
+  `with_gc_root_scope` per iteration returning `Option<Completion>` —
+  `None` to continue, `Some(c)` to propagate an abrupt completion), and
+  `call_async_function` (one frame spanning through the
+  `async_function_resume` kickoff call). `construct_from_evaluated`'s
+  conversion surfaced a real bug rather than pure bookkeeping cleanup: its
+  class-field-initializer pass had several naked `return other;` statements
+  that bypassed the hand-written teardown, leaking the constructor's rooted
+  callee value onto `gc_temp_roots` on a throwing field initializer. The
+  tree-walker's `eval_new` absorbed the leak by truncating its own
+  (depth-based) frame regardless of what was on top, but the bytecode VM's
+  `Op::Construct` has no such net — `release_construct_operands` only
+  manages the separate `gc_bytecode_roots` stack — so the leak was real
+  and reachable under `--bytecode`. Wrapping the whole function in
+  `with_gc_root_scope` makes every exit, including the naked returns,
+  truncate uniformly, closing the leak as a side effect. The two
+  perf-sensitive sites the issue flagged (the `super()` branch of
+  `eval_call`, and `eval_assign`'s `Expression::Member` branch, the latter
+  already an equivalent hand-rolled closure IIFE before this change) were
+  measured separately on a loop-heavy microbenchmark for each, using
+  minimum-of-21 interleaved runs rather than the mean/median — the shared
+  build host's load made single-run and even median timings swing by double
+  digits in either direction between back-to-back measurements of the same
+  two binaries, so the minimum (closest to an uncontended run) was the only
+  stable signal. Both converted sites came out at parity with their
+  pre-conversion binary (within a few percent, inside the noise floor even
+  at minimum), consistent with `with_gc_root_scope` being `#[inline]` and
+  doing the same O(1) depth-capture/truncate work the manual frame did; both
+  conversions were kept.
+
 ## Deliberately not migrated
 
 - **`eval.rs`'s `destructure_array_assignment`** (the other flagged bypass,
@@ -87,21 +126,14 @@ zero real adapters in `array.rs`).
   `with_gc_root_scope`'s single bulk-truncating frame risks unrooting a
   value a sibling branch still needs. These stay on the raw primitive until
   that interaction is worked out on its own, not bundled into this slice.
-- **`array.rs`'s `from_async_gc_root`/`from_async_gc_unroot`** (`Array.fromAsync`)
-  pin a `FromAsyncState`'s object fields for the life of a multi-tick async
-  continuation, which spans suspend points `with_gc_root_scope`'s single
-  synchronous closure cannot cover. `pin_native_root`/`gc_native_roots` (the
-  anchor-object pinning PR #473 introduced, and `RootedPair` in
-  `iterators.rs` already builds on) is the right target mechanism for this
-  case — but migrating `from_async_gc_root` onto it is #331's item 3 (split
-  frame-roots from independently-registered roots) applied to a specific
-  call site, not this ADR's concern. Left as follow-up.
-- **`exec.rs`'s destructuring-pattern iterator root**, **`array.rs`'s
-  `from_async_gc_root`** loop (see above), and **`regexp.rs`'s global-match
-  result loop** still use the raw `gc_temp_roots.push(id)` / manual-frame
-  idiom #290 and #331 catalogued as remaining mechanical-sweep sites. None
-  are touched here; they are unrelated to the `with_gc_root_scope` seam
-  decision and remain future opportunistic cleanup.
+- **`Array.fromAsync`** used to pin its state on `gc_temp_roots` across a
+  multi-tick continuation. It now holds its values in a `RootedSlots` pinned on
+  its await handlers (`pin_native_root`/`gc_native_roots`, the mechanism
+  `RootedPair` builds on), which is the shape for any root that must outlive
+  one synchronous native call.
+- **Remaining raw `gc_temp_roots` pushes** were folded into `gc_root_id`/
+  `gc_root_value` (#290, #331), and the stack itself is now a `RootStack`
+  newtype that only supports push, pop-of-the-top and truncate.
 
 ## Consequences
 
@@ -110,12 +142,11 @@ zero real adapters in `array.rs`).
   future site is evaluated individually against the same criterion applied
   here (single frame, no cross-branch identity removal, no continuation
   spanning multiple ticks).
-- #331's item 4 (root-stack balance assertions at evaluation boundaries) is
-  **not** unblocked by this change. `gc_temp_roots` still conflates
-  frame-scoped roots (what this ADR's combinator manages) with
-  independently-registered ones — the exact hazard #465 found and fixed for
-  promise-resolver roots sharing the same truncatable stack as an enclosing
-  `eval_call` frame. Until #331's item 3 separates the two root kinds,
-  neither `==` nor `>=` holds at a call boundary while `Array.fromAsync` or
-  an `Atomics.waitAsync`-style continuation is pending, so balance
-  assertions would false-positive. Revisit once item 3 lands.
+- `gc_temp_roots` is **strictly LIFO**: a root is released in reverse order of
+  its push, by `gc_unroot_id` (which debug-asserts the id is on top) or by
+  truncating a frame. Nothing deliberately persistent lives on it any more —
+  values captured across ticks belong in a Pinned Native Root or `RootedSlots`,
+  and transformed generator/async for-of iterators live in the driver's
+  environment, which the collector traces. That is what makes root-stack
+  balance assertions (#331 item 4) sound, which is why they were deferred
+  until the identity-removed roots were gone.

@@ -31,6 +31,37 @@ pub(crate) struct GcPacer {
     /// Consecutive minor collections in which at least 90% of the nursery
     /// survived. Two saturated minors switch back to major pacing.
     high_survival_minors: u8,
+    /// Debug stress mode: force a collection every `stress_period` safepoints
+    /// that would otherwise not collect. Zero disables it.
+    stress_period: u32,
+    /// Safepoints seen while stress mode is on. Every `stress_period`th one
+    /// collects, alternating major (finds missing roots) and minor (finds
+    /// missing write barriers).
+    stress_count: u64,
+    /// Every `begin_collection()` call, unconditionally — one per production
+    /// `Interpreter::gc_safepoint()`, plus one per direct `begin_collection()`
+    /// call from this module's own unit tests below. Unlike `stress_count`
+    /// (which `begin_collection` skips incrementing whenever a major/minor
+    /// collection is already pending), this never resets and is never
+    /// skipped, so tests can assert exact deltas across calls. Test-only.
+    #[cfg(test)]
+    safepoint_calls: u64,
+}
+
+/// Environment variable that enables the GC stress mode: a collection is
+/// forced at every Nth safepoint. Unset, `0` or unparseable leaves it off.
+pub(crate) const GC_STRESS_ENV: &str = "JSSE_GC_STRESS";
+
+/// In-crate unit tests never read the variable, so their exact-result pacer
+/// assertions hold under `JSSE_GC_STRESS`; they opt in with `set_stress_period`.
+fn stress_period_from_env() -> u32 {
+    if cfg!(test) {
+        return 0;
+    }
+    std::env::var(GC_STRESS_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,7 +82,17 @@ impl GcPacer {
             major_requested: false,
             minor_suppressed: false,
             high_survival_minors: 0,
+            stress_period: stress_period_from_env(),
+            stress_count: 0,
+            #[cfg(test)]
+            safepoint_calls: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_stress_period(&mut self, period: u32) {
+        self.stress_period = period;
+        self.stress_count = 0;
     }
 
     /// Charge one object allocation. Reused logical slots still hold a full
@@ -98,6 +139,10 @@ impl GcPacer {
 
     /// Consume the highest-priority pending request at a safepoint.
     pub(crate) fn begin_collection(&mut self) -> Option<CollectionKind> {
+        #[cfg(test)]
+        {
+            self.safepoint_calls += 1;
+        }
         if self.major_requested {
             self.major_requested = false;
             self.minor_requested = false;
@@ -105,6 +150,17 @@ impl GcPacer {
         } else if self.minor_requested {
             self.minor_requested = false;
             Some(CollectionKind::Minor)
+        } else if self.stress_period != 0 {
+            self.stress_count += 1;
+            let period = u64::from(self.stress_period);
+            if !self.stress_count.is_multiple_of(period) {
+                return None;
+            }
+            Some(if (self.stress_count / period) % 2 == 1 {
+                CollectionKind::Major
+            } else {
+                CollectionKind::Minor
+            })
         } else {
             None
         }
@@ -148,6 +204,11 @@ impl GcPacer {
     #[cfg(test)]
     pub(crate) fn is_requested(&self) -> bool {
         self.minor_requested || self.major_requested
+    }
+
+    #[cfg(test)]
+    pub(crate) fn safepoint_calls(&self) -> u64 {
+        self.safepoint_calls
     }
 
     #[cfg(test)]
@@ -435,10 +496,10 @@ impl Interpreter {
                 }
             }
         }
-        roots.extend_from_slice(&self.gc_temp_roots);
+        roots.extend_from_slice(self.gc_temp_roots.as_slice());
         // Values held by active bytecode operand stacks
-        roots.extend_from_slice(&self.gc_bytecode_roots);
-        // Queued microtasks and armed timers both keep their values alive.
+        roots.extend_from_slice(self.gc_bytecode_roots.as_slice());
+        // Queued microtasks, pending async-generator requests and armed timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
         for val in &self.pending_iter_close {
@@ -455,6 +516,10 @@ impl Interpreter {
         for scope_stack in self.generator_scope_stacks.values() {
             Self::collect_scope_stack_roots(scope_stack, &mut roots, &mut seen_envs);
         }
+        for (generator_id, disposal) in &self.generator_pending_dispose {
+            roots.push(*generator_id);
+            disposal.for_each_value(|v| Self::collect_value_roots(v, &mut roots));
+        }
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
@@ -465,16 +530,18 @@ impl Interpreter {
             Self::collect_env_roots(&afs.func_env, &mut roots, &mut seen_envs);
             Self::collect_value_roots(&afs.resolve_fn, &mut roots);
             Self::collect_value_roots(&afs.reject_fn, &mut roots);
-            if let Some(ref v) = afs.pending_return {
-                Self::collect_value_roots(v, &mut roots);
-            }
             if let Some(ref pending) = afs.pending_dispose {
                 pending
                     .cursor
                     .for_each_value(|v| Self::collect_value_roots(v, &mut roots));
             }
-            if let Some(ref v) = afs.saved_finally_exception {
-                Self::collect_value_roots(v, &mut roots);
+            for try_info in &afs.try_stack {
+                match &try_info.pending_completion {
+                    Some(PendingCompletion::Return(v) | PendingCompletion::Throw(v)) => {
+                        Self::collect_value_roots(v, &mut roots);
+                    }
+                    Some(PendingCompletion::LoopControl(_)) | None => {}
+                }
             }
             Self::collect_for_of_stack_roots(&afs.for_of_stack, &mut roots, &mut seen_envs);
             Self::collect_scope_stack_roots(&afs.scope_stack, &mut roots, &mut seen_envs);
@@ -747,6 +814,8 @@ impl Interpreter {
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);
         self.generator_scope_stacks.remove(&id);
+        self.scheduler.remove_async_gen_queue(id);
+        self.generator_pending_dispose.remove(&id);
     }
 
     fn gc_collect_major(&mut self) {
@@ -957,10 +1026,15 @@ impl Interpreter {
             | ObjectKind::RegExp(_)
             | ObjectKind::ArrayBuffer(_)
             | ObjectKind::ShadowRealm(_)
-            | ObjectKind::DisposableStack(_)
             | ObjectKind::Temporal(_)
             | ObjectKind::Intl(_)
             | ObjectKind::PrimitiveWrapper(_) => {}
+            ObjectKind::DisposableStack(d) => {
+                for resource in &d.stack {
+                    Self::collect_value_roots(&resource.value, worklist);
+                    Self::collect_value_roots(&resource.dispose_method, worklist);
+                }
+            }
             ObjectKind::Proxy(p) => {
                 if let Some(tid) = p.target_id {
                     worklist.push(tid);
@@ -1083,12 +1157,8 @@ impl Interpreter {
             IteratorState::ForInEnumerator { obj_id, .. } => worklist.extend(*obj_id),
             IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
             IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
+            IteratorState::RegExpStringIterator { matcher_id, .. } => worklist.push(*matcher_id),
             IteratorState::Generator {
-                func_env,
-                execution_state,
-                ..
-            }
-            | IteratorState::AsyncGenerator {
                 func_env,
                 execution_state,
                 ..
@@ -1105,6 +1175,7 @@ impl Interpreter {
                 delegated_iterator,
                 pending_exception,
                 pending_return,
+                try_stack,
                 _sent_value,
                 ..
             }
@@ -1113,6 +1184,7 @@ impl Interpreter {
                 delegated_iterator,
                 pending_exception,
                 pending_return,
+                try_stack,
                 _sent_value,
                 ..
             } => {
@@ -1127,6 +1199,14 @@ impl Interpreter {
                 }
                 if let Some(v) = pending_return {
                     Self::collect_value_roots(v, worklist);
+                }
+                for try_info in try_stack {
+                    match &try_info.pending_completion {
+                        Some(PendingCompletion::Return(v) | PendingCompletion::Throw(v)) => {
+                            Self::collect_value_roots(v, worklist);
+                        }
+                        Some(PendingCompletion::LoopControl(_)) | None => {}
+                    }
                 }
             }
             _ => {}
@@ -1184,6 +1264,18 @@ impl Interpreter {
             // across GC.
             if let Some(ref w) = borrowed.with_object {
                 worklist.push(w.obj_id);
+            }
+            // A `using`/`await using` declaration's resources sit here between
+            // AddDisposableResource and the block's DisposeResources call.
+            // `value` is usually also reachable via `bindings`, but the
+            // synthetic sync-dispose-fallback wrapper `dispose_method`
+            // (`async_from_sync_dispose_method`) never is. Root both
+            // explicitly.
+            if let Some(ref stack) = borrowed.dispose_stack {
+                for resource in stack {
+                    Self::collect_value_roots(&resource.value, worklist);
+                    Self::collect_value_roots(&resource.dispose_method, worklist);
+                }
             }
             current = borrowed.parent.clone();
         }
@@ -1274,6 +1366,23 @@ mod tests {
     }
 
     #[test]
+    fn trace_object_fields_roots_disposable_stack_resources() {
+        let mut data = JsObjectData::new();
+        data.kind = ObjectKind::DisposableStack(DisposableStackData {
+            stack: vec![DisposableResource {
+                value: obj(30),
+                hint: DisposeHint::Sync,
+                dispose_method: obj(31),
+            }],
+            disposed: false,
+        });
+
+        let mut worklist = Vec::new();
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
+        assert_eq!(as_set(worklist), vec![30, 31]);
+    }
+
+    #[test]
     fn collect_env_roots_walks_parent_chain_and_terminates_on_cycle() {
         // (a) child binds "a"=Object(30), parent binds "b"=Object(31) → {30,31}
         let parent = Environment::new(None);
@@ -1324,6 +1433,62 @@ mod tests {
     // GcPacer — the allocation-pressure heuristic that decides when to collect.
     // Tested through its public interface; expected budgets are hand-computed
     // literals (independent of the pacer's own arithmetic).
+
+    #[test]
+    fn stress_period_zero_never_collects() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(0);
+        for _ in 0..1000 {
+            assert_eq!(pacer.begin_collection(), None);
+        }
+    }
+
+    #[test]
+    fn stress_period_fires_every_nth_safepoint_alternating_major_and_minor() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(3);
+        let fired: Vec<_> = (1..=12).map(|_| pacer.begin_collection()).collect();
+        assert_eq!(
+            fired,
+            vec![
+                None,
+                None,
+                Some(CollectionKind::Major),
+                None,
+                None,
+                Some(CollectionKind::Minor),
+                None,
+                None,
+                Some(CollectionKind::Major),
+                None,
+                None,
+                Some(CollectionKind::Minor),
+            ]
+        );
+    }
+
+    #[test]
+    fn stress_period_one_collects_at_every_safepoint() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(1);
+        for _ in 0..4 {
+            assert!(pacer.begin_collection().is_some());
+        }
+    }
+
+    #[test]
+    fn real_requests_take_priority_over_stress_and_do_not_advance_it() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(2);
+        assert_eq!(pacer.begin_collection(), None);
+        pacer.request();
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+        assert_eq!(
+            pacer.begin_collection(),
+            Some(CollectionKind::Major),
+            "the pending request did not consume a stress tick"
+        );
+    }
 
     #[test]
     fn fresh_pacer_requests_no_collection() {
@@ -1508,7 +1673,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let owner = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(owner);
+        interp.gc_root_id(owner);
         interp.gc.request();
         interp.gc_safepoint();
 
@@ -1530,7 +1695,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let survivor = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(survivor);
+        interp.gc_root_id(survivor);
         assert!(interp.objects.get_cell_expect(survivor).is_young());
 
         interp.gc.request();
@@ -1551,7 +1716,7 @@ mod tests {
             (env.clone(), "captured".to_string()),
         )]));
         let owner = interp.alloc_object(owner_data);
-        interp.gc_temp_roots.push(owner);
+        interp.gc_root_id(owner);
 
         interp.gc.request();
         interp.gc_safepoint();
@@ -1583,12 +1748,54 @@ mod tests {
         assert!(interp.objects.get_cell(dead).is_none());
     }
 
+    fn enqueue_request(interp: &mut Interpreter, gen_id: u64, promise: u64) {
+        interp
+            .scheduler
+            .async_gen_queue_or_default(gen_id)
+            .push_back(crate::interpreter::AsyncGenRequest {
+                kind: crate::interpreter::AsyncGenRequestKind::Next,
+                value: JsValue::UNDEFINED,
+                promise: obj(promise),
+                resolve_fn: JsValue::UNDEFINED,
+                reject_fn: JsValue::UNDEFINED,
+            });
+    }
+
+    #[test]
+    fn pending_async_generator_request_keeps_generator_and_promise_alive() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let generator = interp.alloc_object(JsObjectData::new());
+        let promise = interp.alloc_object(JsObjectData::new());
+        enqueue_request(&mut interp, generator, promise);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(generator).is_some());
+        assert!(interp.objects.get_cell(promise).is_some());
+    }
+
+    #[test]
+    fn freed_async_generator_drops_its_request_queue() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let generator = interp.alloc_object(JsObjectData::new());
+        interp.scheduler.async_gen_queue_or_default(generator);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(generator).is_none());
+        assert!(interp.scheduler.async_gen_queue(generator).is_none());
+    }
+
     #[test]
     fn remembered_old_object_keeps_young_child_alive() {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let parent = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(parent);
+        interp.gc_root_id(parent);
         interp.gc.request();
         interp.gc_safepoint();
         assert!(interp.objects.get_cell_expect(parent).is_old());
@@ -1610,7 +1817,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let survivor = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(survivor);
+        interp.gc_root_id(survivor);
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1626,7 +1833,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let parent = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(parent);
+        interp.gc_root_id(parent);
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1659,13 +1866,13 @@ mod tests {
         weak_map_data.class_name = "WeakMap".to_string();
         weak_map_data.kind = ObjectKind::Map(Vec::new());
         let weak_map = interp.alloc_object(weak_map_data);
-        interp.gc_temp_roots.push(weak_map);
+        interp.gc_root_id(weak_map);
         interp.gc.request();
         interp.gc_safepoint();
 
         let key = interp.alloc_object(JsObjectData::new());
         let value = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(key);
+        interp.gc_root_id(key);
         interp
             .objects
             .get_cell_expect(weak_map)
@@ -1678,7 +1885,7 @@ mod tests {
         interp.gc_safepoint();
         assert!(interp.objects.get_cell(value).is_some());
 
-        interp.gc_temp_roots.retain(|&id| id != key);
+        interp.gc_unroot_id(key);
         interp.gc.request_minor();
         interp.gc_safepoint();
         assert!(interp.objects.get_cell(key).is_none());
@@ -1703,7 +1910,7 @@ mod tests {
         weak_set_data.class_name = "WeakSet".to_string();
         weak_set_data.kind = ObjectKind::Set(Vec::new());
         let weak_set = interp.alloc_object(weak_set_data);
-        interp.gc_temp_roots.push(weak_set);
+        interp.gc_root_id(weak_set);
         interp.gc.request();
         interp.gc_safepoint();
 
@@ -1738,7 +1945,7 @@ mod tests {
 
     fn rooted_anchor(interp: &mut Interpreter) -> JsValue {
         let anchor = interp.alloc_object(JsObjectData::new());
-        interp.gc_temp_roots.push(anchor);
+        interp.gc_root_id(anchor);
         obj(anchor)
     }
 

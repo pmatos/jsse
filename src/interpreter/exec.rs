@@ -28,9 +28,12 @@ impl Interpreter {
         body: &Body,
         env: &EnvRef,
         _state_machine: &crate::interpreter::generator_transform::GeneratorStateMachine,
+        async_generator: bool,
     ) -> Completion {
+        let saved_async_generator_body =
+            std::mem::replace(&mut self.in_async_generator_body, async_generator);
         #[cfg(feature = "perf-counters")]
-        {
+        let result = {
             self.perf.body_non_function += 1;
             let (name, id) = _state_machine.perf_key.clone().unwrap_or_else(|| {
                 (
@@ -42,9 +45,11 @@ impl Interpreter {
             let result = self.exec_body_inner(body, env);
             self.perf.leave_ast_body();
             result
-        }
+        };
         #[cfg(not(feature = "perf-counters"))]
-        self.exec_body_inner(body, env)
+        let result = self.exec_body_inner(body, env);
+        self.in_async_generator_body = saved_async_generator_body;
+        result
     }
 
     /// Unlabelled Body execution, the script-body fallback, and `eval` reach
@@ -79,10 +84,9 @@ impl Interpreter {
     }
 
     fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
-        let prev = self.enter_ic_body(body);
-        let result = self.exec_statements_cached(body.as_slice(), env, None);
-        self.leave_ic_body(prev);
-        result
+        self.with_ic_body(body, |interp| {
+            interp.exec_statements_cached(body.as_slice(), env, None)
+        })
     }
 
     /// Execute a Script Body through the opt-in bytecode path when the entire
@@ -104,24 +108,23 @@ impl Interpreter {
                         self.perf.compile_ok += 1;
                         self.perf.body_non_function += 1;
                     }
-                    let prev = self.enter_ic_body(body);
-                    let result = if let Some(err) =
-                        self.instantiate_body_declarations(body.as_slice(), env, None)
-                    {
-                        err
-                    } else {
-                        self.call_stack_envs.push(env.clone());
-                        let result = crate::interpreter::bytecode::vm::run_script_chunk(
-                            self,
-                            &chunk,
-                            env,
-                            JsValue::UNDEFINED,
-                        );
-                        self.call_stack_envs.pop();
-                        result
-                    };
-                    self.leave_ic_body(prev);
-                    return result;
+                    return self.with_ic_body(body, |interp| {
+                        if let Some(err) =
+                            interp.instantiate_body_declarations(body.as_slice(), env, None)
+                        {
+                            err
+                        } else {
+                            interp.call_stack_envs.push(env.clone());
+                            let result = crate::interpreter::bytecode::vm::run_script_chunk(
+                                interp,
+                                &chunk,
+                                env,
+                                JsValue::UNDEFINED,
+                            );
+                            interp.call_stack_envs.pop();
+                            result
+                        }
+                    });
                 }
                 Err(_e) => {
                     #[cfg(feature = "perf-counters")]
@@ -171,23 +174,24 @@ impl Interpreter {
                 false,
             );
         }
-        let prev = self.enter_ic_body(body);
-        let mut last = Completion::Empty;
-        for stmt in body.as_slice() {
-            self.gc_root_completion(&last);
-            self.gc_safepoint();
-            let comp = self.exec_statement(stmt, env);
-            self.gc_unroot_completion(&last);
-            match comp {
-                Completion::Normal(v) => last = Completion::Normal(v),
-                Completion::Empty => {}
-                other => {
-                    last = other;
-                    break;
+        let last = self.with_ic_body(body, |interp| {
+            let mut last = Completion::Empty;
+            for stmt in body.as_slice() {
+                interp.gc_root_completion(&last);
+                interp.gc_safepoint();
+                let comp = interp.exec_statement(stmt, env);
+                interp.gc_unroot_completion(&last);
+                match comp {
+                    Completion::Normal(v) => last = Completion::Normal(v),
+                    Completion::Empty => {}
+                    other => {
+                        last = other;
+                        break;
+                    }
                 }
             }
-        }
-        self.leave_ic_body(prev);
+            last
+        });
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
         last
@@ -1350,23 +1354,80 @@ impl Interpreter {
                     if let Err(e) = self.with_set_mutable_binding(with_obj_id, name, val, strict) {
                         return Completion::Throw(e);
                     }
-                } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
-                    return Completion::Throw(e);
+                } else {
+                    propagate!(self.bind_pattern(&d.pattern, val, kind, env));
                 }
-            } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
-                return Completion::Throw(e);
+            } else {
+                propagate!(self.bind_pattern(&d.pattern, val, kind, env));
             }
         }
         Completion::Normal(JsValue::UNDEFINED)
     }
 
+    /// RestBindingInitialization's object-construction step (§14.3.3.3 /
+    /// §7.3.26 `CopyDataProperties`): builds a fresh plain object from the
+    /// own enumerable properties of `source_val` that aren't in `excluded`.
+    /// Shared by the tree-walker `Pattern::Object` rest arm and the
+    /// state-machine `ObjectRestCopy` terminator dispatch so both inherit
+    /// the same implementation. Note: `rest_obj_id` is allocated before
+    /// `copy_data_properties` runs, which can invoke arbitrary user code
+    /// (getters, proxy traps) that may reach a GC safepoint — the two share
+    /// no explicit rooting of the not-yet-populated rest object across that
+    /// window.
+    pub(crate) fn bind_object_rest_values(
+        &mut self,
+        source_val: &JsValue,
+        excluded: &[JsPropertyKey],
+    ) -> Completion {
+        let rest_obj_id = self.create_object_id();
+        if let Some(o) = source_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
+            let pairs = propagate!(self.copy_data_properties(o.id, source_val, excluded));
+            for (k, v) in pairs {
+                self.get_object_cell_expect(rest_obj_id)
+                    .borrow_mut()
+                    .insert_value(k, v);
+            }
+        }
+        Completion::Normal(JsValue::object(rest_obj_id))
+    }
+
+    /// Runtime half of the `ObjectRestCopy` state-machine terminator
+    /// (generator_transform.rs): `ToObject(source_val)`, then
+    /// `ToPropertyKey` each already-evaluated exclusion value, then
+    /// `bind_object_rest_values`. Driver-specific operand evaluation
+    /// (`excluded`'s expressions) happens before this is called; this is the
+    /// part shared by all three state-machine drivers.
+    pub(crate) fn object_rest_copy(
+        &mut self,
+        source_val: JsValue,
+        excluded_vals: &[JsValue],
+    ) -> Completion {
+        let obj_val = propagate!(self.to_object(&source_val));
+        let mut excluded_keys = Vec::with_capacity(excluded_vals.len());
+        for v in excluded_vals {
+            excluded_keys.push(propagate!(self.to_property_key(v)));
+        }
+        self.bind_object_rest_values(&obj_val, &excluded_keys)
+    }
+
+    /// Binds `val` to `pat`, declaring/initializing names in `env` per `kind`.
+    ///
+    /// Returns `Completion` rather than `Result<(), JsValue>` so a `yield`
+    /// reached while evaluating a default or computed key (`var {a = yield 1} = {}`,
+    /// `var [a = yield 1] = []`) propagates as `Completion::Yield` instead of
+    /// being silently discarded — see issue #727. `Throw` and (for array
+    /// patterns) the iterator-close bookkeeping are otherwise unchanged from
+    /// the pre-#727 `Result`-returning version.
     pub(crate) fn bind_pattern(
         &mut self,
         pat: &Pattern,
         val: JsValue,
         kind: BindingKind,
         env: &EnvRef,
-    ) -> Result<(), JsValue> {
+    ) -> Completion {
         match pat {
             Pattern::Identifier(name) => {
                 if kind == BindingKind::Var {
@@ -1383,7 +1444,7 @@ impl Interpreter {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
-                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                    let result = if self.with_scope_depth > 0 || self.has_ever_entered_with {
                         match self.resolve_with_has_binding(name, env) {
                             Ok(Some(obj_id)) => {
                                 let strict = env.borrow().strict;
@@ -1394,11 +1455,13 @@ impl Interpreter {
                         }
                     } else {
                         self.env_set(env, name, val)
-                    }
+                    };
+                    propagate!(result);
+                    Completion::Normal(JsValue::UNDEFINED)
                 } else {
                     env.borrow_mut().declare(name, kind);
                     env.borrow_mut().initialize_binding(name, val);
-                    Ok(())
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
             Pattern::Assign(inner, default) => {
@@ -1422,11 +1485,7 @@ impl Interpreter {
                             );
                         }
                     }
-                    match self.eval_expr(default, env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::UNDEFINED,
-                    }
+                    propagate!(self.eval_expr(default, env))
                 } else {
                     val
                 };
@@ -1438,15 +1497,11 @@ impl Interpreter {
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
-                let iterator = self.get_iterator(&val)?;
-                if let Some(o) = iterator
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    self.gc_temp_roots.push(o.id);
-                }
+                let iterator = propagate!(self.get_iterator(&val));
+                self.gc_root_value(&iterator);
                 let mut done = false;
                 let mut error: Option<JsValue> = None;
+                let mut yield_val: Option<JsValue> = None;
 
                 for elem in elements {
                     if let Some(elem) = elem {
@@ -1475,20 +1530,36 @@ impl Interpreter {
                                         }
                                     }
                                 };
-                                if let Err(e) = self.bind_pattern(p, item, kind, env) {
-                                    error = Some(e);
-
-                                    break;
+                                match self.bind_pattern(p, item, kind, env) {
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => {
+                                        error = Some(e);
+                                        break;
+                                    }
+                                    Completion::Yield(v) => {
+                                        yield_val = Some(v);
+                                        break;
+                                    }
+                                    other => {
+                                        self.gc_unroot_value(&iterator);
+                                        return other;
+                                    }
                                 }
                             }
                             ArrayPatternElement::Rest(p) => {
                                 let mut rest = Vec::new();
                                 if !done {
+                                    // Later steps run user code; the Vec is
+                                    // invisible to the GC (issue #794).
+                                    let rest_frame = self.gc_root_frame();
                                     loop {
                                         match self.iterator_step(&iterator) {
                                             Ok(Some(result)) => {
                                                 match self.iterator_value(&result) {
-                                                    Ok(v) => rest.push(v),
+                                                    Ok(v) => {
+                                                        self.gc_root_value(&v);
+                                                        rest.push(v);
+                                                    }
                                                     Err(e) => {
                                                         done = true;
                                                         error = Some(e);
@@ -1507,11 +1578,18 @@ impl Interpreter {
                                             }
                                         }
                                     }
+                                    self.gc_unroot_frame(rest_frame);
                                 }
                                 if error.is_none() {
                                     let arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(p, arr, kind, env) {
-                                        error = Some(e);
+                                    match self.bind_pattern(p, arr, kind, env) {
+                                        Completion::Normal(_) => {}
+                                        Completion::Throw(e) => error = Some(e),
+                                        Completion::Yield(v) => yield_val = Some(v),
+                                        other => {
+                                            self.gc_unroot_value(&iterator);
+                                            return other;
+                                        }
                                     }
                                 }
                                 break;
@@ -1534,35 +1612,49 @@ impl Interpreter {
                         }
                     }
                 }
-                let unroot_iter = |s: &mut Self| {
-                    if let Some(o) = iterator
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                        && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
-                    {
-                        s.gc_temp_roots.remove(pos);
-                    }
-                };
-                if let Some(err) = error {
+                // A `yield` mid-pattern suspends the generator; this attempt
+                // at binding is abandoned (the tree-walker replays the whole
+                // statement from the top on resume, per the InlineYield
+                // fallback), so the iterator is never resumed either. Per
+                // §13.15.5.2, close it eventually rather than now: stash it
+                // for `pending_iter_close` to close when the generator
+                // concludes, the same bookkeeping `destructure_array_assignment`
+                // already does for the destructuring-*assignment* form.
+                if let Some(yv) = yield_val {
                     if !done {
-                        let _ = self.iterator_close_result(&iterator);
+                        self.pending_iter_close.push(iterator.clone());
                     }
-                    unroot_iter(self);
-                    return Err(err);
+                    self.gc_unroot_value(&iterator);
+                    return Completion::Yield(yv);
+                }
+                if let Some(err) = error {
+                    // `iterator_close` roots `err` across `return()`, which can
+                    // run arbitrary user code (issue #794), and hands it back
+                    // unchanged regardless of what `return()` does.
+                    let err = if !done {
+                        self.iterator_close(&iterator, err)
+                    } else {
+                        err
+                    };
+                    self.gc_unroot_value(&iterator);
+                    return Completion::Throw(err);
                 }
                 if !done {
                     let r = self.iterator_close_result(&iterator);
-                    unroot_iter(self);
-                    return r;
+                    self.gc_unroot_value(&iterator);
+                    return match r {
+                        Ok(()) => Completion::Normal(JsValue::UNDEFINED),
+                        Err(e) => Completion::Throw(e),
+                    };
                 }
-                unroot_iter(self);
-                Ok(())
+                self.gc_unroot_value(&iterator);
+                Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Object(props) => {
                 // RequireObjectCoercible + ToObject for primitives
                 let obj_val = match self.to_object(&val) {
                     Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
+                    Completion::Throw(e) => return Completion::Throw(e),
                     _ => unreachable!(),
                 };
                 let mut excluded_keys = Vec::new();
@@ -1574,11 +1666,7 @@ impl Interpreter {
                                 .as_object_id()
                                 .map(|id| crate::types::JsObject { id })
                             {
-                                match self.get_object_property(o.id, name, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Err(e),
-                                    _ => JsValue::UNDEFINED,
-                                }
+                                propagate!(self.get_object_property(o.id, name, &obj_val))
                             } else {
                                 JsValue::UNDEFINED
                             };
@@ -1587,7 +1675,7 @@ impl Interpreter {
                                 if !var_scope.borrow().bindings.contains_key(name) {
                                     var_scope.borrow_mut().declare(name, kind);
                                 }
-                                self.env_set(env, name, v)?;
+                                propagate!(self.env_set(env, name, v));
                             } else {
                                 env.borrow_mut().declare(name, kind);
                                 env.borrow_mut().initialize_binding(name, v);
@@ -1602,13 +1690,12 @@ impl Interpreter {
                                 PropertyKey::Number(n) => JsPropertyKey::from(
                                     crate::interpreter::to_js_string(&JsValue::number(*n)),
                                 ),
-                                PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => self.to_property_key(&v)?,
-                                    Completion::Throw(e) => return Err(e),
-                                    _ => JsPropertyKey::from_str(""),
-                                },
+                                PropertyKey::Computed(expr) => {
+                                    let v = propagate!(self.eval_expr(expr, env));
+                                    propagate!(self.to_property_key(&v))
+                                }
                                 PropertyKey::Private(_) => {
-                                    return Err(self.create_type_error(
+                                    return Completion::Throw(self.create_type_error(
                                         "Private names are not valid in object patterns",
                                     ));
                                 }
@@ -1649,7 +1736,7 @@ impl Interpreter {
                                 }
                                 let resolved =
                                     if self.with_scope_depth > 0 || self.has_ever_entered_with {
-                                        self.resolve_with_has_binding(binding_name, env)?
+                                        propagate!(self.resolve_with_has_binding(binding_name, env))
                                     } else {
                                         None
                                     };
@@ -1659,11 +1746,7 @@ impl Interpreter {
                                     .as_object_id()
                                     .map(|id| crate::types::JsObject { id })
                                 {
-                                    match self.get_object_property(o.id, &key_str, &obj_val) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::UNDEFINED,
-                                    }
+                                    propagate!(self.get_object_property(o.id, &key_str, &obj_val))
                                 } else {
                                     JsValue::UNDEFINED
                                 };
@@ -1672,11 +1755,7 @@ impl Interpreter {
                                 if v.is_undefined()
                                     && let Some(dflt) = default_expr
                                 {
-                                    v = match self.eval_expr(dflt, env) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::UNDEFINED,
-                                    };
+                                    v = propagate!(self.eval_expr(dflt, env));
                                     if dflt.is_anonymous_function_definition() {
                                         self.set_function_name(&v, binding_name);
                                     }
@@ -1685,54 +1764,40 @@ impl Interpreter {
                                 // Step 6: InitializeReferencedBinding(lhs, v)
                                 let strict = env.borrow().strict;
                                 match resolved {
-                                    Some(obj_id) => self.with_set_mutable_binding(
+                                    Some(obj_id) => propagate!(self.with_set_mutable_binding(
                                         obj_id,
                                         binding_name,
                                         v,
                                         strict,
-                                    )?,
-                                    None => self.env_set(env, binding_name, v)?,
+                                    )),
+                                    None => propagate!(self.env_set(env, binding_name, v)),
                                 }
                             } else {
                                 let v = if let Some(o) = obj_val
                                     .as_object_id()
                                     .map(|id| crate::types::JsObject { id })
                                 {
-                                    match self.get_object_property(o.id, &key_str, &obj_val) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => JsValue::UNDEFINED,
-                                    }
+                                    propagate!(self.get_object_property(o.id, &key_str, &obj_val))
                                 } else {
                                     JsValue::UNDEFINED
                                 };
-                                self.bind_pattern(pat, v, kind, env)?;
+                                propagate!(self.bind_pattern(pat, v, kind, env));
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
-                            let rest_obj_id = self.create_object_id();
-                            if let Some(o) = obj_val
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                let pairs =
-                                    self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
-                                for (k, v) in pairs {
-                                    self.get_object_cell_expect(rest_obj_id)
-                                        .borrow_mut()
-                                        .insert_value(k, v);
-                                }
-                            }
-                            let rest_id = rest_obj_id;
-                            let rest_val = JsValue::object(rest_id);
-                            self.bind_pattern(pat, rest_val, kind, env)?;
+                            let rest_val =
+                                propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
+                            propagate!(self.bind_pattern(pat, rest_val, kind, env));
                         }
                     }
                 }
-                Ok(())
+                Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Rest(inner) => self.bind_pattern(inner, val, kind, env),
-            Pattern::MemberExpression(expr) => self.assign_to_expr(expr, val, env),
+            Pattern::MemberExpression(expr) => {
+                propagate!(self.assign_to_expr(expr, val, env));
+                Completion::Normal(JsValue::UNDEFINED)
+            }
         }
     }
 
@@ -1983,10 +2048,24 @@ impl Interpreter {
             scope_stack.truncate(target_depth);
         }
         match &state.scope_action {
-            Some(ScopeAction::OpenBlock) if scope_stack.len() < target_depth => {
+            Some(ScopeAction::OpenBlock(decls)) if scope_stack.len() < target_depth => {
                 let parent = innermost(scope_stack, for_of_env);
+                let env = Environment::new(Some(parent));
+                // `BlockDeclarationInstantiation`: every lexical name of the
+                // block enters TDZ together, before any of its statements
+                // run — not just the ones textually in this first fragment.
+                // Never `initialize_binding` here; the state whose body
+                // contains the actual declaration does that when it runs.
+                for (name, is_const) in decls {
+                    let kind = if *is_const {
+                        BindingKind::Const
+                    } else {
+                        BindingKind::Let
+                    };
+                    env.borrow_mut().declare(name, kind);
+                }
                 scope_stack.push(ScopeFrame {
-                    env: Environment::new(Some(parent)),
+                    env,
                     try_depth,
                     for_of_depth,
                 });
@@ -2130,11 +2209,11 @@ impl Interpreter {
                             } else {
                                 &for_env
                             };
-                            if let Some(d) = decl.declarations.first()
-                                && let Err(e) =
-                                    self.bind_pattern(&d.pattern, key_val, kind, bind_env)
-                            {
-                                break 'unroot Completion::Throw(e);
+                            if let Some(d) = decl.declarations.first() {
+                                match self.bind_pattern(&d.pattern, key_val, kind, bind_env) {
+                                    Completion::Normal(_) => {}
+                                    other => break 'unroot other,
+                                }
                             }
                         }
                         ForInOfLeft::Pattern(pat) => match pat {
@@ -2152,10 +2231,9 @@ impl Interpreter {
                                 }
                             }
                             _ => {
-                                if let Err(e) =
-                                    self.bind_pattern(pat, key_val, BindingKind::Let, &for_env)
-                                {
-                                    break 'unroot Completion::Throw(e);
+                                match self.bind_pattern(pat, key_val, BindingKind::Let, &for_env) {
+                                    Completion::Normal(_) => {}
+                                    other => break 'unroot other,
                                 }
                             }
                         },
@@ -2298,10 +2376,13 @@ impl Interpreter {
         loop_label: Option<&str>,
     ) -> Completion {
         let mut v = JsValue::UNDEFINED;
+        // `v` (the loop's running completion value) must stay rooted for as
+        // long as it's live: `iterator_next()` below and the loop body run
+        // arbitrary user code that can collect (issue #794). Re-rooted in
+        // place wherever `v` is replaced.
+        self.gc_root_value(&v);
         loop {
-            self.gc_root_value(&v);
             self.gc_safepoint();
-            self.gc_unroot_value(&v);
             let step_result = match self.iterator_next(iterator) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
@@ -2352,11 +2433,15 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     }
-                    if let Some(d) = decl.declarations.first()
-                        && let Err(e) = self.bind_pattern(&d.pattern, val, kind, bind_env)
-                    {
-                        self.iterator_close(iterator, e.clone());
-                        return Completion::Throw(e);
+                    if let Some(d) = decl.declarations.first() {
+                        match self.bind_pattern(&d.pattern, val, kind, bind_env) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                self.iterator_close(iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
+                        }
                     }
                 }
                 ForInOfLeft::Pattern(pat) => match self.assign_to_for_pattern(pat, val, env) {
@@ -2394,25 +2479,41 @@ impl Interpreter {
             let body_result = self.dispose_resources(&for_env, body_result);
             match body_result {
                 Completion::Normal(val) => {
+                    self.gc_unroot_value(&v);
                     v = val;
+                    self.gc_root_value(&v);
                 }
                 Completion::Empty => {}
                 Completion::Continue(None, cont_val) => {
                     if let Some(val) = cont_val {
+                        self.gc_unroot_value(&v);
                         v = val;
+                        self.gc_root_value(&v);
                     }
                 }
                 Completion::Break(None, break_val) => {
                     if let Some(val) = break_val {
+                        self.gc_unroot_value(&v);
                         v = val;
+                        self.gc_root_value(&v);
                     }
-                    if let Err(e) = self.iterator_close_result(iterator) {
+                    // `v` (the loop-carried completion value) must survive
+                    // `return()`, which can run arbitrary user code (issue #794).
+                    let close_result = self.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&v);
+                        interp.iterator_close_result(iterator)
+                    });
+                    if let Err(e) = close_result {
                         return Completion::Throw(e);
                     }
                     return Completion::Normal(v);
                 }
                 Completion::Return(ret_v) => {
-                    if let Err(e) = self.iterator_close_result(iterator) {
+                    let close_result = self.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&ret_v);
+                        interp.iterator_close_result(iterator)
+                    });
+                    if let Err(e) = close_result {
                         return Completion::Throw(e);
                     }
                     return Completion::Return(ret_v);
@@ -2422,7 +2523,13 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
                 Completion::Break(Some(label), val) => {
-                    if let Err(e) = self.iterator_close_result(iterator) {
+                    let close_result = self.with_gc_root_scope(|interp| {
+                        if let Some(bv) = &val {
+                            interp.gc_root_value(bv);
+                        }
+                        interp.iterator_close_result(iterator)
+                    });
+                    if let Err(e) = close_result {
                         return Completion::Throw(e);
                     }
                     return Completion::Break(Some(label), val);
@@ -2430,10 +2537,18 @@ impl Interpreter {
                 Completion::Continue(Some(lbl), val) => {
                     if loop_label == Some(lbl.as_str()) {
                         if let Some(v2) = val {
+                            self.gc_unroot_value(&v);
                             v = v2;
+                            self.gc_root_value(&v);
                         }
                     } else {
-                        if let Err(e) = self.iterator_close_result(iterator) {
+                        let close_result = self.with_gc_root_scope(|interp| {
+                            if let Some(cv) = &val {
+                                interp.gc_root_value(cv);
+                            }
+                            interp.iterator_close_result(iterator)
+                        });
+                        if let Err(e) = close_result {
                             return Completion::Throw(e);
                         }
                         return Completion::Continue(Some(lbl), val);
@@ -2478,10 +2593,7 @@ impl Interpreter {
                         if matches!(param, Pattern::Identifier(_)) {
                             catch_env.borrow_mut().is_simple_catch_scope = true;
                         }
-                        if let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
-                        {
-                            return Completion::Throw(e);
-                        }
+                        propagate!(self.bind_pattern(param, val, BindingKind::Let, &catch_env));
                     }
                     let catch_block_env = Environment::new(Some(catch_env.clone()));
                     // A call in the catch Block is in tail position only when
@@ -2512,7 +2624,10 @@ impl Interpreter {
             // after it), so it must keep whatever ambient suppression applies
             // but add none of its own — depth is already `saved_tco` here.
             let fin_env = Environment::new(Some(env.clone()));
-            let fin_result = self.exec_statements(finalizer, &fin_env);
+            let fin_result = self.with_gc_root_scope(|interp| {
+                result.root_payload(|v| interp.gc_root_value(v));
+                interp.exec_statements(finalizer, &fin_env)
+            });
             if fin_result.is_abrupt() {
                 return fin_result;
             }

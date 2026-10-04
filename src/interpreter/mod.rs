@@ -23,7 +23,10 @@ mod builtins;
 pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
 mod bytecode;
 mod dispose;
-pub(crate) use dispose::{AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, PendingDispose};
+pub(crate) use dispose::{
+    AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
+    GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
+};
 mod env_helpers;
 mod eval;
 mod exec;
@@ -42,6 +45,7 @@ pub(crate) mod perf_counters;
 pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
+mod root_stack;
 pub(crate) use property_map::PropertyMap;
 mod scheduler;
 #[cfg(test)]
@@ -247,6 +251,13 @@ pub(crate) struct Interpreter {
     gc_marks: Vec<bool>,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
+    /// The running state-machine body belongs to an async generator; set for
+    /// the duration of `exec_state_machine_body` so a nested sync activation
+    /// resets it.
+    pub(crate) in_async_generator_body: bool,
+    /// An inline `yield*` handed its iterable to the async driver as the
+    /// `Completion::Yield` value; the driver clears it after every body run.
+    pub(crate) inline_yield_delegates: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
     /// Start of the running generator activation's window in
     /// `pending_iter_close`; slots below it belong to enclosing activations.
@@ -263,6 +274,9 @@ pub(crate) struct Interpreter {
     /// since a generator's driver state lives outside the object's
     /// `IteratorState` enum.
     pub(crate) generator_scope_stacks: FxHashMap<u64, Vec<ScopeFrame>>,
+    /// Async generator requests parked at a DisposeResources `Await`, keyed
+    /// by generator object id (see [`GeneratorDisposal`]).
+    pub(crate) generator_pending_dispose: FxHashMap<u64, GeneratorDisposal>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
@@ -277,8 +291,8 @@ pub(crate) struct Interpreter {
     function_env_pool: Vec<EnvRef>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
-    pub(crate) gc_temp_roots: Vec<u64>,
-    pub(crate) gc_bytecode_roots: Vec<u64>,
+    pub(crate) gc_temp_roots: root_stack::RootStack,
+    pub(crate) gc_bytecode_roots: root_stack::RootStack,
     // microtask roots are stored inline alongside their jobs in JobScheduler
     pub(crate) class_private_names: Vec<HashMap<String, String>>,
     next_class_brand_id: u64,
@@ -406,17 +420,60 @@ pub(crate) struct Interpreter {
 /// Soft JS call-depth limit: crossing it throws a catchable `RangeError:
 /// Maximum call stack size exceeded`. Sits well below the native capacity of
 /// the 128 MiB execution stack the engine runs on (see `lib.rs`), yet far
-/// above the depth any real program reaches (the old 8 MiB main stack held
-/// every passing test, i.e. depths under ~1500).
-pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = 4_000;
+/// above the depth any real program reaches in release (the old 8 MiB main
+/// stack held every passing test, i.e. depths under ~1500).
+///
+/// Profile-aware because the resource really being bounded is stack *bytes*,
+/// not call count: debug frames run several times larger than release's, so
+/// a single release-sized limit sat *above* debug's native capacity and the
+/// guard never got a chance to fire before SIGABRT — jsse#607, sibling of
+/// jsse#599/#606, which found and fixed the same gap in the parser's
+/// `MAX_PARSE_DEPTH`. Measured by disabling the guard and binary-searching
+/// the abort point over the stack-hungriest call shapes (plain recursion, a
+/// recursive getter, a `Proxy` `apply`-trap forwarding to `target.apply`):
+/// debug's native call capacity is ~1,020 for the `Proxy` shape (the
+/// hungriest measured) vs. release's own ~30,300 for plain recursion.
+/// `cfg!(debug_assertions)` is a proxy for frame size, not the real variable
+/// — a custom profile built with `opt-level = 0, debug-assertions = false`
+/// still gets the release numbers below and could still abort; #606 accepted
+/// the same limitation for `MAX_PARSE_DEPTH`.
+///
+/// Debug keeps release's internal ratios (`rearm` = 0.6×`hard`, `soft` =
+/// 0.8×`hard`); the compile-time assertion below couples all three arms in
+/// both profiles at once, so an edit to one without the others fails to
+/// build regardless of which profile you happen to compile.
+const CALL_DEPTH_SOFT_LIMIT_DEBUG: usize = 160;
+const CALL_DEPTH_SOFT_LIMIT_RELEASE: usize = 4_000;
+pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = if cfg!(debug_assertions) {
+    CALL_DEPTH_SOFT_LIMIT_DEBUG
+} else {
+    CALL_DEPTH_SOFT_LIMIT_RELEASE
+};
+
 /// Hard ceiling enforced even while the soft limit is disarmed (i.e. while a
-/// catch handler is recovering). The [`soft`, `hard`) band gives handlers room
-/// to run; `hard` still sits far below native capacity so it throws rather
-/// than overflowing the stack.
-pub(crate) const CALL_DEPTH_HARD_LIMIT: usize = 5_000;
+/// catch handler is recovering). The [`soft`, `hard`) band gives handlers
+/// room to run; `hard` still sits far below native capacity so it throws
+/// rather than overflowing the stack. Profile-aware for the same reason as
+/// `CALL_DEPTH_SOFT_LIMIT` above.
+const CALL_DEPTH_HARD_LIMIT_DEBUG: usize = 200;
+const CALL_DEPTH_HARD_LIMIT_RELEASE: usize = 5_000;
+pub(crate) const CALL_DEPTH_HARD_LIMIT: usize = if cfg!(debug_assertions) {
+    CALL_DEPTH_HARD_LIMIT_DEBUG
+} else {
+    CALL_DEPTH_HARD_LIMIT_RELEASE
+};
+
 /// The soft limit re-arms only after the stack unwinds below this, so a
-/// recovering handler oscillating just under the soft limit does not re-trip.
-pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
+/// recovering handler oscillating just under the soft limit does not
+/// re-trip. Profile-aware for the same reason as `CALL_DEPTH_SOFT_LIMIT`
+/// above.
+const CALL_DEPTH_REARM_LIMIT_DEBUG: usize = 120;
+const CALL_DEPTH_REARM_LIMIT_RELEASE: usize = 3_000;
+pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = if cfg!(debug_assertions) {
+    CALL_DEPTH_REARM_LIMIT_DEBUG
+} else {
+    CALL_DEPTH_REARM_LIMIT_RELEASE
+};
 
 /// Expression-evaluation nesting limit: crossing it throws a catchable
 /// `RangeError: Maximum call stack size exceeded` instead of overflowing the
@@ -426,22 +483,54 @@ pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
 /// input that reaches this depth is a single flat expression, which has no
 /// intermediate `catch` points, so the throw fully unwinds every `eval_expr`
 /// frame before any handler runs. Expression nesting reachable *through* JS
-/// calls is bounded first by the `CALL_DEPTH_*` guards (hard 5000 × a few eval
-/// frames per level ≈ well under 20k), so this limit never interferes with
-/// normal recursion. It sits far above that (50k) yet at roughly a third of the
-/// measured native overflow point on the 128 MiB execution stack (a flat
-/// expression SIGABRTs between 140k and 150k operands with the guard removed),
-/// leaving ample headroom for the error object's own construction.
-pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
+/// calls is bounded first by the `CALL_DEPTH_*` guards (hard limit × a few
+/// eval frames per level), so this limit never interferes with normal
+/// recursion — see the compile-time assertion below for the exact coupling.
+///
+/// Profile-aware for the same reason as `CALL_DEPTH_HARD_LIMIT` above: debug
+/// frames are several times larger than release's, so a single
+/// release-sized limit sat above debug's native capacity — jsse#607.
+/// Measured by disabling the guard and binary-searching the abort point over
+/// the stack-hungriest expression shapes (a flat `1+1+1+…` chain, a
+/// self-referential member chain `a.b.b.b…`): debug's native capacity is
+/// ~6,990 for the member-chain shape (the hungriest measured) vs. release's
+/// own ~190,600 for the flat additive chain.
+const EVAL_DEPTH_LIMIT_DEBUG: usize = 2_000;
+const EVAL_DEPTH_LIMIT_RELEASE: usize = 50_000;
+pub(crate) const EVAL_DEPTH_LIMIT: usize = if cfg!(debug_assertions) {
+    EVAL_DEPTH_LIMIT_DEBUG
+} else {
+    EVAL_DEPTH_LIMIT_RELEASE
+};
+
+// A single `if cfg!(debug_assertions)` expression only ever const-evaluates
+// the arm that gets compiled, so an assertion written against the four
+// public names above would silently check one profile's numbers only — and
+// since every CI job builds `--release` (see CLAUDE.md), the debug arm's
+// coupling would never be compile-checked anywhere. Asserting over the named
+// `_DEBUG`/`_RELEASE` pairs instead checks both arms on every build,
+// regardless of which one is actually compiled in.
+const _: () = assert!(
+    CALL_DEPTH_REARM_LIMIT_DEBUG < CALL_DEPTH_SOFT_LIMIT_DEBUG
+        && CALL_DEPTH_SOFT_LIMIT_DEBUG < CALL_DEPTH_HARD_LIMIT_DEBUG
+        && EVAL_DEPTH_LIMIT_DEBUG > CALL_DEPTH_HARD_LIMIT_DEBUG * 5
+        && CALL_DEPTH_REARM_LIMIT_RELEASE < CALL_DEPTH_SOFT_LIMIT_RELEASE
+        && CALL_DEPTH_SOFT_LIMIT_RELEASE < CALL_DEPTH_HARD_LIMIT_RELEASE
+        && EVAL_DEPTH_LIMIT_RELEASE > CALL_DEPTH_HARD_LIMIT_RELEASE * 5,
+    "CALL_DEPTH_*/EVAL_DEPTH_LIMIT coupling broken in one profile: REARM < SOFT < HARD and \
+     EVAL_DEPTH_LIMIT > HARD * 5 must hold in both debug and release"
+);
 
 /// Maximum number of Proxy forwarding seams one prototype-chain operation may
 /// cross before reporting stack exhaustion. Ordinary-only chains are not
 /// counted: `OrdinarySetPrototypeOf` prevents them from cycling, and their hot
 /// iterative/tail-recursive paths already handle very deep acyclic chains.
 ///
-/// A Proxy can legally hide a cycle from `OrdinarySetPrototypeOf`. Keeping this
-/// below the JS call-depth ceiling leaves enough native stack to construct and
-/// throw a catchable `RangeError` instead of reaching SIGABRT first.
+/// A Proxy can legally hide a cycle from `OrdinarySetPrototypeOf`. Not
+/// profile-aware, unlike the guards above: its own measured native capacity
+/// (~54,000 in debug, the tighter of the two profiles) already sits a
+/// comfortable ~13.5x above this limit, so it fires safely in both profiles
+/// without needing a `cfg!(debug_assertions)` split — jsse#607.
 pub(crate) const PROXY_CHAIN_DEPTH_LIMIT: usize = 4_000;
 
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
@@ -605,12 +694,15 @@ impl Interpreter {
             gc_marks: Vec::new(),
             generator_context: None,
             destructuring_yield: false,
+            in_async_generator_body: false,
+            inline_yield_delegates: false,
             pending_iter_close: Vec::new(),
             iter_close_base: 0,
             active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
             generator_for_of_stacks: FxHashMap::default(),
             generator_scope_stacks: FxHashMap::default(),
+            generator_pending_dispose: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
@@ -624,8 +716,8 @@ impl Interpreter {
             function_env_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
-            gc_temp_roots: Vec::new(),
-            gc_bytecode_roots: Vec::new(),
+            gc_temp_roots: root_stack::RootStack::default(),
+            gc_bytecode_roots: root_stack::RootStack::default(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
             next_auto_accessor_id: 0,
@@ -1339,10 +1431,19 @@ impl Interpreter {
         }
     }
 
+    /// Sole production push into `gc_temp_roots`; pair with `gc_unroot_id`.
+    pub(crate) fn gc_root_id(&mut self, id: u64) {
+        self.gc_temp_roots.push(id);
+    }
+
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
-        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
-            self.gc_temp_roots.push(o.id);
+        if let Some(id) = val.as_object_id() {
+            self.gc_root_id(id);
         }
+    }
+
+    pub(crate) fn gc_unroot_id(&mut self, id: u64) {
+        self.gc_temp_roots.pop_expected(id);
     }
 
     /// Save the current GC temp-root stack depth. Call gc_unroot_frame()
@@ -1356,6 +1457,15 @@ impl Interpreter {
     #[inline(always)]
     pub(crate) fn gc_unroot_frame(&mut self, frame: usize) {
         self.gc_temp_roots.truncate(frame);
+    }
+
+    /// Debug-assert that the temp-root stack is exactly `depth` deep. Placed at
+    /// boundaries where every root pushed by the code in between must already
+    /// have been released: after a native call's operands are popped, after a
+    /// microtask or timer job, and after a nested run.
+    #[inline(always)]
+    pub(crate) fn gc_assert_root_depth(&self, depth: usize, boundary: &str) {
+        self.gc_temp_roots.assert_depth(depth, boundary);
     }
 
     /// Run `body` inside a fresh GC temp-root scope: capture the current
@@ -1419,17 +1529,8 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
-        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
-            && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)
-        {
-            self.gc_temp_roots.remove(pos);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn gc_unroot_args(&mut self, args: &[JsValue]) {
-        for v in args {
-            self.gc_unroot_value(v);
+        if let Some(id) = val.as_object_id() {
+            self.gc_unroot_id(id);
         }
     }
 
@@ -2341,6 +2442,13 @@ impl Interpreter {
     }
 
     pub(crate) fn run(&mut self, program: &Program) -> Completion {
+        let depth = self.gc_root_frame();
+        let result = self.run_program(program);
+        self.gc_assert_root_depth(depth, "a program run");
+        result
+    }
+
+    fn run_program(&mut self, program: &Program) -> Completion {
         self.gc_safepoint();
         let result = match program.source_type {
             SourceType::Script => {
@@ -2363,6 +2471,13 @@ impl Interpreter {
     }
 
     pub(crate) fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
+        let depth = self.gc_root_frame();
+        let result = self.run_program_with_path(program, path);
+        self.gc_assert_root_depth(depth, "a program run");
+        result
+    }
+
+    fn run_program_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
@@ -3706,85 +3821,86 @@ impl Interpreter {
         self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
 
-        let prev_ic_handle = self.enter_ic_body(&program.body);
-
-        // Module items reach `exec_statement` without passing through
-        // `dispatch_body`, so without a frame their work lands in
-        // `ast_work_units` but in no BODY row — module-heavy runs could not
-        // localize their tree-walker work at all (#537 review, third pass).
-        #[cfg(feature = "perf-counters")]
-        {
-            self.perf.body_non_function += 1;
-            let name = self.perf.name_module_body.clone();
-            self.perf
-                .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
-        }
-        let mut err = None;
-        // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
-        // structurally from `exec_statement`/`exec_export_declaration`, the
-        // same way `Throw` does — it must stop this loop immediately (a
-        // later module item must not run) and must reach `dispose_resources`
-        // below as `Exit`, not be discarded and reconstructed as `Normal`,
-        // so the disposer short-circuit there actually fires (#554 review).
-        let mut exit_code: Option<i32> = None;
-        for item in &program.module_items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    let result = self.exec_statement(stmt, &module_env);
-                    match result {
-                        Completion::Throw(e) => {
-                            module.borrow_mut().error = Some(e.clone());
-                            err = Some(e);
-                            break;
+        let err = self.with_ic_body(&program.body, |interp| {
+            // Module items reach `exec_statement` without passing through
+            // `dispatch_body`, so without a frame their work lands in
+            // `ast_work_units` but in no BODY row — module-heavy runs could not
+            // localize their tree-walker work at all (#537 review, third pass).
+            #[cfg(feature = "perf-counters")]
+            {
+                interp.perf.body_non_function += 1;
+                let name = interp.perf.name_module_body.clone();
+                interp
+                    .perf
+                    .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
+            }
+            let mut err = None;
+            // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
+            // structurally from `exec_statement`/`exec_export_declaration`, the
+            // same way `Throw` does — it must stop this loop immediately (a
+            // later module item must not run) and must reach `dispose_resources`
+            // below as `Exit`, not be discarded and reconstructed as `Normal`,
+            // so the disposer short-circuit there actually fires (#554 review).
+            let mut exit_code: Option<i32> = None;
+            for item in &program.module_items {
+                match item {
+                    ModuleItem::Statement(stmt) => {
+                        let result = interp.exec_statement(stmt, &module_env);
+                        match result {
+                            Completion::Throw(e) => {
+                                module.borrow_mut().error = Some(e.clone());
+                                err = Some(e);
+                                break;
+                            }
+                            Completion::Exit(code) => {
+                                exit_code = Some(code);
+                                break;
+                            }
+                            _ => {}
                         }
-                        Completion::Exit(code) => {
-                            exit_code = Some(code);
-                            break;
+                    }
+                    ModuleItem::ImportDeclaration(_) => {}
+                    ModuleItem::ExportDeclaration(export) => {
+                        let result = interp.exec_export_declaration(export, &module_env);
+                        match result {
+                            Completion::Throw(e) => {
+                                module.borrow_mut().error = Some(e.clone());
+                                err = Some(e);
+                                break;
+                            }
+                            Completion::Exit(code) => {
+                                exit_code = Some(code);
+                                break;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        interp.collect_exports(export, &module_env, &module);
                     }
                 }
-                ModuleItem::ImportDeclaration(_) => {}
-                ModuleItem::ExportDeclaration(export) => {
-                    let result = self.exec_export_declaration(export, &module_env);
-                    match result {
-                        Completion::Throw(e) => {
-                            module.borrow_mut().error = Some(e.clone());
-                            err = Some(e);
-                            break;
-                        }
-                        Completion::Exit(code) => {
-                            exit_code = Some(code);
-                            break;
-                        }
-                        _ => {}
-                    }
-                    self.collect_exports(export, &module_env, &module);
+            }
+            let completion = match exit_code {
+                Some(code) => Completion::Exit(code),
+                None => match &err {
+                    Some(e) => Completion::Throw(e.clone()),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                },
+            };
+            match interp.dispose_resources(&module_env, completion) {
+                Completion::Throw(e) => {
+                    module.borrow_mut().error = Some(e.clone());
+                    err = Some(e);
                 }
+                Completion::Exit(code) => {
+                    interp.pending_exit = Some(code);
+                    err = None;
+                }
+                _ => {}
             }
-        }
-        let completion = match exit_code {
-            Some(code) => Completion::Exit(code),
-            None => match &err {
-                Some(e) => Completion::Throw(e.clone()),
-                None => Completion::Normal(JsValue::UNDEFINED),
-            },
-        };
-        match self.dispose_resources(&module_env, completion) {
-            Completion::Throw(e) => {
-                module.borrow_mut().error = Some(e.clone());
-                err = Some(e);
-            }
-            Completion::Exit(code) => {
-                self.pending_exit = Some(code);
-                err = None;
-            }
-            _ => {}
-        }
-        module.borrow_mut().program_ast = None;
-        #[cfg(feature = "perf-counters")]
-        self.perf.leave_ast_body();
-        self.leave_ic_body(prev_ic_handle);
+            module.borrow_mut().program_ast = None;
+            #[cfg(feature = "perf-counters")]
+            interp.perf.leave_ast_body();
+            err
+        });
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
         match err {
@@ -3910,9 +4026,6 @@ impl Interpreter {
                 current_state: 0,
                 try_stack: vec![],
                 pending_binding: None,
-                pending_return: None,
-                pending_loop_control: None,
-                saved_finally_exception: None,
                 pending_for_of_unwind: None,
                 resolve_fn,
                 reject_fn,
@@ -5558,7 +5671,9 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
+                let rooted_depth = self.gc_root_frame();
                 let job_result = job(self);
+                self.gc_assert_root_depth(rooted_depth, "a microtask job");
                 self.gc_unroot_frame(mt_frame);
                 // A `__host_exit` inside the job (issue #242) surfaces as
                 // `Completion::Exit`; the drain loop is a `()`-returning
@@ -5681,7 +5796,9 @@ impl Interpreter {
             for arg in &args {
                 self.gc_root_value(arg);
             }
+            let rooted_depth = self.gc_root_frame();
             let result = self.call_function(&callback, &JsValue::UNDEFINED, &args);
+            self.gc_assert_root_depth(rooted_depth, "a timer callback");
             self.gc_unroot_frame(frame);
             if let Completion::Exit(code) = result {
                 self.pending_exit = Some(code);
@@ -5802,7 +5919,9 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
+                let rooted_depth = self.gc_root_frame();
                 let job_result = job(self);
+                self.gc_assert_root_depth(rooted_depth, "a microtask job");
                 self.gc_unroot_frame(mt_frame);
                 // A `__host_exit` inside the job (issue #242) latches the
                 // terminal sink and stops draining.

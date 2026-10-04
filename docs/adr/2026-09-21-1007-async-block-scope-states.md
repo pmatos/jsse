@@ -71,6 +71,9 @@ iteration environments.
 
 ## Scoped to plain async functions
 
+> Superseded in part by ADR-2026-09-21-2015: async generators no longer keep the
+> intact-block path described below.
+
 `StateTerminator` is shared by the one lowering pass across sync generators,
 async generators, and async functions (`transform_async_function` rewrites
 `await`→`yield` before the pass and `Yield`→`Await` after). `EnterScope`/
@@ -85,17 +88,12 @@ detect_for_await: false`). The two generator drivers
 the two new variants, exactly the shape already used for `StateTerminator::
 Yield` in the async-function driver (a variant only the other side emits).
 
-An async generator containing the same block shape (`{ await using a; ... }`)
-keeps taking the pre-existing intact-block path unchanged: the
-`suspendable_dispose_block`/`parked_block_dispose` single-slot mechanism and
-the `block_exits`/`BlockExits` table this ADR's design replaces *for plain
-async functions* remain live code, not dead code to delete, because async
-generators still depend on them. Porting `scope_stack` to the two generator
-drivers (or designing something native to their different per-terminator
-idiom — they route abrupt completions via `route_generator_exception` and
-friends, not `route_return!`/`route_loop_control!`/`unwind_for_of!`) is
-follow-up work, tracked generally by #665's "blocking driver instead of
-suspend" class of bugs for loop/switch heads in those drivers.
+Async generators take a different route (ADR-2026-09-21-2015): they lower these
+blocks through the ordinary `OpenBlock` scope depth and dispose the frames a
+state transition leaves, so they no longer keep an intact-block path. The
+`block_exits`/`BlockExits` table, which no lowering ever populated, is gone;
+the `suspendable_dispose_block`/`parked_block_dispose` slot is now consulted
+only by the async-function driver.
 
 ## Known boundary: deep scope/for-of alternation
 

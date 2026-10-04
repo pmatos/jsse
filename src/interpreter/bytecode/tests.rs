@@ -2188,3 +2188,245 @@ fn strict_tail_calls_are_counted_as_vm_issued_calls() {
         interp.perf.calls_from_vm
     );
 }
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "released out of LIFO order")]
+fn unrooting_a_non_top_bytecode_root_asserts() {
+    let mut interp = Interpreter::new();
+    let (first, second) = (interp.create_object_id(), interp.create_object_id());
+    interp.gc_bytecode_roots.push(first);
+    interp.gc_bytecode_roots.push(second);
+    interp.gc_bytecode_roots.pop_expected(first);
+}
+
+fn run_bytecode_script(source: &str) -> (Completion, Interpreter) {
+    use crate::parser::Parser;
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let completion = interp.run(&program);
+    (completion, interp)
+}
+
+#[test]
+fn multi_statement_script_completion_stays_balanced_under_bytecode() {
+    let source =
+        "Object(); if (true) { Object(); } for (var i = 0; i < 2; i++) { Object(); } Object();";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "this source must run through the bytecode VM for the test to be meaningful"
+    );
+    assert!(
+        matches!(completion, Completion::Normal(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "bytecode operand roots must be released at every statement boundary"
+    );
+}
+
+#[test]
+fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
+    // `compile_call` only accepts a bare `Identifier` callee, so an IIFE
+    // callee (a `Function` expression) bails the whole script out of the
+    // bytecode VM before this scenario can be exercised. `Object()` and
+    // `decodeURIComponent` are both called by plain identifier, so this
+    // compiles and runs on the VM: `Object()`'s result is left live on the
+    // operand stack while `decodeURIComponent('%')` throws, reproducing
+    // issue #331's "outer in-progress expression operand" case for real.
+    let source = "var __r = Object() + decodeURIComponent('%');";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "this source must run through the bytecode VM for the test to be meaningful"
+    );
+    assert!(
+        matches!(completion, Completion::Throw(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "the outer chunk's unconditional truncate must release the live \
+         `Object()` operand left on the stack by `decodeURIComponent`'s abrupt throw"
+    );
+}
+
+// --- Statement-boundary safepoints (issue #808) ---
+//
+// All of these assert *deltas* between two runs, not absolute counts:
+// `Interpreter::new()` plus the entry path used can itself cross a safepoint
+// before the chunk under test ever executes, so an absolute count is fragile
+// to unrelated call-path changes. A delta between "N statements" and "N+1
+// statements" (or "N iterations" and "N+1 iterations") isolates exactly the
+// thing being tested.
+
+fn literal_expr_stmt(n: f64) -> Statement {
+    Statement::Expression(Expression::Literal(Literal::Number(n)))
+}
+
+fn literal_return_stmt(n: f64) -> Statement {
+    Statement::Return(Some(Expression::Literal(Literal::Number(n))))
+}
+
+/// Compiles `body` as a function chunk and runs it on a fresh interpreter,
+/// returning how many safepoints fired. A fresh `Interpreter::new()` plus
+/// `run_chunk` (unlike `interp.run(&program)`) performs no declaration
+/// instantiation of its own, so this count is exactly the safepoints the
+/// chunk itself triggers.
+fn run_body_count_safepoints(body: &[Statement]) -> u64 {
+    let chunk = compile_body(body).expect("compile");
+    let mut interp = Interpreter::new();
+    let env = interp.realm().global_env.clone();
+    let _ = run_chunk(&mut interp, &chunk, &env, JsValue::UNDEFINED);
+    interp.gc.safepoint_calls()
+}
+
+/// Shared by the top-level and nested-block variants below: each wraps the
+/// same three-vs-four-statement bodies differently, but both must show that
+/// one extra statement adds exactly one safepoint.
+fn assert_one_statement_adds_one_safepoint(wrap: impl Fn(Vec<Statement>) -> Vec<Statement>) {
+    let three = wrap(vec![
+        literal_expr_stmt(1.0),
+        literal_expr_stmt(2.0),
+        literal_return_stmt(3.0),
+    ]);
+    let four = wrap(vec![
+        literal_expr_stmt(1.0),
+        literal_expr_stmt(2.0),
+        literal_expr_stmt(3.0),
+        literal_return_stmt(4.0),
+    ]);
+    let three_count = run_body_count_safepoints(&three);
+    let four_count = run_body_count_safepoints(&four);
+    assert_eq!(
+        four_count - three_count,
+        1,
+        "one extra statement must add exactly one safepoint \
+         (three={three_count}, four={four_count})"
+    );
+}
+
+#[test]
+fn statement_list_safepoint_count_scales_with_statement_count() {
+    assert_one_statement_adds_one_safepoint(|body| body);
+}
+
+/// A statement that compiles to no bytecode (e.g. `;`) must not get its own
+/// safepoint either — nothing could have been allocated since the prior one,
+/// so emitting one would be a pure wasted VM dispatch.
+#[test]
+fn zero_byte_statement_adds_no_safepoint() {
+    let without_empty = vec![literal_return_stmt(1.0)];
+    let with_empty = vec![Statement::Empty, literal_return_stmt(1.0)];
+    let without_count = run_body_count_safepoints(&without_empty);
+    let with_count = run_body_count_safepoints(&with_empty);
+    assert_eq!(
+        with_count, without_count,
+        "an empty statement must not add a safepoint of its own \
+         (without={without_count}, with={with_count})"
+    );
+}
+
+#[test]
+fn nested_block_statement_list_safepoint_count_scales_with_statement_count() {
+    // Wrapping in a block (rather than leaving the statements at top level)
+    // proves Statement::Block has its own emission site in
+    // `compile_statement_list`, not just the function/script top level.
+    assert_one_statement_adds_one_safepoint(|body| vec![Statement::Block(body)]);
+}
+
+/// Runs `source` as a full script and returns its safepoint count, after
+/// asserting the script body took the bytecode path (not a silent
+/// tree-walker fallback, which would make the safepoint-count assertion
+/// pass vacuously). Unlike `run_body_count_safepoints`, this goes through
+/// the full `interp.run(&program)` pipeline.
+fn run_script_safepoints(source: &str) -> u64 {
+    let mut parser = crate::parser::Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let completion = interp.run(&program);
+    assert!(
+        matches!(completion, Completion::Normal(_) | Completion::Empty),
+        "{completion:?}"
+    );
+    assert_eq!(
+        interp.bytecode_chunks_executed, 1,
+        "script body must take the bytecode path"
+    );
+    interp.gc.safepoint_calls()
+}
+
+#[test]
+fn script_body_statement_list_safepoint_count_scales_with_statement_count() {
+    let three_count = run_script_safepoints("1; 2; 3;");
+    let four_count = run_script_safepoints("1; 2; 3; 4;");
+    assert_eq!(
+        four_count - three_count,
+        1,
+        "one extra top-level script statement must add exactly one safepoint \
+         (three={three_count}, four={four_count})"
+    );
+}
+
+/// Guards the `tests/gc_stress.rs` `--bytecode` straight-line scenario
+/// against silently falling back to the tree-walker: a top-level function
+/// *declaration* makes the whole script body bail (`compile_statement`'s
+/// catch-all), but the call sites and `make`'s own body are compiled and
+/// executed separately, so this must still take the bytecode path.
+#[test]
+fn loop_free_allocating_calls_take_bytecode_path() {
+    let source = "\
+        function make(n) { var o = new Object(); o.n = n; return o; } \
+        var results = []; \
+        results.push(make(1).n); \
+        results.push(make(2).n); \
+        results.push(make(3).n); \
+        results.push(make(4).n); \
+        var __r = results.join(',');";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "straight-line allocating calls should compile make()'s body to bytecode"
+    );
+    assert_eq!(
+        v.as_string().map(|s| s.to_string()).as_deref(),
+        Some("1,2,3,4")
+    );
+}
+
+/// A braced loop body is a `Statement::Block`, which gets its own
+/// statement-boundary safepoint on top of the loop's back-edge one — two
+/// safepoints per iteration, not one. Contrast with the unbraced body in
+/// `single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge` below.
+#[test]
+fn braced_single_statement_loop_body_adds_block_safepoint_per_iteration() {
+    let three_count =
+        run_script_safepoints("var sink = 0; for (var i = 0; i < 3; i++) { sink = i; }");
+    let four_count =
+        run_script_safepoints("var sink = 0; for (var i = 0; i < 4; i++) { sink = i; }");
+    assert_eq!(
+        four_count - three_count,
+        2,
+        "one extra iteration of a braced loop body must add two safepoints: \
+         the block's own statement-boundary one plus the back-edge one \
+         (three={three_count}, four={four_count})"
+    );
+}
+
+#[test]
+fn single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge() {
+    let three_count = run_script_safepoints("var sink = 0; for (var i = 0; i < 3; i++) sink = i;");
+    let four_count = run_script_safepoints("var sink = 0; for (var i = 0; i < 4; i++) sink = i;");
+    assert_eq!(
+        four_count - three_count,
+        1,
+        "one extra loop iteration must add exactly one back-edge safepoint, \
+         not an extra statement-boundary safepoint for the single-statement \
+         loop body (three={three_count}, four={four_count})"
+    );
+}

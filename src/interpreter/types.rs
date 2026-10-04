@@ -263,6 +263,27 @@ impl Completion {
             _ => default,
         }
     }
+    /// Every `JsValue` this completion carries as a payload, for GC-rooting
+    /// across a call (`finally`, `IteratorClose`'s `return()`) that can run
+    /// user code and trigger a collection while the completion is still a
+    /// bare Rust local. Mirrors `DisposeCursor::for_each_value`'s match.
+    pub(crate) fn root_payload(&self, mut f: impl FnMut(&JsValue)) {
+        match self {
+            Completion::Normal(v)
+            | Completion::Return(v)
+            | Completion::Throw(v)
+            | Completion::Yield(v) => f(v),
+            Completion::Break(_, Some(v)) | Completion::Continue(_, Some(v)) => f(v),
+            Completion::TailCall { func, this, args } => {
+                f(func);
+                f(this);
+                for a in args {
+                    f(a);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Convert a fallible or control-flow-carrying value into the interpreter's
@@ -331,7 +352,6 @@ pub(crate) struct GeneratorContext {
     pub(crate) current_yield: usize,
     /// Values sent to previous yields (index k = value passed to next() after yield k)
     pub(crate) prev_sent_values: Vec<JsValue>,
-    pub(crate) is_async: bool,
     pub(crate) resume_kind: GeneratorResumeKind,
 }
 
@@ -356,6 +376,18 @@ pub(crate) enum StateMachineExecutionState {
     Completed,
 }
 
+/// A Completion Record intercepted by a running `finally`, owned by the
+/// `TryContextInfo` whose finalizer is running it (issue #719). ECMAScript
+/// carries exactly one Completion Record at a time, so this is a tagged union
+/// rather than three independently optional fields: a context can be
+/// restoring a throw, a return, or a loop-control jump, never more than one.
+#[derive(Debug, Clone)]
+pub(crate) enum PendingCompletion {
+    Return(JsValue),
+    Throw(JsValue),
+    LoopControl(LoopControlTarget),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TryContextInfo {
     pub catch_state: Option<usize>,
@@ -363,6 +395,11 @@ pub(crate) struct TryContextInfo {
     pub _after_state: usize,
     pub entered_catch: bool,
     pub entered_finally: bool,
+    /// The completion this context's finalizer is running on behalf of.
+    /// Living on the context means a jump or throw that leaves the finalizer
+    /// discards it together with the context, and a nested finalizer cannot
+    /// overwrite it.
+    pub pending_completion: Option<PendingCompletion>,
 }
 
 #[derive(Debug, Clone)]
@@ -380,9 +417,6 @@ pub(crate) struct AsyncFunctionState {
     pub current_state: usize,
     pub try_stack: Vec<TryContextInfo>,
     pub pending_binding: Option<SentValueBinding>,
-    pub pending_return: Option<JsValue>,
-    pub pending_loop_control: Option<LoopControlTarget>,
-    pub saved_finally_exception: Option<JsValue>,
     pub pending_for_of_unwind: Option<PendingForOfUnwind>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
@@ -432,6 +466,12 @@ pub(crate) struct ForOfLoopState {
     pub(crate) outer_env: EnvRef,
     /// The current lexical head's per-iteration environment, when any.
     pub(crate) iteration_env: Option<EnvRef>,
+    /// `for await`: closing the iterator is AsyncIteratorClose, which Awaits
+    /// the result of `return()`.
+    pub(crate) is_await: bool,
+    /// AsyncIteratorClose already called `return()` and is parked at its
+    /// Await; re-entering the unwind must not call it again.
+    pub(crate) iterator_closed: bool,
 }
 
 impl ForOfLoopState {
@@ -1463,12 +1503,6 @@ pub(crate) enum IteratorState {
         pending_exception: Option<JsValue>,
         pending_return: Option<JsValue>,
     },
-    AsyncGenerator {
-        body: Body,
-        func_env: EnvRef,
-        is_strict: bool,
-        execution_state: GeneratorExecutionState,
-    },
     StateMachineAsyncGenerator {
         state_machine: Rc<GeneratorStateMachine>,
         func_env: EnvRef,
@@ -1488,6 +1522,7 @@ pub(crate) enum IteratorState {
         global: bool,
         last_index: usize,
         done: bool,
+        matcher_id: u64,
     },
     TypedArrayIterator {
         typed_array_id: u64,
@@ -2270,6 +2305,50 @@ impl JsObjectData {
         self.array_data_mut().map(|data| &mut data.elements)
     }
 
+    /// Create a default data property at the end of a dense Array without
+    /// storing the same index in the ordinary property map. Undefined values
+    /// need a descriptor there because the element vector uses undefined as
+    /// its hole marker.
+    pub(crate) fn try_append_dense_array_data_property(
+        &mut self,
+        key: &JsPropertyKey,
+        value: &JsValue,
+    ) -> bool {
+        if value.is_undefined()
+            || !self.extensible
+            || !is_array_index_property_key(key)
+            || self.properties.contains_key(key)
+        {
+            return false;
+        }
+        let index = parse_array_index(key).unwrap() as usize;
+        if self
+            .array_elements()
+            .is_none_or(|elements| elements.len() != index)
+        {
+            return false;
+        }
+        let Some(length_desc) = self.properties.get("length") else {
+            return false;
+        };
+        let length = length_desc
+            .value
+            .as_ref()
+            .and_then(JsValue::as_number)
+            .unwrap_or(0.0);
+        if index as f64 >= length && length_desc.writable == Some(false) {
+            return false;
+        }
+
+        self.array_elements_mut().unwrap().push(value.clone());
+        if index as f64 >= length {
+            self.properties.get_mut("length").unwrap().value =
+                Some(JsValue::number((index + 1) as f64));
+        }
+        self.shape_id = fresh_shape_id();
+        true
+    }
+
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
         self.array_data()
             .map(|data| data.extra_string_property_order.as_slice())
@@ -2936,10 +3015,12 @@ impl JsObjectData {
 
             // Intern once; the same backing bytes are shared between property_order and
             // the property map so the two stored copies share one allocation.
-            // Compare by value (not pointer): integer-index keys are not interned
-            // and get fresh storage each time, so pointer equality would miss existing entries.
+            // The map and property_order are kept in sync. An Array element can
+            // be current without a map entry, in which case this descriptor
+            // needs a new order entry; a map lookup avoids scanning the order
+            // list for every element created by Array builtins.
             let ikey = key.clone();
-            if !self.property_order.iter().any(|k| k == &ikey) {
+            if !self.properties.contains_key(&ikey) {
                 self.record_property_creation(&ikey);
             }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are

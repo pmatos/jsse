@@ -9,6 +9,7 @@ mod literals;
 mod modules;
 mod operand;
 
+use generator_runtime::ForOfUnwindOutcome;
 pub(crate) use operand::Operand;
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth
@@ -901,6 +902,9 @@ impl Interpreter {
             Expression::Spread(_) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
             Expression::Yield(expr, delegate) => {
                 if *delegate {
+                    if self.in_async_generator_body {
+                        return self.eval_inline_async_yield_star(expr.as_deref(), env);
+                    }
                     let iterable = if let Some(e) = expr {
                         match self.eval_expr(e, env) {
                             Completion::Normal(v) => v,
@@ -909,21 +913,9 @@ impl Interpreter {
                     } else {
                         JsValue::UNDEFINED
                     };
-                    let is_async_gen = self
-                        .generator_context
-                        .as_ref()
-                        .map(|c| c.is_async)
-                        .unwrap_or(false);
-                    let iterator = if is_async_gen {
-                        match self.get_async_iterator(&iterable) {
-                            Ok(it) => it,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        match self.get_iterator(&iterable) {
-                            Ok(it) => it,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    let iterator = match self.get_iterator(&iterable) {
+                        Ok(it) => it,
+                        Err(e) => return Completion::Throw(e),
                     };
                     self.with_gc_root_scope(|this| {
                         this.gc_root_value(&iterator);
@@ -931,15 +923,6 @@ impl Interpreter {
                             let next_result = match this.iterator_next(&iterator) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
-                            };
-                            let next_result = if is_async_gen {
-                                match this.await_value(&next_result) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                }
-                            } else {
-                                next_result
                             };
                             let done = match this.iterator_complete(&next_result) {
                                 Ok(d) => d,
@@ -1865,10 +1848,9 @@ impl Interpreter {
                 {
                     self.perf.body_compiled += 1;
                 }
-                let prev = self.enter_ic_body(body);
-                let result = vm::run_chunk(self, &chunk, exec_env, this_val.clone());
-                self.leave_ic_body(prev);
-                return result;
+                return self.with_ic_body(body, |interp| {
+                    vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
+                });
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -1880,9 +1862,9 @@ impl Interpreter {
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
         let analysis = self.hoist_cache.analysis_for(body);
-        let prev = self.enter_ic_body(body);
-        let result = self.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis));
-        self.leave_ic_body(prev);
+        let result = self.with_ic_body(body, |interp| {
+            interp.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis))
+        });
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
         result
@@ -2873,9 +2855,8 @@ impl Interpreter {
                 // and PutValue. Those operations can hit GC safepoints while
                 // `obj_val` otherwise exists only as a Rust local, invisible to
                 // the tracing collector.
-                let gc_frame = self.gc_root_frame();
-                self.gc_root_value(&obj_val);
-                let result = (|| {
+                self.with_gc_root_scope(|interp| {
+                    interp.gc_root_value(&obj_val);
                     if let MemberProperty::Private(name) = prop {
                         // The RHS is evaluated first (preserving jsse's existing
                         // evaluation order). A plain `= ` performs PrivateSet with
@@ -2883,28 +2864,28 @@ impl Interpreter {
                         // to PrivateGet -> op -> PrivateSet, so accessor-backed
                         // privates read through the getter and write through the
                         // setter exactly as a data field does.
-                        let rval = match self.eval_expr(right, env) {
+                        let rval = match interp.eval_expr(right, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         if op == AssignOp::Assign {
                             if let Err(e) =
-                                self.set_private_field(&obj_val, name, rval.clone(), env)
+                                interp.set_private_field(&obj_val, name, rval.clone(), env)
                             {
                                 return Completion::Throw(e);
                             }
                             return Completion::Normal(rval);
                         }
-                        let lval = match self.private_get(&obj_val, name, env) {
+                        let lval = match interp.private_get(&obj_val, name, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let final_val = match self.apply_compound_assign(op, lval, rval) {
+                        let final_val = match interp.apply_compound_assign(op, lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         if let Err(e) =
-                            self.set_private_field(&obj_val, name, final_val.clone(), env)
+                            interp.set_private_field(&obj_val, name, final_val.clone(), env)
                         {
                             return Completion::Throw(e);
                         }
@@ -2913,7 +2894,7 @@ impl Interpreter {
                     // Evaluate computed key expression before RHS
                     let key_val = match prop {
                         MemberProperty::Computed(expr) => {
-                            let v = match self.eval_expr(expr, env) {
+                            let v = match interp.eval_expr(expr, env) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -2932,14 +2913,14 @@ impl Interpreter {
                             } else {
                                 "undefined"
                             };
-                            return Completion::Throw(self.create_type_error(&format!(
+                            return Completion::Throw(interp.create_type_error(&format!(
                                 "Cannot read properties of {base_str}"
                             )));
                         }
                         let key = match prop {
                             MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
-                                match self.to_property_key(key_val.as_ref().unwrap()) {
+                                match interp.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
                                     Err(e) => return Completion::Throw(e),
                                 }
@@ -2950,18 +2931,18 @@ impl Interpreter {
                             .as_object_id()
                             .map(|id| crate::types::JsObject { id })
                         {
-                            match self.get_object_property(o.id, &key, &obj_val) {
+                            match interp.get_object_property(o.id, &key, &obj_val) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             }
                         } else {
-                            match self.to_object(&obj_val) {
+                            match interp.to_object(&obj_val) {
                                 Completion::Normal(wrapped) => {
                                     if let Some(o) = (wrapped)
                                         .as_object_id()
                                         .map(|id| crate::types::JsObject { id })
                                     {
-                                        match self.get_object_property(o.id, &key, &obj_val) {
+                                        match interp.get_object_property(o.id, &key, &obj_val) {
                                             Completion::Normal(v) => v,
                                             other => return other,
                                         }
@@ -2978,7 +2959,7 @@ impl Interpreter {
                         (JsPropertyKey::from_str(""), None) // key computed after RHS for simple assign
                     };
                     // Now evaluate RHS
-                    let rval = match self.eval_expr(right, env) {
+                    let rval = match interp.eval_expr(right, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
@@ -2987,7 +2968,7 @@ impl Interpreter {
                         match prop {
                             MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
-                                match self.to_property_key(key_val.as_ref().unwrap()) {
+                                match interp.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
                                     Err(e) => return Completion::Throw(e),
                                 }
@@ -3000,7 +2981,7 @@ impl Interpreter {
                     // Note: super[key] = val is handled by the early return above
                     // Throw for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
-                        return Completion::Throw(self.create_type_error(&format!(
+                        return Completion::Throw(interp.create_type_error(&format!(
                             "Cannot set properties of {} (setting '{}')",
                             if obj_val.is_null() {
                                 "null"
@@ -3013,7 +2994,7 @@ impl Interpreter {
                     let final_val = if op == AssignOp::Assign {
                         rval
                     } else {
-                        match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
+                        match interp.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
@@ -3040,7 +3021,7 @@ impl Interpreter {
                     if !(final_val).is_undefined()
                         && let Some(idx_u32) = parse_array_index(&key)
                         && let Some(obj_id) = obj_val.as_object_id()
-                        && let Some(obj) = self.get_object(obj_id)
+                        && let Some(obj) = interp.get_object(obj_id)
                     {
                         let fast = {
                             let b = obj.borrow();
@@ -3104,8 +3085,8 @@ impl Interpreter {
                             // OrdinarySet/proxy_set — a bare Proxy exposes no
                             // own descriptor here, so check it explicitly.
                             && !proto_id.is_some_and(|pid| {
-                                self.has_proxy_in_prototype_chain(pid)
-                                    || self.get_property_descriptor_on_id(pid, &key).is_some()
+                                interp.has_proxy_in_prototype_chain(pid)
+                                    || interp.get_property_descriptor_on_id(pid, &key).is_some()
                             }) {
                                 // Append at end: push and bump length + shape.
                                 let mut b = obj.borrow_mut();
@@ -3122,7 +3103,7 @@ impl Interpreter {
                         }
                     }
                     let strict = env.borrow().strict;
-                    let set_outcome = match self.set_object_with_key_result(
+                    let set_outcome = match interp.set_object_with_key_result(
                         obj_val.clone(),
                         &key,
                         final_val.clone(),
@@ -3132,22 +3113,20 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if !set_outcome.succeeded() && strict {
-                        return Completion::Throw(self.member_assignment_error(&obj_val, &key));
+                        return Completion::Throw(interp.member_assignment_error(&obj_val, &key));
                     }
                     // The realm test comes before `as_str`, which validates the
                     // whole key as UTF-8: it is both cheaper and false for
                     // essentially every write in a real program.
                     if let Some(obj_id) = obj_val.as_object_id()
                         && set_outcome.wrote_own_data_property_on(obj_id)
-                        && self.is_realm_global_object(obj_id)
+                        && interp.is_realm_global_object(obj_id)
                         && let Some(key_str) = key.as_str()
                     {
-                        self.sync_global_object_binding(obj_id, key_str, &final_val);
+                        interp.sync_global_object_binding(obj_id, key_str, &final_val);
                     }
                     Completion::Normal(final_val)
-                })();
-                self.gc_unroot_frame(gc_frame);
-                result
+                })
             }
             Expression::Array(elements, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
@@ -4060,6 +4039,58 @@ impl Interpreter {
         }
     }
 
+    /// Keep a captured destructuring Reference alive while `body` computes its
+    /// value, then perform the matching PutValue operation.
+    fn with_destruct_lref(
+        &mut self,
+        lref: Option<DestructLRef>,
+        fallback_target: &Expression,
+        env: &EnvRef,
+        body: impl FnOnce(&mut Self) -> Completion,
+    ) -> Completion {
+        self.with_gc_root_scope(|interp| {
+            if let Some(lref) = &lref {
+                interp.gc_root_destruct_lref(lref);
+            }
+
+            let value = match body(interp) {
+                Completion::Normal(value) => value,
+                other => return other,
+            };
+            interp.gc_root_value(&value);
+
+            match lref {
+                Some(DestructLRef::Member(base, raw_key)) => {
+                    let key = match interp.to_property_key(&raw_key) {
+                        Ok(key) => key,
+                        Err(error) => return Completion::Throw(error),
+                    };
+                    let strict = env.borrow().strict;
+                    match interp.set_object_with_key(base, &key, value, strict) {
+                        Ok(()) => Completion::Empty,
+                        Err(error) => Completion::Throw(error),
+                    }
+                }
+                Some(DestructLRef::Private(base, name)) => {
+                    match interp.set_private_field(&base, &name, value, env) {
+                        Ok(()) => Completion::Empty,
+                        Err(error) => Completion::Throw(error),
+                    }
+                }
+                Some(DestructLRef::Super(base_id, key, this_val, strict)) => {
+                    match interp.super_set_property(base_id, &key, value, &this_val, strict) {
+                        Completion::Normal(_) | Completion::Empty => Completion::Empty,
+                        other => other,
+                    }
+                }
+                None => match interp.put_value_to_target(fallback_target, value, env) {
+                    Completion::Normal(_) | Completion::Empty => Completion::Empty,
+                    other => other,
+                },
+            }
+        })
+    }
+
     /// Evaluate a member expression as an lref (Reference) for destructuring.
     /// Returns base + key info or suspension explicitly; ToPropertyKey is
     /// deferred to PutValue time per spec.
@@ -4149,12 +4180,7 @@ impl Interpreter {
             Ok(v) => v,
             Err(e) => return Completion::Throw(e),
         };
-        if let Some(o) = iterator
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            self.gc_temp_roots.push(o.id);
-        }
+        self.gc_root_value(&iterator);
         let mut done = false;
         let mut error: Option<JsValue> = None;
         let mut yield_val: Option<JsValue> = None;
@@ -4189,24 +4215,17 @@ impl Interpreter {
                         }
                     };
 
-                    // Keep the lRef's base, pending key, and receiver alive
-                    // through iterator collection and the eventual PutValue.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &precomp {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
+                    let result = self.with_destruct_lref(precomp, inner, env, |interp| {
                         // Collect remaining iterator values into rest array
                         let mut rest = Vec::new();
                         if !done {
                             loop {
-                                match self.iterator_step(&iterator) {
-                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                match interp.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match interp.iterator_value(&result) {
                                         Ok(v) => {
                                             // Later steps run user code; the
                                             // Vec is invisible to the GC.
-                                            self.gc_root_value(&v);
+                                            interp.gc_root_value(&v);
                                             rest.push(v);
                                         }
                                         Err(e) => {
@@ -4226,51 +4245,8 @@ impl Interpreter {
                             }
                         }
 
-                        let arr = self.create_array(rest);
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&arr);
-                        match precomp {
-                            Some(DestructLRef::Member(base, raw_key)) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base, &key, arr, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                            Some(DestructLRef::Private(base, ref name)) => {
-                                if let Err(e) = self.set_private_field(&base, name, arr, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, arr, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            None => match self.put_value_to_target(inner, arr, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                Completion::Throw(e) => {
-                                    return Completion::Throw(e);
-                                }
-                                Completion::Yield(v) => {
-                                    return Completion::Yield(v);
-                                }
-                                _ => {}
-                            },
-                        }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
+                        Completion::Normal(interp.create_array(rest))
+                    });
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4302,19 +4278,12 @@ impl Interpreter {
                         }
                     };
 
-                    // The target was evaluated before iterator/default user
-                    // code; its lRef must survive until PutValue.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &precomp {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
+                    let result = self.with_destruct_lref(precomp, target, env, |interp| {
                         let item = if done {
                             JsValue::UNDEFINED
                         } else {
-                            match self.iterator_step(&iterator) {
-                                Ok(Some(result)) => match self.iterator_value(&result) {
+                            match interp.iterator_step(&iterator) {
+                                Ok(Some(result)) => match interp.iterator_value(&result) {
                                     Ok(v) => v,
                                     Err(e) => {
                                         done = true;
@@ -4334,12 +4303,12 @@ impl Interpreter {
 
                         let val = if item.is_undefined() {
                             if let Some(default) = default_expr {
-                                match self.eval_expr(default, env) {
+                                match interp.eval_expr(default, env) {
                                     Completion::Normal(v) => {
                                         if let Expression::Identifier(name) = target
                                             && default.is_anonymous_function_definition()
                                         {
-                                            self.set_function_name(&v, name);
+                                            interp.set_function_name(&v, name);
                                         }
                                         v
                                     }
@@ -4354,46 +4323,8 @@ impl Interpreter {
                             item
                         };
 
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&val);
-                        match precomp {
-                            Some(DestructLRef::Member(base, raw_key)) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base, &key, val, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                            Some(DestructLRef::Private(base, ref name)) => {
-                                if let Err(e) = self.set_private_field(&base, name, val, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, val, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            None => match self.put_value_to_target(target, val, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                Completion::Yield(v) => return Completion::Yield(v),
-                                _ => {}
-                            },
-                        }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
+                        Completion::Normal(val)
+                    });
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4411,41 +4342,34 @@ impl Interpreter {
             }
         }
 
-        let unroot = |s: &mut Self| {
-            if let Some(o) = iterator
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
-            {
-                s.gc_temp_roots.remove(pos);
-            }
-        };
-
         if let Some(yv) = yield_val {
             // §13.15.5.2: if iterator not done, track it for IteratorClose when generator returns
             if !done {
                 self.pending_iter_close.push(iterator.clone());
             }
-            unroot(self);
+            self.gc_unroot_value(&iterator);
             return Completion::Yield(yv);
         }
 
         // §13.15.5.2: IteratorClose when done is false
         if !done {
             if let Some(err) = error {
-                let _ = self.iterator_close_result(&iterator);
-                unroot(self);
+                // `iterator_close` roots `err` across `return()`, which can
+                // run arbitrary user code (issue #794), and hands it back
+                // unchanged regardless of what `return()` does.
+                let err = self.iterator_close(&iterator, err);
+                self.gc_unroot_value(&iterator);
                 return Completion::Throw(err);
             }
             let r = self.iterator_close_result(&iterator);
-            unroot(self);
+            self.gc_unroot_value(&iterator);
             return match r {
                 Ok(()) => Completion::Normal(JsValue::UNDEFINED),
                 Err(e) => Completion::Throw(e),
             };
         }
 
-        unroot(self);
+        self.gc_unroot_value(&iterator);
         if let Some(err) = error {
             return Completion::Throw(err);
         }
@@ -4481,24 +4405,8 @@ impl Interpreter {
             for prop in props {
                 // Handle rest: {...rest} = obj
                 if let Expression::Spread(inner) = &prop.value {
-                    let rest_obj_id = self.create_object_id();
-                    if let Some(o) = obj_val
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys)
-                        {
-                            Ok(p) => p,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        for (k, v) in pairs {
-                            self.get_object_cell_expect(rest_obj_id)
-                                .borrow_mut()
-                                .insert_value(k, v);
-                        }
-                    }
-                    let rest_id = rest_obj_id;
-                    let rest_val = JsValue::object(rest_id);
+                    let rest_val =
+                        propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
                     match self.put_value_to_target(inner, rest_val, env) {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
@@ -4551,20 +4459,13 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
 
-                        // GetV and an initializer can run user code after the
-                        // target is evaluated, so retain the whole lRef.
-                        let gc_frame = self.gc_root_frame();
-                        if let Some(lref) = &pre_ref {
-                            self.gc_root_destruct_lref(lref);
-                        }
-
-                        let result = (|| {
+                        let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
                             // Get property via get_object_property (invokes getters/Proxy)
                             let val = if let Some(o) = obj_val
                                 .as_object_id()
                                 .map(|id| crate::types::JsObject { id })
                             {
-                                match self.get_object_property(o.id, &key, &obj_val) {
+                                match interp.get_object_property(o.id, &key, &obj_val) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     Completion::Yield(v) => return Completion::Yield(v),
@@ -4576,17 +4477,21 @@ impl Interpreter {
 
                             let val = if val.is_undefined() {
                                 if let Some(default) = default_expr {
-                                    match self.eval_expr(default, env) {
+                                    match interp.eval_expr(default, env) {
                                         Completion::Normal(v) => {
                                             if let Expression::Identifier(name) = target
                                                 && default.is_anonymous_function_definition()
                                             {
-                                                self.set_function_name(&v, name);
+                                                interp.set_function_name(&v, name);
                                             }
                                             v
                                         }
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        Completion::Yield(v) => return Completion::Yield(v),
+                                        Completion::Throw(e) => {
+                                            return Completion::Throw(e);
+                                        }
+                                        Completion::Yield(v) => {
+                                            return Completion::Yield(v);
+                                        }
                                         other => return other,
                                     }
                                 } else {
@@ -4596,47 +4501,8 @@ impl Interpreter {
                                 val
                             };
 
-                            // ToPropertyKey and the write itself can run user code.
-                            self.gc_root_value(&val);
-                            if let Some(lref) = pre_ref {
-                                match lref {
-                                    DestructLRef::Member(base_val, raw_key) => {
-                                        match self.to_property_key(&raw_key) {
-                                            Ok(key) => {
-                                                let strict = env.borrow().strict;
-                                                if let Err(e) = self.set_object_with_key(
-                                                    base_val, &key, val, strict,
-                                                ) {
-                                                    return Completion::Throw(e);
-                                                }
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    DestructLRef::Private(base_val, ref name) => {
-                                        if let Err(e) =
-                                            self.set_private_field(&base_val, name, val, env)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                        if let Completion::Throw(e) = self
-                                            .super_set_property(base_id, key, val, this_val, strict)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                }
-                            } else {
-                                match self.put_value_to_target(target, val, env) {
-                                    Completion::Normal(_) | Completion::Empty => {}
-                                    other => return other,
-                                }
-                            }
-                            Completion::Empty
-                        })();
-                        self.gc_unroot_frame(gc_frame);
+                            Completion::Normal(val)
+                        });
 
                         match result {
                             Completion::Normal(_) | Completion::Empty => {}
@@ -4690,43 +4556,47 @@ impl Interpreter {
             } else {
                 env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED)
             };
-            let gc_frame = self.gc_root_frame();
-            let arg_vals = match self.eval_spread_args(args, env) {
-                Ok(v) => v,
-                Err(e) => {
-                    self.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(e);
-                }
-            };
-            let this_in_tdz = Self::this_is_in_tdz(env);
-            if this_in_tdz {
-                let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
-                let saved_new_target = self.new_target.clone();
-                let result =
-                    self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
-                self.new_target = saved_new_target;
-                self.gc_unroot_frame(gc_frame);
-                if let Completion::Normal(ref v) = result {
-                    Self::initialize_this_binding(env, v.clone());
-                    if let Err(e) = self.initialize_instance_elements(v.clone(), env) {
-                        return Completion::Throw(e);
+            return self.with_gc_root_scope(|interp| {
+                let arg_vals = match interp.eval_spread_args(args, env) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this_in_tdz = Self::this_is_in_tdz(env);
+                if this_in_tdz {
+                    let current_new_target =
+                        interp.new_target.clone().unwrap_or(super_ctor.clone());
+                    let saved_new_target = interp.new_target.clone();
+                    let result = interp.construct_with_new_target(
+                        &super_ctor,
+                        &arg_vals,
+                        current_new_target,
+                    );
+                    interp.new_target = saved_new_target;
+                    if let Completion::Normal(ref v) = result {
+                        Self::initialize_this_binding(env, v.clone());
+                        if let Err(e) = interp.initialize_instance_elements(v.clone(), env) {
+                            return Completion::Throw(e);
+                        }
                     }
+                    result
+                } else {
+                    let current_new_target =
+                        interp.new_target.clone().unwrap_or(super_ctor.clone());
+                    let saved_new_target = interp.new_target.clone();
+                    let result = interp.construct_with_new_target(
+                        &super_ctor,
+                        &arg_vals,
+                        current_new_target,
+                    );
+                    interp.new_target = saved_new_target;
+                    if let Completion::Throw(_) = result {
+                        return result;
+                    }
+                    Completion::Throw(interp.create_reference_error(
+                        "'super()' has already been called in this derived constructor",
+                    ))
                 }
-                return result;
-            } else {
-                let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
-                let saved_new_target = self.new_target.clone();
-                let result =
-                    self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
-                self.new_target = saved_new_target;
-                self.gc_unroot_frame(gc_frame);
-                if let Completion::Throw(_) = result {
-                    return result;
-                }
-                return Completion::Throw(self.create_reference_error(
-                    "'super()' has already been called in this derived constructor",
-                ));
-            }
+            });
         }
 
         // Handle member calls: obj.method()
@@ -5086,13 +4956,30 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest = args.get(index..).unwrap_or(&[]).to_vec();
                 let rest_array = self.create_array(rest);
-                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                self.bind_pattern_or_throw(inner, rest_array, BindingKind::Var, func_env)?;
                 break;
             }
             let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
-            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
+            self.bind_pattern_or_throw(param, value, BindingKind::Var, func_env)?;
         }
         Ok(())
+    }
+
+    /// Like `bind_pattern`, but for call sites where the pattern is known to
+    /// never contain `yield` (e.g. function parameters, an early SyntaxError
+    /// in generator formals) so only `Throw` is reachable, and the caller
+    /// wants plain `Result` propagation via `?`.
+    fn bind_pattern_or_throw(
+        &mut self,
+        pat: &Pattern,
+        val: JsValue,
+        kind: BindingKind,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        match self.bind_pattern(pat, val, kind, env) {
+            Completion::Throw(e) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     pub(crate) fn call_function(
@@ -5318,19 +5205,23 @@ impl Interpreter {
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
                             self.current_realm_id = fn_realm;
                         }
+                        let operands_base = self.gc_root_frame();
                         self.gc_root_value(_this_val);
                         for a in args.iter() {
                             self.gc_root_value(a);
                         }
+                        let operands_depth = self.gc_root_frame();
                         let saved_this = self.last_call_this_value.take();
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
+                        self.gc_assert_root_depth(operands_depth, "a native call");
                         // Unroot the native call operands after the call returns.
                         for a in args.iter().rev() {
                             self.gc_unroot_value(a);
                         }
                         self.gc_unroot_value(_this_val);
+                        self.gc_assert_root_depth(operands_base, "a native call's operands");
                         self.current_realm_id = caller_realm;
                         result
                     }
@@ -6546,405 +6437,399 @@ impl Interpreter {
         args: &[JsValue],
         env: &EnvRef,
     ) -> Completion {
-        let gc_frame = self.gc_root_frame();
-        let callee_val = callee_val.clone();
-        self.gc_root_value(&callee_val);
-        let evaluated_args = args.to_vec();
-        for arg in &evaluated_args {
-            self.gc_root_value(arg);
-        }
-        // Check if callee is a constructor
-        if let Some(co) = (callee_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            let is_proxy = self.get_proxy_info(co.id).is_some();
-            if !is_proxy && let Some(func_obj) = self.get_object_cell(co.id) {
-                let b = func_obj.borrow();
-                let is_ctor = match &b.callable {
-                    Some(JsFunction::User {
-                        is_arrow,
-                        is_generator,
-                        is_async,
-                        is_method,
-                        ..
-                    }) => !is_arrow && !is_method && !is_generator && !is_async,
-                    Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
-                    None => false,
-                };
-                if !is_ctor {
-                    let name = match &b.callable {
-                        Some(JsFunction::Native(n, _, _, _)) => n.clone(),
-                        Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
-                        None => String::new(),
-                    };
-                    drop(b);
-                    let name = if name.is_empty() {
-                        self.describe_non_callable(&callee_val)
-                    } else {
-                        name
-                    };
-                    self.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(
-                        self.create_type_error(&format!("{} is not a constructor", name)),
-                    );
-                }
+        self.with_gc_root_scope(|interp| {
+            let callee_val = callee_val.clone();
+            interp.gc_root_value(&callee_val);
+            let evaluated_args = args.to_vec();
+            for arg in &evaluated_args {
+                interp.gc_root_value(arg);
             }
-        } else {
-            self.gc_unroot_frame(gc_frame);
-            let desc = self.describe_non_callable(&callee_val);
-            return Completion::Throw(
-                self.create_type_error(&format!("{desc} is not a constructor")),
-            );
-        }
-        // Proxy construct trap
-        if let Some(co) = (callee_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && self.get_proxy_info(co.id).is_some()
-        {
-            let target_val = self.get_proxy_target_val(co.id);
-            let args_array = self.create_array(evaluated_args.clone());
-            let new_target = callee_val.clone();
-            self.gc_unroot_frame(gc_frame);
-            match self.invoke_proxy_trap(
-                co.id,
-                "construct",
-                vec![target_val.clone(), args_array, new_target.clone()],
-            ) {
-                Ok(Some(v)) => {
-                    if (v).is_object() {
-                        return Completion::Normal(v);
-                    }
-                    return Completion::Throw(
-                        self.create_type_error("'construct' on proxy: trap returned non-Object"),
-                    );
-                }
-                Ok(None) => {
-                    // No trap, forward to target with original newTarget
-                    return self.construct_with_new_target(
-                        &target_val,
-                        &evaluated_args,
-                        new_target,
-                    );
-                }
-                Err(e) => return Completion::Throw(e),
-            }
-        }
-        // Bound functions: delegate to construct_with_new_target which handles new_target resolution
-        if let Some(co) = (callee_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(co.id)
-            && func_obj.borrow().bound().is_some()
-        {
-            self.gc_unroot_frame(gc_frame);
-            return self.construct_with_new_target(
-                &callee_val,
-                &evaluated_args,
-                callee_val.clone(),
-            );
-        }
-        // Check if this is a derived class constructor
-        let is_derived = if let Some(o) = callee_val
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(o.id)
-        {
-            func_obj.borrow().is_derived_class_constructor()
-        } else {
-            false
-        };
-
-        // Fast path for default derived constructor: bypass the synthetic body to avoid
-        // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
-        if is_derived {
-            let is_default_derived = if let Some(o) = callee_val
+            // Check if callee is a constructor
+            if let Some(co) = (callee_val)
                 .as_object_id()
                 .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
             {
-                func_obj.borrow().is_default_derived_constructor()
-            } else {
-                false
-            };
-            if is_default_derived {
-                // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
-                let super_ctor = if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = self.get_object_cell(o.id)
-                {
-                    if let Some(id) = func_obj.borrow().prototype_id {
-                        JsValue::object(id)
-                    } else {
-                        JsValue::UNDEFINED
+                let is_proxy = interp.get_proxy_info(co.id).is_some();
+                if !is_proxy && let Some(func_obj) = interp.get_object_cell(co.id) {
+                    let b = func_obj.borrow();
+                    let is_ctor = match &b.callable {
+                        Some(JsFunction::User {
+                            is_arrow,
+                            is_generator,
+                            is_async,
+                            is_method,
+                            ..
+                        }) => !is_arrow && !is_method && !is_generator && !is_async,
+                        Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
+                        None => false,
+                    };
+                    if !is_ctor {
+                        let name = match &b.callable {
+                            Some(JsFunction::Native(n, _, _, _)) => n.clone(),
+                            Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
+                            None => String::new(),
+                        };
+                        drop(b);
+                        let name = if name.is_empty() {
+                            interp.describe_non_callable(&callee_val)
+                        } else {
+                            name
+                        };
+                        return Completion::Throw(
+                            interp.create_type_error(&format!("{} is not a constructor", name)),
+                        );
                     }
-                } else {
-                    JsValue::UNDEFINED
-                };
-                let prev_new_target = self.new_target.take();
-                self.new_target = Some(callee_val.clone());
-                self.gc_unroot_frame(gc_frame);
-                let result = self.construct_with_new_target(
-                    &super_ctor,
+                }
+            } else {
+                let desc = interp.describe_non_callable(&callee_val);
+                return Completion::Throw(
+                    interp.create_type_error(&format!("{desc} is not a constructor")),
+                );
+            }
+            // Proxy construct trap
+            if let Some(co) = (callee_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+                && interp.get_proxy_info(co.id).is_some()
+            {
+                let target_val = interp.get_proxy_target_val(co.id);
+                let args_array = interp.create_array(evaluated_args.clone());
+                let new_target = callee_val.clone();
+                match interp.invoke_proxy_trap(
+                    co.id,
+                    "construct",
+                    vec![target_val.clone(), args_array, new_target.clone()],
+                ) {
+                    Ok(Some(v)) => {
+                        if (v).is_object() {
+                            return Completion::Normal(v);
+                        }
+                        return Completion::Throw(
+                            interp.create_type_error("'construct' on proxy: trap returned non-Object"),
+                        );
+                    }
+                    Ok(None) => {
+                        // No trap, forward to target with original newTarget
+                        return interp.construct_with_new_target(
+                            &target_val,
+                            &evaluated_args,
+                            new_target,
+                        );
+                    }
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
+            // Bound functions: delegate to construct_with_new_target which handles new_target resolution
+            if let Some(co) = (callee_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+                && let Some(func_obj) = interp.get_object_cell(co.id)
+                && func_obj.borrow().bound().is_some()
+            {
+                return interp.construct_with_new_target(
+                    &callee_val,
                     &evaluated_args,
                     callee_val.clone(),
                 );
-                if let Completion::Normal(ref new_obj) = result {
-                    // initialize_instance_elements reads self.new_target to find class fields,
-                    // so keep new_target set to callee_val until after it returns.
-                    if let Err(e) = self.initialize_instance_elements(new_obj.clone(), env) {
-                        self.new_target = prev_new_target;
-                        return Completion::Throw(e);
-                    }
-                }
-                self.new_target = prev_new_target;
-                return result;
             }
-        }
+            // Check if this is a derived class constructor
+            let is_derived = if let Some(o) = callee_val
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+                && let Some(func_obj) = interp.get_object_cell(o.id)
+            {
+                func_obj.borrow().is_derived_class_constructor()
+            } else {
+                false
+            };
 
-        if is_derived {
-            // Derived constructor: don't create this, let super() handle it
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(callee_val.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
-            let prev_constructing_derived = self.constructing_derived;
-            self.constructing_derived = true;
-            self.calling_as_construct = true;
-            let (result, had_explicit_return, final_this) =
-                self.call_constructor_body(&callee_val, &JsValue::UNDEFINED, &evaluated_args);
-            self.gc_unroot_frame(gc_frame);
-            self.constructing_derived = prev_constructing_derived;
-            self.new_target = prev_new_target;
-            match result {
-                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                    Completion::Normal(v)
-                }
-                Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
-                    Completion::Throw(self.create_type_error(
-                        "Derived constructors may only return object or undefined",
-                    ))
-                }
-                Completion::Normal(_) | Completion::Empty => {
-                    match final_this {
-                        Some(v) if (v).is_object() => Completion::Normal(v),
-                        Some(v) if !(v).is_undefined() => Completion::Normal(v),
-                        _ => {
-                            Completion::Throw(self.create_reference_error(
-                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                            ))
+            // Fast path for default derived constructor: bypass the synthetic body to avoid
+            // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
+            if is_derived {
+                let is_default_derived = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    func_obj.borrow().is_default_derived_constructor()
+                } else {
+                    false
+                };
+                if is_default_derived {
+                    // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
+                    let super_ctor = if let Some(o) = callee_val
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                        && let Some(func_obj) = interp.get_object_cell(o.id)
+                    {
+                        if let Some(id) = func_obj.borrow().prototype_id {
+                            JsValue::object(id)
+                        } else {
+                            JsValue::UNDEFINED
                         }
-                    }
-                }
-                other => other,
-            }
-        } else {
-            // Base constructor: create this object as before
-            let new_obj_id = self.create_object_id();
-            if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-            {
-                let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
-                    self.get_object_cell_expect(new_obj_id)
-                        .borrow_mut()
-                        .prototype_id = Some(proto_id);
-                }
-            }
-            let instance_field_defs = if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-            {
-                func_obj.borrow().class_instance_field_defs.clone()
-            } else {
-                Vec::new()
-            };
-            let this_val = JsValue::object(new_obj_id);
-            // Use constructor's closure (class_env) so the class name binding
-            // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-            let init_parent = if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-                && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
-            {
-                closure.clone()
-            } else {
-                env.clone()
-            };
-            let init_env = Environment::new(Some(init_parent));
-            init_env.borrow_mut().declare("this", BindingKind::Const);
-            init_env
-                .borrow_mut()
-                .initialize_binding("this", this_val.clone());
-            init_env.borrow_mut().is_field_initializer = true;
-            if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(o.id)
-            {
-                if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                    let cls_env = closure.borrow();
-                    if let Some(ref names) = cls_env.class_private_names {
-                        init_env.borrow_mut().class_private_names = Some(names.clone());
-                    }
-                }
-                // Set __home_object__ for super property access in field initializers.
-                let func_obj_id = func_obj.borrow().id.unwrap();
-                let proto_val = self.get_property_on_id(func_obj_id, "prototype");
-                if proto_val.is_object() {
-                    init_env.borrow_mut().bindings.insert(
-                        "__home_object__".to_string(),
-                        Binding {
-                            value: proto_val,
-                            kind: BindingKind::Const,
-                            initialized: true,
-                            deletable: false,
-                        },
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    let prev_new_target = interp.new_target.take();
+                    interp.new_target = Some(callee_val.clone());
+                    let result = interp.construct_with_new_target(
+                        &super_ctor,
+                        &evaluated_args,
+                        callee_val.clone(),
                     );
-                }
-            }
-            // Pass 1: Install private methods and accessors first.
-            for idef in &instance_field_defs {
-                match idef {
-                    InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            if !obj.borrow().extensible {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot define private method on non-extensible object",
-                                ));
-                            }
-                            if obj.borrow().private_fields.contains_key(name) {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot add private method to object twice",
-                                ));
-                            }
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(name.clone(), PrivateElement::Method(value.clone()));
+                    if let Completion::Normal(ref new_obj) = result {
+                        // initialize_instance_elements reads interp.new_target to find class fields,
+                        // so keep new_target set to callee_val until after it returns.
+                        if let Err(e) = interp.initialize_instance_elements(new_obj.clone(), env) {
+                            interp.new_target = prev_new_target;
+                            return Completion::Throw(e);
                         }
                     }
-                    InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            if !obj.borrow().extensible {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot define private accessor on non-extensible object",
-                                ));
-                            }
-                            if obj.borrow().private_fields.contains_key(name) {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot add private accessor to object twice",
-                                ));
-                            }
-                            obj.borrow_mut().private_fields.insert(
-                                name.clone(),
-                                PrivateElement::Accessor {
-                                    get: get.clone(),
-                                    set: set.clone(),
-                                },
-                            );
-                        }
-                    }
-                    _ => {}
+                    interp.new_target = prev_new_target;
+                    return result;
                 }
             }
-            // Pass 2: Run field initializers in source order.
-            for idef in &instance_field_defs {
-                match idef {
-                    InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
-                        let source_name = name.split('#').next().unwrap_or(name);
-                        let display_name = format!("#{source_name}");
-                        let val = if let Some(init) = initializer {
-                            match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => {
-                                    if init.is_anonymous_function_definition() {
-                                        self.set_function_name(&v, &display_name);
-                                    }
-                                    v
+
+            if is_derived {
+                // Derived constructor: don't create this, let super() handle it
+                let prev_new_target = interp.new_target.take();
+                interp.new_target = Some(callee_val.clone());
+                interp.last_call_had_explicit_return = false;
+                interp.last_call_this_value = None;
+                let prev_constructing_derived = interp.constructing_derived;
+                interp.constructing_derived = true;
+                interp.calling_as_construct = true;
+                let (result, had_explicit_return, final_this) =
+                    interp.call_constructor_body(&callee_val, &JsValue::UNDEFINED, &evaluated_args);
+                interp.constructing_derived = prev_constructing_derived;
+                interp.new_target = prev_new_target;
+                match result {
+                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
+                        Completion::Normal(v)
+                    }
+                    Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
+                        Completion::Throw(interp.create_type_error(
+                            "Derived constructors may only return object or undefined",
+                        ))
+                    }
+                    Completion::Normal(_) | Completion::Empty => {
+                        match final_this {
+                            Some(v) if (v).is_object() => Completion::Normal(v),
+                            Some(v) if !(v).is_undefined() => Completion::Normal(v),
+                            _ => {
+                                Completion::Throw(interp.create_reference_error(
+                                    "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                                ))
+                            }
+                        }
+                    }
+                    other => other,
+                }
+            } else {
+                // Base constructor: create this object as before
+                let new_obj_id = interp.create_object_id();
+                if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    let proto = func_obj.borrow().get_property_value("prototype");
+                    if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
+                        interp.get_object_cell_expect(new_obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(proto_id);
+                    }
+                }
+                let instance_field_defs = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    func_obj.borrow().class_instance_field_defs.clone()
+                } else {
+                    Vec::new()
+                };
+                let this_val = JsValue::object(new_obj_id);
+                // Use constructor's closure (class_env) so the class name binding
+                // is accessible in field initializers (spec §15.7.14 step 28.e.i).
+                let init_parent = if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                    && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
+                {
+                    closure.clone()
+                } else {
+                    env.clone()
+                };
+                let init_env = Environment::new(Some(init_parent));
+                init_env.borrow_mut().declare("this", BindingKind::Const);
+                init_env
+                    .borrow_mut()
+                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().is_field_initializer = true;
+                if let Some(o) = callee_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                    && let Some(func_obj) = interp.get_object_cell(o.id)
+                {
+                    if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
+                        let cls_env = closure.borrow();
+                        if let Some(ref names) = cls_env.class_private_names {
+                            init_env.borrow_mut().class_private_names = Some(names.clone());
+                        }
+                    }
+                    // Set __home_object__ for super property access in field initializers.
+                    let func_obj_id = func_obj.borrow().id.unwrap();
+                    let proto_val = interp.get_property_on_id(func_obj_id, "prototype");
+                    if proto_val.is_object() {
+                        init_env.borrow_mut().bindings.insert(
+                            "__home_object__".to_string(),
+                            Binding {
+                                value: proto_val,
+                                kind: BindingKind::Const,
+                                initialized: true,
+                                deletable: false,
+                            },
+                        );
+                    }
+                }
+                // Pass 1: Install private methods and accessors first.
+                for idef in &instance_field_defs {
+                    match idef {
+                        InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                if !obj.borrow().extensible {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define private method on non-extensible object",
+                                    ));
                                 }
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            if !obj.borrow().extensible {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot define private field on non-extensible object",
-                                ));
-                            }
-                            if obj.borrow().private_fields.contains_key(name) {
-                                return Completion::Throw(self.create_type_error(
-                                    "Cannot initialize private field twice on the same object",
-                                ));
-                            }
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(name.clone(), PrivateElement::Field(val));
-                        }
-                    }
-                    InstanceFieldDef::Public(key, initializer) => {
-                        let val = if let Some(init) = initializer {
-                            match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => {
-                                    if init.is_anonymous_function_definition() {
-                                        self.set_function_name(&v, key);
-                                    }
-                                    v
+                                if obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot add private method to object twice",
+                                    ));
                                 }
-                                other => return other,
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Method(value.clone()));
                             }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        match crate::interpreter::builtins::array::create_data_property_or_throw(
-                            self, &this_val, key, val,
-                        ) {
-                            Ok(()) => {}
-                            Err(e) => return Completion::Throw(e),
                         }
-                    }
-                    InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
-                        let val = if let Some(init) = initializer {
-                            match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => v,
-                                other => return other,
+                        InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                if !obj.borrow().extensible {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define private accessor on non-extensible object",
+                                    ));
+                                }
+                                if obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot add private accessor to object twice",
+                                    ));
+                                }
+                                obj.borrow_mut().private_fields.insert(
+                                    name.clone(),
+                                    PrivateElement::Accessor {
+                                        get: get.clone(),
+                                        set: set.clone(),
+                                    },
+                                );
                             }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(obj) = self.get_object_cell(new_obj_id) {
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(slot_name.clone(), PrivateElement::Field(val));
                         }
+                        _ => {}
                     }
-                    _ => {} // Methods/accessors handled in pass 1
+                }
+                // Pass 2: Run field initializers in source order.
+                for idef in &instance_field_defs {
+                    match idef {
+                        InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
+                            let source_name = name.split('#').next().unwrap_or(name);
+                            let display_name = format!("#{source_name}");
+                            let val = if let Some(init) = initializer {
+                                match interp.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => {
+                                        if init.is_anonymous_function_definition() {
+                                            interp.set_function_name(&v, &display_name);
+                                        }
+                                        v
+                                    }
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                if !obj.borrow().extensible {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define private field on non-extensible object",
+                                    ));
+                                }
+                                if obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot initialize private field twice on the same object",
+                                    ));
+                                }
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Field(val));
+                            }
+                        }
+                        InstanceFieldDef::Public(key, initializer) => {
+                            let val = if let Some(init) = initializer {
+                                match interp.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => {
+                                        if init.is_anonymous_function_definition() {
+                                            interp.set_function_name(&v, key);
+                                        }
+                                        v
+                                    }
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            match crate::interpreter::builtins::array::create_data_property_or_throw(
+                                interp, &this_val, key, val,
+                            ) {
+                                Ok(()) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
+                            let val = if let Some(init) = initializer {
+                                match interp.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(slot_name.clone(), PrivateElement::Field(val));
+                            }
+                        }
+                        _ => {} // Methods/accessors handled in pass 1
+                    }
+                }
+                let prev_new_target = interp.new_target.take();
+                interp.new_target = Some(callee_val.clone());
+                interp.last_call_had_explicit_return = false;
+                interp.last_call_this_value = None;
+                interp.calling_as_construct = true;
+                let (result, had_explicit_return, captured_this) =
+                    interp.call_constructor_body(&callee_val, &this_val, &evaluated_args);
+                let final_this = captured_this.unwrap_or(this_val.clone());
+                interp.new_target = prev_new_target;
+                match result {
+                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
+                        Completion::Normal(v)
+                    }
+                    Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
+                    other => other,
                 }
             }
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(callee_val.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
-            self.calling_as_construct = true;
-            let (result, had_explicit_return, captured_this) =
-                self.call_constructor_body(&callee_val, &this_val, &evaluated_args);
-            self.gc_unroot_frame(gc_frame);
-            let final_this = captured_this.unwrap_or(this_val.clone());
-            self.new_target = prev_new_target;
-            match result {
-                Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                    Completion::Normal(v)
-                }
-                Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
-                other => other,
-            }
-        }
+        })
     }
 
     pub(crate) fn construct(&mut self, constructor: &JsValue, args: &[JsValue]) -> Completion {
@@ -7996,182 +7881,178 @@ impl Interpreter {
         uses_arguments: bool,
         has_simple_params: bool,
     ) -> Completion {
-        let gc_frame = self.gc_root_frame();
-        let promise = self.create_promise_object();
-        let promise_id = if let Some(o) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            o.id
-        } else {
-            0
-        };
-        self.gc_root_value(&promise);
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        self.gc_root_value(&resolve_fn);
-        self.gc_root_value(&reject_fn);
+        self.with_gc_root_scope(|interp| {
+            let promise = interp.create_promise_object();
+            let promise_id = if let Some(o) = (promise)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
+                o.id
+            } else {
+                0
+            };
+            interp.gc_root_value(&promise);
+            let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
+            interp.gc_root_value(&resolve_fn);
+            interp.gc_root_value(&reject_fn);
 
-        let closure_strict = closure.borrow().strict;
-        let func_env = Environment::new_function_scope_with_capacity(
-            Some(closure),
-            params.len().saturating_add(2),
-        );
-        if is_arrow {
-            func_env.borrow_mut().is_arrow_scope = true;
-        }
-        // Set up `this` and `arguments` before binding parameters so that
-        // default parameter expressions can reference `arguments`.
-        if !is_arrow {
-            let effective_this = if !is_strict && !closure_strict {
-                if (this_val).is_nullish() {
-                    self.realm()
-                        .global_env
-                        .borrow()
-                        .get("this")
-                        .unwrap_or(this_val.clone())
-                } else if !(this_val).is_object() {
-                    match self.to_object(this_val) {
-                        Completion::Normal(v) => v,
-                        _ => this_val.clone(),
+            let closure_strict = closure.borrow().strict;
+            let func_env = Environment::new_function_scope_with_capacity(
+                Some(closure),
+                params.len().saturating_add(2),
+            );
+            if is_arrow {
+                func_env.borrow_mut().is_arrow_scope = true;
+            }
+            // Set up `this` and `arguments` before binding parameters so that
+            // default parameter expressions can reference `arguments`.
+            if !is_arrow {
+                let effective_this = if !is_strict && !closure_strict {
+                    if (this_val).is_nullish() {
+                        interp
+                            .realm()
+                            .global_env
+                            .borrow()
+                            .get("this")
+                            .unwrap_or(this_val.clone())
+                    } else if !(this_val).is_object() {
+                        match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            _ => this_val.clone(),
+                        }
+                    } else {
+                        this_val.clone()
                     }
                 } else {
                     this_val.clone()
+                };
+                func_env.borrow_mut().bindings.insert(
+                    "this".to_string(),
+                    Binding {
+                        value: effective_this,
+                        kind: BindingKind::Const,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+                if uses_arguments {
+                    let is_simple = has_simple_params;
+                    let env_strict = func_env.borrow().strict;
+                    let use_mapped = is_simple && !is_strict && !env_strict;
+                    let param_names: Vec<String> = if use_mapped {
+                        params
+                            .iter()
+                            .filter_map(|p| {
+                                if let Pattern::Identifier(name) = p {
+                                    Some(name.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let mapped_env = if use_mapped { Some(&func_env) } else { None };
+                    let arguments_obj = interp.create_arguments_object(
+                        args,
+                        func_val.clone(),
+                        is_strict,
+                        mapped_env,
+                        &param_names,
+                    );
+                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                    let _ = interp.env_set(&func_env, "arguments", arguments_obj);
+                    if is_strict || !is_simple {
+                        func_env.borrow_mut().arguments_immutable = true;
+                    }
+                } else {
+                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
                 }
-            } else {
-                this_val.clone()
+            }
+            {
+                let is_simple_p = has_simple_params;
+                if !is_simple_p {
+                    func_env.borrow_mut().has_parameter_expressions = true;
+                }
+            }
+            if let Err(error) =
+                interp.bind_function_parameters(params, args, &func_env, has_simple_params)
+            {
+                let _ = interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                // A default-param expression may have called `__host_exit`
+                // (issue #229): return abrupt so the caller unwinds.
+                if interp.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::UNDEFINED);
+                }
+                return Completion::Normal(promise);
+            }
+
+            func_env.borrow_mut().strict = is_strict;
+            interp.in_tail_position = false;
+
+            let sm = crate::interpreter::generator_transform::transform_async_function(
+                body.as_slice(),
+                params,
+            );
+            #[cfg(feature = "perf-counters")]
+            let sm = {
+                let mut sm = sm;
+                sm.perf_key = Some(interp.perf_body_name(_func_obj_id));
+                sm
             };
-            func_env.borrow_mut().bindings.insert(
-                "this".to_string(),
-                Binding {
-                    value: effective_this,
-                    kind: BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
+            let sm = Rc::new(sm);
+
+            for tv in &sm.temp_vars {
+                func_env.borrow_mut().declare(tv, BindingKind::Var);
+            }
+            for lv in &sm.local_vars {
+                if matches!(
+                    lv.kind,
+                    VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+                ) && lv.scope_depth > 0
+                {
+                    // Nested lexical bindings are created by their transformed
+                    // runtime scopes and must not leak into the function scope.
+                    continue;
+                }
+                if !func_env.borrow().bindings.contains_key(&lv.name) {
+                    func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                }
+            }
+
+            let async_id = interp.scheduler.alloc_async_function_id();
+
+            interp.scheduler.insert_async_function_state(
+                async_id,
+                AsyncFunctionState {
+                    pending_dispose: None,
+                    state_machine: sm,
+                    func_env,
+                    is_strict,
+                    current_state: 0,
+                    try_stack: vec![],
+                    pending_binding: None,
+                    pending_for_of_unwind: None,
+                    resolve_fn,
+                    reject_fn,
+                    for_of_stack: vec![],
+                    module_path: None,
+                    scope_stack: vec![],
                 },
             );
-            if uses_arguments {
-                let is_simple = has_simple_params;
-                let env_strict = func_env.borrow().strict;
-                let use_mapped = is_simple && !is_strict && !env_strict;
-                let param_names: Vec<String> = if use_mapped {
-                    params
-                        .iter()
-                        .filter_map(|p| {
-                            if let Pattern::Identifier(name) = p {
-                                Some(name.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let mapped_env = if use_mapped { Some(&func_env) } else { None };
-                let arguments_obj = self.create_arguments_object(
-                    args,
-                    func_val.clone(),
-                    is_strict,
-                    mapped_env,
-                    &param_names,
-                );
-                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                let _ = self.env_set(&func_env, "arguments", arguments_obj);
-                if is_strict || !is_simple {
-                    func_env.borrow_mut().arguments_immutable = true;
-                }
-            } else {
-                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+
+            let resume = interp.async_function_resume(async_id, JsValue::UNDEFINED, false);
+
+            // If the body ran `__host_exit` synchronously (before any await, issue
+            // #242), propagate the exit as this call's completion — in expression
+            // position too (`f(), g()`; `h(f())`), which a statement-level check
+            // cannot reach — instead of returning the never-to-settle promise.
+            if let Completion::Exit(code) = resume {
+                return Completion::Exit(code);
             }
-        }
-        {
-            let is_simple_p = has_simple_params;
-            if !is_simple_p {
-                func_env.borrow_mut().has_parameter_expressions = true;
-            }
-        }
-        if let Err(error) =
-            self.bind_function_parameters(params, args, &func_env, has_simple_params)
-        {
-            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
-            self.drain_microtasks();
-            self.gc_unroot_frame(gc_frame);
-            // A default-param expression may have called `__host_exit`
-            // (issue #229): return abrupt so the caller unwinds.
-            if self.pending_exit.is_some() {
-                return Completion::Throw(JsValue::UNDEFINED);
-            }
-            return Completion::Normal(promise);
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        self.in_tail_position = false;
-
-        let sm = crate::interpreter::generator_transform::transform_async_function(
-            body.as_slice(),
-            params,
-        );
-        #[cfg(feature = "perf-counters")]
-        let sm = {
-            let mut sm = sm;
-            sm.perf_key = Some(self.perf_body_name(_func_obj_id));
-            sm
-        };
-        let sm = Rc::new(sm);
-
-        for tv in &sm.temp_vars {
-            func_env.borrow_mut().declare(tv, BindingKind::Var);
-        }
-        for lv in &sm.local_vars {
-            if matches!(
-                lv.kind,
-                VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-            ) && lv.scope_depth > 0
-            {
-                // Nested lexical bindings are created by their transformed
-                // runtime scopes and must not leak into the function scope.
-                continue;
-            }
-            if !func_env.borrow().bindings.contains_key(&lv.name) {
-                func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
-            }
-        }
-
-        let async_id = self.scheduler.alloc_async_function_id();
-
-        self.scheduler.insert_async_function_state(
-            async_id,
-            AsyncFunctionState {
-                pending_dispose: None,
-                state_machine: sm,
-                func_env,
-                is_strict,
-                current_state: 0,
-                try_stack: vec![],
-                pending_binding: None,
-                pending_return: None,
-                pending_loop_control: None,
-                saved_finally_exception: None,
-                pending_for_of_unwind: None,
-                resolve_fn,
-                reject_fn,
-                for_of_stack: vec![],
-                module_path: None,
-                scope_stack: vec![],
-            },
-        );
-
-        let resume = self.async_function_resume(async_id, JsValue::UNDEFINED, false);
-
-        self.gc_unroot_frame(gc_frame);
-        // If the body ran `__host_exit` synchronously (before any await, issue
-        // #242), propagate the exit as this call's completion — in expression
-        // position too (`f(), g()`; `h(f())`), which a statement-level check
-        // cannot reach — instead of returning the never-to-settle promise.
-        if let Completion::Exit(code) = resume {
-            return Completion::Exit(code);
-        }
-        Completion::Normal(promise)
+            Completion::Normal(promise)
+        })
     }
 
     /// Drives an async function's state machine. Returns `Completion::Exit`
@@ -8186,7 +8067,7 @@ impl Interpreter {
         is_error: bool,
     ) -> Completion {
         use crate::interpreter::generator_transform::{
-            LoopControlTarget, SentValueBindingKind, StateTerminator,
+            ArrayPatternIterOp, LoopControlTarget, SentValueBindingKind, StateTerminator,
         };
 
         let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
@@ -8200,9 +8081,6 @@ impl Interpreter {
             current_state,
             mut try_stack,
             pending_binding,
-            pending_return: saved_pending_return,
-            pending_loop_control: restored_pending_loop_control,
-            saved_finally_exception: restored_saved_finally_exception,
             pending_for_of_unwind: restored_pending_for_of_unwind,
             resolve_fn,
             reject_fn,
@@ -8246,10 +8124,6 @@ impl Interpreter {
                         env.set(name, sent_value.clone()).ok();
                     }
                 }
-                SentValueBindingKind::Pattern(pattern) => {
-                    let _ =
-                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
-                }
                 SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
             }
         }
@@ -8284,9 +8158,6 @@ impl Interpreter {
                 current_state,
                 try_stack: try_stack.clone(),
                 pending_binding: None,
-                pending_return: None,
-                pending_loop_control: restored_pending_loop_control,
-                saved_finally_exception: None,
                 pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
@@ -8300,9 +8171,6 @@ impl Interpreter {
         let saved_in_state_machine = self.in_state_machine;
         self.in_state_machine = true;
         let mut current_id = current_state;
-        let mut pending_return: Option<JsValue> = saved_pending_return;
-        let mut pending_loop_control = restored_pending_loop_control;
-        let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<ForOfLoopState> = saved_for_of_stack;
         // Lowered lexical scopes, including suspendable `await using` blocks.
@@ -8312,22 +8180,99 @@ impl Interpreter {
         // obligation across suspension until the handler completes normally.
         let mut pending_for_of_unwind = restored_pending_for_of_unwind;
 
+        // Helper: suspend at a disposer's `Await`, parking `$park` (a
+        // `PendingDispose` or an expression producing one) to resume later.
+        // Shared by every disposal site below that can suspend mid-unwind.
+        macro_rules! park_dispose_at_await {
+            ($cursor:expr, $value:expr, $park:expr) => {{
+                let gc_frame = self.gc_root_frame();
+                $cursor.for_each_value(|v| self.gc_root_value(v));
+                self.gc_root_value(&$value);
+                self.async_fn_suspend_at_await(
+                    async_id,
+                    &state_machine,
+                    &func_env,
+                    is_strict,
+                    current_id,
+                    &try_stack,
+                    None,
+                    pending_for_of_unwind.take(),
+                    &resolve_fn,
+                    &reject_fn,
+                    &$value,
+                    &for_of_stack,
+                    &scope_stack,
+                );
+                self.gc_unroot_frame(gc_frame);
+                self.scheduler.park_async_function_dispose(async_id, $park);
+                return Completion::Normal(JsValue::UNDEFINED);
+            }};
+        }
+
         // Helper: close the for-of loops from `$from` inward, surfacing an
         // abrupt completion from a disposer or an iterator `return` method.
+        // `$seed` is the completion driving the unwind (mirroring
+        // `unwind_scopes_to!`'s own seed/tag signature) rather than always
+        // starting from `Completion::Empty`, so a parked-then-resumed
+        // re-entry (via `$then`) can seed with the value the cursor's own
+        // finished completion carries and continue unwinding from there —
+        // provably equivalent to the original call never having suspended
+        // (see the ADR for this issue). Each level's `iteration_env` dispose
+        // may itself suspend: on `ForOfUnwindOutcome::Parked` this parks the
+        // function with `$then` and returns, leaving the loop being closed
+        // on `for_of_stack` with its `iteration_env` already taken so the
+        // resumed re-entry finds nothing left to dispose for it and
+        // idempotently proceeds straight to `close_for_of_iterator`. The
+        // per-level handler-boundary re-check below re-runs after *every*
+        // level's dispose, synchronous or resumed, because it is part of
+        // this same per-level loop body either way.
         macro_rules! unwind_for_of {
-            ($from:expr) => {
+            ($from:expr, $seed:expr, $then:expr) => {
                 let unwind_from = $from;
-                let mut unwind_completion = Completion::Empty;
+                let mut unwind_completion = $seed;
                 while for_of_stack.len() > unwind_from {
-                    let Some(loop_state) = for_of_stack.pop() else {
-                        break;
-                    };
+                    let loop_pos = for_of_stack.len() - 1;
                     // Handlers entered inside this loop have already completed
                     // before its IteratorClose runs. Handlers surrounding the
                     // loop remain available for a close failure.
-                    try_stack.truncate(loop_state.try_depth);
-                    unwind_completion =
-                        self.close_for_of_loop(loop_state, &func_env, unwind_completion, None);
+                    try_stack.truncate(for_of_stack[loop_pos].try_depth);
+                    if let Some(env) = for_of_stack[loop_pos].iteration_env.take() {
+                        unwind_completion =
+                            match self.dispose_env_for_for_of_unwind(&env, unwind_completion, true)
+                            {
+                                ForOfUnwindOutcome::Done(c) => c,
+                                ForOfUnwindOutcome::Parked { cursor, value } => {
+                                    park_dispose_at_await!(
+                                        cursor,
+                                        value,
+                                        PendingDispose {
+                                            cursor,
+                                            then: $then,
+                                        }
+                                    );
+                                }
+                            };
+                    }
+                    unwind_completion = match self.close_for_of_iterator_parking(
+                        &mut for_of_stack[loop_pos],
+                        &func_env,
+                        unwind_completion,
+                        None,
+                        true,
+                    ) {
+                        ForOfUnwindOutcome::Done(c) => c,
+                        ForOfUnwindOutcome::Parked { cursor, value } => {
+                            park_dispose_at_await!(
+                                cursor,
+                                value,
+                                PendingDispose {
+                                    cursor,
+                                    then: $then,
+                                }
+                            );
+                        }
+                    };
+                    for_of_stack.pop();
                     match &unwind_completion {
                         Completion::Exit(code) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -8402,36 +8347,14 @@ impl Interpreter {
                     let mut cursor = DisposeCursor::new(stack, $seed);
                     match cursor.step(self, None) {
                         DisposeStep::Await(value) => {
-                            let gc_frame = self.gc_root_frame();
-                            cursor.for_each_value(|v| self.gc_root_value(v));
-                            self.gc_root_value(&value);
-                            self.async_fn_suspend_at_await(
-                                async_id,
-                                &state_machine,
-                                &func_env,
-                                is_strict,
-                                current_id,
-                                &try_stack,
-                                None,
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
-                                pending_for_of_unwind.take(),
-                                &resolve_fn,
-                                &reject_fn,
-                                &value,
-                                &for_of_stack,
-                                &scope_stack,
-                            );
-                            self.gc_unroot_frame(gc_frame);
-                            self.scheduler.park_async_function_dispose(
-                                async_id,
+                            park_dispose_at_await!(
+                                cursor,
+                                value,
                                 PendingDispose {
                                     cursor,
                                     then: $then,
-                                },
+                                }
                             );
-                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         DisposeStep::Done(Completion::Exit(code)) => {
                             self.scheduler.remove_async_function_state(async_id);
@@ -8454,9 +8377,6 @@ impl Interpreter {
         macro_rules! route_return {
             ($val:expr) => {{
                 let ret_val: JsValue = $val;
-                // A return produced by a finalizer replaces any loop-control
-                // completion that originally entered it.
-                pending_loop_control = None;
                 let mut routed_to = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_finally
@@ -8493,14 +8413,27 @@ impl Interpreter {
                     Completion::Return(ret_val.clone()),
                     DisposeThen::ScopeCrossReturn
                 );
-                unwind_for_of!(unwind_from);
+                unwind_for_of!(
+                    unwind_from,
+                    Completion::Return(ret_val.clone()),
+                    DisposeThen::ForOfCrossReturn
+                );
                 unwind_scopes_to!(
                     scope_target,
                     Completion::Return(ret_val.clone()),
                     DisposeThen::ScopeCrossReturn
                 );
-                if let Some((_, finally_state)) = routed_to {
-                    pending_return = Some(ret_val);
+                if let Some((idx, finally_state)) = routed_to {
+                    // Own this return on the context whose finally is about
+                    // to run it, not the driver: a nested try/finally's own
+                    // TryExit must not see it (issue #719). Truncating here
+                    // unconditionally — not only when something is being
+                    // replaced — is what makes EnterFinally and TryExit land
+                    // on the correct context next.
+                    try_stack[idx].pending_completion = Some(PendingCompletion::Return(ret_val));
+                    try_stack.truncate(idx + 1);
+                    self.scheduler
+                        .sync_async_function_try_stack(async_id, &try_stack);
                     current_id = finally_state;
                 } else if let Some(stack) = self.take_dispose_stack(&func_env) {
                     pending_dispose = Some(PendingDispose {
@@ -8525,11 +8458,10 @@ impl Interpreter {
 
                 // A loop-control completion produced by a finalizer replaces
                 // the return, throw, or earlier loop-control completion that
-                // originally entered it.
-                pending_return = None;
-                saved_finally_exception = None;
+                // originally entered it — via the unconditional truncation to
+                // the routed depth below, not by explicitly clearing
+                // driver-global state (issue #719).
                 pending_for_of_unwind = None;
-                pending_loop_control = Some(target);
 
                 let mut routed_to = None;
                 for i in (target.try_depth..try_stack.len()).rev() {
@@ -8568,17 +8500,31 @@ impl Interpreter {
                     Completion::Empty,
                     DisposeThen::ScopeCrossLoopControl(target)
                 );
-                unwind_for_of!(handler_boundary.min(for_of_stack.len()));
+                unwind_for_of!(
+                    handler_boundary.min(for_of_stack.len()),
+                    Completion::Empty,
+                    DisposeThen::ForOfCrossLoopControl(target)
+                );
                 unwind_scopes_to!(
                     scope_boundary,
                     Completion::Empty,
                     DisposeThen::ScopeCrossLoopControl(target)
                 );
 
-                if let Some((_, finally_state)) = routed_to {
+                if let Some((depth, finally_state)) = routed_to {
+                    // Own this jump on the context whose finally is about to
+                    // run it, not the driver: a nested try/finally's own
+                    // TryExit must not see it (issue #719). Contexts nested
+                    // inside the selected finally are left, so EnterFinally
+                    // must mark this one.
+                    try_stack[depth].pending_completion =
+                        Some(PendingCompletion::LoopControl(target));
+                    try_stack.truncate(depth + 1);
+                    self.scheduler
+                        .sync_async_function_try_stack(async_id, &try_stack);
                     current_id = finally_state;
                 } else {
-                    pending_loop_control = None;
+                    try_stack.truncate(target.try_depth);
                     current_id = target.target_state;
                 }
             }};
@@ -8653,31 +8599,7 @@ impl Interpreter {
                         // Suspending reads `value.constructor`, which can run
                         // user code and collect; until the cursor is parked in
                         // the saved state it is reachable only from `disposal`.
-                        let gc_frame = self.gc_root_frame();
-                        disposal.cursor.for_each_value(|v| self.gc_root_value(v));
-                        self.gc_root_value(&value);
-                        self.async_fn_suspend_at_await(
-                            async_id,
-                            &state_machine,
-                            &func_env,
-                            is_strict,
-                            current_id,
-                            &try_stack,
-                            None,
-                            pending_return.take(),
-                            pending_loop_control.take(),
-                            saved_finally_exception.take(),
-                            pending_for_of_unwind.take(),
-                            &resolve_fn,
-                            &reject_fn,
-                            &value,
-                            &for_of_stack,
-                            &scope_stack,
-                        );
-                        self.gc_unroot_frame(gc_frame);
-                        self.scheduler
-                            .park_async_function_dispose(async_id, disposal);
-                        return Completion::Normal(JsValue::UNDEFINED);
+                        park_dispose_at_await!(disposal.cursor, value, disposal);
                     }
                     // A disposer that called `__host_exit` (issue #242)
                     // propagates out uncatchably instead of settling.
@@ -8694,27 +8616,44 @@ impl Interpreter {
                         (DisposeThen::ScopeExit(after_state), _) => {
                             current_id = after_state;
                         }
-                        (DisposeThen::ScopeCrossReturn, Completion::Throw(e)) => {
+                        // Scope-crossing and for-of-crossing disposals resume
+                        // identically: `route_return!`/`route_loop_control!`
+                        // re-enter with the value or target carried by the
+                        // cursor's own completion, continuing whatever this
+                        // one level's dispose left (further scopes or loops,
+                        // then the function-level disposal) — provably
+                        // equivalent to the original call never suspending.
+                        (
+                            DisposeThen::ScopeCrossReturn | DisposeThen::ForOfCrossReturn,
+                            Completion::Throw(e),
+                        ) => {
                             pending_exception = Some(e);
                         }
-                        (DisposeThen::ScopeCrossReturn, Completion::Return(v)) => {
+                        (
+                            DisposeThen::ScopeCrossReturn | DisposeThen::ForOfCrossReturn,
+                            Completion::Return(v),
+                        ) => {
                             route_return!(v);
                         }
-                        (DisposeThen::ScopeCrossReturn, _) => unreachable!(
-                            "a scope-cross return cursor is seeded with Completion::Return and only ever finishes as Return or Throw"
-                        ),
-                        (DisposeThen::ScopeCrossLoopControl(_), Completion::Throw(e)) => {
+                        (DisposeThen::ScopeCrossReturn | DisposeThen::ForOfCrossReturn, _) => {
+                            unreachable!(
+                                "a scope/for-of-cross return cursor is seeded with Completion::Return and only ever finishes as Return or Throw"
+                            )
+                        }
+                        (
+                            DisposeThen::ScopeCrossLoopControl(_)
+                            | DisposeThen::ForOfCrossLoopControl(_),
+                            Completion::Throw(e),
+                        ) => {
                             pending_exception = Some(e);
                         }
-                        (DisposeThen::ScopeCrossLoopControl(target), _) => {
+                        (
+                            DisposeThen::ScopeCrossLoopControl(target)
+                            | DisposeThen::ForOfCrossLoopControl(target),
+                            _,
+                        ) => {
                             route_loop_control!(target);
                         }
-                        (DisposeThen::ScopeCrossThrow, Completion::Throw(e)) => {
-                            pending_exception = Some(e);
-                        }
-                        (DisposeThen::ScopeCrossThrow, _) => unreachable!(
-                            "a scope-cross throw cursor is seeded with Completion::Throw and always finishes as Throw"
-                        ),
                         // The head's own error routing (`for_of_protocol_failure`,
                         // pending_exception) mirrors what the blocking call used to
                         // do inline; a non-throw completion just re-enters the head.
@@ -8722,6 +8661,23 @@ impl Interpreter {
                             pending_exception = Some(e);
                         }
                         (DisposeThen::ForOfIteration, _) => {}
+                        // For a for-of-crossing throw, the loop being unwound
+                        // stays on `for_of_stack` with its `iteration_env`
+                        // already taken, so re-entering the top-level throw
+                        // routing below recomputes `needs_for_of_unwind`/
+                        // `pending_for_of_unwind` fresh from that stack
+                        // instead of this arm setting it.
+                        (
+                            DisposeThen::ScopeCrossThrow | DisposeThen::ForOfCrossThrow,
+                            Completion::Throw(e),
+                        ) => {
+                            pending_exception = Some(e);
+                        }
+                        (DisposeThen::ScopeCrossThrow | DisposeThen::ForOfCrossThrow, _) => {
+                            unreachable!(
+                                "a scope/for-of-cross throw cursor is seeded with Completion::Throw and always finishes as Throw"
+                            )
+                        }
                         (_, Completion::Throw(e)) => {
                             self.scheduler.remove_async_function_state(async_id);
                             let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
@@ -8771,16 +8727,10 @@ impl Interpreter {
                     let loop_state = for_of_stack.remove(pos);
                     let iterator = func_env.borrow().get(&loop_state.iter_var);
                     if let Some(iterator) = iterator {
-                        self.unroot_for_of_iterator(&iterator);
+                        self.forget_for_of_iterator(&iterator);
                     }
                 }
 
-                // A throw produced while an intervening finally was handling
-                // another abrupt completion replaces that completion.
-                let pending_return_was_replaced = pending_return.take().is_some();
-                let pending_loop_control_was_replaced = pending_loop_control.take().is_some();
-                let pending_completion_was_replaced =
-                    pending_return_was_replaced || pending_loop_control_was_replaced;
                 // §14.7.5.6: any abrupt body completion leaving a for-of closes
                 // its iterator, so every still-active loop crossed on the way to
                 // the handler unwinds — not just the ones a previous unwind
@@ -8838,12 +8788,24 @@ impl Interpreter {
                         &func_env,
                         Completion::Throw(exc),
                     ) {
-                        Completion::Throw(error) => exc = error,
-                        Completion::Exit(code) => {
+                        ForOfUnwindOutcome::Done(Completion::Throw(error)) => exc = error,
+                        ForOfUnwindOutcome::Done(Completion::Exit(code)) => {
                             self.scheduler.remove_async_function_state(async_id);
                             return Completion::Exit(code);
                         }
-                        _ => unreachable!("unwinding a throw must stay abrupt"),
+                        ForOfUnwindOutcome::Done(_) => {
+                            unreachable!("unwinding a throw must stay abrupt")
+                        }
+                        ForOfUnwindOutcome::Parked { cursor, value } => {
+                            park_dispose_at_await!(
+                                cursor,
+                                value,
+                                PendingDispose {
+                                    cursor,
+                                    then: DisposeThen::ForOfCrossThrow,
+                                }
+                            );
+                        }
                     }
                 }
 
@@ -8863,24 +8825,19 @@ impl Interpreter {
                     };
                 }
 
-                if let Some((depth, state, is_catch, _)) = handler {
-                    if is_catch {
-                        // A catch-only context is finished once its handler is
-                        // selected, but try-catch-finally must retain this
-                        // context so abrupt control from the catch still routes
-                        // through its attached finalizer. EnterCatch marks it
-                        // entered, preventing the catch from handling itself.
-                        let retained_depth = if try_stack[depth].finally_state.is_some() {
-                            depth + 1
-                        } else {
-                            depth
-                        };
-                        try_stack.truncate(retained_depth);
-                    } else if pending_completion_was_replaced {
-                        // Drop the completed inner finally contexts so
-                        // EnterFinally marks the handler selected above.
-                        try_stack.truncate(depth + 1);
-                    }
+                if let Some((depth, state, _is_catch, _)) = handler {
+                    // Always retain exactly this context: for a catch, every
+                    // try/catch now routes its normal-completion path through
+                    // a `TryExit` (see `transform_try_statement`), which must
+                    // still find this context on the stack to pop once the
+                    // catch body finishes — EnterCatch marks it entered,
+                    // preventing the catch from handling itself. For a
+                    // finally, any inner context's own completion this throw
+                    // is escaping past must not survive to confuse a later
+                    // TryExit (issue #719); truncating unconditionally is a
+                    // no-op when nothing was being replaced, since try_stack
+                    // is already exactly this deep in that case.
+                    try_stack.truncate(depth + 1);
                     pending_exception = Some(exc);
                     current_id = state;
                     continue;
@@ -8927,7 +8884,7 @@ impl Interpreter {
                     let outer_block =
                         std::mem::replace(&mut self.suspendable_dispose_block, isolated_block);
                     let result =
-                        self.exec_state_machine_body(state_body, &term_env, &state_machine);
+                        self.exec_state_machine_body(state_body, &term_env, &state_machine, false);
                     self.suspendable_dispose_block = outer_block;
                     self.in_state_machine = saved_in_state_machine;
                     if let Some(cursor) = self.parked_block_dispose.take() {
@@ -8992,31 +8949,28 @@ impl Interpreter {
                     continue;
                 }
                 Completion::Break(label, _) => {
-                    if let Some(target) = state_machine.states[current_id]
-                        .block_exits
-                        .as_ref()
-                        .and_then(|exits| exits.breaks.get(label).copied())
-                    {
-                        route_loop_control!(target);
-                        continue;
-                    }
-                    // Close iterator for the innermost matching for-of loop
+                    // Close iterator for the innermost matching for-of loop.
+                    // Mirrors the adjacent `Completion::Continue` arm: build a
+                    // `LoopControlTarget` and route it the same way a
+                    // transformed `break` reaches `route_loop_control!` via
+                    // the `LoopControl` terminator, instead of a bespoke
+                    // direct `unwind_for_of!` call.
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        let after_state = for_of_stack[pos].after_state;
-                        unwind_for_of!(pos);
-                        current_id = after_state;
+                        let loop_state = &for_of_stack[pos];
+                        let target = LoopControlTarget {
+                            target_state: loop_state.after_state,
+                            try_depth: loop_state.try_depth,
+                            for_of_depth: pos,
+                            // Mirrors the `Continue` arm below: no transform-time
+                            // target to read a scope depth from, so pin the
+                            // floor at the current depth.
+                            scope_depth: scope_stack.len(),
+                        };
+                        route_loop_control!(target);
                         continue;
                     }
                 }
                 Completion::Continue(label, _) => {
-                    if let Some(target) = state_machine.states[current_id]
-                        .block_exits
-                        .as_ref()
-                        .and_then(|exits| exits.continues.get(label).copied())
-                    {
-                        route_loop_control!(target);
-                        continue;
-                    }
                     // An inline statement can surface continue directly rather
                     // than through a LoopControl terminator. Route it through
                     // intervening finalizers before returning to the loop head.
@@ -9053,9 +9007,6 @@ impl Interpreter {
                     current_id,
                     &try_stack,
                     None,
-                    pending_return.take(),
-                    pending_loop_control.take(),
-                    saved_finally_exception.take(),
                     pending_for_of_unwind.take(),
                     &resolve_fn,
                     &reject_fn,
@@ -9092,9 +9043,6 @@ impl Interpreter {
                                 current_id,
                                 &try_stack,
                                 sent_value_binding.clone(),
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -9120,9 +9068,6 @@ impl Interpreter {
                         resume_state,
                         &try_stack,
                         sent_value_binding.clone(),
-                        pending_return.take(),
-                        pending_loop_control.take(),
-                        saved_finally_exception.take(),
                         pending_for_of_unwind.take(),
                         &resolve_fn,
                         &reject_fn,
@@ -9192,41 +9137,50 @@ impl Interpreter {
                         _after_state: after_state,
                         entered_catch: false,
                         entered_finally: false,
+                        pending_completion: None,
                     });
                     current_id = try_state;
                 }
 
                 StateTerminator::TryExit { after_state } => {
-                    try_stack.pop();
-                    if let Some(exc) = pending_exception.take() {
-                        pending_exception = Some(exc);
-                        continue;
+                    let finished = try_stack.pop();
+                    match finished.and_then(|ctx| ctx.pending_completion) {
+                        Some(PendingCompletion::Throw(exc)) => {
+                            pending_exception = Some(exc);
+                            continue;
+                        }
+                        Some(PendingCompletion::Return(ret_val)) => {
+                            route_return!(ret_val);
+                            continue;
+                        }
+                        Some(PendingCompletion::LoopControl(target)) => {
+                            route_loop_control!(target);
+                            continue;
+                        }
+                        None => {
+                            // A fresh, not-yet-routed exception (the one-shot
+                            // resume input, not a completion owned by the
+                            // context just popped) still threads through here
+                            // unchanged.
+                            if let Some(exc) = pending_exception.take() {
+                                pending_exception = Some(exc);
+                                continue;
+                            }
+                            if pending_for_of_unwind
+                                .as_ref()
+                                .is_some_and(|pending| pending.clear_at_state == Some(after_state))
+                            {
+                                pending_for_of_unwind = None;
+                            }
+                            current_id = after_state;
+                        }
                     }
-                    if let Some(ret_val) = pending_return.take() {
-                        route_return!(ret_val);
-                        continue;
-                    }
-                    // Restore any exception saved from before the finally block
-                    if let Some(exc) = saved_finally_exception.take() {
-                        pending_exception = Some(exc);
-                        continue;
-                    }
-                    if let Some(target) = pending_loop_control.take() {
-                        route_loop_control!(target);
-                        continue;
-                    }
-                    if pending_for_of_unwind
-                        .as_ref()
-                        .is_some_and(|pending| pending.clear_at_state == Some(after_state))
-                    {
-                        pending_for_of_unwind = None;
-                    }
-                    current_id = after_state;
                 }
 
                 StateTerminator::EnterCatch {
                     body_state,
                     ref param,
+                    ref lexical_decls,
                 } => {
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_catch = true;
@@ -9240,6 +9194,19 @@ impl Interpreter {
                     if let Some(pattern) = param {
                         let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &catch_env);
                     }
+                    // `BlockDeclarationInstantiation` for the catch body's own
+                    // Block (see the `OpenBlock` fix this mirrors, #738): its
+                    // lexical names enter TDZ here, into the same environment
+                    // as `param`, rather than the spec's separate nested one
+                    // (see the `EnterCatch` doc comment).
+                    for (name, is_const) in lexical_decls {
+                        let kind = if *is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        catch_env.borrow_mut().declare(name, kind);
+                    }
                     scope_stack.push(ScopeFrame {
                         env: catch_env,
                         try_depth: try_stack.len(),
@@ -9249,11 +9216,20 @@ impl Interpreter {
                 }
 
                 StateTerminator::EnterFinally { body_state } => {
+                    let mut parked = false;
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_finally = true;
+                        // A throw routed here belongs to this context, not an
+                        // enclosing one — see issue #719.
+                        if let Some(exc) = pending_exception.take() {
+                            ctx.pending_completion = Some(PendingCompletion::Throw(exc));
+                            parked = true;
+                        }
                     }
-                    // Park any pending exception so the finally body runs normally
-                    saved_finally_exception = pending_exception.take();
+                    if parked {
+                        self.scheduler
+                            .sync_async_function_try_stack(async_id, &try_stack);
+                    }
                     current_id = body_state;
                 }
 
@@ -9321,7 +9297,6 @@ impl Interpreter {
                             }
                         }
                     };
-                    self.gc_root_value(&iterator);
                     self.env_set(&func_env, iter_var, iterator).ok();
                     for_of_stack.push(ForOfLoopState {
                         iter_var: iter_var.clone(),
@@ -9331,6 +9306,8 @@ impl Interpreter {
                         try_depth: try_stack.len(),
                         outer_env: term_env,
                         iteration_env: None,
+                        is_await,
+                        iterator_closed: false,
                     });
                     current_id = head_state;
                 }
@@ -9360,6 +9337,8 @@ impl Interpreter {
                                 try_depth: try_stack.len(),
                                 outer_env: term_env.clone(),
                                 iteration_env: None,
+                                is_await,
+                                iterator_closed: false,
                             });
                             for_of_stack.len() - 1
                         }
@@ -9441,9 +9420,6 @@ impl Interpreter {
                                 current_id, // resume to same ForOfHead state
                                 &try_stack,
                                 binding,
-                                pending_return.take(),
-                                pending_loop_control.take(),
-                                saved_finally_exception.take(),
                                 pending_for_of_unwind.take(),
                                 &resolve_fn,
                                 &reject_fn,
@@ -9487,7 +9463,7 @@ impl Interpreter {
                             .borrow()
                             .get(iter_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        self.unroot_for_of_iterator(&iterator);
+                        self.forget_for_of_iterator(&iterator);
                         for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
@@ -9524,7 +9500,7 @@ impl Interpreter {
                                     }
                                 }
                                 if let Some(d) = decl.declarations.first() {
-                                    self.bind_pattern(
+                                    match self.bind_pattern(
                                         &d.pattern,
                                         value,
                                         match decl.kind {
@@ -9535,7 +9511,10 @@ impl Interpreter {
                                             | VarKind::AwaitUsing => BindingKind::Const,
                                         },
                                         &bind_env,
-                                    )
+                                    ) {
+                                        Completion::Throw(e) => Err(e),
+                                        _ => Ok(()),
+                                    }
                                 } else {
                                     Ok(())
                                 }
@@ -9555,6 +9534,198 @@ impl Interpreter {
                         }
                         current_id = body_state;
                     }
+                }
+
+                StateTerminator::ArrayPatternIter {
+                    ref op,
+                    ref iter_var,
+                    next_state,
+                } => match op {
+                    ArrayPatternIterOp::Init { iterable } => {
+                        let iterable_val = operand!(iterable, &term_env);
+                        let iterator = match self.for_of_init_iterator(&iterable_val, false) {
+                            Ok(it) => it,
+                            Err(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                        };
+                        self.env_set(&func_env, iter_var, iterator).ok();
+                        for_of_stack.push(ForOfLoopState {
+                            iter_var: iter_var.clone(),
+                            label_set: vec![],
+                            head_state: next_state,
+                            after_state: next_state,
+                            try_depth: try_stack.len(),
+                            outer_env: term_env.clone(),
+                            iteration_env: None,
+                            is_await: false,
+                            iterator_closed: false,
+                        });
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Step { dest_var } => {
+                        let loop_pos = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                        let value = match loop_pos {
+                            None => JsValue::UNDEFINED,
+                            Some(pos) => {
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                match self.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            for_of_protocol_failure = Some(iter_var.clone());
+                                            pending_exception = Some(e);
+                                            continue;
+                                        }
+                                    },
+                                    Ok(None) => {
+                                        self.forget_for_of_iterator(&iterator);
+                                        for_of_stack.remove(pos);
+                                        JsValue::UNDEFINED
+                                    }
+                                    Err(e) => {
+                                        for_of_protocol_failure = Some(iter_var.clone());
+                                        pending_exception = Some(e);
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        if let Some(dest) = dest_var {
+                            self.env_set(&func_env, dest, value).ok();
+                        }
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Drain { dest_var } => {
+                        let loop_pos = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                        let rest = match loop_pos {
+                            None => Vec::new(),
+                            Some(pos) => {
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                let mut rest = Vec::new();
+                                let mut drain_failed = false;
+                                loop {
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => match self.iterator_value(&result) {
+                                            Ok(v) => rest.push(v),
+                                            Err(e) => {
+                                                for_of_protocol_failure = Some(iter_var.clone());
+                                                pending_exception = Some(e);
+                                                drain_failed = true;
+                                                break;
+                                            }
+                                        },
+                                        Ok(None) => break,
+                                        Err(e) => {
+                                            for_of_protocol_failure = Some(iter_var.clone());
+                                            pending_exception = Some(e);
+                                            drain_failed = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if drain_failed {
+                                    continue;
+                                }
+                                self.forget_for_of_iterator(&iterator);
+                                for_of_stack.remove(pos);
+                                rest
+                            }
+                        };
+                        let arr = self.create_array(rest);
+                        self.env_set(&func_env, dest_var, arr).ok();
+                        current_id = next_state;
+                    }
+                    ArrayPatternIterOp::Finish => {
+                        if let Some(pos) = for_of_stack
+                            .iter()
+                            .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                        {
+                            let loop_state = for_of_stack.remove(pos);
+                            match self.close_for_of_loop(
+                                loop_state,
+                                &func_env,
+                                Completion::Normal(JsValue::UNDEFINED),
+                                None,
+                            ) {
+                                Completion::Throw(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                                Completion::Exit(code) => {
+                                    self.scheduler.remove_async_function_state(async_id);
+                                    return Completion::Exit(code);
+                                }
+                                _ => {}
+                            }
+                        }
+                        current_id = next_state;
+                    }
+                },
+
+                StateTerminator::ToPropertyKey {
+                    ref source,
+                    ref dest,
+                    next_state,
+                } => {
+                    let raw = term_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    match self.to_property_key_value(&raw) {
+                        Ok(v) => {
+                            self.env_set(&func_env, dest, v).ok();
+                            current_id = next_state;
+                        }
+                        Err(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                    }
+                }
+
+                StateTerminator::ObjectRestCopy {
+                    ref source,
+                    ref excluded,
+                    ref dest_var,
+                    next_state,
+                } => {
+                    let source_val = term_env.borrow().get(source).unwrap_or(JsValue::UNDEFINED);
+                    let mut excluded_vals = Vec::with_capacity(excluded.len());
+                    let mut eval_failed = false;
+                    for expr in excluded {
+                        let v = operand!(expr, &term_env, throw(e) => {
+                            pending_exception = Some(e);
+                            eval_failed = true;
+                            break;
+                        });
+                        excluded_vals.push(v);
+                    }
+                    if eval_failed {
+                        continue;
+                    }
+                    let rest_val = match self.object_rest_copy(source_val, &excluded_vals) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        _ => JsValue::UNDEFINED,
+                    };
+                    self.env_set(&func_env, dest_var, rest_val).ok();
+                    current_id = next_state;
                 }
 
                 StateTerminator::Completed => {
@@ -9631,8 +9802,10 @@ impl Interpreter {
         head_env
     }
 
-    fn unroot_for_of_iterator(&mut self, iterator: &JsValue) {
-        self.gc_unroot_value(iterator);
+    /// A transformed for-of's iterator lives in the driver's environment, which
+    /// the collector already traces, so ending the loop only has to stop
+    /// tracking it for `return()` of the running activation.
+    fn forget_for_of_iterator(&mut self, iterator: &JsValue) {
         if let Some(iterator_id) = iterator.as_object_id() {
             self.forget_pending_iter_close(iterator_id);
         }
@@ -9660,22 +9833,41 @@ impl Interpreter {
 
     fn close_for_of_loop(
         &mut self,
-        loop_state: ForOfLoopState,
+        mut loop_state: ForOfLoopState,
         func_env: &EnvRef,
         completion: Completion,
         generator_id: Option<u64>,
     ) -> Completion {
-        let mut completion = match loop_state.iteration_env {
+        let completion = match loop_state.iteration_env.take() {
             Some(env) => self.dispose_resources(&env, completion),
             None => completion,
         };
+        self.close_for_of_iterator(loop_state, func_env, completion, generator_id)
+    }
+
+    /// The synchronous half of `close_for_of_loop`: IteratorClose for the
+    /// loop's iterator once its per-iteration environment (if any) has
+    /// already been disposed (`loop_state.iteration_env` is `None`). Split
+    /// out so an async-generator caller can dispose that environment through
+    /// its own resumable path first, then share this synchronous tail.
+    fn close_for_of_iterator(
+        &mut self,
+        loop_state: ForOfLoopState,
+        func_env: &EnvRef,
+        mut completion: Completion,
+        generator_id: Option<u64>,
+    ) -> Completion {
+        debug_assert!(
+            loop_state.iteration_env.is_none(),
+            "close_for_of_iterator expects the iteration_env already disposed"
+        );
 
         // The borrow must end before `iterator_close_result` runs the user's
         // `return` method, which may write bindings in this same environment.
         let iterator = func_env.borrow().get(&loop_state.iter_var);
         if matches!(completion, Completion::Exit(_)) {
             if let Some(iterator) = iterator {
-                self.unroot_for_of_iterator(&iterator);
+                self.forget_for_of_iterator(&iterator);
                 if let Some(generator_id) = generator_id {
                     self.remove_generator_inline_iterator(generator_id, &iterator);
                 }
@@ -9683,8 +9875,13 @@ impl Interpreter {
             return completion;
         }
         if let Some(iterator) = iterator {
-            let close_result = self.iterator_close_result(&iterator);
-            self.unroot_for_of_iterator(&iterator);
+            // `completion`'s payload must survive `return()`, which can run
+            // arbitrary user code (issue #794).
+            let close_result = self.with_gc_root_scope(|interp| {
+                completion.root_payload(|v| interp.gc_root_value(v));
+                interp.iterator_close_result(&iterator)
+            });
+            self.forget_for_of_iterator(&iterator);
             if let Some(generator_id) = generator_id {
                 self.remove_generator_inline_iterator(generator_id, &iterator);
             }
@@ -9703,23 +9900,95 @@ impl Interpreter {
         completion
     }
 
+    /// `close_for_of_iterator` for a driver that may suspend (`can_park`): a
+    /// `for await` loop's AsyncIteratorClose Awaits the result of `return()`, so the close
+    /// runs as a [`DisposeCursor`] and reports `Parked` while that Await is
+    /// pending. The loop stays on the caller's stack, flagged
+    /// `iterator_closed`, so the re-entered unwind releases it instead of
+    /// calling `return()` a second time; its resumed completion is the seed.
+    fn close_for_of_iterator_parking(
+        &mut self,
+        loop_state: &mut ForOfLoopState,
+        func_env: &EnvRef,
+        completion: Completion,
+        generator_id: Option<u64>,
+        can_park: bool,
+    ) -> ForOfUnwindOutcome {
+        let iterator = func_env.borrow().get(&loop_state.iter_var);
+        if loop_state.iterator_closed || !(loop_state.is_await && can_park) || iterator.is_none() {
+            let completion = if loop_state.iterator_closed {
+                if let Some(iterator) = &iterator {
+                    self.forget_for_of_iterator(iterator);
+                    if let Some(generator_id) = generator_id {
+                        self.remove_generator_inline_iterator(generator_id, iterator);
+                    }
+                }
+                completion
+            } else {
+                self.close_for_of_iterator(loop_state.clone(), func_env, completion, generator_id)
+            };
+            return ForOfUnwindOutcome::Done(completion);
+        }
+        let iterator = iterator.expect("checked above");
+        let mut cursor = DisposeCursor::iterator_close(iterator.clone(), completion);
+        match cursor.step(self, None) {
+            DisposeStep::Await(value) => {
+                loop_state.iterator_closed = true;
+                ForOfUnwindOutcome::Parked { cursor, value }
+            }
+            DisposeStep::Done(completion) => {
+                self.forget_for_of_iterator(&iterator);
+                if let Some(generator_id) = generator_id {
+                    self.remove_generator_inline_iterator(generator_id, &iterator);
+                }
+                ForOfUnwindOutcome::Done(completion)
+            }
+        }
+    }
+
     /// Closes every active for-of loop from `from` to the innermost, inner to
     /// outer, carrying each loop's resulting completion into the next outer
-    /// iteration disposal.
+    /// iteration disposal. Mirrors `unwind_generator_for_of_loops`: the loop
+    /// being closed stays on `for_of_stack` with its `iteration_env` already
+    /// taken while that environment's own disposal is in flight, so a
+    /// disposal `Await` can be reported to the caller (`ForOfUnwindOutcome::
+    /// Parked`) instead of draining the job queue inline. The caller parks
+    /// with `DisposeThen::ForOfCrossThrow` and, on resume, re-enters the
+    /// top-level throw routing that calls back in here to finish the rest.
     fn unwind_async_for_of_loops(
         &mut self,
         for_of_stack: &mut Vec<ForOfLoopState>,
         from: usize,
         func_env: &EnvRef,
         mut completion: Completion,
-    ) -> Completion {
-        for loop_state in for_of_stack.drain(from..).rev() {
-            completion = self.close_for_of_loop(loop_state, func_env, completion, None);
+    ) -> ForOfUnwindOutcome {
+        while for_of_stack.len() > from {
+            let loop_pos = for_of_stack.len() - 1;
+            if let Some(env) = for_of_stack[loop_pos].iteration_env.take() {
+                completion = match self.dispose_env_for_for_of_unwind(&env, completion, true) {
+                    ForOfUnwindOutcome::Done(c) => c,
+                    parked @ ForOfUnwindOutcome::Parked { .. } => return parked,
+                };
+                if matches!(completion, Completion::Exit(_)) {
+                    break;
+                }
+            }
+            completion = match self.close_for_of_iterator_parking(
+                &mut for_of_stack[loop_pos],
+                func_env,
+                completion,
+                None,
+                true,
+            ) {
+                ForOfUnwindOutcome::Done(c) => c,
+                parked @ ForOfUnwindOutcome::Parked { .. } => return parked,
+            };
+            for_of_stack.pop();
             if matches!(completion, Completion::Exit(_)) {
                 break;
             }
         }
-        completion
+        ForOfUnwindOutcome::Done(completion)
     }
 
     fn async_fn_complete(&mut self, async_id: u64, resolve_fn: &JsValue) -> Completion {
@@ -9737,9 +10006,6 @@ impl Interpreter {
         resume_state: usize,
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
-        pending_return: Option<JsValue>,
-        pending_loop_control: Option<crate::interpreter::generator_transform::LoopControlTarget>,
-        saved_finally_exception: Option<JsValue>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
@@ -9768,9 +10034,6 @@ impl Interpreter {
                 current_state: resume_state,
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
-                pending_return,
-                pending_loop_control,
-                saved_finally_exception,
                 pending_for_of_unwind,
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
@@ -10119,6 +10382,48 @@ fn compare_bigint_number(
                 number < trunc
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod destructuring_reference_scope_tests {
+    use super::*;
+
+    #[test]
+    fn roots_and_finalizes_a_captured_member_reference() {
+        let mut interp = Interpreter::new();
+        let object_id = interp.create_object_id();
+        let env = Environment::new(None);
+        let baseline = interp.gc_root_frame();
+        let reference = DestructLRef::Member(
+            JsValue::object(object_id),
+            JsValue::string(JsString::from_str("answer")),
+        );
+
+        let completion =
+            interp.with_destruct_lref(Some(reference), &Expression::This, &env, |interp| {
+                assert!(
+                    interp.gc_temp_roots.contains(&object_id),
+                    "captured member base must stay rooted while the body runs"
+                );
+                Completion::Normal(JsValue::number(42.0))
+            });
+
+        assert!(matches!(completion, Completion::Empty));
+        assert_eq!(
+            interp.gc_root_frame(),
+            baseline,
+            "reference roots must be released after finalization"
+        );
+        let descriptor = interp
+            .get_object_cell_expect(object_id)
+            .borrow()
+            .get_own_property_full("answer")
+            .expect("captured reference must receive the body value");
+        assert_eq!(
+            descriptor.value.and_then(|value| value.as_number()),
+            Some(42.0)
+        );
     }
 }
 
