@@ -901,13 +901,34 @@ fn declares_lexical_binding(stmt: &Statement) -> bool {
     }
 }
 
-/// A statement list the transform flattens into the enclosing state graph. Its
-/// declarations lose their block scope once flattened, so a list that holds an
-/// isolatable block next to a lexical declaration cannot be lowered.
-fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
-    let combined = stmts.clone().fold(AwaitUsingScan::None, |acc, s| {
+/// A statement list the transform flattens into the enclosing state graph.
+/// `Block` and `try`/`catch`/`finally` clause bodies both open their own
+/// per-entry environment once lowered (`ScopeAction::OpenBlock`, `#703`),
+/// so a sibling lexical declaration next to an isolatable block is not
+/// observably affected by the block being pulled into its own nested
+/// state — confirmed by probing a case-level `let` shadowing an outer
+/// binding across a plain (non-`await using`) `await` in each: `try`/
+/// `catch`/`finally`/plain-block all already preserve the outer binding
+/// once lowered. `switch` does not share this fold (see `scan_switch_body`).
+fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement>) -> AwaitUsingScan {
+    stmts.fold(AwaitUsingScan::None, |acc, s| {
         acc.combine(scan_await_using(s))
-    });
+    })
+}
+
+/// A `switch` statement's `CaseBlock` is one lexical scope spanning every
+/// case (`BlockDeclarationInstantiation` runs once for the whole switch),
+/// but `transform_switch_statement` lowers each case's statements straight
+/// into the state graph with no `EnterScope`/`ExitScope` pair at all —
+/// unlike `Block`/`try` clause bodies, switch never got the per-entry-scope
+/// treatment `#703` gave those. Confirmed by probe: a case-level `let`
+/// shadowing an outer binding across a plain (non-`await using`) `await`
+/// already loses the outer value once such a switch is lowered. So a
+/// lexical declaration next to an isolatable block here still can't be
+/// flattened safely; that gap is tracked separately, out of scope for this
+/// fix.
+fn scan_switch_body<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
+    let combined = scan_flattened_list(stmts.clone());
     if combined == AwaitUsingScan::Isolatable && stmts.into_iter().any(declares_lexical_binding) {
         AwaitUsingScan::Blocked
     } else {
@@ -940,16 +961,8 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         Statement::Labeled(_, inner) => scan_await_using(inner),
         Statement::While(w) => scan_await_using(&w.body),
         Statement::DoWhile(d) => scan_await_using(&d.body),
-        Statement::For(f) => {
-            let body = scan_await_using(&f.body);
-            match &f.init {
-                Some(ForInit::Variable(decl)) if decl.kind != VarKind::Var => {
-                    body.blocked_unless_none()
-                }
-                _ => body,
-            }
-        }
-        Statement::ForIn(f) => scan_await_using(&f.body).blocked_unless_none(),
+        Statement::For(f) => scan_await_using(&f.body),
+        Statement::ForIn(f) => scan_await_using(&f.body),
         Statement::ForOf(f) => {
             let body = scan_await_using(&f.body);
             match &f.left {
@@ -971,9 +984,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
             }
             result
         }
-        Statement::Switch(s) => {
-            scan_flattened_list(s.cases.iter().flat_map(|c| c.consequent.iter()))
-        }
+        Statement::Switch(s) => scan_switch_body(s.cases.iter().flat_map(|c| c.consequent.iter())),
         Statement::With(_, body) => scan_await_using(body).blocked_unless_none(),
         _ => AwaitUsingScan::None,
     }
@@ -985,9 +996,11 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// `try`/`catch`/`finally` bodies and `switch` cases. The block's disposal then
 /// suspends the function at its Awaits instead of draining the queue inline.
 ///
-/// Containers whose lowering would flatten an observable lexical scope
-/// (`for (let ..)`, `for-in`, `with`, a list declaring a binding beside the
-/// block) are excluded and keep running in the tree-walker.
+/// Containers whose lowering would flatten an observable lexical scope are
+/// excluded and keep running in the tree-walker: `with`, a `using`/`await
+/// using` for-of loop variable, and a `switch` case list beside the block
+/// (switch's `CaseBlock` never gets its own per-entry scope at all, unlike
+/// `Block`/`try`/`for`/`for-in`, which `#703` already covers).
 pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
     scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
@@ -1150,6 +1163,15 @@ mod tests {
             "outer: while (c) { { await using a = null; } }",
             "switch (x) { case 1: { await using a = null; } break; }",
             "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
+            "for (let i = 0; i < 3; i++) { { await using a = null; } }",
+            "for (const i = 0; ;) { { await using a = null; } }",
+            "while (c) { let j = i; { await using a = null; } }",
+            "for (k in o) { { await using a = null; } }",
+            "try { let x = 2; { await using a = null; } } finally {}",
+            "try {} catch (e) { const x = 1; { await using a = null; } }",
+            "try {} finally { class C {} { await using a = null; } }",
+            "{ let x = 1; { await using a = null; } }",
+            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
         ];
         for src in isolatable {
             assert!(scan_first_statement(src), "expected isolatable: {src}");
@@ -1176,19 +1198,19 @@ mod tests {
 
     #[test]
     fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
+        // `with` and a `using`/`await using` for-of loop variable are
+        // genuinely still unsafe to flatten (no per-entry scope treatment
+        // exists for either). `switch` is unsafe for a different reason:
+        // `transform_switch_statement` never opens a scope for the whole
+        // `CaseBlock` at all (unlike `Block`/`try`, `#703` never covered
+        // it) — confirmed by a case-level `let` shadowing an outer binding
+        // across a plain `await` already losing the outer value once such
+        // a switch is lowered, with no `await using` involved.
         let blocked = [
-            "for (let i = 0; i < 3; i++) { { await using a = null; } }",
-            "for (const i = 0; ;) { { await using a = null; } }",
-            "while (c) { let j = i; { await using a = null; } }",
-            "for (k in o) { { await using a = null; } }",
-            "try { let x = 2; { await using a = null; } } finally {}",
-            "try {} catch (e) { const x = 1; { await using a = null; } }",
-            "try {} finally { class C {} { await using a = null; } }",
-            "{ let x = 1; { await using a = null; } }",
             "with (o) { { await using a = null; } }",
             "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
-            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
+            "for (using r of y) { { await using a = null; } }",
         ];
         for src in blocked {
             assert!(!scan_first_statement(src), "expected blocked: {src}");

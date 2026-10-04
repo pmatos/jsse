@@ -122,6 +122,21 @@ asyncTest(async function () {
 
   log = await observe(function (L) {
     return (async function () {
+      for (let i = 0; i < 2; i++) {
+        await using a = null;
+        L('b' + i);
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['b0', 'sync-end', 'w1', 'b1', 'w2', 'after', 'w3', 'settled', 'w4'],
+    'for (let ...) body'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
       for (var x of [1, 2]) {
         await using a = null;
         L('b' + x);
