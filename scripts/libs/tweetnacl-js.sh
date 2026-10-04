@@ -30,25 +30,35 @@
 # adapter on jsse; Node loads real tape as an independent framework oracle.
 #
 # Curve25519/Ed25519 point arithmetic runs ~140-390x slower on the tree-walker
-# than on V8 per operation, so the full upstream counts (256 scalarmult / 256
-# box / 1024 sign) project to ~6h rather than minutes, while a correctness smoke
-# run over all 13 files with truncated vectors passed 1233/1233 byte-identical
-# to Node — pure interpretation overhead, not an engine bug, but not a practical
-# harness either. lib_prepare therefore evenly samples the three curve-heavy
-# vector files (scalarmult.random/box.random/sign.spec) down to 20 each
-# (stride-sampled across the full array, not just a prefix, so the subset still
-# spans the original vector space); every other file (secretbox, hash,
-# onetimeauth — no elliptic-curve cost) stays at its full upstream count. This
-# is the only corpus here reduced by sampling a data set; other configs that
-# drop cases do it case-by-case, never by thinning a vector file.
+# than on V8 per operation. At the 2026-09-05 baseline that put the full
+# upstream counts (256 scalarmult / 256 box / 1024 sign) at a projected ~6h,
+# so lib_prepare sampled all three curve-heavy vector files down to 20 each.
+# #603 (bytecode `new`/compound-member-assignment support) has since landed,
+# and general tree-walker throughput is also ~4x faster than that baseline
+# (docs/perf/2026-10-04/tweetnacl-recheck.md) — re-measured end to end rather
+# than re-projected: today's (then-)20/20/20 corpus runs in 9m25.7s real.
+# scalarmult.random.js and box.random.js now run their full upstream
+# 256-vector counts outright (sample()'s `arr.length <= n` guard makes the
+# call for them a no-op). sign.spec.js is raised from 20 to 256 (of 1024
+# upstream) — its per-vector cost (a sign + an open/verify, scaling linearly
+# with vector count) is what keeps the total harness run inside LIB_TIMEOUT;
+# 1024 projects to well over an hour for that one file alone. It is still
+# stride-sampled (not a prefix) so the 256-vector subset spans the original
+# vector space; every non-curve file (secretbox, hash, onetimeauth) already
+# ran its full upstream count and is unaffected. Validated end to end
+# (--clean, cold cache) at 50m15s real — this build host runs several
+# concurrent agent sessions, so that figure includes some incidental
+# contention (see the perf doc); LIB_TIMEOUT below is sized with real
+# margin above it rather than against a best-case number.
 #
-# Exhaustive coverage is issue #361. Measured 2026-09-05: --bytecode does not
-# move this workload (1.00-1.07x), because the three functions carrying 96% of
-# the work — M, car25519, sel25519 — all bail out of the compiler, on `new` and
-# on compound assignment to a member target (issue #603). Raising the caps needs
-# ~17x to hold today's ~22min, or ~6x to stay inside LIB_TIMEOUT below; #603 is
-# a precondition for that multiplier, not a demonstration of it. Numbers, counter
-# dumps and method: docs/perf/2026-09-05/tweetnacl-bytecode-null-result.md.
+# Exhaustive coverage (all three at full upstream counts) remains issue #361 —
+# sign.spec.js is the long pole, not scalarmult/box, so closing it needs
+# further engine throughput rather than another sampling-cap bump. The
+# bytecode VM still doesn't help here: `car25519`'s `Math.floor(...)` call
+# bails the compiler (`compile_call` only accepts an `Identifier` callee),
+# which keeps 98.63% of the remaining tree-walked work off the VM — tracked in
+# #839. Numbers, counter dumps and method:
+# docs/perf/2026-10-04/tweetnacl-recheck.md.
 LIB_REPO="https://github.com/dchest/tweetnacl-js.git"
 LIB_REF="1.0.3"   # git tag; matches the published npm 1.0.3 exactly (same commit as v1.0.2)
 LIB_ENTRY="test/jsse-entry.js"
@@ -57,8 +67,8 @@ LIB_ESBUILD_EXTRA=(
     --alias:tape=./test/jsse-tape.js
 )
 LIB_SHIMS=("node-crypto-shim.js" "node-test-harness.js")
-LIB_EXPECT_COUNT="5470"   # locked: sampled corpus, equal on jsse and Node
-LIB_TIMEOUT="3600"        # 1h: the fixed 200-iteration scalarMult.base KAT loop alone is ~10min
+LIB_EXPECT_COUNT="7362"   # locked: raised corpus (#361), equal on jsse and Node
+LIB_TIMEOUT="6000"        # 100min: measured 50m15s real on a loaded shared host (~2x margin)
 
 lib_prepare() {
     # Retain only the dependencies the test files themselves import; the
@@ -77,8 +87,10 @@ lib_prepare() {
         fs.writeFileSync(p, src.replace(needle, 'var nacl = window.nacl;'));
       }
     "
-    # Evenly sample the curve-heavy vector files (see the header comment for
-    # why); every other data file keeps its full upstream vector count.
+    # Evenly sample sign.spec.js — the one file whose full upstream count
+    # (1024) still doesn't fit LIB_TIMEOUT (see the header comment for why);
+    # scalarmult.random.js and box.random.js now run their full upstream 256
+    # each, unsampled.
     node -e "
       const fs = require('fs');
       function sample(arr, n) {
@@ -87,14 +99,11 @@ lib_prepare() {
         for (var i = 0; i < n; i++) out.push(arr[Math.floor(i * stride)]);
         return out;
       }
-      var sampled = 0;
-      ['test/data/scalarmult.random.js', 'test/data/box.random.js', 'test/data/sign.spec.js'].forEach(function (p) {
-        var data = require('./' + p);
-        var out = sample(data, 20);
-        sampled += data.length - out.length;
-        fs.writeFileSync(p, 'module.exports = ' + JSON.stringify(out, null, 2) + ';\n');
-      });
-      console.log('tweetnacl-js: dropped ' + sampled + ' vectors sampling to a tractable runtime (issue #361)');
+      var p = 'test/data/sign.spec.js';
+      var data = require('./' + p);
+      var out = sample(data, 256);
+      fs.writeFileSync(p, 'module.exports = ' + JSON.stringify(out, null, 2) + ';\n');
+      console.log('tweetnacl-js: dropped ' + (data.length - out.length) + ' sign.spec.js vectors sampling to a tractable runtime (issue #361)');
     "
     cp "$SCRIPT_DIR/node-tape-module.js" test/jsse-tape.js
     cp "$SCRIPT_DIR/libs/tweetnacl-js-jsse-entry.js" "$LIB_ENTRY"

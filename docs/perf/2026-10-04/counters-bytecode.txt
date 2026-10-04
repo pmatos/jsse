@@ -1,0 +1,86 @@
+PERF	vm_ops	153948180
+PERF	ast_stmt_execs	714656
+PERF	ast_expr_evals	31056176
+PERF	ast_work_units	31770832
+PERF	body_dispatch_compiled	79779
+PERF	body_dispatch_ast	38870
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	1929.68
+PERF	ast_units_in_functions	31770713
+PERF	ast_units_per_ast_body	817.36
+PERF	compile_ok	36
+PERF	compile_bail	21
+PERF	calls_from_vm	80986
+PERF	calls_to_native	652358
+PERF	calls_to_user	118649
+PERF	gc_minor	7
+PERF	gc_major	7
+PERF	gc_ms	17
+BAIL	call callee	7
+BAIL	expression:Array	4
+BAIL	statement:Throw	4
+BAIL	expression:Function	2
+BAIL	nested tail call	2
+BAIL	binary op	1
+BAIL	expression:Typeof	1
+BODY	C	31336617	98.63%	38831	call callee
+BODY	ur	223564	0.70%	8	expression:Array
+BODY	Q	98277	0.31%	3	call callee
+BODY	pr	86190	0.27%	3	call callee
+BODY	_r	21274	0.07%	1	expression:Array
+BODY	<anonymous#1481>	1832	0.01%	1	nested tail call
+BODY	<anonymous#1082>	861	0.00%	1	expression:Function
+BODY	<anonymous#1503>	783	0.00%	1	call callee
+BODY	gr	465	0.00%	1	expression:Array
+BODY	<anonymous#1511>	383	0.00%	1	statement:Throw
+BODY	xr	144	0.00%	6	binary op
+BODY	<script body>	119	0.00%	1	call callee
+BODY	vr	84	0.00%	2	expression:Array
+BODY	<anonymous#1487>	60	0.00%	3	statement:Throw
+BODY	bench	57	0.00%	1	call callee
+BODY	<anonymous#6289>	36	0.00%	2	call callee
+BODY	<anonymous#1499>	27	0.00%	1	statement:Throw
+BODY	T	23	0.00%	1	nested tail call
+BODY	<anonymous#1519>	20	0.00%	1	expression:Typeof
+BODY	Er	10	0.00%	1	statement:Throw
+BODY	<anonymous#6276>	6	0.00%	1	expression:Function
+OP	LoadName	48889360	31.76%
+OP	GetElement	16815656	10.92%
+OP	Pop	14271551	9.27%
+OP	Add	10694378	6.95%
+OP	LoadConst	9276141	6.03%
+OP	JumpIfFalse	7304486	4.74%
+OP	Lt	7292982	4.74%
+OP	Jump	6875485	4.47%
+OP	UpdateName	6871206	4.46%
+OP	SetElement	6658814	4.33%
+OP	DupN	5489714	3.57%
+OP	ToPrimitiveKey	5489714	3.57%
+OP	Mul	5267043	3.42%
+OP	ResolveName	665211	0.43%
+OP	StoreResolvedName	665211	0.43%
+OP	BitXor	357156	0.23%
+OP	BitOr	290161	0.19%
+OP	BitAnd	135689	0.09%
+OP	Sub	132049	0.09%
+OP	LoadCalleeName	80986	0.05%
+OP	Call	80983	0.05%
+OP	GetProp	64330	0.04%
+OP	ReturnUndefined	59317	0.04%
+OP	LoadResolvedName	45380	0.03%
+OP	Construct	38541	0.03%
+OP	UShr	33011	0.02%
+OP	SetProp	21704	0.01%
+OP	LoadThis	21704	0.01%
+OP	Return	20459	0.01%
+OP	Shl	17006	0.01%
+OP	BitNot	7170	0.00%
+OP	JumpIfFalsyKeep	4598	0.00%
+OP	LtEq	4104	0.00%
+OP	Mod	2564	0.00%
+OP	StrictNotEq	2535	0.00%
+OP	Shr	1256	0.00%
+OP	Div	516	0.00%
+OP	Not	5	0.00%
+OP	ReturnCall	3	0.00%
+OP	Neg	1	0.00%
