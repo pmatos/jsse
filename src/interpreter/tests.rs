@@ -815,6 +815,63 @@ fn module_loader_dispatch_owns_host_type_and_mode_handling() {
 }
 
 #[test]
+fn source_text_module_loader_preserves_mode_identity_and_context() {
+    let dir = temp_case_dir("source-text-loader-modes");
+    let child_path = write_case_file(&dir, "child.js", "export const value = 1;");
+    let parent_path = write_case_file(
+        &dir,
+        "parent.js",
+        r#"import "./child.js"; export const value = 1;"#,
+    );
+    let broken_path = write_case_file(
+        &dir,
+        "broken.js",
+        r#"import { missing } from "./child.js"; export { missing };"#,
+    );
+    let sentinel_path = write_case_file(&dir, "sentinel.js", "export {};");
+
+    let mut interp = Interpreter::new();
+    let sentinel_key = ModuleKey::for_file(sentinel_path);
+    interp.current_module_path = Some(sentinel_key.clone());
+    let parent_key = ModuleKey::for_file(parent_path);
+
+    let deferred = interp
+        .load_module_for_type(&parent_key, None, ModuleLoadMode::Defer)
+        .expect("deferred source text module should link");
+    let child_key = ModuleKey::for_file(child_path);
+    let child = interp
+        .module_registry_get(&child_key)
+        .expect("deferred dependency should be registered");
+    assert!(deferred.borrow().deferred_only);
+    assert!(child.borrow().deferred_only);
+    assert_eq!(interp.current_module_path, Some(sentinel_key.clone()));
+    assert!(!interp.loading_deferred);
+    assert_eq!(interp.static_module_load_depth, 0);
+
+    let eager = interp
+        .load_module_for_type(&parent_key, None, ModuleLoadMode::Evaluate)
+        .expect("eager source text module should reuse the deferred record");
+    assert!(Rc::ptr_eq(&deferred, &eager));
+    assert!(!eager.borrow().deferred_only);
+    assert_eq!(interp.current_module_path, Some(sentinel_key.clone()));
+    assert!(!interp.loading_deferred);
+    assert_eq!(interp.static_module_load_depth, 0);
+
+    let broken_key = ModuleKey::for_file(broken_path);
+    assert!(
+        interp
+            .load_module_for_type(&broken_key, None, ModuleLoadMode::Defer)
+            .is_err(),
+        "missing deferred import binding should fail during linking"
+    );
+    assert_eq!(interp.current_module_path, Some(sentinel_key));
+    assert!(!interp.loading_deferred);
+    assert_eq!(interp.static_module_load_depth, 0);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn module_top_level_call_and_member_evaluate() {
     let dir = temp_case_dir("module-ic-fallback");
     let main_path = write_case_file(
