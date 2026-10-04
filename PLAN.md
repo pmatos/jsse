@@ -1,223 +1,361 @@
-# Plan: issue #665 — third slice: abrupt exits (`break`/`continue`/`return`/`throw`) from `for (await using x of …)` in async functions
+# Plan: issue #665 — `await using` disposal still drains microtasks inline in several shapes
 
-## 0. Where #665 stands (read first — this replaces the earlier plan)
+## 0. Current state vs. the issue text (read this first)
 
-- Landed on `main`: #666 (function-level + `disposeAsync`), #688 (nested `await using` blocks in try/loop/switch
-  bodies), #701 (real block scope states, closes #683), #703 (per-entry scope for lowered blocks/loops/catch,
-  closes #684), #699 (`for (await using x of …)` head parsed as sync iteration + per-iteration disposal parked at
-  `ForOfHead`). The previous `PLAN.md` (parse bug + `ForOfHead` parking) is **fully merged; do not redo it**.
-- This branch was reset to `origin/main` (`a129a725`) by the planner (`backup/665-pre-rebase` holds the old tip).
-  The remote branch was deleted after #699 merged (`git ls-remote origin <branch>` → empty), so a plain
-  `git push -u origin HEAD` works; if the ref reappears, `git fetch origin <branch>` then `--force-with-lease`.
-- Still open trackers: #685 (loop heads + iterator close), #686 (async generators), #687 (other blocking
-  `await_value` callers). This PR is `Refs #665`, `Refs #685` — **not** `Closes`.
+The issue's own headline repro (`try { { await using a = null; throw 1; } } catch...`)
+**already passes** on this branch — built and ran it against `node` (the reference
+engine), byte-identical output. `while` bodies, `switch` case blocks (with a nested
+`{ }`), `for (var ...)` and `for-of (const ...)` bodies, and top-level module
+`await using` also already match `node`. `#688`, `#699`, `#701` and `#703` fixed
+these. This plan does not re-fix what's already fixed; it targets the shapes that
+are still broken, confirmed by running both engines side by side (`node` as
+oracle, never as spec authority — see `CLAUDE.md`'s authority order):
 
-Probe on `a129a725` (witness chain `w1..w8` started before the call, `L` logs, `sync-end` logged after the call;
-script pattern: `test262-extra/await-using-try-catch-finally-dispose-tick-alignment.js` `observe(shape)`):
+| Shape | Status |
+|---|---|
+| `try { { await using a=null; throw 1; } } catch {}` | **passes** |
+| `switch` case with nested `{ await using }` block | **passes** |
+| `while` / `do-while` body with `await using` | **passes** |
+| `for (var i...)` / `for-of (var x of ...)` body | **passes** |
+| module top-level `await using a = null;` (no wrapping container) | **passes** |
+| `for (let i...)` body with `await using` | **BROKEN** |
+| `try`/`switch`/plain-block body with a **lexical sibling** (`let y=1;`) next to a nested `await using` block | **BROKEN** (all three containers) |
+| `for (var k in {...})` body with `await using` | **BROKEN** |
+| async generator, `await using` directly in a nested `{ }` block | **BROKEN** |
+| async generator, `await using` directly in the function's own top-level body (no block at all) | **BROKEN** |
+| async generator, `try { { await using } }` or `for (let...)` body | **BROKEN** |
 
-| shape | node | jsse (main) | cluster |
-|---|---|---|---|
-| `for (await using a of [null,null]) { L('b'); break }` `L('after')` | `b,sync-end,w1,after,w2,settled` | `b,w1,after,sync-end,w2,settled` | **this PR** |
-| same with `return 1` | `b,sync-end,w1,w2,settled` | `b,w1,sync-end,w2,settled` | **this PR** |
-| body `throw 1` caught by outer `try` | `b,sync-end,w1,caught,after,w2,settled` | `b,w1,caught,after,sync-end,w2,settled` | **this PR** |
-| custom iterator with `return()` logging `ret`, then `break` | `b,sync-end,w1,ret,after,w2,settled` | `b,w1,ret,after,sync-end,w2,settled` | **this PR** |
-| `for (await using a = null; false;) {}` (C-style head) | `sync-end,w1,after,w2,settled` | `w1,after,sync-end,w2,settled` | follow-up B |
-| async-generator block / `for-of` head / `return()` | see #686 | blocks inline | follow-up C |
-| `for await (var a of [1,2]) { break }` (no `await using` at all) | `sync-end,w1,w2,b,w3,after,…` | `…b,after,…` | follow-up D |
+"Broken" means: a job already queued *before* the async call runs (a witness
+microtask chain) fires *before* the synchronous caller's own next statement,
+i.e. the engine drained the job queue inside the call instead of suspending it
+— the exact symptom the issue names. Repros live under `$TMPDIR/jsse665/*.js`
+in this workspace (not committed; recreate from the shapes above if needed).
+
+This plan fixes the **two confirmed, well-isolated regressions** that explain
+nearly every broken row above with one root cause each, for a scoped, reviewable
+PR. The remaining broken rows (async-generator function-level disposal, and
+Try/Switch/For containers inside async generators) need a second, larger
+architectural piece and are left as follow-up (§7).
 
 ## 1. Problem restated
 
-For a lowered `for (await using x of iterable) body` in an async function or TLA module, a **normal** iteration end
-already suspends at the disposal `Await` (#699). But when the body *exits the loop abruptly* — `break`, labeled
-`continue` to an outer loop, `return`, or an uncaught/propagating throw — the loop is closed by
-`close_for_of_loop` (`src/interpreter/eval.rs:~9661`), which runs the iteration environment's DisposeResources through
-the blocking driver (`dispose_resources` → `run_dispose_cursor_blocking`, draining the microtask queue inline at each
-`Await`). Queued jobs therefore run in the middle of synchronous code and the function settles on the wrong tick.
-Two entry points reach it: the `unwind_for_of!` macro (`~8317`, used by `route_return!` and `route_loop_control!`
-and the direct `unwind_for_of!(pos)` at `~9006`) and `unwind_async_for_of_loops` (`~9709`, the throw path at `~8835`).
+`DisposeResources`' `Await`s must suspend the running execution context and let
+the job queue drive the resumption (per `Await`, spec id `await`), the same way
+every other `await` in async code does. For two specific shapes, jsse's
+generator-transform classifies the surrounding statement as "doesn't need its
+own state" and lets the tree-walker run the whole container (loop iteration,
+`try` clause, etc.) in one shot; when the nested `await using` block's disposal
+pops that container's `DisposeCursor`, there is no state boundary left to
+suspend at, so the interpreter falls back to `Interpreter::await_value`'s
+blocking path, which drains the job queue inline before returning control to
+the synchronous caller. Both shapes trace back to the same place: an
+over-conservative `Blocked` classification in
+`generator_analysis.rs::scan_await_using`, written before `#703` gave every
+lowered block/loop/catch its own per-entry scope (`ScopeAction::OpenBlock` /
+`CopyForward`). That per-entry scoping now already protects the exact lexical
+scope these `Blocked` arms were guarding, making the conservatism stale.
 
 ## 2. Spec basis
 
-`spec/` (ecma262) predates Explicit Resource Management: it has no `await using` `ForDeclaration` and no
-DisposeResources. Base clauses that exist:
+The pinned `spec/` snapshot (tc39/ecma262 @ `270a490b`) does **not** contain
+Explicit Resource Management (`using`/`await using`/`DisposeResources`) at all —
+confirmed by grep (`Disposable`, `AwaitUsingDeclaration`, `DisposeResources`:
+zero matches). This matches the existing `test262-extra/await-using-*` files in
+this repo, which already cite `esid: sec-disposeresources` as an *external*
+anchor (the Explicit Resource Management proposal text, test262 `features:
+[explicit-resource-management]`), not a clause inside this submodule. This plan
+follows that existing convention and does the same.
 
-- **`sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset`** (`spec/spec.html:22388`),
-  the tail of the loop (`:22453-22461`): `result` = evaluation of `stmt`; "If LoopContinues(result, labelSet) is
-  false: `status` = UpdateEmpty(result, V); … `IteratorClose(iteratorRecord, status)`". The
-  [proposal-explicit-resource-management] text inserts `DisposeResources(iterationEnv.[[DisposeCapability]], result)`
-  **between** evaluating `stmt` and the `LoopContinues` test — so an abrupt body completion first disposes
-  (awaiting for `await using`), and only then is the iterator closed with the resulting completion (a disposer
-  throw replaces `break`/`return` and is then the `status` passed to `IteratorClose`).
-- **`sec-iteratorclose`** (`:7162`): a throw `completion` wins over any error from `return()`; otherwise a `return()`
-  failure replaces `break`/`continue`/`return`. Already implemented by `iterator_close_result` + `close_for_of_loop`;
-  unchanged.
-- **`sec-disposeresources`** (proposal; reproduced in the `info:` blocks of the existing
-  `test262-extra/await-using-*.js` and test262's `language/statements/await-using/`): step 3.f (`needsAwait`),
-  step 4 (trailing `Await(undefined)`), `Dispose` step 3 (`Await(result)`); implemented by `DisposeCursor`
-  (`src/interpreter/dispose.rs`), unchanged.
-- **`await`**: the disposal `Await` suspends the running async-function context; the continuation is a later job.
+Clauses actually present in `spec/spec.html` that govern the defect:
 
-test262 already in tree that pins adjacent behavior (must stay green):
-`language/statements/for-of/head-await-using-*.js`, `language/statements/for-await-of/head-await-using-init.js`,
-`language/statements/await-using/initializer-Symbol.asyncDispose-called-at-end-of-each-iteration-of-forofstatement.js`.
-test262 has no abrupt-exit tick-ordering test → new `test262-extra/` files (§5).
+- **`Await`** (abstract operation, id `await`, `spec.html:51047`, oldids
+  `await-fulfilled`/`await-rejected`): defines `Await(value)` as scheduling its
+  continuation as a job and suspending the running execution context. jsse's
+  `Interpreter::await_value` (`src/interpreter/eval.rs:9890`) implements this
+  correctly when it *can* suspend; the bug is call sites that reach it from a
+  context with no state boundary to suspend *to*, so they fall back to draining
+  the job queue inline instead.
+- **`sec-forbodyevaluation`** / **`sec-createperiterationenvironment`**
+  (`spec.html:22070`, `22100`): a `for (let ...)` loop creates a fresh
+  per-iteration environment each pass. This is exactly what `#703`'s
+  `ScopeAction::CopyForward` implements, and exactly the mechanism the stale
+  `Blocked` classification was written to protect *before* `CopyForward`
+  existed.
+- **`sec-block`** / **`sec-blockdeclarationinstantiation`** (`spec.html:21341`,
+  `21412`): a `Block` gets a fresh declarative environment per entry — the
+  general case `ScopeAction::OpenBlock` (`#703`) implements for any
+  state-machine-lowered container (loop body, `try`/`catch`/`finally` clause).
+- **`sec-try-statement-runtime-semantics-evaluation`** /
+  **`sec-runtime-semantics-catchclauseevaluation`** (`spec.html:23182`,
+  `23150`): each `try`/`catch`/`finally` clause is itself a `Block` production,
+  confirming the same per-entry-scope reasoning applies to `try` clause bodies
+  with a lexical sibling next to an `await using` block.
+- **`sec-runtime-semantics-forinofheadevaluation`** /
+  **`sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset`**
+  (`spec.html:22352`, `22388`): governs `for-in` body evaluation; nothing in it
+  requires blocking `await using` disposal in a `for-in` body any more than in
+  a `for-of` body (already fixed).
 
-## 3. Design (implementer verifies point 1 first — it decides whether the slice is cheap)
+External (not in `spec/`, implemented against the proposal text per existing
+codebase convention, `esid: sec-disposeresources`): `DisposeResources`'
+trailing/disposer `Await` steps — the thing every one of these call sites must
+suspend at instead of draining.
 
-The parked-cursor machinery is generic (`PendingDispose { cursor, then: DisposeThen }`,
-`Scheduler::park_async_function_dispose`, top-of-loop cursor stepper in `async_function_resume`). `unwind_scopes_to!`
-already parks in the middle of an unwind and **re-enters** `route_return!` / `route_loop_control!` / the throw routing
-from scratch on resume, relying on the recompute being idempotent. Apply the same trick to for-of loops:
+## 3. Files to touch
 
-1. **Do not pop the loop before disposing.** In the unwind, look at `for_of_stack.last_mut()`: `iteration_env.take()`,
-   `take_dispose_stack(&env)`. If the stack has only `Sync`-hint resources, finish inline (no `Await` is possible,
-   same short-cut #699 used at `ForOfHead`). Otherwise build `DisposeCursor::new(stack, seed)` (seed = the completion
-   in flight: `Return(v)` for return routing, `Empty` for loop control, `Throw(exc)` for throw routing) and `step` it:
-   `Await` → GC-root frame, `async_fn_suspend_at_await(...)` with the **loop still on `for_of_stack`** (it is saved
-   in the async state), `park_async_function_dispose(id, PendingDispose { cursor, then })`, return. `Done(Exit)` →
-   `remove_async_function_state` + `return Exit`. `Done(Throw(e))` → continue as a disposer throw (below).
-2. **New `DisposeThen` variants**, one per caller, mirroring `ScopeCrossReturn/LoopControl/Throw`:
-   `ForOfCloseReturn`, `ForOfCloseLoopControl(LoopControlTarget)`, `ForOfCloseThrow`. On resume with a **non-throw**
-   completion, re-enter the caller (`route_return!(v)` / `route_loop_control!(target)`); the top loop now has
-   `iteration_env == None`, so the unwind skips its dispose half, runs **only** the iterator-close half, pops it and
-   proceeds to the next loop. On resume with `Throw(e)` set `pending_for_of_unwind = Some(PendingForOfUnwind {
-   clear_at_state: None })` and `pending_exception = Some(e)` — exactly what `unwind_for_of!`'s existing
-   `Completion::Throw` tail does — so the throw routing closes the remaining loops (this one's `return()` still runs,
-   with the throw as its completion, errors from `return()` suppressed).
-3. **Split `close_for_of_loop` into two halves** in `eval.rs`: the dispose half (env → `DisposeCursor`) and
-   `close_for_of_iterator(loop_state, func_env, completion, generator_id)` = the existing body from
-   "The borrow must end before `iterator_close_result`…" onward. Keep `close_for_of_loop` as a thin composition of the
-   two using the **blocking** dispose driver — it is also called by `generator_runtime.rs:~6804`
-   (`Some(generator_id)`, sync/async-generator unwinding) which must stay blocking in this PR.
-4. **The throw path** (`unwind_async_for_of_loops`, call at `~8835`) is not the macro. Give the throw routing its own
-   parked variant of the same loop (same seam: dispose half may park with `ForOfCloseThrow`; on resume the routing
-   block is re-entered with `pending_exception = Some(e)`, and `needs_for_of_unwind` is recomputed from the still
-   non-empty `for_of_stack`). The blocking `unwind_async_for_of_loops` helper can then be deleted if unreferenced
-   (otherwise the fmt/clippy hook fails on dead code) — check `generator_runtime.rs` for other users first.
-5. Suspension inside `unwind_for_of!` must persist `pending_return` / `pending_loop_control` /
-   `saved_finally_exception` / `pending_for_of_unwind` through `async_fn_suspend_at_await` exactly as
-   `unwind_scopes_to!` does (copy its argument list; a `.take()` there is intentional).
-6. **Ordering to preserve** with a finalizer between the loop and its handler: `route_return!` computes `unwind_from`
-   from the intercepting `finally` (`routed_to`), so only loops nested inside it are closed now. Re-entry recomputes
-   the same value; do not cache it across the suspension.
+- `src/interpreter/generator_analysis.rs` — relax the stale `Blocked` arms in
+  `scan_await_using`/`scan_flattened_list` (the `declares_lexical_binding`
+  downgrade, the `Statement::For` lexical-init arm, the `Statement::ForIn` arm).
+  Update the doc comments on `AwaitUsingScan::Blocked` and `scan_flattened_list`
+  that currently justify the conservatism being removed.
+- `src/interpreter/generator_transform.rs` — no behavioral change expected
+  (the existing `transform_scope_block`/`ScopeAction::OpenBlock` paths already
+  handle every container kind correctly once `scan_await_using` stops blocking
+  them), but add/adjust unit tests in its `#[cfg(test)]` module alongside
+  `has_suspendable_await_using_block`'s existing coverage.
+- `test262-extra/await-using-loop-body-dispose-tick-alignment.js` — add the
+  `for (let ...)` body case (the file already covers `for (var ...)`, `for-of`,
+  `while`, `do-while`; the `let` variant is conspicuously absent — that gap is
+  the bug).
+- `test262-extra/await-using-try-catch-finally-dispose-tick-alignment.js` and
+  `test262-extra/await-using-switch-case-block-dispose-tick-alignment.js` — add
+  the lexical-sibling-next-to-a-nested-block case to each.
+- New `test262-extra/await-using-for-in-body-dispose-tick-alignment.js` (no
+  existing file covers `for-in`).
+- `src/interpreter/eval/generator_runtime.rs` — async generator state-stepping
+  loop (the `exec_state_machine_body` call around what is currently line
+  `~4229`, parallel to the plain-generator one around `~792`): mirror the
+  `suspendable_dispose_block` / `parked_block_dispose` wiring that
+  `src/interpreter/eval.rs:~8916-8939` already does for the async-function
+  driver, so a directly-nested `await using` block in an async generator parks
+  its cursor instead of calling the blocking `dispose_resources`.
+- New `test262-extra/await-using-async-generator-block-dispose-tick-alignment.js`
+  — the `observe()`-witness-chain pattern from
+  `await-using-loop-body-dispose-tick-alignment.js`, adapted to drive an async
+  generator with `for await` and assert tick alignment for a directly-nested
+  `{ await using a = null; }` block in the generator body.
+- `CONTEXT.md` — no new vocabulary; `ScopeAction::OpenBlock`/`CopyForward`,
+  `suspendable_dispose_block`, and `PendingDispose`/`DisposeThen` are already
+  documented there from `#645`/`#688`/`#699`/`#703`.
+- No `docs/adr/` entry: this follows the established architecture
+  (`PendingDispose`/`DisposeCursor`/`ScopeAction`) with no new decision to
+  record; it closes a gap the existing per-entry-scope decision (`#703`) left
+  behind.
 
-Note the direct `unwind_for_of!(pos)` at `~9006`: it is the *unlabeled-break* fallback (`Completion::Break(None, _)` out
-of a state body when no `block_exits` target matched); it closes to `pos` then jumps to `after_state`. It does not go
-through `route_*`, so its resume arm must set `current_id = for_of_stack[pos].after_state` (capture it before parking)
-— add a `DisposeThen` variant or route it through `route_loop_control!` if that is equivalent. If re-entry is **not**
-idempotent for some macro, stop, keep that call site blocking, and record it in the PR body and #685 rather than
-growing a bespoke continuation.
+## 4. TDD slices
 
-## 4. Files to touch
+1. **Red:** add the `for (let i = 0; i < 2; i++) { await using a = null; ...}`
+   case to `await-using-loop-body-dispose-tick-alignment.js`, expected array
+   `['b0', 'sync-end', 'w1', 'b1', 'w2', 'after', 'w3', 'settled', 'w4']`
+   (mirroring the existing `for (var ...)` case's shape — derive the exact
+   array by running the same shape against `node` first, then cross-check
+   against the `DisposeResources` Await-count model already used by the
+   sibling cases in that file; `node` is corroboration, not authority).
+   Run it — confirms it fails today (`run-test262.py test262-extra/...`).
+   **Green:** in `generator_analysis.rs`, drop the `Statement::For` arm's
+   `body.blocked_unless_none()` downgrade for a lexical (`let`/`const`) init
+   when the body is otherwise `Isolatable` (so it resolves to `Isolatable`
+   directly, same as `Statement::While`'s arm already does). Re-run; also run
+   `await-using-lowering-preserves-block-scope.js` (the closure-per-iteration
+   regression guard) to confirm `#703`'s `CopyForward` still gives each
+   iteration its own binding once the body is state-machine-lowered via this
+   path.
+2. **Red:** add a `for (let i …) { fns.push(() => i); { await using a = null; } }`
+   case to `await-using-lowering-preserves-block-scope.js` if slice 1's fix
+   doesn't already exercise a closure capturing the per-iteration binding
+   (check first; the file's existing `for (let i...)` case may already cover
+   this once slice 1 routes it through `transform_yielding_statement`).
+   **Green:** none expected beyond slice 1 if `CopyForward` already composes
+   correctly with `transform_scope_block`; this slice is a verification step,
+   not a new fix, unless the red run surfaces a second bug.
+3. **Red:** add the lexical-sibling case to
+   `await-using-try-catch-finally-dispose-tick-alignment.js` (`try { let y = 1;
+   { await using a = null; L('t'); } } catch (e) {}`) and to
+   `await-using-switch-case-block-dispose-tick-alignment.js` (`case 1: let y =
+   1; { await using a = null; L('s'); } break;`), with expected arrays derived
+   the same way as slice 1 (run against `node`, pin the array). Confirm both
+   fail today.
+   **Green:** in `generator_analysis.rs::scan_flattened_list`, drop the
+   `declares_lexical_binding` downgrade to `Blocked` (the whole `if combined ==
+   AwaitUsingScan::Isolatable && stmts.into_iter().any(declares_lexical_binding)
+   { Blocked }` branch becomes dead weight once `ScopeAction::OpenBlock`
+   guarantees the flattened list's own lexical declarations get a fresh
+   per-entry environment regardless of whether a nested block is pulled into
+   its own state). Re-run both new cases plus
+   `await-using-lowering-preserves-block-scope.js`'s `try` case (already
+   covers a `let` shadowing an outer binding) and the full
+   `generator_analysis.rs`/`generator_transform.rs` unit test suites
+   (`cargo test --release`).
+4. **Red:** add `await-using-for-in-body-dispose-tick-alignment.js` (new file,
+   same `observe()` pattern, `for (var k in {a:1,b:2}) { await using a = null;
+   L('k'+k); }`), confirm it fails today.
+   **Green:** in `generator_analysis.rs`, drop the `Statement::ForIn` arm's
+   `blocked_unless_none()` (same change as slice 1, different arm). Re-run,
+   plus the `for-in` case already present in
+   `await-using-lowering-preserves-block-scope.js` (visits every key).
+5. **Red:** add
+   `await-using-async-generator-block-dispose-tick-alignment.js`: an async
+   generator with `async function* gen() { { await using a = null; L('in-gen');
+   } L('after-block'); }`, driven via `for await` from an async function,
+   asserting the witness chain interleaves around the block's disposal the
+   same way the function-level case does. Confirm it fails today (drains
+   inline — the symptom reproduced manually this session).
+   **Green:** in `src/interpreter/eval/generator_runtime.rs`, before calling
+   `exec_state_machine_body` in the async-generator state-stepping loop,
+   compute `isolated_block` from `state_machine.states[current_id].body`'s
+   last statement exactly as `src/interpreter/eval.rs` already does for the
+   async-function driver, swap it into `self.suspendable_dispose_block` for
+   the call, and route a `self.parked_block_dispose.take()` result into
+   whatever this driver's equivalent of `PendingDispose`/`continue` dispatch
+   is (likely a new local `pending_dispose` branch parked the same way the
+   async-function loop parks `DisposeThen::Block`, or an immediate call into
+   `async_gen_await_resume` — confirm the exact shape by reading
+   `async_gen_await_resume`, `src/interpreter/eval/generator_runtime.rs:5961`,
+   before wiring this). Re-run the new test plus the full test262-extra suite
+   and `cargo test --release` (this touches shared generator-runtime code
+   paths used by every generator, not just async ones with `await using`).
 
-- `src/interpreter/dispose.rs` — three `DisposeThen` variants (doc comment each, matching existing style).
-- `src/interpreter/eval.rs` (`async_function_resume` + helpers) — the macro `unwind_for_of!` (dispose-then-park),
-  the throw-routing call to `unwind_async_for_of_loops`, the top-of-loop `DisposeStep::Done` match (3 new arms, keep
-  the `Completion::Exit` arm ahead of them — issue #242), split of `close_for_of_loop`.
-- `src/interpreter/eval/generator_runtime.rs` — **no behavior change**; only its `close_for_of_loop` call site is
-  re-verified against the split (still blocking).
-- `src/interpreter/gc.rs` — none expected: parked cursors are already traced through `AsyncFunctionState.pending_dispose`
-  (`gc.rs:~471`) and the loop states through the saved `for_of_stack`. Covered by a regression test rather than a change.
-- `CONTEXT.md` — one glossary line only if a new term is introduced; no ADR.
-- Tests: §5.
+Run the full project quality gate after each slice, as separate commands per
+`CLAUDE.md` (never `&&`-chained): `cargo build --release`, `cargo test
+--release`, `./scripts/lint.sh`, `uv run python scripts/run-test262.py` (full
+suite, baseline from `origin/main:test262-pass.txt` — do **not** pass
+`--update-baseline`), `uv run python scripts/run-custom-tests.py`.
 
-Not touched: `exec.rs` (tree-walker loops), `scheduler.rs` (parking API already generic), the parser, the transform
-(`generator_transform.rs` — loops are already lowered by #699), `test262-pass.txt`, `spec/`, `test262/`.
+## 5. Test surface
 
-## 5. TDD slices (red → green; one commit each; conventional-commit subjects; `Refs #665`)
+- `test262/test/language/statements/using/`,
+  `test262/test/language/statements/await-using/`,
+  `test262/test/language/statements/for-await-of/`,
+  `test262/test/language/statements/try/`,
+  `test262/test/language/statements/for/`,
+  `test262/test/language/statements/for-in/`,
+  `test262/test/language/statements/switch/`,
+  `test262/test/language/statements/async-generator/`,
+  `test262/test/language/expressions/async-generator/` — run targeted; none of
+  these assert exact microtask tick alignment (confirmed: the two async-
+  generator `await-using` tests under `language/statements/await-using/` pass
+  today despite the bug — they check *that* disposal happens, not *when*), so
+  they will not regress and will not catch this class of bug either. That's
+  what the new `test262-extra` files are for.
+- `test262-extra/await-using-*-tick-alignment.js` (existing + new files listed
+  in §3/§4) is the actual regression surface for this change. Run via
+  `uv run python scripts/run-test262.py test262-extra/` (per `CLAUDE.md`, no
+  dedicated runner).
+- `test262-extra/await-using-lowering-preserves-block-scope.js` is the guard
+  against over-relaxing `scan_await_using`: it must keep passing after every
+  slice, since it specifically pins per-iteration/per-entry lexical scoping for
+  the containers this plan is relaxing.
+- `cargo test --release` for `generator_analysis.rs`'s and
+  `generator_transform.rs`'s own unit tests (`has_suspendable_await_using_block`,
+  `suspendable_await_using_block_through_containers`, and friends) — extend
+  `suspendable_await_using_block_through_containers` with cases for the
+  relaxed shapes (`for (let...)`, lexical sibling, `for-in`) so the classifier
+  change has a direct unit-level pin, not just an end-to-end tick-alignment
+  test.
+- Full `uv run python scripts/run-test262.py` (baseline from
+  `origin/main:test262-pass.txt`) after every slice — this change touches the
+  generator-transform classifier used by every async function/generator in
+  the suite, so a full run (not just a targeted directory) is required before
+  calling any slice done.
 
-Before slice 1, per the global instruction, turn this list into TaskCreate tasks with `addBlockedBy` ordering. Build with
-`cargo build --release -j4`; run gates as separate commands (never `&&`-chained); run `test262-extra/` via
-`uv run python scripts/run-test262.py test262-extra/<file>`. Compute every expected trace with `node` first, then
-write it into the test as the literal expectation.
+## 6. Regression risk
 
-1. **`test(disposable): pin abrupt for-of exits from await using heads (red)`** —
-   `test262-extra/await-using-for-of-close-dispose-tick-alignment.js` (`esid:
-   sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset`, `info:` quoting the
-   `LoopContinues`/`IteratorClose` tail + DisposeResources 3.f/4, `flags: [async]`, `includes: [asyncHelpers.js,
-   compareArray.js]`, `features: [explicit-resource-management]`, same `observe(shape)` witness harness). Shapes: `break`
-   (null resource), `return`, body `throw` caught by an outer `try`, custom iterator whose `return()` logs (asserts
-   dispose tick **before** `ret`), async disposer (asserts `disp` before `ret`), labeled `continue outer` crossing an
-   inner `for (await using …)`, two nested `for (await using …)` loops left by one `return`, `break` inside a
-   `try/finally` inside the loop, a disposer that throws on `break` (error propagates, `return()` still called, later
-   code not run), a disposer returning a rejecting promise. Commit only once red is observed (mark in the commit body).
-2. **`refactor(async): split close_for_of_loop into dispose and iterator-close halves`** — no behavior change; existing
-   suites green; generator caller unchanged. (Keeps slice 3 small and lets clippy see no dead code: land the helper
-   together with its use if the hook blocks.)
-3. **`fix(disposable): suspend at for-of iteration disposal on break/continue/return`** — `DisposeThen::ForOfCloseReturn`
-   / `ForOfCloseLoopControl` + the `unwind_for_of!` macro change + resume arms. Turns the break/return/iterclose/
-   labeled-continue/nested cases green.
-4. **`fix(disposable): suspend at for-of iteration disposal on the throw path`** — `ForOfCloseThrow` + the
-   throw-routing loop; turns the throw/rejecting-disposer/suppressed cases green.
-5. **`test(disposable): GC-root parked for-of close disposal`** —
-   `test262-extra/await-using-for-of-close-dispose-suspended-gc-rooting.js`, next to
-   `await-using-for-of-head-dispose-suspended-gc-rooting.js`: the disposer allocates and forces GC while parked
-   mid-`break`, then the iterator's `return()` must still run on the (still-rooted) iterator.
-6. **`test(disposable): pin module top-level abrupt for-of exit ticks`** —
-   `test262-extra/await-using-module-for-of-close-dispose-tick-alignment.js` + `_FIXTURE.mjs`
-   (`flags: [module, async]`), same layout as `await-using-module-for-of-head-dispose-tick-alignment*`.
-   Should be green with no code change (module bodies use `async_function_resume`); if not, fix the call-site gap here.
+- **Highest risk:** `generator_analysis.rs::scan_await_using` is consulted
+  (via `has_suspendable_await_using_block`, gated on `detect_for_await`, i.e.
+  plain async functions only — see §7) for *every* `try`/`for`/`for-in`/
+  `switch`/loop statement in every async function, not just ones with `await
+  using`. Relaxing `Blocked` → `Isolatable` changes which containers get
+  lowered into `transform_scope_block`'s `EnterScope`/`ExitScope` state
+  machinery versus the plain tree-walker. A mistake here silently changes
+  closure/TDZ/shadowing behavior for code that has nothing to do with
+  disposal — exactly what
+  `await-using-lowering-preserves-block-scope.js` exists to catch, which is
+  why it's named explicitly as a required re-run after every slice, not just
+  the matching one.
+- **Generator-transform hot path:** `scan_await_using` runs during every
+  async-function transform (it's part of the `create_simple_machine`
+  fast-path check at `generator_transform.rs:541-556`), so a classification
+  bug here can silently flip simple (non-state-machine) async functions into
+  the state-machine path or vice versa, affecting performance-sensitive code
+  far beyond `await using` users. The full test262 run (not a targeted
+  subdirectory) is the only thing that would catch a regression in, e.g., a
+  `for-in` loop that has nothing to do with disposal.
+- **`src/interpreter/eval/generator_runtime.rs`** is shared by plain
+  generators, async generators, and `yield*` delegation to async iterables —
+  it's one of the densest files in the interpreter (confirmed: ~20
+  `dispose_resources` call sites spread across generator/async-generator/
+  yield* paths). Slice 5 touches only the async-generator state-stepping loop
+  and must not change behavior for the plain-generator loop (which has its own,
+  separate, `is_async: false` copy of the same loop shape a few hundred lines
+  away) or for `yield*`.
+- **GC rooting:** this plan's slice 5 reuses the *existing*
+  `parked_block_dispose`/`DisposeCursor` rooting path (already traced via
+  `gc_root_scope`/`gc_safepoint` for the async-function driver), so no new GC
+  surface is introduced here. The deferred function-level async-generator
+  slice (§7) *would* need a new field and new GC tracing (precedent:
+  `bf0d87f3`, "root the parked cursor while wiring the Await continuation") —
+  flagged there, not here, since it's out of scope for this PR.
+- **Bytecode fast path:** `bytecode/` is feature-flagged off by default and
+  this plan does not touch it; `async`/`await using` function bodies already
+  go through the tree-walker/state-machine path exclusively as far as this
+  investigation found, so no interaction expected, but worth a grep-confirm
+  during implementation if `bytecode_enabled` is ever turned on for async code.
 
-## 6. Test surface
+## 7. Out of scope (tracked as follow-up, not bundled into this PR)
 
-Targeted test262 (run each; no regressions vs `origin/main:test262-pass.txt`):
-`test262/test/language/statements/for-of/`, `.../for-await-of/`, `.../await-using/`, `.../using/`,
-`.../for/`, `.../async-function/`, `.../async-generator/`, `.../try/`, `.../labeled/`,
-`test262/test/language/expressions/await/`, `.../module-code/top-level-await/`,
-`test262/test/built-ins/DisposableStack/`, `.../AsyncDisposableStack/`. Then the full default
-`uv run python scripts/run-test262.py` (never rebuild the binary while it runs). Also
-`uv run python scripts/run-test262.py test262-extra/` (must stay 100% green), `cargo test` (lib + bin),
-`uv run python scripts/run-custom-tests.py`, `./scripts/lint.sh`.
+File each of these as its own GitHub issue once this PR lands (per the
+"many small changes" rule — do not bundle):
 
-Not covered by test262 (hence the `test262-extra/` files in §5): tick alignment of abrupt-exit disposal, dispose-before-
-`return()` ordering, GC rooting while parked mid-unwind, module variant. Regression probe (not committed): the §0
-table plus `for_body`/`while_body`/`try_block` shapes, which must stay equal to node.
+1. **Async generator function-level `await using` disposal** (`async
+   function* gen() { await using a = null; ... }`, no wrapping block at all —
+   confirmed broken, the single most basic case). This needs a new
+   `pending_dispose`-equivalent field on the async generator's suspended state
+   (`IteratorState::StateMachineAsyncGenerator`, `types.rs:~1472`), GC tracing
+   for it (`gc.rs`, precedent `bf0d87f3`), and resumption plumbing through
+   `async_gen_await_resume` (`generator_runtime.rs:5961`) for the `Return`/
+   `Throw`/`Normal`-completion dispose call sites (confirmed at
+   `generator_runtime.rs:~4175`, `~4265`, `~5809`, and others). Materially
+   larger than this plan's slices; its own PR.
+2. **`try`/`switch`/`for`-wrapped `await using` inside async generators**
+   (confirmed broken: `async function* gen() { try { { await using a=null; } }
+   catch {} }` and the `for (let...)` equivalent). Slice 5 in this plan only
+   fixes a *directly*-nested block in an async generator; `Try`/`Switch`/`For`
+   containers route through a different branch
+   (`transform_try_statement`/`transform_for_statement`'s `ScopeAction::
+   OpenBlock` path, which has no parking hook at all, unlike `Block`'s own
+   fallback at `generator_transform.rs:950-968`). Needs that fallback
+   generalized beyond `Block`, which depends on #1 existing first (both need
+   the same new async-generator dispose-parking primitive).
+3. **For-await-of early-exit tick ordering** (not an `await using` bug):
+   `for await (const v of gen()) { break; }` where `gen`'s `finally` runs one
+   tick earlier in jsse than in `node` (`iter-finally` before `w3` vs. after).
+   Root cause looks unrelated to disposal — likely a missing `Await` in
+   `AsyncGeneratorUnwrapYieldResumption` (`spec.html:50772`) on a return
+   completion injected at a suspended `yield`. File separately; do not
+   conflate with this issue.
+4. **For-of/for-await head disposal audit** (`close_for_of_loop`,
+   `unwind_async_for_of_loops`, `exec.rs`'s loop/switch `dispose_resources`
+   call sites named in the issue). Every shape this investigation actually
+   probed for these (for-of body, for-await `break`-triggered `IteratorClose`)
+   already matched `node` or reduces to #3. Needs its own targeted probing
+   pass (more shapes: `return()` instead of `break`, nested for-of loops,
+   for-of over a sync iterable inside an async function) before claiming a
+   fix is needed — do not guess at a fix for an unconfirmed bug.
+5. **Remaining blocking `await_value`/`dispose_resources` callers** named in
+   the issue (`exec.rs:2310`, the ~20 `dispose_resources(...)` sites in
+   `generator_runtime.rs` beyond the ones #1/#2 above name) — audit once #1/#2
+   land, since several of them are plain-generator or `yield*` paths that
+   structurally cannot reach an `await using` disposal (no `await` is legal in
+   a non-async generator), and auditing them before #1/#2 exist would be
+   premature.
+6. **Unify `has_block_with_await_using` (narrow) with
+   `has_suspendable_await_using_block` (broad) at
+   `generator_transform.rs:849`** — once #1/#2 give async generators a real
+   parking primitive for `Try`/`Switch`/`For`, the narrow check becomes
+   redundant with the broad one everywhere, not just under `detect_for_await`.
+   Pure cleanup, deferred until the behavior it would unify actually exists on
+   both sides.
 
-## 7. Regression risk
-
-- **Hot path:** `async_function_resume` (`eval.rs`) — the unwind macros are shared by every lowered async function
-  with a for-of. Guard: the park path is taken only when the iteration env has a dispose stack containing an
-  `Async`-hint resource; plain `for (const x of …)` loops see `take_dispose_stack` → `None` and follow today's path
-  unchanged (assert with the existing for-of/for-await-of suites).
-- **Macro re-entry idempotence** (§3.1) is the main risk: `route_return!`/`route_loop_control!` recompute
-  `routed_to`, `unwind_from`, `scope_target` on every entry. A loop left with `iteration_env == None` must be skipped by
-  the dispose half but still iterator-closed exactly once (double `return()` call is the failure mode to test).
-- **Iterator-close correctness:** a disposer throw during `break` must make `IteratorClose` see a throw completion
-  (errors from `return()` suppressed); a `return()` failure after a *successful* disposal replaces the break. Both are
-  in the slice-1 shapes.
-- **GC:** the loop stays on `for_of_stack` during suspension (saved state) and the cursor is traced via
-  `pending_dispose`; the new GC test proves neither drops the iterator.
-- **Bytecode fast path:** compiler bails on `statement:ForOf`; no change. **Property MOP / `ObjectKind` matches:** untouched.
-- **Baseline:** expect no `test262-pass.txt` movement; do not touch it (runner diffs against `origin/main`).
-- **Node-compat library harnesses:** none of the wired libraries use `await using`; no run needed beyond `cargo test`.
-
-## 8. Out of scope (follow-ups; file/append to the trackers named)
-
-- **A. #687 / generator-runtime:** `close_for_of_loop` with `Some(generator_id)`; the other blocking `await_value` callers
-  (`eval.rs:936,1022`, `exec.rs:2310`, `generator_runtime.rs:3120,3343,3526,3740,4307,5609,6144,6182`). The tree-walker
-  cannot suspend; the fix for those is lowering more shapes, not parking.
-- **B. C-style `for (await using a = …; …; …)` heads (#685):** tree-walked in `exec.rs:~1866/1933`, so
-  `for (await using a = null; false;) {}` drains inline. Probed: when such a `for` *is* lowered because its body has
-  another suspension, `transform_for_statement` gives an `await using` head **no scope** (`per_iteration_bindings`
-  covers only `let`/`const`), so the head disposes at *function* end instead of loop end
-  (`for (await using a = d;;) { await 0; … } L('after')` → jsse `…,after,disp` vs node `…,disp,after`). Fix shape:
-  wrap the loop in `transform_scope_block`-style `EnterScope`/`ExitScope`, break target after the `ExitScope`. Not
-  "predicate widening only" — separate PR.
-- **C. #686 async generators:** `EnterScope`/`ExitScope` are `unreachable!` in the async-generator executor
-  (`generator_runtime.rs:~5940`) and there is no `pending_dispose` on `IteratorState::StateMachineAsyncGenerator`;
-  ~13 `dispose_resources` sites in `async_generator_next_state_machine_impl` and the return/throw entry points each need
-  a continuation that resolves/rejects the request promise. New state → own PR. (`agen_return` in the probe only *looks*
-  hung because the inline drain outruns the 20-tick harness; run standalone it completes.)
-- **D. `AsyncIteratorClose` missing `Await(return())` result** for `for await … break` in lowered async functions
-  (`sec-asynciteratorclose`; diverges from node with **no** `await using` present, see the table). Different mechanism
-  (`iterator_close_result`), not a disposal bug — do not fix opportunistically here; file it.
-- **E. Nested-container lowering gap:** a `for (await using …)`/`for await` head nested in `if`/`try`/loop body with
-  nothing else suspending falls back to the tree-walker (noted on #699/#685).
-- No formatting/cleanup outside touched lines; no ADR; no `test262-pass.txt` update.
-
-## 9. PR / issue hygiene
-
-- Title: `fix(disposable): suspend at for-of disposal on abrupt loop exits (break/continue/return/throw)`.
-  Body: `Refs #665`, `Refs #685`; the node-vs-jsse table; list §8 A–E as remaining. Do **not** use `Closes`.
-- After merge, comment on #665/#685 with the remaining list (§8) and file D as a new `needs-triage` issue.
-- The implementation stage `git rm`s this `PLAN.md` before opening the PR.
+A `gh issue comment 665` documenting this split (what's already fixed, what
+this PR closes, what's deferred and why) will be posted alongside this commit,
+per the operating contract's judgment-call documentation requirement.
