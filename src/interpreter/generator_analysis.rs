@@ -901,19 +901,80 @@ fn declares_lexical_binding(stmt: &Statement) -> bool {
     }
 }
 
+fn declares_annexb_function(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::FunctionDeclaration(_) => true,
+        Statement::Labeled(_, inner) => declares_annexb_function(inner),
+        _ => false,
+    }
+}
+
+/// Does this subtree, reached through the same containers `scan_await_using`
+/// walks, declare a plain `function` at statement position anywhere inside?
+/// Annex B hoists such a declaration to the nearest function/script scope in
+/// sloppy mode (`sec-web-compat-blockdeclarationinstantiation`), but neither
+/// `transform_scope_block` nor the generic per-entry `ScopeAction::OpenBlock`
+/// path implements that hoisting (confirmed by probe: `typeof g` after the
+/// block is `'undefined'` instead of `'function'` even for a plain, non-
+/// `await using` suspension) — a pre-existing gap, tracked separately. A
+/// container whose body reaches a function declaration must stay blocked
+/// here so lowering it doesn't newly expose that gap.
+fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::FunctionDeclaration(_) => true,
+        Statement::Block(stmts) => stmts.iter().any(contains_annexb_function_declaration),
+        Statement::If(i) => {
+            contains_annexb_function_declaration(&i.consequent)
+                || i.alternate
+                    .as_ref()
+                    .is_some_and(|a| contains_annexb_function_declaration(a))
+        }
+        Statement::Labeled(_, inner) => contains_annexb_function_declaration(inner),
+        Statement::While(w) => contains_annexb_function_declaration(&w.body),
+        Statement::DoWhile(d) => contains_annexb_function_declaration(&d.body),
+        Statement::For(f) => contains_annexb_function_declaration(&f.body),
+        Statement::ForIn(f) => contains_annexb_function_declaration(&f.body),
+        Statement::ForOf(f) => contains_annexb_function_declaration(&f.body),
+        Statement::Try(t) => {
+            t.block.iter().any(contains_annexb_function_declaration)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.iter().any(contains_annexb_function_declaration))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(contains_annexb_function_declaration))
+        }
+        Statement::Switch(s) => s.cases.iter().any(|c| {
+            c.consequent
+                .iter()
+                .any(contains_annexb_function_declaration)
+        }),
+        Statement::With(_, body) => contains_annexb_function_declaration(body),
+        _ => false,
+    }
+}
+
 /// A statement list the transform flattens into the enclosing state graph.
 /// `Block` and `try`/`catch`/`finally` clause bodies both open their own
 /// per-entry environment once lowered (`ScopeAction::OpenBlock`, `#703`),
-/// so a sibling lexical declaration next to an isolatable block is not
-/// observably affected by the block being pulled into its own nested
-/// state — confirmed by probing a case-level `let` shadowing an outer
-/// binding across a plain (non-`await using`) `await` in each: `try`/
-/// `catch`/`finally`/plain-block all already preserve the outer binding
-/// once lowered. `switch` does not share this fold (see `scan_switch_body`).
-fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement>) -> AwaitUsingScan {
-    stmts.fold(AwaitUsingScan::None, |acc, s| {
+/// so a sibling lexical (`let`/`const`/class) declaration next to an
+/// isolatable block is not observably affected by the block being pulled
+/// into its own nested state — confirmed by probing a case-level `let`
+/// shadowing an outer binding across a plain (non-`await using`) `await` in
+/// each: `try`/`catch`/`finally`/plain-block all already preserve the outer
+/// binding once lowered. A sibling `function` declaration is different: it
+/// hits the Annex-B gap (`contains_annexb_function_declaration`), so that
+/// one sibling kind still blocks. `switch` does not share this fold at all
+/// (see `scan_switch_body`).
+fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
+    let combined = stmts.clone().fold(AwaitUsingScan::None, |acc, s| {
         acc.combine(scan_await_using(s))
-    })
+    });
+    if combined == AwaitUsingScan::Isolatable && stmts.into_iter().any(declares_annexb_function) {
+        AwaitUsingScan::Blocked
+    } else {
+        combined
+    }
 }
 
 /// A `switch` statement's `CaseBlock` is one lexical scope spanning every
@@ -961,8 +1022,30 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         Statement::Labeled(_, inner) => scan_await_using(inner),
         Statement::While(w) => scan_await_using(&w.body),
         Statement::DoWhile(d) => scan_await_using(&d.body),
-        Statement::For(f) => scan_await_using(&f.body),
-        Statement::ForIn(f) => scan_await_using(&f.body),
+        Statement::For(f) => {
+            let body = scan_await_using(&f.body);
+            let using_init = matches!(
+                &f.init,
+                Some(ForInit::Variable(decl))
+                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
+            );
+            if using_init
+                || (body == AwaitUsingScan::Isolatable
+                    && contains_annexb_function_declaration(&f.body))
+            {
+                body.blocked_unless_none()
+            } else {
+                body
+            }
+        }
+        Statement::ForIn(f) => {
+            let body = scan_await_using(&f.body);
+            if body == AwaitUsingScan::Isolatable && contains_annexb_function_declaration(&f.body) {
+                AwaitUsingScan::Blocked
+            } else {
+                body
+            }
+        }
         Statement::ForOf(f) => {
             let body = scan_await_using(&f.body);
             match &f.left {
@@ -1200,17 +1283,34 @@ mod tests {
     fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
         // `with` and a `using`/`await using` for-of loop variable are
         // genuinely still unsafe to flatten (no per-entry scope treatment
-        // exists for either). `switch` is unsafe for a different reason:
-        // `transform_switch_statement` never opens a scope for the whole
-        // `CaseBlock` at all (unlike `Block`/`try`, `#703` never covered
-        // it) — confirmed by a case-level `let` shadowing an outer binding
-        // across a plain `await` already losing the outer value once such
-        // a switch is lowered, with no `await using` involved.
+        // exists for either); so is a C-style `for` whose own head declares
+        // `using`/`await using` (`transform_for_statement`'s per-iteration
+        // `CopyForward` only recognizes `let`/`const`, confirmed by a
+        // test262 regression: `for (await using x = ...; ...)` lost the
+        // outer `x`/`y` bindings once this was relaxed for `let`/`const`
+        // without also excluding `using`/`await using`). `switch` is unsafe
+        // for a different reason: `transform_switch_statement` never opens
+        // a scope for the whole `CaseBlock` at all (unlike `Block`/`try`,
+        // `#703` never covered it) — confirmed by a case-level `let`
+        // shadowing an outer binding across a plain `await` already losing
+        // the outer value once such a switch is lowered, with no `await
+        // using` involved. A `function` declaration sibling is unsafe for
+        // yet another reason, regardless of container: Annex B function
+        // hoisting (`sec-web-compat-functiondeclarationinstantiation`) isn't
+        // implemented by either lowering path (confirmed by probe: `typeof
+        // g` after the block is `'undefined'` instead of `'function'`, even
+        // across a plain, non-`await using` suspension).
         let blocked = [
             "with (o) { { await using a = null; } }",
             "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
             "for (using r of y) { { await using a = null; } }",
+            "for (await using r = y; ; ) { { await using a = null; } }",
+            "for (using r = y; ; ) { { await using a = null; } }",
+            "{ function g() {} { await using a = null; } }",
+            "try { function g() {} { await using a = null; } } finally {}",
+            "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
+            "for (k in o) { await using a = null; function g() {} }",
         ];
         for src in blocked {
             assert!(!scan_first_statement(src), "expected blocked: {src}");
