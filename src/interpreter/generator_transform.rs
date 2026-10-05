@@ -248,8 +248,16 @@ pub(crate) enum StateTerminator {
     /// block that directly declares `await using` in a plain async function
     /// (never a generator or async generator) — see
     /// `has_block_with_await_using`.
+    ///
+    /// `with_vars` are the temp vars holding the values of every enclosing
+    /// `with` expression active at the point the scope opens, outermost
+    /// first. The driver chains a with-environment per entry (after
+    /// `ToObject`) between `term_env` and the scope's own `Environment`, so
+    /// a declaration inside the scope binds into `scope_env` itself rather
+    /// than a throwaway environment rebuilt per state (issue #858).
     EnterScope {
         body_state: usize,
+        with_vars: Vec<String>,
     },
     /// Closes the block scope most recently opened by `EnterScope`: pops it
     /// from `scope_stack` and disposes its resources (suspendably, at each
@@ -617,7 +625,9 @@ fn transform_generator_inner_opts(
         })
         && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
-        && !body.iter().any(has_block_with_await_using)
+        && !body
+            .iter()
+            .any(|s| has_block_with_await_using(s, detect_for_await))
         && !body.iter().any(has_suspendable_await_using_block)
     {
         return create_simple_machine(body, params, &analysis);
@@ -923,7 +933,7 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // Return statements in async generators need Return terminators
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
-        } else if (ctx.is_async && has_block_with_await_using(stmt))
+        } else if (ctx.is_async && has_block_with_await_using(stmt, ctx.detect_for_await))
             || (stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty())
         {
             transform_yielding_statement(stmt, ctx, next_after);
@@ -1032,9 +1042,21 @@ fn collect_block_lexical_decls<'a>(
 fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
     let body_state = ctx.new_state();
     let exit_state = ctx.new_state();
-    ctx.finalize_current_state(StateTerminator::EnterScope { body_state });
+    let with_vars = ctx.with_scopes.clone();
+    ctx.finalize_current_state(StateTerminator::EnterScope {
+        body_state,
+        with_vars,
+    });
     ctx.current_state_id = body_state;
     ctx.scope_depth += 1;
+    // The scope's own `Environment` now carries the with-chain (built by the
+    // `EnterScope` runtime handler from `with_vars` above), so the interior
+    // must not also get the per-state `Statement::With` AST rewrap — that
+    // would bind declarations into a throwaway block environment distinct
+    // from `scope_env` instead (issue #858). Restored below so statements
+    // lexically after the scope but still inside the same enclosing `with`
+    // keep the rewrap.
+    let saved_with_scopes = std::mem::take(&mut ctx.with_scopes);
     transform_statements(stmts, ctx, exit_state);
     if ctx.current_state_id != exit_state {
         ctx.finalize_current_state(StateTerminator::Goto(exit_state));
@@ -1044,6 +1066,7 @@ fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_
     // depth; otherwise reconciliation would truncate it before disposal.
     ctx.finalize_current_state(StateTerminator::ExitScope { after_state });
     ctx.scope_depth -= 1;
+    ctx.with_scopes = saved_with_scopes;
     ctx.current_state_id = after_state;
 }
 

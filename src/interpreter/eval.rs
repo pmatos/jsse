@@ -9747,8 +9747,43 @@ impl Interpreter {
                     complete_function!();
                 }
 
-                StateTerminator::EnterScope { body_state } => {
-                    let scope_env = Environment::new(Some(term_env.clone()));
+                StateTerminator::EnterScope {
+                    body_state,
+                    ref with_vars,
+                } => {
+                    // §14.11.2 WithStatement Evaluation steps 1-5, chained once per
+                    // enclosing `with` (outermost first) rather than rebuilt per
+                    // state: `scope_env`'s parent is the innermost with-environment,
+                    // so a declaration inside the scope binds directly into
+                    // `scope_env` itself (issue #858).
+                    let mut parent_env = term_env.clone();
+                    let mut threw = false;
+                    for with_var in with_vars {
+                        let val = term_env
+                            .borrow()
+                            .get(with_var)
+                            .unwrap_or(JsValue::UNDEFINED);
+                        let obj_val = match self.to_object(&val) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                pending_exception = Some(e);
+                                threw = true;
+                                break;
+                            }
+                            _ => JsValue::UNDEFINED,
+                        };
+                        let Some(obj_id) = obj_val.as_object_id() else {
+                            continue;
+                        };
+                        parent_env = Environment::new_with_object(parent_env, obj_id);
+                    }
+                    if threw {
+                        continue;
+                    }
+                    if !with_vars.is_empty() {
+                        self.has_ever_entered_with = true;
+                    }
+                    let scope_env = Environment::new(Some(parent_env));
                     scope_stack.push(ScopeFrame {
                         env: scope_env,
                         try_depth: try_stack.len(),

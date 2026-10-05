@@ -1162,17 +1162,28 @@ pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
 /// a Block that directly declares `await using`. It does not look through
 /// loops, `try` or `switch`; `has_suspendable_await_using_block` extends the
 /// reach to those containers.
-pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
+///
+/// `through_with` additionally reaches through `with`: a `with`-body that
+/// directly declares `await using` gets genuine suspend capability via
+/// `transform_yielding_statement`'s own `Statement::With` arm (`EnterScope`/
+/// `ExitScope`, chaining the with-environment itself — see issue #858), but
+/// only in a plain async function (`TransformContext::detect_for_await`).
+/// An async generator leaves this reach on the ordinary per-statement
+/// pipeline (`ScopeAction::OpenBlock` plus the inline-yield replay
+/// backstop), which already handles it correctly, so callers must pass
+/// `through_with: false` there.
+pub(crate) fn has_block_with_await_using(stmt: &Statement, through_with: bool) -> bool {
     match stmt {
         Statement::Block(stmts) => block_has_await_using(stmts),
         Statement::If(i) => {
-            has_block_with_await_using(&i.consequent)
+            has_block_with_await_using(&i.consequent, through_with)
                 || i.alternate
                     .as_ref()
-                    .is_some_and(|s| has_block_with_await_using(s))
+                    .is_some_and(|s| has_block_with_await_using(s, through_with))
         }
-        Statement::Labeled(_, inner) => has_block_with_await_using(inner),
+        Statement::Labeled(_, inner) => has_block_with_await_using(inner, through_with),
         Statement::For(f) => f.disposes_at_head(),
+        Statement::With(_, s) if through_with => has_block_with_await_using(s, through_with),
         _ => false,
     }
 }
