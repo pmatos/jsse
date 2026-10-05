@@ -38,6 +38,13 @@ pub(crate) struct GeneratorState {
     /// just needs a push; a `for`-head per-iteration frame needs a fresh
     /// copy even when the depth hasn't changed).
     pub scope_action: Option<ScopeAction>,
+    /// Temp vars holding the values of every enclosing `with` expression
+    /// (outermost first) when `scope_action` is an `OpenBlock`. The driver
+    /// chains a with-environment per entry between the enclosing environment
+    /// and the new block frame, so declarations in the block bind into that
+    /// frame rather than into a per-state `Statement::With` rewrap's
+    /// throwaway block (issue #862, the `OpenBlock` analogue of #858).
+    pub scope_with_vars: Vec<String>,
 }
 
 /// See [`GeneratorState::scope_action`].
@@ -451,6 +458,17 @@ impl TransformContext {
         }
     }
 
+    /// Moves the enclosing `with` chain onto `state`'s `OpenBlock` scope (see
+    /// [`GeneratorState::scope_with_vars`]) and returns it for the caller to
+    /// put back once the scope's interior is lowered: inside, the scope's own
+    /// environment carries the chain, so `finalize_current_state` must not
+    /// also rewrap each state in `Statement::With`.
+    fn claim_with_chain(&mut self, state: usize) -> Vec<String> {
+        let chain = std::mem::take(&mut self.with_scopes);
+        self.states[state].scope_with_vars = chain.clone();
+        chain
+    }
+
     fn new_temp_var(&mut self, prefix: &str) -> String {
         let id = self.temp_counter;
         self.temp_counter += 1;
@@ -469,6 +487,7 @@ impl TransformContext {
             inline_jumps: Vec::new(),
             scope_depth: 0,
             scope_action: None,
+            scope_with_vars: Vec::new(),
         });
         id
     }
@@ -674,6 +693,7 @@ fn create_simple_machine(
             inline_jumps: Vec::new(),
             scope_depth: 0,
             scope_action: None,
+            scope_with_vars: Vec::new(),
         }],
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
@@ -1112,6 +1132,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
                     collect_block_lexical_decls(stmts.iter()),
                 ));
+                let with_chain = ctx.claim_with_chain(entry_state);
 
                 let inner_after = ctx.new_state();
                 transform_statements(stmts, ctx, inner_after);
@@ -1120,6 +1141,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 }
                 ctx.current_state_id = inner_after;
                 ctx.scope_depth -= 1;
+                ctx.with_scopes = with_chain;
 
                 // `inner_after` must only be finalized once `scope_depth` is
                 // back to the outer value, whether that's done here (bridging
@@ -1226,6 +1248,14 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 )));
             }
             if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await) {
+                // §14.11.2 step 2: ToObject(value) throws for null/undefined
+                // at `with` entry. A block scope opened directly under the
+                // `with` chains its with-environments in the driver, which
+                // cannot throw there, so check once up front.
+                ctx.emit_statement(Statement::With(
+                    Expression::Identifier(with_var.clone()),
+                    Box::new(Statement::Empty),
+                ));
                 let with_body_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::Goto(with_body_state));
                 ctx.current_state_id = with_body_state;
@@ -3555,11 +3585,13 @@ fn transform_try_statement(
             collect_block_lexical_decls(try_stmt.block.iter()),
         ));
         ctx.scope_depth += 1;
+        let with_chain = ctx.claim_with_chain(try_body_state);
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
         if ctx.current_state_id != clause_completion_state {
             ctx.finalize_current_state(StateTerminator::Goto(clause_completion_state));
         }
         ctx.scope_depth -= 1;
+        ctx.with_scopes = with_chain;
     }
 
     if let Some(ref info) = catch_info {
@@ -3616,11 +3648,13 @@ fn transform_try_statement(
                     collect_block_lexical_decls(finalizer.iter()),
                 ));
                 ctx.scope_depth += 1;
+                let with_chain = ctx.claim_with_chain(finally_body_state);
                 transform_statements(finalizer, ctx, finally_exit_state);
                 if ctx.current_state_id != finally_exit_state {
                     ctx.finalize_current_state(StateTerminator::Goto(finally_exit_state));
                 }
                 ctx.scope_depth -= 1;
+                ctx.with_scopes = with_chain;
             }
         }
         ctx.current_state_id = finally_exit_state;
