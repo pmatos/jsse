@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::Body;
+use std::borrow::Cow;
 
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
@@ -266,9 +267,6 @@ impl Interpreter {
         // Hoist let/const/class declarations as uninitialized (TDZ) bindings
         Self::hoist_lexical_declarations(stmts, env);
 
-        // Annex B.3.3: at function/global level in sloppy mode,
-        // create var bindings for function declarations inside blocks.
-        // Skip names that conflict with parameters or lexical bindings.
         if !is_block_scope && !env.borrow().strict {
             // Only the raw name collection is cacheable; the post-processing
             // below inspects live env/parameter/lexical state and must run per
@@ -276,17 +274,15 @@ impl Interpreter {
             // original code discards the `blocked` accumulator after the collect
             // call; only the `names` (`all_annexb`) feed post-processing.
             let all_annexb = match analysis {
-                Some(analysis) => analysis.annexb_names.clone(),
+                Some(analysis) => Cow::Borrowed(&analysis.annexb_names[..]),
                 None => {
                     let mut names = Vec::new();
                     let mut blocked = Vec::new();
                     Self::collect_annexb_function_names(stmts, &mut names, &mut blocked);
-                    names
+                    Cow::Owned(names)
                 }
             };
-            if !all_annexb.is_empty() {
-                self.register_annexb_function_names(stmts, env, is_global, all_annexb);
-            }
+            self.register_annexb_function_names(stmts, env, is_global, &all_annexb);
         }
 
         None
@@ -309,8 +305,11 @@ impl Interpreter {
         stmts: &[Statement],
         env: &EnvRef,
         is_global: bool,
-        all_annexb: Vec<String>,
+        all_annexb: &[String],
     ) {
+        if all_annexb.is_empty() {
+            return;
+        }
         let mut registered = Vec::new();
         // Collect top-level var/function names from statements
         let mut top_level_var_names = Vec::new();
@@ -339,13 +338,13 @@ impl Interpreter {
         }
         for name in all_annexb {
             // Skip if name conflicts with a lexical declaration
-            if lexical_names.contains(&name) {
+            if lexical_names.contains(name) {
                 continue;
             }
             // Skip if name conflicts with a parameter (binding exists but
             // is NOT from a top-level var/function declaration)
-            let is_param = env.borrow().bindings.contains_key(&name)
-                && !top_level_var_names.contains(&name)
+            let is_param = env.borrow().bindings.contains_key(name)
+                && !top_level_var_names.contains(name)
                 && name != "arguments";
             if is_param {
                 continue;
@@ -360,26 +359,26 @@ impl Interpreter {
                     .borrow()
                     .parent
                     .as_ref()
-                    .map(|p| p.borrow().bindings.contains_key(&name))
+                    .map(|p| p.borrow().bindings.contains_key(name))
                     .unwrap_or(false);
                 if has_parent_binding {
                     continue;
                 }
             }
-            if !env.borrow().bindings.contains_key(&name) {
+            if !env.borrow().bindings.contains_key(name) {
                 if is_global {
-                    self.env_declare_global_var(env, &name);
+                    self.env_declare_global_var(env, name);
                 } else {
-                    env.borrow_mut().declare(&name, BindingKind::Var);
+                    env.borrow_mut().declare(name, BindingKind::Var);
                 }
             }
-            registered.push(name);
+            registered.push(name.clone());
         }
         if !registered.is_empty() {
             let mut merged = env
-                .borrow()
+                .borrow_mut()
                 .annexb_function_names
-                .clone()
+                .take()
                 .unwrap_or_default();
             for name in registered {
                 if !merged.contains(&name) {
@@ -401,19 +400,12 @@ impl Interpreter {
     ///
     /// Reuses the `HoistCache`'s memoised Annex-B name collection (#72) instead
     /// of re-walking the body's AST on every call.
-    pub(crate) fn hoist_annexb_at_state_machine_entry(
-        &mut self,
-        body: &Body,
-        env: &EnvRef,
-        is_strict: bool,
-    ) {
-        if is_strict {
+    pub(crate) fn hoist_annexb_at_state_machine_entry(&mut self, body: &Body, env: &EnvRef) {
+        if env.borrow().strict {
             return;
         }
-        let names = self.hoist_cache.analysis_for(body).annexb_names.clone();
-        if !names.is_empty() {
-            self.register_annexb_function_names(body.as_slice(), env, false, names);
-        }
+        let analysis = self.hoist_cache.analysis_for(body);
+        self.register_annexb_function_names(body.as_slice(), env, false, &analysis.annexb_names);
     }
 
     fn exec_prepared_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
