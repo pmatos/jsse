@@ -2009,6 +2009,34 @@ impl Interpreter {
         }
     }
 
+    /// §14.11.2 WithStatement Evaluation steps 1-5 for every enclosing `with`
+    /// a lowered scope sits under (`with_vars` holds the temp vars carrying the
+    /// `with` values, outermost first): `ToObject` each and chain a
+    /// with-environment over `parent`, returning the innermost.
+    pub(crate) fn chain_with_environments(
+        &mut self,
+        parent: &EnvRef,
+        with_vars: &[String],
+    ) -> Result<EnvRef, JsValue> {
+        let mut chained = parent.clone();
+        for with_var in with_vars {
+            let val = parent.borrow().get(with_var).unwrap_or(JsValue::UNDEFINED);
+            let obj_val = match self.to_object(&val) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => unreachable!("to_object only returns Normal or Throw"),
+            };
+            let obj_id = obj_val
+                .as_object_id()
+                .expect("to_object always returns an object");
+            chained = Environment::new_with_object(chained, obj_id);
+        }
+        if !with_vars.is_empty() {
+            self.has_ever_entered_with = true;
+        }
+        Ok(chained)
+    }
+
     /// Reconciles a generator/async-function driver's lexical scope stack
     /// toward the frame count `state` statically requires
     /// (`GeneratorState::scope_depth`), then returns the environment its
@@ -2057,7 +2085,17 @@ impl Interpreter {
         }
         match &state.scope_action {
             Some(ScopeAction::OpenBlock(decls)) if scope_stack.len() < target_depth => {
-                let parent = innermost(scope_stack, for_of_env);
+                let mut parent = innermost(scope_stack, for_of_env);
+                if !state.scope_with_vars.is_empty() {
+                    // The `with` values were already `ToObject`-checked when
+                    // the `with` statement was entered (see the `With` arm of
+                    // `transform_statement`), so this cannot throw.
+                    if let Ok(chained) =
+                        self.chain_with_environments(&parent, &state.scope_with_vars)
+                    {
+                        parent = chained;
+                    }
+                }
                 let env = Environment::new(Some(parent));
                 // `BlockDeclarationInstantiation`: every lexical name of the
                 // block enters TDZ together, before any of its statements
