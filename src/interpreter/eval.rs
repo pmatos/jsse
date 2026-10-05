@@ -5415,27 +5415,7 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
-                            // §sec-functiondeclarationinstantiation web-compat
-                            // insertion point: run Annex B function hoisting over
-                            // the original body now, at state-machine construction
-                            // time (#842 — see call_async_function for rationale).
-                            if !is_strict {
-                                let mut names = Vec::new();
-                                let mut blocked = Vec::new();
-                                Self::collect_annexb_function_names(
-                                    body.as_slice(),
-                                    &mut names,
-                                    &mut blocked,
-                                );
-                                if !names.is_empty() {
-                                    self.register_annexb_function_names(
-                                        body.as_slice(),
-                                        &exec_env,
-                                        false,
-                                        names,
-                                    );
-                                }
-                            }
+                            self.hoist_annexb_at_state_machine_entry(&body, &exec_env, is_strict);
                             self.get_object_cell_expect(gen_obj_id).borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineAsyncGenerator {
@@ -5627,27 +5607,7 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
-                            // §sec-functiondeclarationinstantiation web-compat
-                            // insertion point: run Annex B function hoisting over
-                            // the original body now, at state-machine construction
-                            // time (#842 — see call_async_function for rationale).
-                            if !is_strict {
-                                let mut names = Vec::new();
-                                let mut blocked = Vec::new();
-                                Self::collect_annexb_function_names(
-                                    body.as_slice(),
-                                    &mut names,
-                                    &mut blocked,
-                                );
-                                if !names.is_empty() {
-                                    self.register_annexb_function_names(
-                                        body.as_slice(),
-                                        &exec_env,
-                                        false,
-                                        names,
-                                    );
-                                }
-                            }
+                            self.hoist_annexb_at_state_machine_entry(&body, &exec_env, is_strict);
                             self.get_object_cell_expect(gen_obj_id).borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
@@ -8063,24 +8023,7 @@ impl Interpreter {
                 }
             }
 
-            // §sec-functiondeclarationinstantiation web-compat insertion point:
-            // run Annex B function hoisting over the *original* body now, at
-            // state-machine construction time — the per-fragment Annex B pass
-            // that `instantiate_body_declarations` runs as each state dispatches
-            // only ever sees one split fragment of this body, one scope level
-            // too deep to satisfy `!is_block_scope` (#842).
-            if !is_strict {
-                let mut names = Vec::new();
-                let mut blocked = Vec::new();
-                Interpreter::collect_annexb_function_names(
-                    body.as_slice(),
-                    &mut names,
-                    &mut blocked,
-                );
-                if !names.is_empty() {
-                    interp.register_annexb_function_names(body.as_slice(), &func_env, false, names);
-                }
-            }
+            interp.hoist_annexb_at_state_machine_entry(body, &func_env, is_strict);
 
             let async_id = interp.scheduler.alloc_async_function_id();
 

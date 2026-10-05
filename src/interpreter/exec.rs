@@ -390,6 +390,32 @@ impl Interpreter {
         }
     }
 
+    /// §sec-functiondeclarationinstantiation web-compat insertion point: run
+    /// Annex B function hoisting over a generator/async-function/async-generator's
+    /// *original* (pre-lowering) body once, at state-machine construction time.
+    /// The per-fragment Annex B pass that `instantiate_body_declarations` runs as
+    /// each state of a lowered body dispatches only ever sees one split fragment,
+    /// one scope level too deep to satisfy `!is_block_scope` — so a nested
+    /// `function` declaration whose enclosing block gets split into its own
+    /// state never gets hoisted by that pass alone (#842).
+    ///
+    /// Reuses the `HoistCache`'s memoised Annex-B name collection (#72) instead
+    /// of re-walking the body's AST on every call.
+    pub(crate) fn hoist_annexb_at_state_machine_entry(
+        &mut self,
+        body: &Body,
+        env: &EnvRef,
+        is_strict: bool,
+    ) {
+        if is_strict {
+            return;
+        }
+        let names = self.hoist_cache.analysis_for(body).annexb_names.clone();
+        if !names.is_empty() {
+            self.register_annexb_function_names(body.as_slice(), env, false, names);
+        }
+    }
+
     fn exec_prepared_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
