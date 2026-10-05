@@ -470,16 +470,6 @@ impl Compiler {
         op: Op,
         site_id: CallSiteId,
     ) -> Result<(), CompileError> {
-        let Expression::Identifier(name) = callee else {
-            return Err(CompileError::Unsupported("call callee"));
-        };
-        // A bare `eval` may resolve to the realm's intrinsic eval at runtime,
-        // in which case it needs the caller's lexical environment. Keep the
-        // whole Body on the tree-walker rather than changing direct-eval
-        // semantics.
-        if name == "eval" {
-            return Err(CompileError::Unsupported("direct eval call"));
-        }
         if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
             return Err(CompileError::Unsupported("spread call argument"));
         }
@@ -489,12 +479,38 @@ impl Compiler {
             return Err(CompileError::Unsupported("operand stack overflow"));
         }
 
-        let name_idx = self.add_name(name)?;
-        self.emit(Op::LoadCalleeName);
-        self.emit_u16(name_idx);
         // Stack layout consumed by Call/ReturnCall:
         //   [..., callee, this, arg0, ..., argN]
-        self.push_n(2);
+        // `super.m()` needs no check here: `compile_expr` rejects `Super`.
+        match callee {
+            // A bare `eval` may resolve to the realm's intrinsic eval at
+            // runtime, in which case it needs the caller's lexical
+            // environment. Keep the whole Body on the tree-walker rather than
+            // changing direct-eval semantics.
+            Expression::Identifier(name) if name == "eval" => {
+                return Err(CompileError::Unsupported("direct eval call"));
+            }
+            Expression::Identifier(name) => {
+                let name_idx = self.add_name(name)?;
+                self.emit(Op::LoadCalleeName);
+                self.emit_u16(name_idx);
+                self.push_n(2);
+            }
+            Expression::Member(obj, MemberProperty::Dot(name), _) => {
+                self.compile_expr(obj)?;
+                let name_idx = self.add_name(name)?;
+                self.emit(Op::LoadMethod);
+                self.emit_u16(name_idx);
+                self.push_n(1);
+            }
+            Expression::Member(obj, MemberProperty::Computed(key), _) => {
+                self.compile_expr(obj)?;
+                self.compile_expr(key)?;
+                // base + key on the stack become callee + this in place.
+                self.emit(Op::LoadMethodElement);
+            }
+            _ => return Err(CompileError::Unsupported("call callee")),
+        }
         for arg in args {
             self.compile_expr(arg)?;
         }

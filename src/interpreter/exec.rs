@@ -881,6 +881,53 @@ impl Interpreter {
         }
     }
 
+    // A statement list that forms its own block scope (a `Block`, or a
+    // `try`/`catch`/`finally` body): its direct function declarations are
+    // Annex B.3.3 candidates, then nested statements are scanned.
+    fn collect_annexb_in_block(
+        inner: &[Statement],
+        names: &mut Vec<String>,
+        blocked: &mut Vec<String>,
+    ) {
+        let mut block_lexicals = Vec::new();
+        for s in inner {
+            match s {
+                Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
+                    for d in &decl.declarations {
+                        d.pattern.bound_names(&mut block_lexicals);
+                    }
+                }
+                Statement::ClassDeclaration(cls) => {
+                    block_lexicals.push(cls.name.clone());
+                }
+                _ => {}
+            }
+        }
+        // Only regular functions (not generators or async) per Annex B.3.3
+        for s in inner {
+            if let Some(f) = super::hoisting::unwrap_labeled_function(s)
+                && !f.is_generator
+                && !f.is_async
+                && !names.contains(&f.name)
+                && !blocked.contains(&f.name)
+                && !block_lexicals.contains(&f.name)
+            {
+                names.push(f.name.clone());
+            }
+        }
+        let prev_len = blocked.len();
+        blocked.extend(block_lexicals);
+        for s in inner {
+            if let Some(f) = super::hoisting::unwrap_labeled_function(s)
+                && !blocked.contains(&f.name)
+            {
+                blocked.push(f.name.clone());
+            }
+        }
+        Self::collect_annexb_function_names(inner, names, blocked);
+        blocked.truncate(prev_len);
+    }
+
     // Annex B.3.3: recursively find function declarations inside blocks
     // for var-scope hoisting at the function/global level.
     // `blocked` tracks lexical names from enclosing scopes that would
@@ -892,58 +939,7 @@ impl Interpreter {
     ) {
         for stmt in stmts {
             match stmt {
-                Statement::Block(inner) => {
-                    // Collect lexical names in this block
-                    let mut block_lexicals = Vec::new();
-                    for s in inner {
-                        match s {
-                            Statement::Variable(decl)
-                                if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
-                            {
-                                for d in &decl.declarations {
-                                    d.pattern.bound_names(&mut block_lexicals);
-                                }
-                            }
-                            Statement::ClassDeclaration(cls) => {
-                                block_lexicals.push(cls.name.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Check function declarations in this block
-                    // Only regular functions (not generators or async) per Annex B.3.3
-                    for s in inner {
-                        let mut stmt = s;
-                        while let Statement::Labeled(_, inner_s) = stmt {
-                            stmt = inner_s;
-                        }
-                        if let Statement::FunctionDeclaration(f) = stmt
-                            && !f.is_generator
-                            && !f.is_async
-                            && !names.contains(&f.name)
-                            && !blocked.contains(&f.name)
-                            && !block_lexicals.contains(&f.name)
-                        {
-                            names.push(f.name.clone());
-                        }
-                    }
-                    // Recurse with block lexicals and function decl names added to blocked set
-                    let prev_len = blocked.len();
-                    blocked.extend(block_lexicals);
-                    for s in inner {
-                        let mut stmt = s;
-                        while let Statement::Labeled(_, inner_s) = stmt {
-                            stmt = inner_s;
-                        }
-                        if let Statement::FunctionDeclaration(f) = stmt
-                            && !blocked.contains(&f.name)
-                        {
-                            blocked.push(f.name.clone());
-                        }
-                    }
-                    Self::collect_annexb_function_names(inner, names, blocked);
-                    blocked.truncate(prev_len);
-                }
+                Statement::Block(inner) => Self::collect_annexb_in_block(inner, names, blocked),
                 Statement::If(if_stmt) => {
                     Self::collect_annexb_function_names(
                         std::slice::from_ref(&*if_stmt.consequent),
@@ -1079,7 +1075,7 @@ impl Interpreter {
                     blocked.truncate(prev_len);
                 }
                 Statement::Try(t) => {
-                    Self::collect_annexb_function_names(&t.block, names, blocked);
+                    Self::collect_annexb_in_block(&t.block, names, blocked);
                     if let Some(ref h) = t.handler {
                         let prev_len = blocked.len();
                         if let Some(ref param) = h.param {
@@ -1089,25 +1085,16 @@ impl Interpreter {
                                 param.bound_names(blocked);
                             }
                         }
-                        Self::collect_annexb_function_names(&h.body, names, blocked);
+                        Self::collect_annexb_in_block(&h.body, names, blocked);
                         blocked.truncate(prev_len);
                     }
                     if let Some(ref fin) = t.finalizer {
-                        Self::collect_annexb_function_names(fin, names, blocked);
+                        Self::collect_annexb_in_block(fin, names, blocked);
                     }
                 }
                 _ => {}
             }
         }
-    }
-
-    /// §14.11.2 steps 5-7: the object environment `with (obj)` evaluates its
-    /// body in, layered over `parent`.
-    pub(crate) fn new_with_env(&mut self, obj_id: u64, parent: &EnvRef) -> EnvRef {
-        self.has_ever_entered_with = true;
-        let env = Environment::new(Some(parent.clone()));
-        env.borrow_mut().with_object = Some(WithObject { obj_id });
-        env
     }
 
     pub(crate) fn exec_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Completion {
@@ -1218,8 +1205,9 @@ impl Interpreter {
                     .map(|id| crate::types::JsObject { id })
                 {
                     if self.get_object_cell(obj_ref.id).is_some() {
-                        let with_env = self.new_with_env(obj_ref.id, env);
+                        let with_env = Environment::new_with_object(env.clone(), obj_ref.id);
                         self.with_scope_depth += 1;
+                        self.has_ever_entered_with = true;
                         let c = self.exec_statement(body, &with_env);
                         self.with_scope_depth -= 1;
                         // UpdateEmpty(C, undefined) per §14.11.2 step 9

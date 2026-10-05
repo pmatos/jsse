@@ -9751,31 +9751,35 @@ impl Interpreter {
                     body_state,
                     ref with_vars,
                 } => {
+                    // §14.11.2 WithStatement Evaluation steps 1-5, chained once per
+                    // enclosing `with` (outermost first) rather than rebuilt per
+                    // state: `scope_env`'s parent is the innermost with-environment,
+                    // so a declaration inside the scope binds directly into
+                    // `scope_env` itself (issue #858).
                     let mut parent_env = term_env.clone();
-                    for with_var in with_vars.iter() {
-                        let raw = term_env
+                    for with_var in with_vars {
+                        let val = term_env
                             .borrow()
                             .get(with_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        match self.to_object(&raw) {
-                            Completion::Normal(obj) => {
-                                if let Some(obj_id) = obj.as_object_id() {
-                                    parent_env = self.new_with_env(obj_id, &parent_env);
-                                }
-                            }
+                        let obj_val = match self.to_object(&val) {
+                            Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 pending_exception = Some(e);
                                 break;
                             }
-                            Completion::Exit(code) => {
-                                self.scheduler.remove_async_function_state(async_id);
-                                return Completion::Exit(code);
-                            }
-                            _ => {}
-                        }
+                            _ => unreachable!("to_object only returns Normal or Throw"),
+                        };
+                        let obj_id = obj_val
+                            .as_object_id()
+                            .expect("to_object always returns an object");
+                        parent_env = Environment::new_with_object(parent_env, obj_id);
                     }
                     if pending_exception.is_some() {
                         continue;
+                    }
+                    if !with_vars.is_empty() {
+                        self.has_ever_entered_with = true;
                     }
                     let scope_env = Environment::new(Some(parent_env));
                     scope_stack.push(ScopeFrame {

@@ -397,6 +397,43 @@ fn run_chunk_inner(
                     }
                 }
             }
+            Op::LoadMethod => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let name = &chunk.names[idx as usize];
+                let gc_frame = root_operand_stack(interp, &stack);
+                let base = stack.pop().expect("stack underflow on LoadMethod");
+                let result = member_get(interp, &base, name);
+                unroot_stack_value(interp, &base);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Completion::Normal(method) => {
+                        push_value(interp, &mut stack, method);
+                        push_value(interp, &mut stack, base);
+                    }
+                    abrupt => return abrupt,
+                }
+            }
+            Op::LoadMethodElement => {
+                let gc_frame = root_operand_stack(interp, &stack);
+                let key_val = stack
+                    .pop()
+                    .expect("stack underflow on LoadMethodElement key");
+                let base = stack
+                    .pop()
+                    .expect("stack underflow on LoadMethodElement base");
+                let result = member_get_computed(interp, &base, &key_val);
+                unroot_stack_value(interp, &key_val);
+                unroot_stack_value(interp, &base);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Completion::Normal(method) => {
+                        push_value(interp, &mut stack, method);
+                        push_value(interp, &mut stack, base);
+                    }
+                    abrupt => return abrupt,
+                }
+            }
             Op::SetProp => {
                 let idx = decode_u16(chunk, pc);
                 pc += 2;

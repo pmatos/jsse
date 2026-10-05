@@ -973,6 +973,32 @@ impl Environment {
         }))
     }
 
+    /// §9.1.2.3 NewObjectEnvironment: a with-environment over `obj_id`, whose
+    /// `[[OuterEnv]]` is `parent`.
+    pub(crate) fn new_with_object(parent: EnvRef, obj_id: u64) -> EnvRef {
+        let strict = parent.borrow().strict;
+        Rc::new(RefCell::new(Environment {
+            bindings: HashMap::new(),
+            parent: Some(parent),
+            strict,
+            is_function_scope: false,
+            is_arrow_scope: false,
+            with_object: Some(WithObject { obj_id }),
+            dispose_stack: None,
+            global_object_id: None,
+            annexb_function_names: None,
+            class_private_names: None,
+            is_field_initializer: false,
+            arguments_immutable: false,
+            has_parameter_expressions: false,
+            has_simple_params: true,
+            is_simple_catch_scope: false,
+            is_derived_constructor_scope: false,
+            indirect_bindings: None,
+            module_path: None,
+        }))
+    }
+
     pub(crate) fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
         Self::new_function_scope_with_capacity(parent, 0)
     }
