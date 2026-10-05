@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::Body;
+use std::borrow::Cow;
 
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
@@ -266,9 +267,6 @@ impl Interpreter {
         // Hoist let/const/class declarations as uninitialized (TDZ) bindings
         Self::hoist_lexical_declarations(stmts, env);
 
-        // Annex B.3.3: at function/global level in sloppy mode,
-        // create var bindings for function declarations inside blocks.
-        // Skip names that conflict with parameters or lexical bindings.
         if !is_block_scope && !env.borrow().strict {
             // Only the raw name collection is cacheable; the post-processing
             // below inspects live env/parameter/lexical state and must run per
@@ -276,88 +274,138 @@ impl Interpreter {
             // original code discards the `blocked` accumulator after the collect
             // call; only the `names` (`all_annexb`) feed post-processing.
             let all_annexb = match analysis {
-                Some(analysis) => analysis.annexb_names.clone(),
+                Some(analysis) => Cow::Borrowed(&analysis.annexb_names[..]),
                 None => {
                     let mut names = Vec::new();
                     let mut blocked = Vec::new();
                     Self::collect_annexb_function_names(stmts, &mut names, &mut blocked);
-                    names
+                    Cow::Owned(names)
                 }
             };
-            if !all_annexb.is_empty() {
-                let mut registered = Vec::new();
-                // Collect top-level var/function names from statements
-                let mut top_level_var_names = Vec::new();
-                // Collect top-level lexical names (let/const/class)
-                let mut lexical_names = Vec::new();
-                for stmt in stmts {
-                    match stmt {
-                        Statement::FunctionDeclaration(f) => {
-                            top_level_var_names.push(f.name.clone());
-                        }
-                        Statement::Variable(decl) if decl.kind == VarKind::Var => {
-                            for d in &decl.declarations {
-                                d.pattern.bound_names(&mut top_level_var_names);
-                            }
-                        }
-                        Statement::Variable(decl)
-                            if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
-                        {
-                            for d in &decl.declarations {
-                                d.pattern.bound_names(&mut lexical_names);
-                            }
-                        }
-                        Statement::ClassDeclaration(cls) => {
-                            lexical_names.push(cls.name.clone());
-                        }
-                        _ => {}
-                    }
-                }
-                for name in all_annexb {
-                    // Skip if name conflicts with a lexical declaration
-                    if lexical_names.contains(&name) {
-                        continue;
-                    }
-                    // Skip if name conflicts with a parameter (binding exists but
-                    // is NOT from a top-level var/function declaration)
-                    let is_param = env.borrow().bindings.contains_key(&name)
-                        && !top_level_var_names.contains(&name)
-                        && name != "arguments";
-                    if is_param {
-                        continue;
-                    }
-                    // Annex B §B.3.3.1 step 22.f: skip "arguments" in function scopes
-                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
-                        continue;
-                    }
-                    // Annex B: skip if non-simple params and name matches a parent binding
-                    if !env.borrow().has_simple_params {
-                        let has_parent_binding = env
-                            .borrow()
-                            .parent
-                            .as_ref()
-                            .map(|p| p.borrow().bindings.contains_key(&name))
-                            .unwrap_or(false);
-                        if has_parent_binding {
-                            continue;
-                        }
-                    }
-                    if !env.borrow().bindings.contains_key(&name) {
-                        if is_global {
-                            self.env_declare_global_var(env, &name);
-                        } else {
-                            env.borrow_mut().declare(&name, BindingKind::Var);
-                        }
-                    }
-                    registered.push(name);
-                }
-                if !registered.is_empty() {
-                    var_scope.borrow_mut().annexb_function_names = Some(registered);
-                }
-            }
+            self.register_annexb_function_names(stmts, env, is_global, &all_annexb);
         }
 
         None
+    }
+
+    /// Annex B.3.3.1 / `sec-functiondeclarationinstantiation`'s web-compat
+    /// insertion point: at function/global level in sloppy mode, create var
+    /// bindings for function declarations inside blocks. Skip names that
+    /// conflict with parameters or lexical bindings. `env` must already be the
+    /// function/global var scope itself (callers only invoke this when
+    /// `!is_block_scope`) — this does not re-derive that invariant.
+    ///
+    /// `env`'s existing `annexb_function_names` (if any) are merged with, not
+    /// replaced by, this call's results: a lowered generator/async-function
+    /// state machine may run this once at entry over the original body and
+    /// again per-fragment as each state dispatches (#842), and a destructive
+    /// overwrite on the second call would drop names only the first call saw.
+    pub(crate) fn register_annexb_function_names(
+        &mut self,
+        stmts: &[Statement],
+        env: &EnvRef,
+        is_global: bool,
+        all_annexb: &[String],
+    ) {
+        if all_annexb.is_empty() {
+            return;
+        }
+        let mut registered = Vec::new();
+        // Collect top-level var/function names from statements
+        let mut top_level_var_names = Vec::new();
+        // Collect top-level lexical names (let/const/class)
+        let mut lexical_names = Vec::new();
+        for stmt in stmts {
+            match stmt {
+                Statement::FunctionDeclaration(f) => {
+                    top_level_var_names.push(f.name.clone());
+                }
+                Statement::Variable(decl) if decl.kind == VarKind::Var => {
+                    for d in &decl.declarations {
+                        d.pattern.bound_names(&mut top_level_var_names);
+                    }
+                }
+                Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
+                    for d in &decl.declarations {
+                        d.pattern.bound_names(&mut lexical_names);
+                    }
+                }
+                Statement::ClassDeclaration(cls) => {
+                    lexical_names.push(cls.name.clone());
+                }
+                _ => {}
+            }
+        }
+        for name in all_annexb {
+            // Skip if name conflicts with a lexical declaration
+            if lexical_names.contains(name) {
+                continue;
+            }
+            // Skip if name conflicts with a parameter (binding exists but
+            // is NOT from a top-level var/function declaration)
+            let is_param = env.borrow().bindings.contains_key(name)
+                && !top_level_var_names.contains(name)
+                && name != "arguments";
+            if is_param {
+                continue;
+            }
+            // Annex B §B.3.3.1 step 22.f: skip "arguments" in function scopes
+            if name == "arguments" && !is_global && env.borrow().is_function_scope {
+                continue;
+            }
+            // Annex B: skip if non-simple params and name matches a parent binding
+            if !env.borrow().has_simple_params {
+                let has_parent_binding = env
+                    .borrow()
+                    .parent
+                    .as_ref()
+                    .map(|p| p.borrow().bindings.contains_key(name))
+                    .unwrap_or(false);
+                if has_parent_binding {
+                    continue;
+                }
+            }
+            if !env.borrow().bindings.contains_key(name) {
+                if is_global {
+                    self.env_declare_global_var(env, name);
+                } else {
+                    env.borrow_mut().declare(name, BindingKind::Var);
+                }
+            }
+            registered.push(name.clone());
+        }
+        if !registered.is_empty() {
+            let mut merged = env
+                .borrow_mut()
+                .annexb_function_names
+                .take()
+                .unwrap_or_default();
+            for name in registered {
+                if !merged.contains(&name) {
+                    merged.push(name);
+                }
+            }
+            env.borrow_mut().annexb_function_names = Some(merged);
+        }
+    }
+
+    /// §sec-functiondeclarationinstantiation web-compat insertion point: run
+    /// Annex B function hoisting over a generator/async-function/async-generator's
+    /// *original* (pre-lowering) body once, at state-machine construction time.
+    /// The per-fragment Annex B pass that `instantiate_body_declarations` runs as
+    /// each state of a lowered body dispatches only ever sees one split fragment,
+    /// one scope level too deep to satisfy `!is_block_scope` — so a nested
+    /// `function` declaration whose enclosing block gets split into its own
+    /// state never gets hoisted by that pass alone (#842).
+    ///
+    /// Reuses the `HoistCache`'s memoised Annex-B name collection (#72) instead
+    /// of re-walking the body's AST on every call.
+    pub(crate) fn hoist_annexb_at_state_machine_entry(&mut self, body: &Body, env: &EnvRef) {
+        if env.borrow().strict {
+            return;
+        }
+        let analysis = self.hoist_cache.analysis_for(body);
+        self.register_annexb_function_names(body.as_slice(), env, false, &analysis.annexb_names);
     }
 
     fn exec_prepared_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {

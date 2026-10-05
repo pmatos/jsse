@@ -5426,6 +5426,7 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
+                            self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
                             self.get_object_cell_expect(gen_obj_id).borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineAsyncGenerator {
@@ -5617,6 +5618,7 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
+                            self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
                             self.get_object_cell_expect(gen_obj_id).borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
@@ -8031,6 +8033,8 @@ impl Interpreter {
                     func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
                 }
             }
+
+            interp.hoist_annexb_at_state_machine_entry(body, &func_env);
 
             let async_id = interp.scheduler.alloc_async_function_id();
 
