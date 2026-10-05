@@ -145,4 +145,22 @@ asyncTest(async function () {
     ['t', 'f', 'sync-end', 'w1', 'after', 'w2', 'settled', 'w3', 'w4'],
     'block in a finally body'
   );
+
+  log = await observe(function (L) {
+    return (async function () {
+      try {
+        let y = 1;
+        {
+          await using a = null;
+          L('t');
+        }
+      } catch (e) {}
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['t', 'sync-end', 'w1', 'after', 'w2', 'settled', 'w3', 'w4'],
+    'block in a try body with a lexical sibling declaration'
+  );
 });
