@@ -1158,25 +1158,6 @@ pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
         && pattern_lowering_supported(pattern, PatternLoweringForm::ConstrainedDeclaration)
 }
 
-/// Checks if a statement is, or is reached through `if`/labeled statements from,
-/// a Block that directly declares `await using`. It does not look through
-/// loops, `try` or `switch`; `has_suspendable_await_using_block` extends the
-/// reach to those containers.
-pub(crate) fn has_block_with_await_using(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::Block(stmts) => block_has_await_using(stmts),
-        Statement::If(i) => {
-            has_block_with_await_using(&i.consequent)
-                || i.alternate
-                    .as_ref()
-                    .is_some_and(|s| has_block_with_await_using(s))
-        }
-        Statement::Labeled(_, inner) => has_block_with_await_using(inner),
-        Statement::For(f) => f.disposes_at_head(),
-        _ => false,
-    }
-}
-
 /// The scope statement list a `for (await using x = init; test; update)` head
 /// is equivalent to: the declaration followed by the loop with an empty
 /// initializer. `using` bindings are const-like, so ForBodyEvaluation has no
@@ -1488,27 +1469,35 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
     }
 }
 
-/// Checks if a statement reaches an `await using` block that an async function
-/// can isolate into its own state, through the containers the state-machine
-/// transform can lower: `if`, labeled statements, plain blocks, loop bodies,
-/// `try`/`catch`/`finally` bodies and `switch` cases. The block's disposal then
-/// suspends the function at its Awaits instead of draining the queue inline.
+/// Checks if a statement reaches an `await using` block anywhere inside it —
+/// `Isolatable` or `Blocked` alike — through the containers
+/// `scan_await_using` walks. Both classifications perform a real `Await` at
+/// runtime (`DisposeResources`), so both need the enclosing function to have
+/// genuine suspend/resume capability: an `Isolatable` reach already gets a
+/// dedicated state via the general lowering machinery once it is routed into
+/// `transform_yielding_statement`; a `Blocked` reach can't isolate its own
+/// container into a clean nested state; but it still needs the *enclosing*
+/// state graph to have a real split surrounding it, with the container's
+/// original AST re-emitted as a single state and run by the tree-walker's
+/// existing `with_scopes`/`EnterScope` handling — rather than being folded
+/// into the function's single simple-machine state, where the tree-walker has
+/// no state to suspend to and the disposal's `Await` drains the job queue
+/// inline instead (issue #857).
 ///
-/// A `for (await using ..;;)` head counts as such a block on its own: its
-/// loop environment is isolated independently of whatever the body itself
-/// scans as (`disposes_at_head`, #787).
-///
-/// Containers whose lowering would flatten an observable lexical scope are
-/// excluded and keep running in the tree-walker: `with`; an `await using`
-/// for-of loop variable, and a plain `using` C-style `for` loop variable
-/// (`transform_for_statement`'s `CopyForward` only handles `let`/`const`); and
-/// any of these (now including `switch`, since issue #841 gave its
-/// `CaseBlock` the same per-entry `ScopeAction::OpenBlock` `#703` gave
-/// `Block`/`try`/`for`/`for-in`) reaching a sibling `function` declaration
-/// (Annex B hoisting isn't implemented by either lowering path — see
-/// `contains_annexb_function_declaration`).
-pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
-    scan_await_using(stmt) == AwaitUsingScan::Isolatable
+/// One `Blocked` shape is deliberately excluded: a C-style
+/// `for (using r = …; ; )` loop has no per-iteration disposal support
+/// (`transform_for_statement`'s lowering disposes after loop-exit code, not
+/// at the loop's own exit, regardless of what's in the body — issue #855).
+/// Routing it into the full transform would trade this issue's scheduling
+/// bug for that one instead of fixing either, so it stays excluded — and
+/// keeps draining as it does today — until #855 lands.
+pub(crate) fn reaches_await_using_block(stmt: &Statement) -> bool {
+    if let Statement::For(f) = stmt
+        && matches!(&f.init, Some(ForInit::Variable(decl)) if decl.kind == VarKind::Using)
+    {
+        return false;
+    }
+    scan_await_using(stmt) != AwaitUsingScan::None
 }
 
 pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
@@ -1676,64 +1665,110 @@ mod tests {
         scan_await_using(&f.body.as_slice()[0])
     }
 
+    const ISOLATABLE_SOURCES: &[&str] = &[
+        "{ await using a = null; }",
+        "if (c) { await using a = null; } else { x(); }",
+        "if (c) x(); else { await using a = null; }",
+        "l: { await using a = null; }",
+        "{ { await using a = null; } }",
+        "try { { await using a = null; } } catch (e) {}",
+        "try {} catch (e) { { await using a = null; } }",
+        "try {} finally { { await using a = null; } }",
+        "while (c) { await using a = null; }",
+        "do { await using a = null; } while (c);",
+        "for (;;) { await using a = null; }",
+        "for (var i = 0; i < 2; i++) { await using a = null; }",
+        // Annex B hoisting for `g` is still broken here (jsse prints
+        // `undefined` where node prints `function`) because the
+        // `for (var ...)` head is exempt from the Annex-B guard below —
+        // a pre-existing gap, not a regression from this scan, tracked
+        // as jsse#842. This assertion is about the *scan's*
+        // classification, not about `g` actually being hoisted correctly.
+        "for (var i = 0; i < 2; i++) { await using a = null; function g() {} }",
+        "for (x of y) { await using a = null; }",
+        "for (var x of y) { await using a = null; }",
+        "for (let x of y) { await using a = null; }",
+        "for (const x of y) { await using a = null; }",
+        "for await (const x of y) { await using a = null; }",
+        "for await (x of y) { { await using a = null; } }",
+        "for await (using r of y) { { await using a = null; } }",
+        "outer: while (c) { { await using a = null; } }",
+        "switch (x) { case 1: { await using a = null; } break; }",
+        "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
+        "for (let i = 0; i < 3; i++) { { await using a = null; } }",
+        "for (const i = 0; ;) { { await using a = null; } }",
+        "for (k in o) { { await using a = null; } }",
+        "for (await using a = null; c; i++) {}",
+        "for (await using a = null, b = null; ;) {}",
+        "l: for (await using a = null; ;) {}",
+        "if (c) { for (await using a = null; ;) {} }",
+        "while (c) { for (await using a = null; ;) {} }",
+        "try { for (await using a = null; ;) {} } finally {}",
+        "for (await using a = null; ;) { { await using b = null; } }",
+        "while (c) { let j = i; { await using a = null; } }",
+        // Plain `using` for-of head: scoped like `const` (jsse#845).
+        "for (using r of y) { { await using a = null; } }",
+        // `switch`'s `CaseBlock` now gets the same per-entry
+        // `ScopeAction::OpenBlock` scope `#703` gave `Block`/`try`
+        // (issue #841), so a case-level lexical sibling next to an
+        // isolatable block is as safe here as it is for those containers.
+        "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
+        "try { let x = 2; { await using a = null; } } finally {}",
+        "try {} catch (e) { const x = 1; { await using a = null; } }",
+        "try {} finally { class C {} { await using a = null; } }",
+        "{ let x = 1; { await using a = null; } }",
+        "{ let x = 1; for (await using a = null; ;) {} }",
+        "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
+    ];
+
+    const NONE_SOURCES: &[&str] = &[
+        "await 0;",
+        "await using a = null;",
+        "{ let a = null; }",
+        "try { x(); } catch (e) {}",
+        "while (c) { x(); }",
+        "for await (const x of y) { z(); }",
+        "for (let i = 0; i < 2; i++) { x(); }",
+        "for (using a = null; ;) {}",
+        "for (const a = null; ;) {}",
+        "switch (x) { case 1: y(); }",
+        "async function g() { { await using a = null; } }",
+    ];
+
+    // `with`, an `await using` for-of loop variable, and a plain `using`
+    // C-style `for` loop variable have no per-entry scope treatment at
+    // all (`transform_for_statement`'s `CopyForward` only recognizes
+    // `let`/`const`) — an `await using` C-style `for` loop head is
+    // different: its own loop environment is isolated independently of
+    // the body (`disposes_at_head`, #787), so it's not in this list.
+    // A plain `using` for-of loop variable isn't either (jsse#845) — see
+    // the `ForOf` arm of `scan_await_using`. A `function` declaration
+    // sibling is unsafe for a third, unrelated reason regardless of
+    // container: Annex B function hoisting isn't implemented by either
+    // lowering path.
+    const BLOCKED_SOURCES: &[&str] = &[
+        "with (o) { { await using a = null; } }",
+        "for (await using r of y) { { await using a = null; } }",
+        "for (using r = y; ; ) { { await using a = null; } }",
+        "{ function g() {} { await using a = null; } }",
+        "try { function g() {} { await using a = null; } } finally {}",
+        "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
+        "for (k in o) { await using a = null; function g() {} }",
+        "for (let x of y) { await using a = null; function g() {} }",
+        "for (const x of y) { await using a = null; function g() {} }",
+        "for (using r of y) { await using a = null; function g() {} }",
+        // The function declaration here is not a direct sibling of the
+        // flattened list's own items (it's nested inside one of them),
+        // so the check needs to walk into sibling containers rather than
+        // just matching a direct `FunctionDeclaration` item.
+        "{ let x = 1; { await using a = null; function g() {} } }",
+        "try { let y = 1; { await using a = null; function g() {} } } finally {}",
+        "{ { function g() {} } { await using a = null; } }",
+    ];
+
     #[test]
     fn suspendable_await_using_block_through_containers() {
-        let isolatable = [
-            "{ await using a = null; }",
-            "if (c) { await using a = null; } else { x(); }",
-            "if (c) x(); else { await using a = null; }",
-            "l: { await using a = null; }",
-            "{ { await using a = null; } }",
-            "try { { await using a = null; } } catch (e) {}",
-            "try {} catch (e) { { await using a = null; } }",
-            "try {} finally { { await using a = null; } }",
-            "while (c) { await using a = null; }",
-            "do { await using a = null; } while (c);",
-            "for (;;) { await using a = null; }",
-            "for (var i = 0; i < 2; i++) { await using a = null; }",
-            // Annex B hoisting for `g` is still broken here (jsse prints
-            // `undefined` where node prints `function`) because the
-            // `for (var ...)` head is exempt from the Annex-B guard below —
-            // a pre-existing gap, not a regression from this scan, tracked
-            // as jsse#842. This assertion is about the *scan's*
-            // classification, not about `g` actually being hoisted correctly.
-            "for (var i = 0; i < 2; i++) { await using a = null; function g() {} }",
-            "for (x of y) { await using a = null; }",
-            "for (var x of y) { await using a = null; }",
-            "for (let x of y) { await using a = null; }",
-            "for (const x of y) { await using a = null; }",
-            "for await (const x of y) { await using a = null; }",
-            "for await (x of y) { { await using a = null; } }",
-            "for await (using r of y) { { await using a = null; } }",
-            "outer: while (c) { { await using a = null; } }",
-            "switch (x) { case 1: { await using a = null; } break; }",
-            "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
-            "for (let i = 0; i < 3; i++) { { await using a = null; } }",
-            "for (const i = 0; ;) { { await using a = null; } }",
-            "for (k in o) { { await using a = null; } }",
-            "for (await using a = null; c; i++) {}",
-            "for (await using a = null, b = null; ;) {}",
-            "l: for (await using a = null; ;) {}",
-            "if (c) { for (await using a = null; ;) {} }",
-            "while (c) { for (await using a = null; ;) {} }",
-            "try { for (await using a = null; ;) {} } finally {}",
-            "for (await using a = null; ;) { { await using b = null; } }",
-            "while (c) { let j = i; { await using a = null; } }",
-            // Plain `using` for-of head: scoped like `const` (jsse#845).
-            "for (using r of y) { { await using a = null; } }",
-            // `switch`'s `CaseBlock` now gets the same per-entry
-            // `ScopeAction::OpenBlock` scope `#703` gave `Block`/`try`
-            // (issue #841), so a case-level lexical sibling next to an
-            // isolatable block is as safe here as it is for those containers.
-            "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
-            "try { let x = 2; { await using a = null; } } finally {}",
-            "try {} catch (e) { const x = 1; { await using a = null; } }",
-            "try {} finally { class C {} { await using a = null; } }",
-            "{ let x = 1; { await using a = null; } }",
-            "{ let x = 1; for (await using a = null; ;) {} }",
-            "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
-        ];
-        for src in isolatable {
+        for src in ISOLATABLE_SOURCES {
             assert_eq!(
                 scan_first_statement(src),
                 AwaitUsingScan::Isolatable,
@@ -1744,20 +1779,7 @@ mod tests {
 
     #[test]
     fn no_await_using_block_is_not_suspendable() {
-        let none = [
-            "await 0;",
-            "await using a = null;",
-            "{ let a = null; }",
-            "try { x(); } catch (e) {}",
-            "while (c) { x(); }",
-            "for await (const x of y) { z(); }",
-            "for (let i = 0; i < 2; i++) { x(); }",
-            "for (using a = null; ;) {}",
-            "for (const a = null; ;) {}",
-            "switch (x) { case 1: y(); }",
-            "async function g() { { await using a = null; } }",
-        ];
-        for src in none {
+        for src in NONE_SOURCES {
             assert_eq!(
                 scan_first_statement(src),
                 AwaitUsingScan::None,
@@ -1768,42 +1790,48 @@ mod tests {
 
     #[test]
     fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
-        // `with`, an `await using` for-of loop variable, and a plain `using`
-        // C-style `for` loop variable have no per-entry scope treatment at
-        // all (`transform_for_statement`'s `CopyForward` only recognizes
-        // `let`/`const`) — an `await using` C-style `for` loop head is
-        // different: its own loop environment is isolated independently of
-        // the body (`disposes_at_head`, #787), so it's not in this list.
-        // A plain `using` for-of loop variable isn't either (jsse#845) — see
-        // the `ForOf` arm of `scan_await_using`. A `function` declaration
-        // sibling is unsafe for a third, unrelated reason regardless of
-        // container: Annex B function hoisting isn't implemented by either
-        // lowering path.
-        let blocked = [
-            "with (o) { { await using a = null; } }",
-            "for (await using r of y) { { await using a = null; } }",
-            "for (using r = y; ; ) { { await using a = null; } }",
-            "{ function g() {} { await using a = null; } }",
-            "try { function g() {} { await using a = null; } } finally {}",
-            "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
-            "for (k in o) { await using a = null; function g() {} }",
-            "for (let x of y) { await using a = null; function g() {} }",
-            "for (const x of y) { await using a = null; function g() {} }",
-            "for (using r of y) { await using a = null; function g() {} }",
-            // The function declaration here is not a direct sibling of the
-            // flattened list's own items (it's nested inside one of them),
-            // so the check needs to walk into sibling containers rather than
-            // just matching a direct `FunctionDeclaration` item.
-            "{ let x = 1; { await using a = null; function g() {} } }",
-            "try { let y = 1; { await using a = null; function g() {} } } finally {}",
-            "{ { function g() {} } { await using a = null; } }",
-        ];
-        for src in blocked {
+        for src in BLOCKED_SOURCES {
             assert_eq!(
                 scan_first_statement(src),
                 AwaitUsingScan::Blocked,
                 "expected blocked: {src}"
             );
+        }
+    }
+
+    fn reaches_first_statement(src: &str) -> bool {
+        let program = crate::parser::Parser::new(&format!("async function f() {{ {src} }}"))
+            .expect("parser init")
+            .parse_program()
+            .expect("parse program");
+        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
+            panic!("expected a function declaration");
+        };
+        reaches_await_using_block(&f.body.as_slice()[0])
+    }
+
+    #[test]
+    fn reaches_await_using_block_covers_isolatable_and_blocked() {
+        // The C-style `for (using r = …)` head has no per-iteration disposal
+        // support (`transform_for_statement`'s lowering disposes after
+        // loop-exit code, not at the loop's own exit, regardless of the
+        // body — jsse#855). Routing it into the full transform would trade
+        // this issue's scheduling bug for that one instead of fixing either,
+        // so it's the one `Blocked` shape excluded here.
+        const EXCLUDED: &str = "for (using r = y; ; ) { { await using a = null; } }";
+        for src in ISOLATABLE_SOURCES {
+            assert!(reaches_first_statement(src), "expected reach: {src}");
+        }
+        for src in BLOCKED_SOURCES {
+            let expected = *src != EXCLUDED;
+            assert_eq!(
+                reaches_first_statement(src),
+                expected,
+                "expected reach == {expected}: {src}"
+            );
+        }
+        for src in NONE_SOURCES {
+            assert!(!reaches_first_statement(src), "expected no reach: {src}");
         }
     }
 

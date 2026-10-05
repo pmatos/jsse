@@ -245,9 +245,7 @@ pub(crate) enum StateTerminator {
     /// Opens a block scope: creates the block's own `Environment` (a child of
     /// whatever env is active), pushes it onto the driver's `scope_stack`, and
     /// continues at `body_state` executing against it. Emitted only for a
-    /// block that directly declares `await using` in a plain async function
-    /// (never a generator or async generator) — see
-    /// `has_block_with_await_using`.
+    /// block/clause list for which `ctx.scopes_disposables` is true.
     EnterScope {
         body_state: usize,
     },
@@ -617,8 +615,7 @@ fn transform_generator_inner_opts(
         })
         && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
-        && !body.iter().any(has_block_with_await_using)
-        && !body.iter().any(has_suspendable_await_using_block)
+        && !body.iter().any(reaches_await_using_block)
     {
         return create_simple_machine(body, params, &analysis);
     }
@@ -764,7 +761,7 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
         return true;
     }
     if is_async {
-        contains_suspension(stmt) || has_suspendable_await_using_block(stmt)
+        contains_suspension(stmt) || reaches_await_using_block(stmt)
     } else {
         contains_yield(stmt)
     }
@@ -923,9 +920,7 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // Return statements in async generators need Return terminators
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
-        } else if (ctx.is_async && has_block_with_await_using(stmt))
-            || (stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty())
-        {
+        } else if stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty() {
             transform_yielding_statement(stmt, ctx, next_after);
         } else {
             ctx.emit_statement(stmt.clone());
