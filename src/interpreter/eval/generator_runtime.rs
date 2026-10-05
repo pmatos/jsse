@@ -4543,9 +4543,8 @@ impl Interpreter {
                         let iterator = match self.get_async_iterator(&yield_val) {
                             Ok(it) => it,
                             Err(e) => {
-                                self.retire_generator(o.id);
-                                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                return Completion::Normal(promise);
+                                return self
+                                    .reject_async_generator_request(o.id, promise, &reject_fn, e);
                             }
                         };
 
