@@ -9757,7 +9757,6 @@ impl Interpreter {
                     // so a declaration inside the scope binds directly into
                     // `scope_env` itself (issue #858).
                     let mut parent_env = term_env.clone();
-                    let mut threw = false;
                     for with_var in with_vars {
                         let val = term_env
                             .borrow()
@@ -9767,8 +9766,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 pending_exception = Some(e);
-                                threw = true;
                                 break;
+                            }
+                            Completion::Exit(code) => {
+                                self.scheduler.remove_async_function_state(async_id);
+                                return Completion::Exit(code);
                             }
                             _ => JsValue::UNDEFINED,
                         };
@@ -9777,7 +9779,7 @@ impl Interpreter {
                         };
                         parent_env = Environment::new_with_object(parent_env, obj_id);
                     }
-                    if threw {
+                    if pending_exception.is_some() {
                         continue;
                     }
                     if !with_vars.is_empty() {

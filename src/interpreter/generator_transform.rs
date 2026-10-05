@@ -429,6 +429,13 @@ impl TransformContext {
         self.is_async && self.detect_for_await && block_declares_disposable(stmts)
     }
 
+    /// Whether `stmt` reaches a directly-disposing block (optionally through
+    /// enclosing `with`s) that needs full state-machine lowering rather than
+    /// running inline — see `has_block_with_await_using`.
+    fn needs_with_lowering(&self, stmt: &Statement) -> bool {
+        self.is_async && has_block_with_await_using(stmt, self.detect_for_await)
+    }
+
     fn new(analysis: GeneratorAnalysis, is_async: bool) -> Self {
         Self {
             states: Vec::new(),
@@ -933,7 +940,7 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // Return statements in async generators need Return terminators
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
-        } else if (ctx.is_async && has_block_with_await_using(stmt, ctx.detect_for_await))
+        } else if ctx.needs_with_lowering(stmt)
             || (stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty())
         {
             transform_yielding_statement(stmt, ctx, next_after);
@@ -1237,7 +1244,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 )));
             }
             if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await)
-                || (ctx.is_async && has_block_with_await_using(inner, ctx.detect_for_await))
+                || ctx.needs_with_lowering(inner)
             {
                 let with_body_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::Goto(with_body_state));
