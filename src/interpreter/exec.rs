@@ -881,61 +881,51 @@ impl Interpreter {
         }
     }
 
-    // A block-like statement list (Block, try block, catch body, finally block)
-    // is its own lexical scope, so its directly-contained function declarations
-    // are Annex B.3.3 candidates.
-    fn collect_annexb_in_block(
-        inner: &[Statement],
+    /// One lexical scope whose directly-contained statement lists are `lists`:
+    /// a Block, try/catch/finally block (each a Block production), or a switch
+    /// CaseBlock (one scope spanning every case clause).
+    fn collect_annexb_in_scope(
+        lists: &[&[Statement]],
         names: &mut Vec<String>,
         blocked: &mut Vec<String>,
     ) {
-        // Collect lexical names in this block
-        let mut block_lexicals = Vec::new();
-        for s in inner {
+        let mut lexicals = Vec::new();
+        for s in lists.iter().copied().flatten() {
             match s {
                 Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
                     for d in &decl.declarations {
-                        d.pattern.bound_names(&mut block_lexicals);
+                        d.pattern.bound_names(&mut lexicals);
                     }
                 }
-                Statement::ClassDeclaration(cls) => {
-                    block_lexicals.push(cls.name.clone());
-                }
+                Statement::ClassDeclaration(cls) => lexicals.push(cls.name.clone()),
                 _ => {}
             }
         }
-        // Check function declarations in this block
-        // Only regular functions (not generators or async) per Annex B.3.3
-        for s in inner {
-            let mut stmt = s;
-            while let Statement::Labeled(_, inner_s) = stmt {
-                stmt = inner_s;
-            }
-            if let Statement::FunctionDeclaration(f) = stmt
+        // Only plain functions are Annex B.3.3 candidates.
+        for s in lists.iter().copied().flatten() {
+            if let Some(f) = super::hoisting::unwrap_labeled_function(s)
                 && !f.is_generator
                 && !f.is_async
                 && !names.contains(&f.name)
                 && !blocked.contains(&f.name)
-                && !block_lexicals.contains(&f.name)
+                && !lexicals.contains(&f.name)
             {
                 names.push(f.name.clone());
             }
         }
-        // Recurse with block lexicals and function decl names added to blocked set
+        // Nested blocks may not hoist a name this scope already declares.
         let prev_len = blocked.len();
-        blocked.extend(block_lexicals);
-        for s in inner {
-            let mut stmt = s;
-            while let Statement::Labeled(_, inner_s) = stmt {
-                stmt = inner_s;
-            }
-            if let Statement::FunctionDeclaration(f) = stmt
+        blocked.extend(lexicals);
+        for s in lists.iter().copied().flatten() {
+            if let Some(f) = super::hoisting::unwrap_labeled_function(s)
                 && !blocked.contains(&f.name)
             {
                 blocked.push(f.name.clone());
             }
         }
-        Self::collect_annexb_function_names(inner, names, blocked);
+        for list in lists {
+            Self::collect_annexb_function_names(list, names, blocked);
+        }
         blocked.truncate(prev_len);
     }
 
@@ -951,7 +941,7 @@ impl Interpreter {
         for stmt in stmts {
             match stmt {
                 Statement::Block(inner) => {
-                    Self::collect_annexb_in_block(inner, names, blocked);
+                    Self::collect_annexb_in_scope(&[inner], names, blocked);
                 }
                 Statement::If(if_stmt) => {
                     Self::collect_annexb_function_names(
@@ -1044,51 +1034,12 @@ impl Interpreter {
                     );
                 }
                 Statement::Switch(s) => {
-                    // Switch creates a single scope for all cases
-                    let mut switch_lexicals = Vec::new();
-                    for case in &s.cases {
-                        for cs in &case.consequent {
-                            match cs {
-                                Statement::Variable(decl)
-                                    if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
-                                {
-                                    for d in &decl.declarations {
-                                        d.pattern.bound_names(&mut switch_lexicals);
-                                    }
-                                }
-                                Statement::ClassDeclaration(cls) => {
-                                    switch_lexicals.push(cls.name.clone());
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    for case in &s.cases {
-                        for cs in &case.consequent {
-                            let mut stmt = cs;
-                            while let Statement::Labeled(_, inner_s) = stmt {
-                                stmt = inner_s;
-                            }
-                            if let Statement::FunctionDeclaration(f) = stmt
-                                && !f.is_generator
-                                && !f.is_async
-                                && !names.contains(&f.name)
-                                && !blocked.contains(&f.name)
-                                && !switch_lexicals.contains(&f.name)
-                            {
-                                names.push(f.name.clone());
-                            }
-                        }
-                    }
-                    let prev_len = blocked.len();
-                    blocked.extend(switch_lexicals);
-                    for case in &s.cases {
-                        Self::collect_annexb_function_names(&case.consequent, names, blocked);
-                    }
-                    blocked.truncate(prev_len);
+                    let cases: Vec<&[Statement]> =
+                        s.cases.iter().map(|c| c.consequent.as_slice()).collect();
+                    Self::collect_annexb_in_scope(&cases, names, blocked);
                 }
                 Statement::Try(t) => {
-                    Self::collect_annexb_in_block(&t.block, names, blocked);
+                    Self::collect_annexb_in_scope(&[&t.block], names, blocked);
                     if let Some(ref h) = t.handler {
                         let prev_len = blocked.len();
                         if let Some(ref param) = h.param {
@@ -1098,11 +1049,11 @@ impl Interpreter {
                                 param.bound_names(blocked);
                             }
                         }
-                        Self::collect_annexb_in_block(&h.body, names, blocked);
+                        Self::collect_annexb_in_scope(&[&h.body], names, blocked);
                         blocked.truncate(prev_len);
                     }
                     if let Some(ref fin) = t.finalizer {
-                        Self::collect_annexb_in_block(fin, names, blocked);
+                        Self::collect_annexb_in_scope(&[fin], names, blocked);
                     }
                 }
                 _ => {}
