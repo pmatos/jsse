@@ -1665,7 +1665,7 @@ mod tests {
         })
     }
 
-    fn scan_first_statement(src: &str) -> bool {
+    fn scan_first_statement(src: &str) -> AwaitUsingScan {
         let program = crate::parser::Parser::new(&format!("async function f() {{ {src} }}"))
             .expect("parser init")
             .parse_program()
@@ -1673,7 +1673,7 @@ mod tests {
         let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
             panic!("expected a function declaration");
         };
-        has_suspendable_await_using_block(&f.body.as_slice()[0])
+        scan_await_using(&f.body.as_slice()[0])
     }
 
     #[test]
@@ -1734,7 +1734,11 @@ mod tests {
             "if (c) { await using a = null; } else { let x = 1; { await using b = null; } }",
         ];
         for src in isolatable {
-            assert!(scan_first_statement(src), "expected isolatable: {src}");
+            assert_eq!(
+                scan_first_statement(src),
+                AwaitUsingScan::Isolatable,
+                "expected isolatable: {src}"
+            );
         }
     }
 
@@ -1754,7 +1758,11 @@ mod tests {
             "async function g() { { await using a = null; } }",
         ];
         for src in none {
-            assert!(!scan_first_statement(src), "expected no scan hit: {src}");
+            assert_eq!(
+                scan_first_statement(src),
+                AwaitUsingScan::None,
+                "expected no scan hit: {src}"
+            );
         }
     }
 
@@ -1791,7 +1799,11 @@ mod tests {
             "{ { function g() {} } { await using a = null; } }",
         ];
         for src in blocked {
-            assert!(!scan_first_statement(src), "expected blocked: {src}");
+            assert_eq!(
+                scan_first_statement(src),
+                AwaitUsingScan::Blocked,
+                "expected blocked: {src}"
+            );
         }
     }
 
