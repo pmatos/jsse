@@ -1405,9 +1405,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
                 // `let`/`const`), so it blocks regardless of the body's
                 // shape. `await using` never reaches here: it's handled by
                 // `disposes_at_head()` above.
-                Some(ForInit::Variable(decl)) if decl.kind == VarKind::Using => {
-                    body.blocked_unless_none()
-                }
+                _ if f.has_plain_using_head() => body.blocked_unless_none(),
                 // A `let`/`const` head is `#703`-covered, so only an Annex-B
                 // function-declaration sibling still blocks it. A `var`/no-
                 // declaration head has no observable per-iteration binding to
@@ -1493,7 +1491,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// keeps draining as it does today — until #855 lands.
 pub(crate) fn reaches_await_using_block(stmt: &Statement) -> bool {
     if let Statement::For(f) = stmt
-        && matches!(&f.init, Some(ForInit::Variable(decl)) if decl.kind == VarKind::Using)
+        && f.has_plain_using_head()
     {
         return false;
     }
@@ -1655,14 +1653,7 @@ mod tests {
     }
 
     fn scan_first_statement(src: &str) -> AwaitUsingScan {
-        let program = crate::parser::Parser::new(&format!("async function f() {{ {src} }}"))
-            .expect("parser init")
-            .parse_program()
-            .expect("parse program");
-        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
-            panic!("expected a function declaration");
-        };
-        scan_await_using(&f.body.as_slice()[0])
+        scan_await_using(&first_statement(src))
     }
 
     const ISOLATABLE_SOURCES: &[&str] = &[
@@ -1800,14 +1791,7 @@ mod tests {
     }
 
     fn reaches_first_statement(src: &str) -> bool {
-        let program = crate::parser::Parser::new(&format!("async function f() {{ {src} }}"))
-            .expect("parser init")
-            .parse_program()
-            .expect("parse program");
-        let Some(Statement::FunctionDeclaration(f)) = program.body.as_slice().first() else {
-            panic!("expected a function declaration");
-        };
-        reaches_await_using_block(&f.body.as_slice()[0])
+        reaches_await_using_block(&first_statement(src))
     }
 
     #[test]
@@ -1822,14 +1806,13 @@ mod tests {
         for src in ISOLATABLE_SOURCES {
             assert!(reaches_first_statement(src), "expected reach: {src}");
         }
-        for src in BLOCKED_SOURCES {
-            let expected = *src != EXCLUDED;
-            assert_eq!(
-                reaches_first_statement(src),
-                expected,
-                "expected reach == {expected}: {src}"
-            );
+        for src in BLOCKED_SOURCES.iter().filter(|&&src| src != EXCLUDED) {
+            assert!(reaches_first_statement(src), "expected reach: {src}");
         }
+        assert!(
+            !reaches_first_statement(EXCLUDED),
+            "expected no reach: {EXCLUDED}"
+        );
         for src in NONE_SOURCES {
             assert!(!reaches_first_statement(src), "expected no reach: {src}");
         }
