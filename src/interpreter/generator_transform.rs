@@ -1236,7 +1236,9 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     ExprBox::new(expr.clone()),
                 )));
             }
-            if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await) {
+            if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await)
+                || (ctx.is_async && has_block_with_await_using(inner, ctx.detect_for_await))
+            {
                 let with_body_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::Goto(with_body_state));
                 ctx.current_state_id = with_body_state;
