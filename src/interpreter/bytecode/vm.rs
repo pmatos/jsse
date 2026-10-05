@@ -403,8 +403,8 @@ fn run_chunk_inner(
                 let name = &chunk.names[idx as usize];
                 let gc_frame = root_operand_stack(interp, &stack);
                 let base = stack.pop().expect("stack underflow on LoadMethod");
-                unroot_stack_value(interp, &base);
                 let result = member_get(interp, &base, name);
+                unroot_stack_value(interp, &base);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
                     Completion::Normal(method) => {

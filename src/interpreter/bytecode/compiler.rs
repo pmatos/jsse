@@ -470,19 +470,6 @@ impl Compiler {
         op: Op,
         site_id: CallSiteId,
     ) -> Result<(), CompileError> {
-        match callee {
-            // A bare `eval` may resolve to the realm's intrinsic eval at
-            // runtime, in which case it needs the caller's lexical
-            // environment. Keep the whole Body on the tree-walker rather than
-            // changing direct-eval semantics.
-            Expression::Identifier(name) if name == "eval" => {
-                return Err(CompileError::Unsupported("direct eval call"));
-            }
-            Expression::Identifier(_) => {}
-            Expression::Member(obj, MemberProperty::Dot(_) | MemberProperty::Computed(_), _)
-                if !matches!(obj.as_ref(), Expression::Super) => {}
-            _ => return Err(CompileError::Unsupported("call callee")),
-        }
         if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
             return Err(CompileError::Unsupported("spread call argument"));
         }
@@ -494,7 +481,15 @@ impl Compiler {
 
         // Stack layout consumed by Call/ReturnCall:
         //   [..., callee, this, arg0, ..., argN]
+        // `super.m()` needs no check here: `compile_expr` rejects `Super`.
         match callee {
+            // A bare `eval` may resolve to the realm's intrinsic eval at
+            // runtime, in which case it needs the caller's lexical
+            // environment. Keep the whole Body on the tree-walker rather than
+            // changing direct-eval semantics.
+            Expression::Identifier(name) if name == "eval" => {
+                return Err(CompileError::Unsupported("direct eval call"));
+            }
             Expression::Identifier(name) => {
                 let name_idx = self.add_name(name)?;
                 self.emit(Op::LoadCalleeName);
@@ -514,7 +509,7 @@ impl Compiler {
                 // base + key on the stack become callee + this in place.
                 self.emit(Op::LoadMethodElement);
             }
-            _ => unreachable!("callee validated above"),
+            _ => return Err(CompileError::Unsupported("call callee")),
         }
         for arg in args {
             self.compile_expr(arg)?;
