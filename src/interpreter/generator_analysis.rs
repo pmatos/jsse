@@ -1265,15 +1265,6 @@ impl AwaitUsingScan {
     }
 }
 
-fn declares_lexical_binding(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::Variable(decl) => decl.kind != VarKind::Var,
-        Statement::ClassDeclaration(_) | Statement::FunctionDeclaration(_) => true,
-        Statement::Labeled(_, inner) => declares_lexical_binding(inner),
-        _ => false,
-    }
-}
-
 /// Does this subtree, reached through the same containers `scan_await_using`
 /// walks, declare a plain `function` at statement position anywhere inside?
 /// Annex B hoists such a declaration to the nearest function/script scope in
@@ -1336,23 +1327,16 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
 /// *sibling* container in this same list (e.g. `{ { function g(){} } {
 /// await using a = null; } }`), not just a direct `FunctionDeclaration`
 /// item, so it uses the deep walker rather than a shallow one. `switch`
-/// does not share this fold at all (see `scan_switch_body`).
+/// shares this same fold (over its flattened `cases[].consequent`): its
+/// `CaseBlock` now gets the identical per-entry `ScopeAction::OpenBlock`
+/// treatment `#703` gave `Block`/`try` clause bodies (issue #841), so a
+/// lexical declaration beside an isolatable block is no more observably
+/// affected there than it is for `Block`/`try`.
 fn scan_flattened_list<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
     let combined = stmts.clone().fold(AwaitUsingScan::None, |acc, s| {
         acc.combine(scan_await_using(s))
     });
     combined.blocked_if(stmts.into_iter().any(contains_annexb_function_declaration))
-}
-
-/// A `switch` statement's `CaseBlock` is one lexical scope spanning every
-/// case (`BlockDeclarationInstantiation` runs once for the whole switch),
-/// but `transform_switch_statement` lowers each case's statements straight
-/// into the state graph with no `EnterScope`/`ExitScope` pair at all —
-/// unlike `Block`/`try` clause bodies, switch never got the per-entry-scope
-/// treatment `#703` gave those. A lexical declaration next to an isolatable
-/// block here can't be flattened safely as a result.
-fn scan_switch_body<'a>(stmts: impl Iterator<Item = &'a Statement> + Clone) -> AwaitUsingScan {
-    scan_flattened_list(stmts.clone()).blocked_if(stmts.into_iter().any(declares_lexical_binding))
 }
 
 /// Whether `stmt` is isolatable (if it is at all) purely through its own
@@ -1471,7 +1455,9 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
             }
             result
         }
-        Statement::Switch(s) => scan_switch_body(s.cases.iter().flat_map(|c| c.consequent.iter())),
+        Statement::Switch(s) => {
+            scan_flattened_list(s.cases.iter().flat_map(|c| c.consequent.iter()))
+        }
         Statement::With(_, body) => scan_await_using(body).blocked_unless_none(),
         Statement::Empty
         | Statement::Expression(_)
@@ -1500,12 +1486,12 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// excluded and keep running in the tree-walker: `with`; a plain `using`
 /// (non-`await`) or `await using` for-of loop variable, and a plain `using`
 /// C-style `for` loop variable (`transform_for_in_of_loop` and
-/// `transform_for_statement`'s `CopyForward` only handle `let`/`const`); a
-/// `switch` case list beside the block (switch's `CaseBlock` never gets its
-/// own per-entry scope at all, unlike `Block`/`try`/`for`/`for-in`, which
-/// `#703` already covers); and any of these reaching a sibling `function`
-/// declaration (Annex B hoisting isn't implemented by either lowering path —
-/// see `contains_annexb_function_declaration`).
+/// `transform_for_statement`'s `CopyForward` only handle `let`/`const`); and
+/// any of these (now including `switch`, since issue #841 gave its
+/// `CaseBlock` the same per-entry `ScopeAction::OpenBlock` `#703` gave
+/// `Block`/`try`/`for`/`for-in`) reaching a sibling `function` declaration
+/// (Annex B hoisting isn't implemented by either lowering path — see
+/// `contains_annexb_function_declaration`).
 pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
     scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
@@ -1717,6 +1703,11 @@ mod tests {
             "try { for (await using a = null; ;) {} } finally {}",
             "for (await using a = null; ;) { { await using b = null; } }",
             "while (c) { let j = i; { await using a = null; } }",
+            // `switch`'s `CaseBlock` now gets the same per-entry
+            // `ScopeAction::OpenBlock` scope `#703` gave `Block`/`try`
+            // (issue #841), so a case-level lexical sibling next to an
+            // isolatable block is as safe here as it is for those containers.
+            "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "try { let x = 2; { await using a = null; } } finally {}",
             "try {} catch (e) { const x = 1; { await using a = null; } }",
             "try {} finally { class C {} { await using a = null; } }",
@@ -1757,15 +1748,11 @@ mod tests {
         // recognizes `let`/`const`) — an `await using` C-style `for` loop
         // head is different: its own loop environment is isolated
         // independently of the body (`disposes_at_head`, #787), so it's not
-        // in this list. `switch` has no per-entry scope either
-        // (`transform_switch_statement` never opens one for the whole
-        // `CaseBlock`, unlike `Block`/`try`, which `#703` covers). A
-        // `function` declaration sibling is unsafe for a third, unrelated
-        // reason regardless of container: Annex B function hoisting isn't
-        // implemented by either lowering path.
+        // in this list. A `function` declaration sibling is unsafe for a
+        // third, unrelated reason regardless of container: Annex B function
+        // hoisting isn't implemented by either lowering path.
         let blocked = [
             "with (o) { { await using a = null; } }",
-            "switch (x) { case 1: let y = 1; case 2: { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
             "for (using r of y) { { await using a = null; } }",
             "for (using r = y; ; ) { { await using a = null; } }",

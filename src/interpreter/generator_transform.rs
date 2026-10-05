@@ -994,7 +994,9 @@ fn suspension_free_class_expr(class_expr: &ClassExpr, ctx: &mut TransformContext
 /// unsplit block. Mirrors `Interpreter::hoist_lexical_declarations`
 /// (`exec.rs`), which performs the same scan directly against an
 /// `Environment` rather than collecting it for later use.
-fn collect_block_lexical_decls(stmts: &[Statement]) -> Vec<(String, bool)> {
+fn collect_block_lexical_decls<'a>(
+    stmts: impl Iterator<Item = &'a Statement>,
+) -> Vec<(String, bool)> {
     let mut decls = Vec::new();
     for stmt in stmts {
         match stmt {
@@ -1090,8 +1092,9 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.finalize_current_state(StateTerminator::Goto(entry_state));
                 ctx.current_state_id = entry_state;
                 ctx.scope_depth += 1;
-                ctx.states[entry_state].scope_action =
-                    Some(ScopeAction::OpenBlock(collect_block_lexical_decls(stmts)));
+                ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
+                    collect_block_lexical_decls(stmts.iter()),
+                ));
 
                 let inner_after = ctx.new_state();
                 transform_statements(stmts, ctx, inner_after);
@@ -3537,7 +3540,7 @@ fn transform_try_statement(
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
         ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
-            collect_block_lexical_decls(&try_stmt.block),
+            collect_block_lexical_decls(try_stmt.block.iter()),
         ));
         ctx.scope_depth += 1;
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
@@ -3556,7 +3559,7 @@ fn transform_try_statement(
             lexical_decls: try_stmt
                 .handler
                 .as_ref()
-                .map(|h| collect_block_lexical_decls(&h.body))
+                .map(|h| collect_block_lexical_decls(h.body.iter()))
                 .unwrap_or_default(),
         });
 
@@ -3598,7 +3601,7 @@ fn transform_try_statement(
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(finalizer),
+                    collect_block_lexical_decls(finalizer.iter()),
                 ));
                 ctx.scope_depth += 1;
                 transform_statements(finalizer, ctx, finally_exit_state);
@@ -3635,23 +3638,44 @@ fn default_case_state(switch_stmt: &SwitchStatement, case_states: &[usize]) -> O
         .find_map(|(case, &state)| case.test.is_none().then_some(state))
 }
 
+/// Opens a switch's `CaseBlock` scope on a fresh bridging state reached via
+/// `Goto` from the current state, bumping `ctx.scope_depth` to match. Shared
+/// by both switch-lowering paths (suspending-test and non-suspending), each
+/// of which independently needs the same "one scope, opened once, covering
+/// every case" bridge (issue #841) ahead of case-test matching.
+fn open_case_block_scope(
+    ctx: &mut TransformContext,
+    case_block_decls: Vec<(String, bool)>,
+) -> usize {
+    let bridge_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::Goto(bridge_state));
+    ctx.current_state_id = bridge_state;
+    ctx.scope_depth += 1;
+    ctx.states[bridge_state].scope_action = Some(ScopeAction::OpenBlock(case_block_decls));
+    bridge_state
+}
+
 /// Lowers a switch whose case tests contain a suspension into a chain of
 /// `ConditionalGoto` states, since `SwitchDispatch` evaluates its tests inside
 /// the terminator where a `yield`/`await` cannot suspend. The discriminant is
 /// captured once so a selector cannot change the value being compared.
 /// Returns the case body states.
+///
+/// The discriminant is captured, then a bridging state opens the `CaseBlock`'s
+/// single lexical scope (`case_block_decls`) before any case-test comparison
+/// runs — `sec-switch-statement-runtime-semantics-evaluation` installs
+/// `blockEnv` before `CaseBlockEvaluation`, which is where case-test matching
+/// happens, so a suspending test's selector must evaluate inside it too.
 fn lower_switch_dispatch_with_suspending_tests(
     switch_stmt: &SwitchStatement,
     ctx: &mut TransformContext,
     after_switch: usize,
+    case_block_decls: Vec<(String, bool)>,
 ) -> Vec<usize> {
     let disc_var = ctx.new_temp_var("switch_disc");
-    let disc_binding = Some(SentValueBindingKind::Variable(disc_var.clone()));
-    if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
-        transform_yielding_expression(&switch_stmt.discriminant, ctx, usize::MAX, disc_binding);
-    } else {
-        emit_expression_with_binding(&switch_stmt.discriminant, &disc_binding, ctx);
-    }
+    bind_expression_to_temp(&switch_stmt.discriminant, &disc_var, ctx);
+
+    open_case_block_scope(ctx, case_block_decls);
 
     let case_states = allocate_case_states(switch_stmt, ctx);
     let case_var = ctx.new_temp_var("switch_case");
@@ -3701,21 +3725,37 @@ fn transform_switch_statement(
             .is_some_and(|test| expr_has_suspension(test, ctx.is_async))
     });
 
+    // `sec-switch-statement-runtime-semantics-evaluation` / `sec-blockdeclarationinstantiation`:
+    // `CaseBlock` is a single lexical environment shared by every case —
+    // `BlockDeclarationInstantiation` runs once, before any case test or body
+    // runs, not per case. Computed once up front so both branches below open
+    // the identical scope.
+    let case_block_decls = collect_block_lexical_decls(
+        switch_stmt
+            .cases
+            .iter()
+            .flat_map(|case| case.consequent.iter()),
+    );
+
     let case_states = if tests_suspend {
-        lower_switch_dispatch_with_suspending_tests(switch_stmt, ctx, after_switch)
+        lower_switch_dispatch_with_suspending_tests(
+            switch_stmt,
+            ctx,
+            after_switch,
+            case_block_decls,
+        )
     } else {
-        let mut temp_discriminant = switch_stmt.discriminant.clone();
-        if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
-            let temp_var = ctx.new_temp_var("switch_disc");
-            let disc_binding = SentValueBindingKind::Variable(temp_var.clone());
-            transform_yielding_expression(
-                &switch_stmt.discriminant,
-                ctx,
-                usize::MAX,
-                Some(disc_binding),
-            );
-            temp_discriminant = Expression::Identifier(temp_var);
-        }
+        // The discriminant evaluates in the *outer* environment (step 1 of the
+        // spec algorithm, before `blockEnv` exists), so — unlike before this
+        // fix — it is always captured into a temp ahead of the scope bridge
+        // below, never left as a raw expression for `SwitchDispatch`'s own
+        // term_env to re-evaluate, which (once the bridge carries that
+        // terminator) is `blockEnv`, not the outer environment.
+        let temp_var = ctx.new_temp_var("switch_disc");
+        bind_expression_to_temp(&switch_stmt.discriminant, &temp_var, ctx);
+        let temp_discriminant = Expression::Identifier(temp_var);
+
+        open_case_block_scope(ctx, case_block_decls);
 
         let case_states = allocate_case_states(switch_stmt, ctx);
         let case_targets = switch_stmt
@@ -3763,6 +3803,8 @@ fn transform_switch_statement(
             ctx.finalize_current_state(StateTerminator::Goto(next_state));
         }
     }
+
+    ctx.scope_depth -= 1;
 
     if let Some(prev) = prev_break {
         ctx.break_targets.insert(None, prev);
@@ -5205,6 +5247,75 @@ mod tests {
             found,
             "expected an EnterCatch terminator carrying the post-yield `const x`, got {:#?}",
             sm.states
+        );
+    }
+
+    #[test]
+    fn switch_case_block_gets_one_shared_open_block_scope() {
+        // Regression for issue #841: a switch's CaseBlock is one lexical
+        // environment spanning every case (`BlockDeclarationInstantiation`
+        // runs once for the whole CaseBlock, not per case) -- both cases'
+        // `let`s must land in a single, shared OpenBlock scope_action, not
+        // per-case ones.
+        let sm = async_machine("switch (1) { case 1: let y = 1; await 0; case 2: let z = 2; } ");
+        let open_block_decls: Vec<&Vec<(String, bool)>> = sm
+            .states
+            .iter()
+            .filter_map(|s| match &s.scope_action {
+                Some(ScopeAction::OpenBlock(decls)) => Some(decls),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            open_block_decls.len(),
+            1,
+            "expected exactly one OpenBlock scope_action for the whole CaseBlock, got {:#?}",
+            sm.states
+        );
+        let decls = open_block_decls[0];
+        assert!(
+            decls.iter().any(|(name, _)| name == "y"),
+            "expected `y` in the shared CaseBlock scope, got {decls:?}"
+        );
+        assert!(
+            decls.iter().any(|(name, _)| name == "z"),
+            "expected `z` in the shared CaseBlock scope, got {decls:?}"
+        );
+    }
+
+    #[test]
+    fn switch_scope_depth_brackets_the_whole_case_block() {
+        // The bridging state (carrying SwitchDispatch) must already be one
+        // scope deeper than the state before the switch, and `after_switch`
+        // must drop back to the outer depth -- guards the depth bookkeeping
+        // directly, independent of `scope_action`'s decls content.
+        let sm =
+            async_machine("let before = 1; switch (1) { case 1: let y = 1; await 0; } before;");
+        let dispatch_depth = sm
+            .states
+            .iter()
+            .find(|s| matches!(s.terminator, StateTerminator::SwitchDispatch { .. }))
+            .map(|s| s.scope_depth)
+            .expect("expected a SwitchDispatch terminator");
+        let outer_depth = sm.states[0].scope_depth;
+        assert_eq!(
+            dispatch_depth,
+            outer_depth + 1,
+            "SwitchDispatch's state must be one scope deeper than the state before the switch"
+        );
+        let after_switch_depth = sm
+            .states
+            .iter()
+            .find(|s| {
+                s.body.as_slice().iter().any(|stmt| {
+                    matches!(stmt, Statement::Expression(Expression::Identifier(n)) if n == "before")
+                })
+            })
+            .map(|s| s.scope_depth)
+            .expect("expected a state reading the post-switch `before` identifier");
+        assert_eq!(
+            after_switch_depth, outer_depth,
+            "the state after the switch must be back at the outer scope depth"
         );
     }
 }
