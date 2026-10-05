@@ -3,6 +3,7 @@ use crate::interpreter::generator_analysis::*;
 use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -253,7 +254,7 @@ pub(crate) enum StateTerminator {
         /// first. The driver wraps each in an object environment beneath the
         /// scope's own, so the scope body runs without a per-state `With`
         /// re-wrap that would hide the scope's resources in a fresh block.
-        with_vars: Vec<String>,
+        with_vars: Rc<[String]>,
     },
     /// Closes the block scope most recently opened by `EnterScope`: pops it
     /// from `scope_stack` and disposes its resources (suspendably, at each
@@ -453,6 +454,12 @@ impl TransformContext {
         }
     }
 
+    /// The enclosing `with` temps not yet present in the environment chain of
+    /// the innermost open `EnterScope`.
+    fn pending_with_scopes(&self) -> &[String] {
+        &self.with_scopes[self.materialized_with_scopes..]
+    }
+
     fn new_temp_var(&mut self, prefix: &str) -> String {
         let id = self.temp_counter;
         self.temp_counter += 1;
@@ -478,8 +485,7 @@ impl TransformContext {
     fn finalize_current_state(&mut self, terminator: StateTerminator) {
         if self.current_state_id < self.states.len() {
             let mut stmts = std::mem::take(&mut self.current_statements);
-            debug_assert!(self.materialized_with_scopes <= self.with_scopes.len());
-            let pending_withs = &self.with_scopes[self.materialized_with_scopes..];
+            let pending_withs = self.pending_with_scopes();
             if !pending_withs.is_empty() && !stmts.is_empty() {
                 let block = Statement::Block(stmts);
                 let mut wrapped = block;
@@ -1040,7 +1046,7 @@ fn collect_block_lexical_decls<'a>(
 fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
     let body_state = ctx.new_state();
     let exit_state = ctx.new_state();
-    let with_vars = ctx.with_scopes[ctx.materialized_with_scopes..].to_vec();
+    let with_vars: Rc<[String]> = ctx.pending_with_scopes().into();
     ctx.finalize_current_state(StateTerminator::EnterScope {
         body_state,
         with_vars,

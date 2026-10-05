@@ -9752,9 +9752,8 @@ impl Interpreter {
                     ref with_vars,
                 } => {
                     let mut parent_env = term_env.clone();
-                    let mut with_failed = false;
-                    for with_var in with_vars {
-                        let raw = parent_env
+                    for with_var in with_vars.iter() {
+                        let raw = term_env
                             .borrow()
                             .get(with_var)
                             .unwrap_or(JsValue::UNDEFINED);
@@ -9766,7 +9765,6 @@ impl Interpreter {
                             }
                             Completion::Throw(e) => {
                                 pending_exception = Some(e);
-                                with_failed = true;
                                 break;
                             }
                             Completion::Exit(code) => {
@@ -9776,7 +9774,7 @@ impl Interpreter {
                             _ => {}
                         }
                     }
-                    if with_failed {
+                    if pending_exception.is_some() {
                         continue;
                     }
                     let scope_env = Environment::new(Some(parent_env));

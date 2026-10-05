@@ -1105,26 +1105,9 @@ impl Interpreter {
     /// body in, layered over `parent`.
     pub(crate) fn new_with_env(&mut self, obj_id: u64, parent: &EnvRef) -> EnvRef {
         self.has_ever_entered_with = true;
-        Rc::new(RefCell::new(Environment {
-            bindings: Default::default(),
-            parent: Some(parent.clone()),
-            strict: parent.borrow().strict,
-            is_function_scope: false,
-            is_arrow_scope: false,
-            with_object: Some(WithObject { obj_id }),
-            dispose_stack: None,
-            global_object_id: None,
-            annexb_function_names: None,
-            class_private_names: None,
-            is_field_initializer: false,
-            arguments_immutable: false,
-            has_parameter_expressions: false,
-            has_simple_params: true,
-            is_simple_catch_scope: false,
-            is_derived_constructor_scope: false,
-            indirect_bindings: None,
-            module_path: None,
-        }))
+        let env = Environment::new(Some(parent.clone()));
+        env.borrow_mut().with_object = Some(WithObject { obj_id });
+        env
     }
 
     pub(crate) fn exec_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Completion {
