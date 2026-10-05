@@ -1315,6 +1315,15 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
     }
 }
 
+/// A loop whose per-iteration lexical scope is otherwise isolatable
+/// (`for`/`for-in`/`for-of` with a `let`/`const`/`using` head): a sibling
+/// Annex-B `function` declaration in `loop_body` still blocks it, the same
+/// gap `scan_flattened_list`/`scan_scoped_list` guard against for
+/// `Block`/`try`/`switch`.
+fn blocked_by_annexb_sibling(body: AwaitUsingScan, loop_body: &Statement) -> AwaitUsingScan {
+    body.blocked_if(contains_annexb_function_declaration(loop_body))
+}
+
 /// A statement list the transform flattens into the enclosing state graph.
 /// `Block` and `try`/`catch`/`finally` clause bodies both open their own
 /// per-entry environment once lowered (`ScopeAction::OpenBlock`, `#703`),
@@ -1426,21 +1435,28 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
                 Some(ForInit::Variable(decl))
                     if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
                 {
-                    body.blocked_if(contains_annexb_function_declaration(&f.body))
+                    blocked_by_annexb_sibling(body, &f.body)
                 }
                 _ => body,
             }
         }
-        Statement::ForIn(f) => {
-            scan_await_using(&f.body).blocked_if(contains_annexb_function_declaration(&f.body))
-        }
+        Statement::ForIn(f) => blocked_by_annexb_sibling(scan_await_using(&f.body), &f.body),
         Statement::ForOf(f) => {
             let body = scan_await_using(&f.body);
             match &f.left {
+                // An `await using` head's own disposal is handled
+                // independently (`disposes_at_head`, #787) and the Annex-B
+                // `function` hoisting gap applies regardless, so any
+                // reachable `await using` in the body blocks the whole
+                // statement here. A plain (sync-dispose) `using`, `let` or
+                // `const` head has no per-entry scope treatment beyond what
+                // `for_of_head_lexical` already gives `const`, so each only
+                // needs the Annex-B guard (jsse#845).
+                _ if f.disposes_at_head() => body.blocked_unless_none(),
                 ForInOfLeft::Variable(decl)
-                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) =>
+                    if matches!(decl.kind, VarKind::Using | VarKind::Let | VarKind::Const) =>
                 {
-                    body.blocked_unless_none()
+                    blocked_by_annexb_sibling(body, &f.body)
                 }
                 _ => body,
             }
@@ -1483,10 +1499,9 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// scans as (`disposes_at_head`, #787).
 ///
 /// Containers whose lowering would flatten an observable lexical scope are
-/// excluded and keep running in the tree-walker: `with`; a plain `using`
-/// (non-`await`) or `await using` for-of loop variable, and a plain `using`
-/// C-style `for` loop variable (`transform_for_in_of_loop` and
-/// `transform_for_statement`'s `CopyForward` only handle `let`/`const`); and
+/// excluded and keep running in the tree-walker: `with`; an `await using`
+/// for-of loop variable, and a plain `using` C-style `for` loop variable
+/// (`transform_for_statement`'s `CopyForward` only handles `let`/`const`); and
 /// any of these (now including `switch`, since issue #841 gave its
 /// `CaseBlock` the same per-entry `ScopeAction::OpenBlock` `#703` gave
 /// `Block`/`try`/`for`/`for-in`) reaching a sibling `function` declaration
@@ -1689,6 +1704,7 @@ mod tests {
             "for (const x of y) { await using a = null; }",
             "for await (const x of y) { await using a = null; }",
             "for await (x of y) { { await using a = null; } }",
+            "for await (using r of y) { { await using a = null; } }",
             "outer: while (c) { { await using a = null; } }",
             "switch (x) { case 1: { await using a = null; } break; }",
             "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
@@ -1703,6 +1719,8 @@ mod tests {
             "try { for (await using a = null; ;) {} } finally {}",
             "for (await using a = null; ;) { { await using b = null; } }",
             "while (c) { let j = i; { await using a = null; } }",
+            // Plain `using` for-of head: scoped like `const` (jsse#845).
+            "for (using r of y) { { await using a = null; } }",
             // `switch`'s `CaseBlock` now gets the same per-entry
             // `ScopeAction::OpenBlock` scope `#703` gave `Block`/`try`
             // (issue #841), so a case-level lexical sibling next to an
@@ -1742,24 +1760,28 @@ mod tests {
 
     #[test]
     fn lowering_that_would_flatten_a_lexical_scope_is_blocked() {
-        // `with`, a `using`/`await using` for-of loop variable, and a plain
-        // `using` C-style `for` loop variable have no per-entry scope
-        // treatment at all (`transform_for_statement`'s `CopyForward` only
-        // recognizes `let`/`const`) — an `await using` C-style `for` loop
-        // head is different: its own loop environment is isolated
-        // independently of the body (`disposes_at_head`, #787), so it's not
-        // in this list. A `function` declaration sibling is unsafe for a
-        // third, unrelated reason regardless of container: Annex B function
-        // hoisting isn't implemented by either lowering path.
+        // `with`, an `await using` for-of loop variable, and a plain `using`
+        // C-style `for` loop variable have no per-entry scope treatment at
+        // all (`transform_for_statement`'s `CopyForward` only recognizes
+        // `let`/`const`) — an `await using` C-style `for` loop head is
+        // different: its own loop environment is isolated independently of
+        // the body (`disposes_at_head`, #787), so it's not in this list.
+        // A plain `using` for-of loop variable isn't either (jsse#845) — see
+        // the `ForOf` arm of `scan_await_using`. A `function` declaration
+        // sibling is unsafe for a third, unrelated reason regardless of
+        // container: Annex B function hoisting isn't implemented by either
+        // lowering path.
         let blocked = [
             "with (o) { { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
-            "for (using r of y) { { await using a = null; } }",
             "for (using r = y; ; ) { { await using a = null; } }",
             "{ function g() {} { await using a = null; } }",
             "try { function g() {} { await using a = null; } } finally {}",
             "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
             "for (k in o) { await using a = null; function g() {} }",
+            "for (let x of y) { await using a = null; function g() {} }",
+            "for (const x of y) { await using a = null; function g() {} }",
+            "for (using r of y) { await using a = null; function g() {} }",
             // The function declaration here is not a direct sibling of the
             // flattened list's own items (it's nested inside one of them),
             // so the check needs to walk into sibling containers rather than

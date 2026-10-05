@@ -4687,6 +4687,23 @@ mod tests {
     }
 
     #[test]
+    fn test_using_for_of_head_wrapping_await_using_block_is_lowered() {
+        // A plain (sync-dispose) `using` for-of head has no `Await` of its
+        // own, but the nested `await using` block in the body does — the
+        // whole statement must still take the real state machine so that
+        // block's disposal suspends instead of draining the job queue
+        // inline (jsse#845).
+        let body = parse_fn_body(
+            "async function f(y) { for (using r of y) { { await using a = null; } } }",
+        );
+        let sm = transform_async_function(&body, &[]);
+        assert!(
+            sm.states.len() > 1,
+            "expected a real state machine, got the simple-machine fast path"
+        );
+    }
+
+    #[test]
     fn test_yield_array_pattern_at_catch_param_already_drives_array_iter() {
         // Characterization, not a regression test for this issue: a `yield`
         // (not `await`) default in an array pattern at the catch-param site
