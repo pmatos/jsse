@@ -478,6 +478,7 @@ impl TransformContext {
     fn finalize_current_state(&mut self, terminator: StateTerminator) {
         if self.current_state_id < self.states.len() {
             let mut stmts = std::mem::take(&mut self.current_statements);
+            debug_assert!(self.materialized_with_scopes <= self.with_scopes.len());
             let pending_withs = &self.with_scopes[self.materialized_with_scopes..];
             if !pending_withs.is_empty() && !stmts.is_empty() {
                 let block = Statement::Block(stmts);

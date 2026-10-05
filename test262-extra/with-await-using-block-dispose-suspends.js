@@ -148,4 +148,74 @@ asyncTest(async function () {
     ['disp', 'sync-end', 'caught-boom', 'after', 'settled'],
     'an abrupt exit from the with body still disposes before the catch'
   );
+
+  log = await observe(function (L) {
+    return (async function () {
+      var x = 'outer';
+      with ({ x: 'ox' }) {
+        let x = 'block';
+        await using a = { [Symbol.asyncDispose]() { L('disp-' + x); } };
+        L('body-' + x);
+      }
+      L('after-' + x);
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['body-block', 'disp-block', 'sync-end', 'after-outer', 'settled'],
+    'a block-scoped binding shadows the with object'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
+      var o = { x: 'ox', [Symbol.unscopables]: { x: true } };
+      var x = 'outer';
+      with (o) {
+        await using a = { [Symbol.asyncDispose]() { L('disp-' + x); } };
+        L('body-' + x);
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['body-outer', 'disp-outer', 'sync-end', 'after', 'settled'],
+    'Symbol.unscopables is honoured inside the scope'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
+      for (var i = 0; i < 2; i++) {
+        with ({ i: 'oi' }) {
+          await using a = { [Symbol.asyncDispose]() { L('disp-' + i); } };
+          L('body-' + i);
+        }
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['body-oi', 'disp-oi', 'sync-end', 'body-oi', 'disp-oi', 'after', 'settled'],
+    'the scope is re-entered under the with on each loop iteration'
+  );
+
+  log = await observe(function (L) {
+    return (async function () {
+      try {
+        with (null) {
+          await using a = { [Symbol.asyncDispose]() { L('disp'); } };
+          L('body');
+        }
+      } catch (e) {
+        L('caught-' + (e instanceof TypeError));
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['caught-true', 'after', 'sync-end', 'settled'],
+    'a null with operand throws a TypeError before the body runs'
+  );
 });

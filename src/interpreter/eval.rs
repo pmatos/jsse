@@ -9769,6 +9769,10 @@ impl Interpreter {
                                 with_failed = true;
                                 break;
                             }
+                            Completion::Exit(code) => {
+                                self.scheduler.remove_async_function_state(async_id);
+                                return Completion::Exit(code);
+                            }
                             _ => {}
                         }
                     }
