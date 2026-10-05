@@ -248,6 +248,12 @@ pub(crate) enum StateTerminator {
     /// block/clause list for which `ctx.scopes_disposables` is true.
     EnterScope {
         body_state: usize,
+        /// Temp variables holding the objects of the enclosing `with`
+        /// statements the scope's environment chain must sit inside, outermost
+        /// first. The driver wraps each in an object environment beneath the
+        /// scope's own, so the scope body runs without a per-state `With`
+        /// re-wrap that would hide the scope's resources in a fresh block.
+        with_vars: Vec<String>,
     },
     /// Closes the block scope most recently opened by `EnterScope`: pops it
     /// from `scope_stack` and disposes its resources (suspendably, at each
@@ -401,6 +407,10 @@ struct TransformContext {
     is_async: bool,
     detect_for_await: bool,
     with_scopes: Vec<String>,
+    /// Leading entries of `with_scopes` already present in the environment
+    /// chain of the innermost open `EnterScope`; states inside that scope only
+    /// re-wrap the entries past this count.
+    materialized_with_scopes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -439,6 +449,7 @@ impl TransformContext {
             is_async,
             detect_for_await: false,
             with_scopes: Vec::new(),
+            materialized_with_scopes: 0,
         }
     }
 
@@ -467,10 +478,11 @@ impl TransformContext {
     fn finalize_current_state(&mut self, terminator: StateTerminator) {
         if self.current_state_id < self.states.len() {
             let mut stmts = std::mem::take(&mut self.current_statements);
-            if !self.with_scopes.is_empty() && !stmts.is_empty() {
+            let pending_withs = &self.with_scopes[self.materialized_with_scopes..];
+            if !pending_withs.is_empty() && !stmts.is_empty() {
                 let block = Statement::Block(stmts);
                 let mut wrapped = block;
-                for with_var in self.with_scopes.iter().rev() {
+                for with_var in pending_withs.iter().rev() {
                     wrapped = Statement::With(
                         Expression::Identifier(with_var.clone()),
                         Box::new(wrapped),
@@ -1027,9 +1039,15 @@ fn collect_block_lexical_decls<'a>(
 fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_state: usize) {
     let body_state = ctx.new_state();
     let exit_state = ctx.new_state();
-    ctx.finalize_current_state(StateTerminator::EnterScope { body_state });
+    let with_vars = ctx.with_scopes[ctx.materialized_with_scopes..].to_vec();
+    ctx.finalize_current_state(StateTerminator::EnterScope {
+        body_state,
+        with_vars,
+    });
     ctx.current_state_id = body_state;
     ctx.scope_depth += 1;
+    let outer_materialized =
+        std::mem::replace(&mut ctx.materialized_with_scopes, ctx.with_scopes.len());
     transform_statements(stmts, ctx, exit_state);
     if ctx.current_state_id != exit_state {
         ctx.finalize_current_state(StateTerminator::Goto(exit_state));
@@ -1038,6 +1056,7 @@ fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_
     // `ExitScope` must execute while its frame is still the state's required
     // depth; otherwise reconciliation would truncate it before disposal.
     ctx.finalize_current_state(StateTerminator::ExitScope { after_state });
+    ctx.materialized_with_scopes = outer_materialized;
     ctx.scope_depth -= 1;
     ctx.current_state_id = after_state;
 }

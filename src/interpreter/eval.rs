@@ -9747,8 +9747,35 @@ impl Interpreter {
                     complete_function!();
                 }
 
-                StateTerminator::EnterScope { body_state } => {
-                    let scope_env = Environment::new(Some(term_env.clone()));
+                StateTerminator::EnterScope {
+                    body_state,
+                    ref with_vars,
+                } => {
+                    let mut parent_env = term_env.clone();
+                    let mut with_failed = false;
+                    for with_var in with_vars {
+                        let raw = parent_env
+                            .borrow()
+                            .get(with_var)
+                            .unwrap_or(JsValue::UNDEFINED);
+                        match self.to_object(&raw) {
+                            Completion::Normal(obj) => {
+                                if let Some(obj_id) = obj.as_object_id() {
+                                    parent_env = self.new_with_env(obj_id, &parent_env);
+                                }
+                            }
+                            Completion::Throw(e) => {
+                                pending_exception = Some(e);
+                                with_failed = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if with_failed {
+                        continue;
+                    }
+                    let scope_env = Environment::new(Some(parent_env));
                     scope_stack.push(ScopeFrame {
                         env: scope_env,
                         try_depth: try_stack.len(),
