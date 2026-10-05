@@ -4405,17 +4405,20 @@ impl Interpreter {
             for prop in props {
                 // Handle rest: {...rest} = obj
                 if let Expression::Spread(inner) = &prop.value {
-                    let rest_val =
-                        propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
-                    // rest_val is otherwise only a Rust local; put_value_to_target on a
-                    // member target re-evaluates the target's base expression, which can
-                    // run arbitrary user code (and reach a GC safepoint) before the target
-                    // itself roots the value being written.
-                    let put_result = self.with_gc_root_scope(|interp| {
-                        interp.gc_root_value(&rest_val);
-                        interp.put_value_to_target(inner, rest_val, env)
+                    // §13.15.5.6 AssignmentRestProperty: evaluate the target's lref
+                    // BEFORE building/copying into the rest object, matching this
+                    // function's own `Init` arm and `destructure_array_assignment`'s
+                    // `Spread` arm. `with_destruct_lref` roots the produced rest value
+                    // across the deferred write, so no manual rooting is needed here.
+                    let precomp = match self.eval_member_lhs_ref(inner, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let result = self.with_destruct_lref(precomp, inner, env, |interp| {
+                        interp.bind_object_rest_values(&obj_val, &excluded_keys)
                     });
-                    match put_result {
+                    match result {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
                     }

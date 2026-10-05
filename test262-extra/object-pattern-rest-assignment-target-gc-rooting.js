@@ -4,10 +4,12 @@
 /*---
 esid: sec-runtime-semantics-restdestructuringassignmentevaluation
 description: >
-  The fresh rest object built by an object assignment pattern's rest
-  property (`({...base().k} = source)`) stays reachable across the garbage
-  collection that can happen while the assignment target's own base
-  expression is evaluated, even though the rest object has no
+  The assignment target's base expression for an object assignment pattern's
+  rest property (`({...base().k} = source)`) is evaluated before
+  CopyDataProperties runs on the source, per AssignmentRestProperty's
+  evaluation order. The fresh rest object this produces stays reachable
+  across the garbage collection that can happen while CopyDataProperties
+  invokes a getter on the source, even though the rest object has no
   JavaScript-visible reference to it yet.
 info: |
   AssignmentRestProperty : ... DestructuringAssignmentTarget
@@ -17,16 +19,24 @@ info: |
   3. Perform ? CopyDataProperties(restObj, value, excludedNames).
   4. Return ? PutValue(lRef, restObj).
 
-  Unlike this clause's own evaluation order (lRef resolved before restObj is
-  created), this engine's DestructuringAssignmentTarget evaluation happens
-  while writing restObj to the target: PutValue re-evaluates the target's
-  base expression first and only roots restObj once that base value is in
-  hand, so restObj must still survive a collection triggered by the base
-  expression itself (e.g. a function call).
+  Step 1 (evaluating the target's base expression) must run before step 3,
+  which can invoke a getter on the source that runs arbitrary code (including
+  a garbage collection) while restObj is not yet reachable from any
+  JavaScript-visible value.
 features: [host-gc-required, object-rest, destructuring-assignment]
 ---*/
 
+var log = [];
+var target = {};
+var calls = 0;
+function getTarget() {
+  calls++;
+  log.push("base");
+  return target;
+}
+
 function churnAndGc() {
+  log.push("get");
   $262.gc();
   var churn = [];
   for (var i = 0; i < 500; i++) {
@@ -34,19 +44,24 @@ function churnAndGc() {
   }
 }
 
-var target = {};
-var calls = 0;
-function getTarget() {
-  calls++;
-  churnAndGc();
-  return target;
-}
+var source = {
+  a: 1,
+  get b() {
+    churnAndGc();
+    return 2;
+  },
+};
 
-({ ...getTarget().k } = { a: 1, b: 2 });
+({ ...getTarget().k } = source);
 
 assert.sameValue(calls, 1, "the target base expression ran exactly once");
-assert.sameValue(target.k.a, 1, "the rest object's own property 'a' survives the base expression's collection");
-assert.sameValue(target.k.b, 2, "the rest object's own property 'b' survives the base expression's collection");
+assert.sameValue(
+  log.join(","),
+  "base,get",
+  "the target's base expression evaluates before CopyDataProperties's Get on the source"
+);
+assert.sameValue(target.k.a, 1, "the rest object's own property 'a' survives the source getter's collection");
+assert.sameValue(target.k.b, 2, "the rest object's own property 'b' survives the source getter's collection");
 assert.sameValue(
   Object.getPrototypeOf(target.k),
   Object.prototype,

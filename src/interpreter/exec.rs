@@ -1659,141 +1659,170 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => unreachable!(),
                 };
-                let mut excluded_keys = Vec::new();
-                for prop in props {
-                    match prop {
-                        ObjectPatternProperty::Shorthand(name) => {
-                            excluded_keys.push(JsPropertyKey::from(name.clone()));
-                            let v = if let Some(o) = obj_val
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                propagate!(self.get_object_property(o.id, name, &obj_val))
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            if kind == BindingKind::Var {
-                                let var_scope = Environment::find_var_scope(env);
-                                if !var_scope.borrow().bindings.contains_key(name) {
-                                    var_scope.borrow_mut().declare(name, kind);
-                                }
-                                propagate!(self.env_set(env, name, v));
-                            } else {
-                                env.borrow_mut().declare(name, kind);
-                                env.borrow_mut().initialize_binding(name, v);
-                            }
-                        }
-                        ObjectPatternProperty::KeyValue(key, pat) => {
-                            let key_str = match key {
-                                PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
-                                PropertyKey::String(s) => {
-                                    JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
-                                }
-                                PropertyKey::Number(n) => JsPropertyKey::from(
-                                    crate::interpreter::to_js_string(&JsValue::number(*n)),
-                                ),
-                                PropertyKey::Computed(expr) => {
-                                    let v = propagate!(self.eval_expr(expr, env));
-                                    propagate!(self.to_property_key(&v))
-                                }
-                                PropertyKey::Private(_) => {
-                                    return Completion::Throw(self.create_type_error(
-                                        "Private names are not valid in object patterns",
-                                    ));
-                                }
-                            };
-                            excluded_keys.push(key_str.clone());
-
-                            // Spec §14.3.3.3: For SingleNameBinding, ResolveBinding
-                            // must happen BEFORE GetV (property access).
-                            let single_name = match pat {
-                                Pattern::Identifier(n) => Some((n.as_str(), None::<&Expression>)),
-                                Pattern::Assign(inner, dflt)
-                                    if matches!(**inner, Pattern::Identifier(_)) =>
+                // obj_val is otherwise only a Rust local for the rest of this
+                // pattern's binding: property gets, default-value
+                // initializers, and with-scope/Proxy binding resolution can
+                // all run arbitrary user code (and reach a GC safepoint)
+                // before every property has been consumed.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    let mut excluded_keys = Vec::new();
+                    for prop in props {
+                        match prop {
+                            ObjectPatternProperty::Shorthand(name) => {
+                                excluded_keys.push(JsPropertyKey::from(name.clone()));
+                                let v = if let Some(o) = obj_val
+                                    .as_object_id()
+                                    .map(|id| crate::types::JsObject { id })
                                 {
-                                    if let Pattern::Identifier(n) = &**inner {
-                                        Some((n.as_str(), Some(dflt.as_ref())))
-                                    } else {
-                                        None
-                                    }
-                                }
-                                _ => None,
-                            };
-
-                            if let Some((binding_name, default_expr)) = single_name
-                                && kind == BindingKind::Var
-                            {
-                                // Step 2: ResolveBinding(bindingId, environment)
-                                let var_scope = Environment::find_var_scope(env);
-                                let already = {
-                                    let gid = var_scope.borrow().global_object_id;
-                                    let vs = var_scope.borrow();
-                                    vs.bindings.contains_key(binding_name)
-                                        || gid.and_then(|id| self.get_object_cell(id)).is_some_and(
-                                            |g| g.borrow().properties.contains_key(binding_name),
-                                        )
+                                    propagate!(self.get_object_property(o.id, name, &obj_val))
+                                } else {
+                                    JsValue::UNDEFINED
                                 };
-                                if !already {
-                                    var_scope.borrow_mut().declare(binding_name, kind);
+                                if kind == BindingKind::Var {
+                                    let var_scope = Environment::find_var_scope(env);
+                                    if !var_scope.borrow().bindings.contains_key(name) {
+                                        var_scope.borrow_mut().declare(name, kind);
+                                    }
+                                    propagate!(self.env_set(env, name, v));
+                                } else {
+                                    env.borrow_mut().declare(name, kind);
+                                    env.borrow_mut().initialize_binding(name, v);
                                 }
-                                let resolved =
-                                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                            }
+                            ObjectPatternProperty::KeyValue(key, pat) => {
+                                let key_str = match key {
+                                    PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                                    PropertyKey::String(s) => JsPropertyKey::from_js_string(
+                                        &JsString::from_vec(s.clone()),
+                                    ),
+                                    PropertyKey::Number(n) => JsPropertyKey::from(
+                                        crate::interpreter::to_js_string(&JsValue::number(*n)),
+                                    ),
+                                    PropertyKey::Computed(expr) => {
+                                        let v = propagate!(self.eval_expr(expr, env));
+                                        propagate!(self.to_property_key(&v))
+                                    }
+                                    PropertyKey::Private(_) => {
+                                        return Completion::Throw(self.create_type_error(
+                                            "Private names are not valid in object patterns",
+                                        ));
+                                    }
+                                };
+                                excluded_keys.push(key_str.clone());
+
+                                // Spec §14.3.3.3: For SingleNameBinding, ResolveBinding
+                                // must happen BEFORE GetV (property access).
+                                let single_name = match pat {
+                                    Pattern::Identifier(n) => {
+                                        Some((n.as_str(), None::<&Expression>))
+                                    }
+                                    Pattern::Assign(inner, dflt)
+                                        if matches!(**inner, Pattern::Identifier(_)) =>
+                                    {
+                                        if let Pattern::Identifier(n) = &**inner {
+                                            Some((n.as_str(), Some(dflt.as_ref())))
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    _ => None,
+                                };
+
+                                if let Some((binding_name, default_expr)) = single_name
+                                    && kind == BindingKind::Var
+                                {
+                                    // Step 2: ResolveBinding(bindingId, environment)
+                                    let var_scope = Environment::find_var_scope(env);
+                                    let already = {
+                                        let gid = var_scope.borrow().global_object_id;
+                                        let vs = var_scope.borrow();
+                                        vs.bindings.contains_key(binding_name)
+                                            || gid
+                                                .and_then(|id| self.get_object_cell(id))
+                                                .is_some_and(|g| {
+                                                    g.borrow().properties.contains_key(binding_name)
+                                                })
+                                    };
+                                    if !already {
+                                        var_scope.borrow_mut().declare(binding_name, kind);
+                                    }
+                                    let resolved = if self.with_scope_depth > 0
+                                        || self.has_ever_entered_with
+                                    {
                                         propagate!(self.resolve_with_has_binding(binding_name, env))
                                     } else {
                                         None
                                     };
 
-                                // Step 3: v = GetV(value, propertyName)
-                                let mut v = if let Some(o) = obj_val
-                                    .as_object_id()
-                                    .map(|id| crate::types::JsObject { id })
-                                {
-                                    propagate!(self.get_object_property(o.id, &key_str, &obj_val))
-                                } else {
-                                    JsValue::UNDEFINED
-                                };
+                                    // Step 3: v = GetV(value, propertyName)
+                                    let mut v = if let Some(o) = obj_val
+                                        .as_object_id()
+                                        .map(|id| crate::types::JsObject { id })
+                                    {
+                                        propagate!(
+                                            self.get_object_property(o.id, &key_str, &obj_val)
+                                        )
+                                    } else {
+                                        JsValue::UNDEFINED
+                                    };
 
-                                // Step 4: If v undefined and initializer present, evaluate
-                                if v.is_undefined()
-                                    && let Some(dflt) = default_expr
-                                {
-                                    v = propagate!(self.eval_expr(dflt, env));
-                                    if dflt.is_anonymous_function_definition() {
-                                        self.set_function_name(&v, binding_name);
+                                    // Step 4: If v undefined and initializer present, evaluate
+                                    if v.is_undefined()
+                                        && let Some(dflt) = default_expr
+                                    {
+                                        v = propagate!(self.eval_expr(dflt, env));
+                                        if dflt.is_anonymous_function_definition() {
+                                            self.set_function_name(&v, binding_name);
+                                        }
                                     }
-                                }
 
-                                // Step 6: InitializeReferencedBinding(lhs, v)
-                                let strict = env.borrow().strict;
-                                match resolved {
-                                    Some(obj_id) => propagate!(self.with_set_mutable_binding(
-                                        obj_id,
-                                        binding_name,
-                                        v,
-                                        strict,
-                                    )),
-                                    None => propagate!(self.env_set(env, binding_name, v)),
-                                }
-                            } else {
-                                let v = if let Some(o) = obj_val
-                                    .as_object_id()
-                                    .map(|id| crate::types::JsObject { id })
-                                {
-                                    propagate!(self.get_object_property(o.id, &key_str, &obj_val))
+                                    // Step 6: InitializeReferencedBinding(lhs, v)
+                                    let strict = env.borrow().strict;
+                                    match resolved {
+                                        Some(obj_id) => propagate!(self.with_set_mutable_binding(
+                                            obj_id,
+                                            binding_name,
+                                            v,
+                                            strict,
+                                        )),
+                                        None => propagate!(self.env_set(env, binding_name, v)),
+                                    }
                                 } else {
-                                    JsValue::UNDEFINED
-                                };
-                                propagate!(self.bind_pattern(pat, v, kind, env));
+                                    let v = if let Some(o) = obj_val
+                                        .as_object_id()
+                                        .map(|id| crate::types::JsObject { id })
+                                    {
+                                        propagate!(
+                                            self.get_object_property(o.id, &key_str, &obj_val)
+                                        )
+                                    } else {
+                                        JsValue::UNDEFINED
+                                    };
+                                    propagate!(self.bind_pattern(pat, v, kind, env));
+                                }
+                            }
+                            ObjectPatternProperty::Rest(pat) => {
+                                let rest_val = propagate!(
+                                    self.bind_object_rest_values(&obj_val, &excluded_keys)
+                                );
+                                // rest_val is otherwise only a Rust local; bind_pattern's
+                                // binding step (e.g. a with-scope's @@unscopables getter, or
+                                // a Proxy `has` trap) can run arbitrary user code before the
+                                // value is written anywhere the GC walks.
+                                let bind_result = self.with_gc_root_scope(|interp| {
+                                    interp.gc_root_value(&rest_val);
+                                    interp.bind_pattern(pat, rest_val, kind, env)
+                                });
+                                propagate!(bind_result);
                             }
                         }
-                        ObjectPatternProperty::Rest(pat) => {
-                            let rest_val =
-                                propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
-                            propagate!(self.bind_pattern(pat, rest_val, kind, env));
-                        }
                     }
-                }
-                Completion::Normal(JsValue::UNDEFINED)
+                    Completion::Normal(JsValue::UNDEFINED)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Pattern::Rest(inner) => self.bind_pattern(inner, val, kind, env),
             Pattern::MemberExpression(expr) => {

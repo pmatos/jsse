@@ -12,15 +12,16 @@ info: |
   RestBindingInitialization
   BindingRestProperty : ... BindingIdentifier
 
-  1. Let restObj be OrdinaryObjectCreate(%Object.prototype%).
-  2. Perform ? CopyDataProperties(restObj, value, excludedNames).
-  3. Return ? BindingInitialization of BindingIdentifier with arguments
-     restObj and environment.
+  1. Let lhs be ? ResolveBinding(StringValue of BindingIdentifier, environment).
+  2. Let restObj be OrdinaryObjectCreate(%Object.prototype%).
+  3. Perform ? CopyDataProperties(restObj, value, excludedNames).
+  4. If environment is undefined, return ? PutValue(lhs, restObj).
+  5. Return ? InitializeReferencedBinding(lhs, restObj).
 
-  restObj is created before CopyDataProperties runs, and CopyDataProperties's
-  own Get(source, key) step can invoke a getter that runs arbitrary code
-  (including a garbage collection) while restObj is not yet reachable from
-  any JavaScript-visible value.
+  restObj is created (step 2) before CopyDataProperties runs (step 3), and
+  CopyDataProperties's own Get(source, key) step can invoke a getter that
+  runs arbitrary code (including a garbage collection) while restObj is not
+  yet reachable from any JavaScript-visible value.
 features: [host-gc-required, object-rest, destructuring-binding]
 ---*/
 
