@@ -4542,15 +4542,10 @@ impl Interpreter {
                     if *is_delegate {
                         let iterator = match self.get_async_iterator(&yield_val) {
                             Ok(it) => it,
-                            Err(e) => match self.get_iterator(&yield_val) {
-                                Ok(it) => it,
-                                Err(_) => {
-                                    self.retire_generator(o.id);
-                                    let _ =
-                                        self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                            },
+                            Err(e) => {
+                                return self
+                                    .reject_async_generator_request(o.id, promise, &reject_fn, e);
+                            }
                         };
 
                         let next_method = if let Some(io) = iterator
