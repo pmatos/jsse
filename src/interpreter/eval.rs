@@ -8021,6 +8021,25 @@ impl Interpreter {
                 }
             }
 
+            // §sec-functiondeclarationinstantiation web-compat insertion point:
+            // run Annex B function hoisting over the *original* body now, at
+            // state-machine construction time — the per-fragment Annex B pass
+            // that `instantiate_body_declarations` runs as each state dispatches
+            // only ever sees one split fragment of this body, one scope level
+            // too deep to satisfy `!is_block_scope` (#842).
+            if !is_strict {
+                let mut names = Vec::new();
+                let mut blocked = Vec::new();
+                Interpreter::collect_annexb_function_names(
+                    body.as_slice(),
+                    &mut names,
+                    &mut blocked,
+                );
+                if !names.is_empty() {
+                    interp.register_annexb_function_names(body.as_slice(), &func_env, false, names);
+                }
+            }
+
             let async_id = interp.scheduler.alloc_async_function_id();
 
             interp.scheduler.insert_async_function_state(
