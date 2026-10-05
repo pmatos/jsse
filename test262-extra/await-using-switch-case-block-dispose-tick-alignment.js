@@ -88,4 +88,31 @@ asyncTest(async function () {
     ['b', 'sync-end', 'w1', 'after', 'w2', 'settled', 'w3', 'w4'],
     'block in a case that breaks'
   );
+
+  // A case-local `let` sibling next to an isolatable `await using` block,
+  // falling through to the next case: `generator_analysis.rs`'s scan used to
+  // block this combination for `switch` specifically, since the CaseBlock
+  // had no per-entry scope to confine the lexical declaration to (issue
+  // #841). Now that it does, the isolation and tick alignment above must
+  // hold identically with the sibling declaration in place, and the later
+  // case must still see the earlier case's binding.
+  log = await observe(function (L) {
+    return (async function () {
+      switch (1) {
+        case 1:
+          let y = 'case1';
+        case 2: {
+          await using a = null;
+          L('saw:' + y);
+        }
+          L('after-case');
+      }
+      L('after');
+    })();
+  });
+  assert.compareArray(
+    log,
+    ['saw:case1', 'sync-end', 'w1', 'after-case', 'after', 'w2', 'settled', 'w3', 'w4'],
+    'case-local let sibling next to an isolatable await using block in a later case, falling through'
+  );
 });
