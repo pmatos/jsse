@@ -61,6 +61,11 @@ pub(crate) enum Op {
     /// there, matching the tree-walker's per-statement safepoint (issue
     /// #808). No operand bytes.
     Safepoint = 56,
+    /// `[..., base]` → `[..., method, base]` for `base.name(...)`; the u16
+    /// operand is the property name. `base` stays as the call's `this`.
+    LoadMethod = 57,
+    /// `[..., base, key]` → `[..., method, base]` for `base[key](...)`.
+    LoadMethodElement = 58,
 }
 
 impl Op {
@@ -123,6 +128,8 @@ impl Op {
             54 => Some(Op::ToPrimitiveKey),
             55 => Some(Op::Construct),
             56 => Some(Op::Safepoint),
+            57 => Some(Op::LoadMethod),
+            58 => Some(Op::LoadMethodElement),
             _ => None,
         }
     }

@@ -2107,23 +2107,32 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
 }
 
 #[test]
-fn member_calls_and_nested_tail_positions_remain_ineligible() {
+fn nested_tail_positions_and_unsupported_member_callees_remain_ineligible() {
     use super::compiler::CompileError;
     use crate::ast::{CallSiteId, LogicalOp, MemberProperty, PropSiteId};
 
-    let member_call = vec![Statement::Expression(Expression::Call(
-        ExprBox::new(Expression::Member(
-            ExprBox::new(Expression::Identifier("object".to_string())),
+    for callee in [
+        Expression::Member(
+            ExprBox::new(Expression::Super),
             MemberProperty::Dot("method".to_string()),
             PropSiteId::UNASSIGNED,
-        )),
-        vec![],
-        CallSiteId::UNASSIGNED,
-    ))];
-    assert!(matches!(
-        compile_body(&member_call),
-        Err(CompileError::Unsupported(_))
-    ));
+        ),
+        Expression::Member(
+            ExprBox::new(Expression::Identifier("object".to_string())),
+            MemberProperty::Private("method".to_string()),
+            PropSiteId::UNASSIGNED,
+        ),
+    ] {
+        let call = vec![Statement::Expression(Expression::Call(
+            ExprBox::new(callee),
+            vec![],
+            CallSiteId::UNASSIGNED,
+        ))];
+        assert!(matches!(
+            compile_body(&call),
+            Err(CompileError::Unsupported(_))
+        ));
+    }
 
     let nested_tail_call = Expression::Logical(
         LogicalOp::And,
@@ -2429,4 +2438,73 @@ fn single_statement_loop_body_adds_no_extra_safepoint_beyond_backedge() {
          not an extra statement-boundary safepoint for the single-statement \
          loop body (three={three_count}, four={four_count})"
     );
+}
+
+#[test]
+fn member_call_on_builtin_namespace_takes_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(o){ var s = 0; for (var i = 0; i < 4; i++) { s += Math.floor(o[i] / 2); } return s; })([1, 2, 3, 5]);",
+        4.0,
+    );
+}
+
+#[test]
+fn member_call_binds_receiver_as_this() {
+    assert_parity_number(
+        "var o = { v: 7, m: function(a){ return this.v + a; } }; \
+         var __r = (function(){ return o.m(1) + o['m'](2); })();",
+        17.0,
+    );
+}
+
+#[test]
+fn member_call_on_primitive_base_uses_prototype_method() {
+    assert_parity_number(
+        "var __r = (function(){ return 'abc'.charCodeAt(1) + (5).toFixed(1).length; })();",
+        101.0,
+    );
+}
+
+#[test]
+fn member_call_evaluates_base_key_get_then_arguments_in_order() {
+    let source = "\
+        var order = []; \
+        var o = { get m(){ order.push('get'); return function(){ order.push('call'); }; } }; \
+        var __r = (function(){ o[(order.push('key'), 'm')]((order.push('arg'), 1)); return order.join(); })();";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bc, bc_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bc_count >= 1, "member call must run on the VM");
+    for (mode, v) in [("AST", ast), ("bytecode", bc)] {
+        assert_eq!(
+            v.as_string().map(|s| s.to_string()).as_deref(),
+            Some("key,get,arg,call"),
+            "{mode} evaluation order"
+        );
+    }
+}
+
+#[test]
+fn member_call_on_nullish_base_throws_type_error() {
+    let source = "var n = null; (function(){ n.x(); })();";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(interp.bytecode_chunks_executed >= 1, "must run on the VM");
+    assert!(
+        matches!(completion, Completion::Throw(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(interp.gc_bytecode_roots.is_empty());
+}
+
+#[test]
+fn member_call_releases_operand_roots() {
+    let source = "var o = { m: function(a){ return a; } }; \
+        (function(){ var s = 0; for (var i = 0; i < 8; i++) { s += o.m(i) + o['m'](1); } return s; })();";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(
+        matches!(completion, Completion::Normal(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(interp.bytecode_chunks_executed >= 1);
+    assert!(interp.gc_bytecode_roots.is_empty());
 }
