@@ -6,9 +6,10 @@ Before planning the fix, each of the issue's three named items was probed agains
 (current binary built from this branch, `./target/release/jsse`) and against the unit tests
 that already pin `generator_analysis.rs::scan_await_using`'s classification. Two of the three
 items turn out to already be fixed on `main`; the third is real but narrower than the issue's
-prose suggests, and surfaces one additional, bigger, out-of-scope bug along the way. A
-`gh issue comment 845` summarizing this (so the next reader doesn't re-litigate it) is part of
-this plan's exit, written by the implementation stage once the fix lands.
+prose suggests, and surfaces one additional, bigger, out-of-scope bug along the way. These
+findings, and the decision to defer the C-style case to a new issue, were posted to
+`gh issue comment 845` during this planning stage (so the next reader doesn't re-litigate it) —
+see https://github.com/pmatos/jsse/issues/845#issuecomment-5987421624.
 
 - **Item 1a, C-style `for (await using x = init; ...)` head** — already fixed, by `#787`
   (`ForStatement::disposes_at_head`, `generator_analysis.rs:1408-1410`,
@@ -35,12 +36,12 @@ this plan's exit, written by the implementation stage once the fix lands.
 - **Item 3, the audit** — delegated to a read-only agent that walked every named call site
   (`exec.rs`'s loop/switch `dispose_resources` sites, `close_for_of_loop`,
   `unwind_async_for_of_loops`, all `dispose_resources`/`run_dispose_cursor_blocking` sites in
-  `eval/generator_runtime.rs`). Full breakdown in §5/§6 below. Headline result: the only
+  `eval/generator_runtime.rs`). Full breakdown in §6 below. Headline result: the only
   *confirmed, reachable, fixable-now* gap is a **`using` (sync, non-`await`) `for`/`for-of` head
   wrapping a nested `await using` block**, which is the literal "same `blocked_unless_none`
   guard" the issue points at — just for the `Using` arm of that guard, not the `AwaitUsing` arm
-  the issue's prose focuses on. Confirmed with node-vs-jsse probes (reproduced below under
-  Spec basis).
+  the issue's prose focuses on. Confirmed with node-vs-jsse probes (reproduced immediately below,
+  under "The confirmed, in-scope bug").
 
 ### The confirmed, in-scope bug
 
@@ -52,12 +53,17 @@ async function f() {
 }
 ```
 
-and the C-style equivalent `for (using r = …; ; ) { { await using a = …; } }`. When this is the
-*only* construct in an async function/async generator needing suspension-awareness (no other
-literal `await`/`yield` forces lowering), `generator_transform.rs::transform_generator_inner_opts`
-picks `create_simple_machine` — the whole body runs on the plain tree-walker, so the nested
-`await using` block's disposal drains the job queue inline instead of suspending at its `Await`.
-Probe (`$TMPDIR`-scoped scratch, not `/tmp`, for the implementation stage to reuse):
+**For-of only.** The C-style equivalent, `for (using r = …; ; ) { { await using a = …; } }`, is
+explicitly **not** fixed by this PR — see "A bigger bug found along the way" below;
+`scan_await_using`'s `For` arm's `Using` case stays exactly as it is
+(`body.blocked_unless_none()`, unchanged).
+
+For the for-of shape above: when this is the *only* construct in an async function/async
+generator needing suspension-awareness (no other literal `await`/`yield` forces lowering),
+`generator_transform.rs::transform_generator_inner_opts` picks `create_simple_machine` — the
+whole body runs on the plain tree-walker, so the nested `await using` block's disposal drains
+the job queue inline instead of suspending at its `Await`. Probe (scratch under `$TMPDIR`, not
+`/tmp`, for the implementation stage to reproduce):
 
 ```
 node:  ["disp-inner","sync-end","w1","body","disp-sync","after","w2","settled","w3","w4"]
@@ -70,53 +76,82 @@ returning control to the synchronous caller" signature from `#665`'s own investi
 
 Root cause, traced precisely: `has_suspendable_await_using_block` (the predicate
 `transform_generator_inner_opts`'s `create_simple_machine` gate uses,
-`generator_transform.rs:621`) is `scan_await_using(stmt) == Isolatable`. For a `using`-headed
+`generator_transform.rs:621`, **and** the per-statement `stmt_has_suspension` check that
+`transform_statements` consults for every statement once a function *is* being lowered,
+`generator_transform.rs:767`) is `scan_await_using(stmt) == Isolatable`. For a `using`-headed
 `for`/`for-of`, `scan_await_using`'s `For`/`ForOf` arms unconditionally return `Blocked` via
-`body.blocked_unless_none()` regardless of whether the body itself is `Isolatable` — so the gate
-never sees the nested block and picks the no-lowering fast path. Confirmed this is *purely* a
-top-level "should we lower at all" gate bug, not a disposal-mechanism bug: when lowering is
-forced by an unrelated `await 0` elsewhere in the same function, the identical
-`using`-head-wraps-`await-using`-block shape matches node exactly (probed both the for-of and
-C-style-for forms this way). This also matches why item 1b needed no fix — its guard is
-`Blocked` too, but a *different*, unconditional gate (`stmt_contains_await_using_head`) already
-forces lowering for the `AwaitUsing` arm, independent of `scan_await_using`.
+`body.blocked_unless_none()` regardless of whether the body itself is `Isolatable` — so neither
+check ever sees the nested block.
 
-### A bigger bug found along the way — explicitly out of scope
+This is **not purely a top-level gate bug** — it was confirmed at both levels, because the two
+checks share the one predicate:
+- Placing an unrelated `await 0` *before* the loop does not distinguish the bug from correct
+  behavior: by the time the loop runs, the synchronous caller has already returned, so an inline
+  drain and a real suspension look identical. This probe is not evidence of a fix, only evidence
+  that nothing crashes.
+- Placing an unrelated `await 0` *after* the loop forces the whole function to lower (so the
+  top-level gate is no longer the question) while the loop itself still runs synchronously during
+  the call — and it **still diverges from node** on current `main`:
+  ```
+  node: [...,"sync-end","w1","body","disp-sync","w2","after",...]
+  jsse: [...,"w1","body","disp-sync","sync-end","w2","after",...]
+  ```
+  This proves the bug also lives in the per-statement `stmt_has_suspension` decision: even once
+  the enclosing function is lowered for an unrelated reason, this specific for-of statement is
+  still treated as not needing its own suspension-aware transform, and gets emitted as an opaque,
+  tree-walker-executed statement inside the lowered state.
+- The fix below (§3, slice 1) corrects the one shared predicate both checks consult, so it is
+  expected to fix both levels in one change — slice 3 tests both scenarios to confirm.
 
-Probing the C-style `for (using r = …; ; )` head further (to check whether the `Using` arm's fix
-should mirror `await_using_for_head_scope`, the mechanism `#787` built for `AwaitUsing`) surfaced
-a second, deeper bug: once a `using`-headed C-style `for` loop *is* lowered (for any reason —
-reproduces identically in a plain sync generator, so this isn't async-specific) and exited via
-`break`, disposal fires **after** the code following the loop has already run, instead of at the
-loop's own exit:
+This also matches why item 1b needed no fix — its guard is `Blocked` too, but a *different*,
+unconditional gate (`stmt_contains_await_using_head`, checked independently of
+`scan_await_using` at both the top-level and per-statement level) already forces lowering for the
+`AwaitUsing` arm.
+
+Two further probes, both already matching node on current `main` (no fix needed, but worth
+pinning as regressions since they're exactly the risk the original guard was written to prevent):
+- **Shadowing:** `let r = 'outer'; { for (using r of …) { { await using a = …; } } } ` — `r` is
+  still `'outer'` afterward, on both engines. This makes sense even pre-fix: when
+  `create_simple_machine` applies, the *whole* body (including the for-of's own scoping) runs on
+  the ordinary tree-walker, which already implements `using`/for-of scoping correctly regardless
+  of the lowering decision — only the nested block's disposal *timing* was wrong, never the
+  loop's variable scoping.
+- **Per-iteration closure identity:** closures captured on each iteration of a `using`-headed
+  for-of (with a nested `await using` block) see distinct per-iteration values, on both engines.
+
+### A bigger bug found along the way — explicitly out of scope, filed as #855
+
+Probing the C-style `for (using r = …; ; )` head further (to check whether its `Using` arm should
+get the same relaxation as the for-of one) surfaced a second, deeper, pre-existing bug, filed
+separately as **#855**: once a `using`-headed C-style `for` loop *is* lowered for *any* reason —
+not just `break`, a plain `false`-test normal exit reproduces it too, and it is not async-specific
+(reproduces identically in a plain sync generator) — its own disposal fires **after** the code
+following the loop has already run, instead of at the loop's own exit:
 
 ```
-node (sync generator): "disposed" (x2 — a separate node-only double-dispose quirk, see below), then "after"
-jsse (sync generator):  "after", then "disposed"
+node (async, normal exit): "disposed", then "after" (modulo a separate node-only double-dispose
+                            quirk noted in #855 — not the bug being reported there)
+jsse (async, normal exit):  "after", then "disposed"
 ```
 
 This is `transform_for_statement`'s generic `CopyForward`-based lowering not understanding
 `using`/`await using` heads at all (per its own doc comment and the issue's own text: "a
-distinct, larger change from #665's per-entry-scope relaxation"), not a tick-alignment-only gap.
-Fixing it needs `transform_for_statement` (or a `Using`-extended `await_using_for_head_scope`,
-gated by a *new* predicate — **not** by widening `ForStatement::disposes_at_head()`, which
+distinct, larger change from #665's per-entry-scope relaxation"), not a tick-alignment-only gap —
+it needs `transform_for_statement` (or a `Using`-extended `await_using_for_head_scope`, gated by
+a *new* predicate — **not** by widening `ForStatement::disposes_at_head()` itself, which
 `stmt_has_suspension`/`stmt_contains_await_using_head` key on for its narrower "head disposal may
-`Await`" meaning) to give a `using` C-style head its own scope and correct loop-control-exit
-disposal timing, mirroring `#787`'s rewrite but without the `Await` aspect. That is a materially
-larger, separate change with its own regression surface (loop-control routing, not just the
-`create_simple_machine` gate). **Not attempted in this PR.** The implementation stage files a new
-`gh issue` for it (title suggestion: "bug: `using`-headed C-style `for` disposes after loop-exit
-code on `break`"), referencing this investigation, and notes the node double-dispose quirk below
-so nobody copies it into a test's expected array.
+`Await`" meaning) to understand a `using` head's own scoping and loop-control-exit disposal
+timing. That is a materially larger, separate change with its own regression surface
+(loop-control routing, not just a scan-classification gate). **Not attempted in this PR** — see
+https://github.com/pmatos/jsse/issues/855, filed during this investigation with full repros for
+both the async-function and sync-generator forms.
 
-Aside, not actionable: node discloses the C-style `using` resource **twice** on some exits (e.g.
-`for (using r = D; false; ) {}` without even entering the body disposes twice on node, once on
-jsse). `using`'s `ForBodyEvaluation` treats the head as const-like with no per-iteration copy
-(`CreatePerIterationEnvironment` has nothing to copy for a `using`/`await using` binding), so a
-single disposal at loop-exit is the spec-correct count; jsse's single disposal looks right and
-node's double-dispose looks like a V8-specific quirk. Do not use node's count as the oracle for
-any new test — derive the expected disposal count from the spec text quoted in test262's own
-`for-of`/`for`/`using` `esid` files instead (see §1).
+This PR can therefore say **Fixes #845**: #845's own three items are item 1a (already fixed),
+item 1b (already correct, confirmed above), item 2 (already fixed), and item 3's audit (§6) —
+all resolved or dispositioned — plus the one concrete gap the audit surfaced (the for-of `Using`
+case fixed here). The C-style `Using` case was never explicitly named as a must-fix in #845's own
+text ("a distinct, larger change" — anticipated as follow-up work), so deferring it to #855 closes
+#845 honestly rather than leaving it open for scope it never committed to.
 
 ## 1. Spec basis
 
@@ -159,7 +194,10 @@ block, but the detection the `create_simple_machine` gate uses doesn't see it).
   scan tests (`suspendable_await_using_block_through_containers`,
   `lowering_that_would_flatten_a_lexical_scope_is_blocked`) to move the newly-isolatable shape
   and add a one-line comment anchoring why the `AwaitUsing` arm and the C-style `for` `Using` case
-  stay as they are.
+  stay as they are. Also update the two doc comments that currently say the `using`/`await using`
+  for-of variable is uniformly excluded — `has_suspendable_await_using_block`'s doc comment
+  (~lines 1485-1494) and `lowering_that_would_flatten_a_lexical_scope_is_blocked`'s own comment —
+  so they don't go stale and contradict the code once only the `AwaitUsing` arm stays excluded.
 - `src/interpreter/generator_transform.rs` — new unit test(s) modeled on
   `test_plain_await_using_for_of_head_is_lowered` (already in this file) asserting
   `transform_async_function`/`transform_generator` pick the real state machine (not
@@ -203,14 +241,29 @@ bug stays unfixed and gets its own follow-up issue per §0).
    ways, not a separate slice).
 3. **Red:** `test262-extra/await-using-for-of-head-sync-using-wraps-await-using-dispose-tick-alignment.js`
    (plain async function) — copy the `observe()`/`asyncTest` harness from
-   `await-using-for-of-head-dispose-tick-alignment.js`, scenario: `for (using r of [disposable])
-   { { await using a = disposable2; } }`, asserting the tick order matches node's (derive it by
-   hand from the two abstract operations in §1, or capture it from a node run — node has no
-   known quirk for the sync-for-of-`using`-head case, only the C-style-for case, so node's output
-   is trustworthy here; this was spot-checked already and matches node exactly once lowering is
-   forced by an unrelated `await 0`, which is exactly the scenario this test forces to happen
-   *without* an unrelated trigger). **Green:** no further production change — slice 1 already
-   fixes it; this is the end-to-end proof.
+   `await-using-for-of-head-dispose-tick-alignment.js`, with at least these scenarios (node has no
+   known quirk for the for-of `using`-head case, only the C-style-for case per #855, so node's
+   output is a trustworthy oracle for all of them):
+   - The loop is the *only* suspension-worthy construct in the function (no other trigger). This
+     is the shape already shown diverging from node on `main`.
+   - An unrelated `await 0` placed *after* the loop (forces the whole function to lower, but the
+     for-of statement itself still must get its own suspension-aware transform — this is the
+     shape that isolates the per-statement `stmt_has_suspension` half of the bug from the
+     top-level `create_simple_machine` gate half; already confirmed diverging from node on
+     `main` too, independent of slice 1's fix).
+   - Do **not** include an unrelated `await 0` placed *before* the loop as a tick-alignment
+     assertion — confirmed during investigation that this ordering can't distinguish inline-drain
+     from real suspension (the synchronous caller has already returned either way), so it isn't a
+     useful regression guard.
+   - A lexical-sibling shadowing scenario: `let r = 'outer'; { for (using r of …) { { await using
+     a = …; } } }` then assert `r` is still `'outer'` afterward — pins the shadowing concern the
+     original guard existed to prevent, even though it already passes pre-fix (confirmed: the
+     tree-walker fast path already scopes `using` correctly regardless of the lowering decision).
+   - A per-iteration closure-identity scenario: closures captured once per iteration of the loop
+     observe distinct per-iteration values — same rationale as the shadowing scenario.
+   **Green:** no further production change beyond slice 1 — this is the end-to-end proof that
+   slice 1's single classification change fixes both the gate-level and statement-level halves of
+   the bug.
 4. **Red:** `test262-extra/async-generator-await-using-for-of-head-sync-using-wraps-await-using-dispose-tick-alignment.js`
    — same scenario inside an async generator (`async function*`, no `yield` before the loop, per
    the existing `async-generator-await-using-for-of-head-dispose-tick-alignment.js` pattern),
@@ -218,21 +271,17 @@ bug stays unfixed and gets its own follow-up issue per §0).
    `transform_generator`/`transform_async_function`'s call sites). **Green:** same, no further
    production change expected; if this one doesn't go green from slice 1 alone, that's new
    information requiring a return to investigation before touching more code.
-5. **Pin item 1b and item 2 as regressions**, since both were found already-fixed and the
-   investigation found no open test gap, but neither currently has a test for the *combination*
-   this issue specifically asked about:
-   - `generator_analysis.rs`: add `"for (await using r of y) { { await using a = null; } }"` to
-     `suspendable_await_using_block_through_containers`'s `isolatable` list — wait, this is
-     **not** correct: the static scan still (correctly, per §0) reports this `Blocked`. Instead,
-     add a new end-to-end test262-extra regression (not a scan-level unit test, since the scan
-     *should* stay `Blocked` here) asserting the runtime tick order for
-     `for (await using r of y) { { await using a = null; } }` inside a plain async function
-     matches node — this is the proof that `Blocked`-but-independently-forced-lowering is safe,
-     guarding against a future refactor accidentally removing the independent
-     `stmt_contains_await_using_head` gate without noticing this shape still depends on it.
-   - No new switch test: `#853`'s own test plan already added exactly this combination
-     end-to-end (`await-using-switch-case-block-dispose-tick-alignment.js`'s extension,
-     per that PR's description) and it's running green today.
+5. **Pin item 1b as a regression.** It was found already-fixed, but has no existing test for the
+   *combination* this issue specifically asked about (`generator_analysis.rs`'s own scan
+   correctly keeps reporting `Blocked` for this shape — that is not a bug, so no scan-level unit
+   test changes here). Add one new end-to-end test262-extra regression asserting the runtime tick
+   order for `for (await using r of y) { { await using a = null; } }` inside a plain async
+   function matches node. This is the proof that "`Blocked`-but-independently-forced-lowering is
+   safe" stays true, guarding against a future refactor accidentally removing the independent
+   `stmt_contains_await_using_head` gate without noticing this shape still depends on it.
+   No new switch test is needed for item 2: `#853`'s own test plan already added exactly this
+   combination end-to-end (`await-using-switch-case-block-dispose-tick-alignment.js`'s extension,
+   per that PR's description) and it's running green today.
 
 ## 4. Test surface
 
@@ -253,18 +302,29 @@ bug stays unfixed and gets its own follow-up issue per §0).
   would most likely show up broadly, not just in ERM-tagged tests.
 - `uv run python scripts/run-custom-tests.py` and `./scripts/lint.sh` as usual quality-gate steps
   (run as separate commands, not `&&`-chained, per the user's global instructions).
+- The new `test262-extra/` files land under the same CI gates every other `test262-extra` file
+  gets, so verify them locally before opening the PR rather than discovering a gate failure after:
+  `ci.yml`'s blocking `JSSE_GC_STRESS=7` pass over `test262-extra/` in both normal and
+  `--bytecode` modes (`JSSE_GC_STRESS=7 uv run python scripts/run-test262.py test262-extra/` and
+  again with `--bytecode`), and the `release-checked` profile run
+  (`cargo build --profile release-checked` then `uv run python scripts/run-test262.py --binary
+  target/release-checked/jsse test262-extra/`). The `--bytecode` run is not expected to interact
+  with this fix at all — confirmed by grepping for `compile_body`/`compiler::compile` in
+  `generator_transform.rs`/`eval/generator_runtime.rs`: no generator or async-function body, with
+  or without `create_simple_machine`, is ever offered to the bytecode compiler (`dispatch_body`'s
+  bytecode path is reached only for plain synchronous, non-generator function bodies). Run it
+  anyway since it's one of the two CI modes every `test262-extra` file is gated on.
 
 ## 5. Regression risk
 
 - **Primary risk:** `scan_await_using`'s `ForOf` `Using` arm now returns `Isolatable` more often.
-  `has_suspendable_await_using_block`/`is_self_contained_isolatable` and
-  `scan_scoped_list`'s `reaches_via_unsafe_flatten` check both consume this. Traced: `is_self_
-  contained_isolatable` does *not* special-case a `Using` for-of head via this path (only
-  `AwaitUsing`'s `disposes_at_head()`), so a `Using`-headed for-of next to a lexical sibling in an
-  enclosing block now participates in `scan_scoped_list`'s sibling-safety fold the same way a
-  `let`/`const`-headed one already does — this is the same code path already exercised by the
-  existing `"for (let x of y) { await using a = null; }"`-style isolatable tests, so no new
-  codepath, just a new input reaching it.
+  `has_suspendable_await_using_block` and `scan_scoped_list`'s `reaches_via_unsafe_flatten` check
+  both consume this. Traced: `is_self_contained_isolatable` does *not* special-case a `Using`
+  for-of head via this path (only `AwaitUsing`'s `disposes_at_head()`), so a `Using`-headed for-of
+  next to a lexical sibling in an enclosing block now participates in `scan_scoped_list`'s
+  sibling-safety fold the same way a `let`/`const`-headed one already does — this is the same code
+  path already exercised by the existing `"for (let x of y) { await using a = null; }"`-style
+  isolatable tests, so no new codepath, just a new input reaching it.
   - Mitigation: slice 2's test update exercises exactly this.
 - **`transform_for_in_of_loop`/`ForOfHead` terminator itself is unchanged** — confirmed by
   reading it end-to-end: it already branches on `decl.kind` generically
@@ -327,8 +387,8 @@ bundled fix here, per "many small changes beat one large change"):
   found along the way." Needs `transform_for_statement` changes (or a `Using`-extended
   `await_using_for_head_scope` gated by a new, separate predicate — never by widening
   `ForStatement::disposes_at_head()` itself, which other code keys on for a narrower meaning),
-  which is the "distinct, larger change" the issue's own text already anticipated. The
-  implementation stage files a new issue for this (see §0) rather than attempting it here.
+  which is the "distinct, larger change" the issue's own text already anticipated. Filed as
+  https://github.com/pmatos/jsse/issues/855 during this investigation rather than attempted here.
 
 ## 7. Out of scope
 
