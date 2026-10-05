@@ -1439,16 +1439,18 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
             match &f.left {
                 // An `await using` head's own disposal is handled
                 // independently (`disposes_at_head`, #787) and the Annex-B
-                // `function` hoisting gap applies regardless, so it stays
-                // fully blocked here. A plain (sync-dispose) `using` head has
-                // no `Await` of its own and `for_of_head_lexical` already
-                // treats it identically to `const` for per-iteration
-                // environment purposes, so it only needs the same Annex-B
-                // guard the `let`/`const` arm above gets (jsse#845).
+                // `function` hoisting gap applies regardless, so any
+                // reachable `await using` in the body blocks the whole
+                // statement here. A plain (sync-dispose) `using`, `let` or
+                // `const` head has no per-entry scope treatment beyond what
+                // `for_of_head_lexical` already gives `const`, so each only
+                // needs the Annex-B guard (jsse#845).
                 ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing => {
                     body.blocked_unless_none()
                 }
-                ForInOfLeft::Variable(decl) if decl.kind == VarKind::Using => {
+                ForInOfLeft::Variable(decl)
+                    if matches!(decl.kind, VarKind::Using | VarKind::Let | VarKind::Const) =>
+                {
                     body.blocked_if(contains_annexb_function_declaration(&f.body))
                 }
                 _ => body,
@@ -1500,10 +1502,8 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// `Block`/`try`/`for`/`for-in`) reaching a sibling `function` declaration
 /// (Annex B hoisting isn't implemented by either lowering path — see
 /// `contains_annexb_function_declaration`). A plain `using` (non-`await`)
-/// for-of loop variable is *not* in this excluded set (jsse#845):
-/// `transform_for_in_of_loop`/`for_of_head_lexical` already scope it
-/// identically to `const`, so it's as safe to isolate as a `let`/`const`
-/// head.
+/// for-of loop variable is *not* in this excluded set — see the `ForOf` arm
+/// of `scan_await_using` for why (jsse#845).
 pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
     scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
@@ -1701,6 +1701,7 @@ mod tests {
             "for (const x of y) { await using a = null; }",
             "for await (const x of y) { await using a = null; }",
             "for await (x of y) { { await using a = null; } }",
+            "for await (using r of y) { { await using a = null; } }",
             "outer: while (c) { { await using a = null; } }",
             "switch (x) { case 1: { await using a = null; } break; }",
             "switch (x) { case 1: y(); { await using a = null; } default: z(); }",
@@ -1783,6 +1784,9 @@ mod tests {
             "try { function g() {} { await using a = null; } } finally {}",
             "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
             "for (k in o) { await using a = null; function g() {} }",
+            "for (let x of y) { await using a = null; function g() {} }",
+            "for (const x of y) { await using a = null; function g() {} }",
+            "for (using r of y) { await using a = null; function g() {} }",
             // The function declaration here is not a direct sibling of the
             // flattened list's own items (it's nested inside one of them),
             // so the check needs to walk into sibling containers rather than

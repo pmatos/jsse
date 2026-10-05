@@ -5,9 +5,10 @@
 esid: sec-web-compat-functiondeclarationinstantiation
 description: >
   A sloppy-mode function declaration next to an `await using` block, in a
-  plain block, a `for (let ...)` body or a `for-in` body, is still hoisted to
-  the enclosing function scope (Annex B.3.3) once the container is lowered
-  to isolate the block's disposal.
+  plain block, a `for (let ...)` body, a `for-in` body, or a `for-of` body
+  headed by `let`/`const`/`using`, is still hoisted to the enclosing function
+  scope (Annex B.3.3) once the container is lowered to isolate the block's
+  disposal.
 info: |
   B.3.3.1 Changes to FunctionDeclarationInstantiation
 
@@ -50,6 +51,24 @@ asyncTest(async function () {
     function j() {}
   }
   assert.sameValue(typeof j, 'function', 'function declared in a for-in body with await using');
+
+  for (let x of [1]) {
+    await using a = null;
+    function s() {}
+  }
+  assert.sameValue(typeof s, 'function', 'function declared in a for-of body headed by let with await using');
+
+  for (const x of [1]) {
+    await using a = null;
+    function t() {}
+  }
+  assert.sameValue(typeof t, 'function', 'function declared in a for-of body headed by const with await using');
+
+  for (using x of [{ [Symbol.dispose]() {} }]) {
+    await using a = null;
+    function u() {}
+  }
+  assert.sameValue(typeof u, 'function', 'function declared in a for-of body headed by using with await using');
 
   {
     let m = 1;
