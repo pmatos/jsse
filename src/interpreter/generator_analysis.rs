@@ -1170,8 +1170,12 @@ pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
 /// only in a plain async function (`TransformContext::detect_for_await`).
 /// An async generator leaves this reach on the ordinary per-statement
 /// pipeline (`ScopeAction::OpenBlock` plus the inline-yield replay
-/// backstop), which already handles it correctly, so callers must pass
-/// `through_with: false` there.
+/// backstop), which does **not** yet chain the with-environment the same
+/// way — a `with`-wrapped `await using` in an async generator still drains
+/// disposal inline instead of suspending (tracked separately as issue #862).
+/// Callers must still pass `through_with: false` there until that lands, to
+/// avoid routing async generators through a lowering path that isn't wired
+/// up for them.
 pub(crate) fn has_block_with_await_using(stmt: &Statement, through_with: bool) -> bool {
     match stmt {
         Statement::Block(stmts) => block_has_await_using(stmts),

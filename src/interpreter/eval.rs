@@ -9768,15 +9768,11 @@ impl Interpreter {
                                 pending_exception = Some(e);
                                 break;
                             }
-                            Completion::Exit(code) => {
-                                self.scheduler.remove_async_function_state(async_id);
-                                return Completion::Exit(code);
-                            }
-                            _ => JsValue::UNDEFINED,
+                            _ => unreachable!("to_object only returns Normal or Throw"),
                         };
-                        let Some(obj_id) = obj_val.as_object_id() else {
-                            continue;
-                        };
+                        let obj_id = obj_val
+                            .as_object_id()
+                            .expect("to_object always returns an object");
                         parent_env = Environment::new_with_object(parent_env, obj_id);
                     }
                     if pending_exception.is_some() {
