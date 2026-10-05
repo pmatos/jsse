@@ -1369,11 +1369,10 @@ impl Interpreter {
     /// own enumerable properties of `source_val` that aren't in `excluded`.
     /// Shared by the tree-walker `Pattern::Object` rest arm and the
     /// state-machine `ObjectRestCopy` terminator dispatch so both inherit
-    /// the same implementation. Note: `rest_obj_id` is allocated before
+    /// the same implementation. `rest_obj_id` is allocated before
     /// `copy_data_properties` runs, which can invoke arbitrary user code
-    /// (getters, proxy traps) that may reach a GC safepoint — the two share
-    /// no explicit rooting of the not-yet-populated rest object across that
-    /// window.
+    /// (getters, proxy traps) that may reach a GC safepoint, so it is rooted
+    /// across that call.
     pub(crate) fn bind_object_rest_values(
         &mut self,
         source_val: &JsValue,
@@ -1384,7 +1383,10 @@ impl Interpreter {
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
         {
-            let pairs = propagate!(self.copy_data_properties(o.id, source_val, excluded));
+            let pairs = propagate!(self.with_gc_root_scope(|interp| {
+                interp.gc_root_id(rest_obj_id);
+                interp.copy_data_properties(o.id, source_val, excluded)
+            }));
             for (k, v) in pairs {
                 self.get_object_cell_expect(rest_obj_id)
                     .borrow_mut()
