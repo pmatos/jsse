@@ -2508,3 +2508,12 @@ fn member_call_releases_operand_roots() {
     assert!(interp.bytecode_chunks_executed >= 1);
     assert!(interp.gc_bytecode_roots.is_empty());
 }
+
+#[test]
+fn strict_member_call_in_tail_position_returns_through_trampoline() {
+    assert_parity_number(
+        "var o = { v: 3, m: function(a){ 'use strict'; return this.v + a; } }; \
+         var __r = (function(){ 'use strict'; return o.m(4); })();",
+        7.0,
+    );
+}
