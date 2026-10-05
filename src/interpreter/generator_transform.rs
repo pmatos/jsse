@@ -245,9 +245,7 @@ pub(crate) enum StateTerminator {
     /// Opens a block scope: creates the block's own `Environment` (a child of
     /// whatever env is active), pushes it onto the driver's `scope_stack`, and
     /// continues at `body_state` executing against it. Emitted only for a
-    /// block that directly declares `await using` in a plain async function
-    /// (never a generator or async generator) — see
-    /// `has_block_with_await_using`.
+    /// block/clause list for which `ctx.scopes_disposables` is true.
     ///
     /// `with_vars` are the temp vars holding the values of every enclosing
     /// `with` expression active at the point the scope opens, outermost
@@ -427,13 +425,6 @@ impl TransformContext {
     /// async function, so its resources dispose at its own exit.
     fn scopes_disposables(&self, stmts: &[Statement]) -> bool {
         self.is_async && self.detect_for_await && block_declares_disposable(stmts)
-    }
-
-    /// Whether `stmt` reaches a directly-disposing block (optionally through
-    /// enclosing `with`s) that needs full state-machine lowering rather than
-    /// running inline — see `has_block_with_await_using`.
-    fn needs_with_lowering(&self, stmt: &Statement) -> bool {
-        self.is_async && has_block_with_await_using(stmt, self.detect_for_await)
     }
 
     fn new(analysis: GeneratorAnalysis, is_async: bool) -> Self {
@@ -632,10 +623,7 @@ fn transform_generator_inner_opts(
         })
         && (detect_for_await || !body.iter().any(stmt_contains_await_using_head))
         && !body.iter().any(stmt_contains_return)
-        && !body
-            .iter()
-            .any(|s| has_block_with_await_using(s, detect_for_await))
-        && !body.iter().any(has_suspendable_await_using_block)
+        && !body.iter().any(reaches_await_using_block)
     {
         return create_simple_machine(body, params, &analysis);
     }
@@ -781,7 +769,7 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
         return true;
     }
     if is_async {
-        contains_suspension(stmt) || has_suspendable_await_using_block(stmt)
+        contains_suspension(stmt) || reaches_await_using_block(stmt)
     } else {
         contains_yield(stmt)
     }
@@ -940,9 +928,7 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // Return statements in async generators need Return terminators
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
-        } else if ctx.needs_with_lowering(stmt)
-            || (stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty())
-        {
+        } else if stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty() {
             transform_yielding_statement(stmt, ctx, next_after);
         } else {
             ctx.emit_statement(stmt.clone());
@@ -1243,9 +1229,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     ExprBox::new(expr.clone()),
                 )));
             }
-            if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await)
-                || ctx.needs_with_lowering(inner)
-            {
+            if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await) {
                 let with_body_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::Goto(with_body_state));
                 ctx.current_state_id = with_body_state;
