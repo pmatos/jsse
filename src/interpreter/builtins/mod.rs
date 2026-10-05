@@ -6522,13 +6522,14 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let obj_id = interp.create_object_id();
-                    let obj_val = JsValue::object(obj_id);
-                    let iterator = match interp.get_iterator(&iterable) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
                     interp.with_gc_root_scope(|interp| {
+                        let obj_id = interp.create_object_id();
+                        let obj_val = JsValue::object(obj_id);
+                        interp.gc_root_value(&obj_val);
+                        let iterator = match interp.get_iterator(&iterable) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         interp.gc_root_value(&iterator);
                         loop {
                             let step = match interp.iterator_step(&iterator) {
@@ -6536,10 +6537,16 @@ impl Interpreter {
                                 Ok(None) => break,
                                 Err(e) => return Completion::Throw(e),
                             };
+                            interp.gc_root_value(&step);
                             let next_item = match interp.iterator_value(&step) {
                                 Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
+                                Err(e) => {
+                                    interp.gc_unroot_value(&step);
+                                    return Completion::Throw(e);
+                                }
                             };
+                            interp.gc_unroot_value(&step);
+                            interp.gc_root_value(&next_item);
                             // Step d: If Type(nextItem) is not Object, close and throw TypeError
                             let Some(item_id) = next_item.as_object_id() else {
                                 let err =
@@ -6557,6 +6564,7 @@ impl Interpreter {
                                 }
                                 _ => JsValue::UNDEFINED,
                             };
+                            interp.gc_root_value(&key_raw);
                             // Step g: Get value from entry[1]
                             let value = match interp.get_object_property(item_id, "1", &next_item) {
                                 Completion::Normal(v) => v,
@@ -6566,6 +6574,7 @@ impl Interpreter {
                                 }
                                 _ => JsValue::UNDEFINED,
                             };
+                            interp.gc_root_value(&value);
                             // Step f: ToPropertyKey(key)
                             let key = match interp.to_property_key(&key_raw) {
                                 Ok(k) => k,
@@ -6574,6 +6583,9 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             };
+                            interp.gc_unroot_value(&value);
+                            interp.gc_unroot_value(&key_raw);
+                            interp.gc_unroot_value(&next_item);
                             if let Some(obj_data) = interp.get_object_cell(obj_id) {
                                 obj_data.borrow_mut().insert_value(key, value);
                             }
