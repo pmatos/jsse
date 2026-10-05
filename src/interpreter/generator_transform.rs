@@ -3638,6 +3638,23 @@ fn default_case_state(switch_stmt: &SwitchStatement, case_states: &[usize]) -> O
         .find_map(|(case, &state)| case.test.is_none().then_some(state))
 }
 
+/// Opens a switch's `CaseBlock` scope on a fresh bridging state reached via
+/// `Goto` from the current state, bumping `ctx.scope_depth` to match. Shared
+/// by both switch-lowering paths (suspending-test and non-suspending), each
+/// of which independently needs the same "one scope, opened once, covering
+/// every case" bridge (issue #841) ahead of case-test matching.
+fn open_case_block_scope(
+    ctx: &mut TransformContext,
+    case_block_decls: Vec<(String, bool)>,
+) -> usize {
+    let bridge_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::Goto(bridge_state));
+    ctx.current_state_id = bridge_state;
+    ctx.scope_depth += 1;
+    ctx.states[bridge_state].scope_action = Some(ScopeAction::OpenBlock(case_block_decls));
+    bridge_state
+}
+
 /// Lowers a switch whose case tests contain a suspension into a chain of
 /// `ConditionalGoto` states, since `SwitchDispatch` evaluates its tests inside
 /// the terminator where a `yield`/`await` cannot suspend. The discriminant is
@@ -3656,18 +3673,9 @@ fn lower_switch_dispatch_with_suspending_tests(
     case_block_decls: Vec<(String, bool)>,
 ) -> Vec<usize> {
     let disc_var = ctx.new_temp_var("switch_disc");
-    let disc_binding = Some(SentValueBindingKind::Variable(disc_var.clone()));
-    if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
-        transform_yielding_expression(&switch_stmt.discriminant, ctx, usize::MAX, disc_binding);
-    } else {
-        emit_expression_with_binding(&switch_stmt.discriminant, &disc_binding, ctx);
-    }
+    bind_expression_to_temp(&switch_stmt.discriminant, &disc_var, ctx);
 
-    let bridge_state = ctx.new_state();
-    ctx.finalize_current_state(StateTerminator::Goto(bridge_state));
-    ctx.current_state_id = bridge_state;
-    ctx.scope_depth += 1;
-    ctx.states[bridge_state].scope_action = Some(ScopeAction::OpenBlock(case_block_decls));
+    open_case_block_scope(ctx, case_block_decls);
 
     let case_states = allocate_case_states(switch_stmt, ctx);
     let case_var = ctx.new_temp_var("switch_case");
@@ -3747,11 +3755,7 @@ fn transform_switch_statement(
         bind_expression_to_temp(&switch_stmt.discriminant, &temp_var, ctx);
         let temp_discriminant = Expression::Identifier(temp_var);
 
-        let bridge_state = ctx.new_state();
-        ctx.finalize_current_state(StateTerminator::Goto(bridge_state));
-        ctx.current_state_id = bridge_state;
-        ctx.scope_depth += 1;
-        ctx.states[bridge_state].scope_action = Some(ScopeAction::OpenBlock(case_block_decls));
+        open_case_block_scope(ctx, case_block_decls);
 
         let case_states = allocate_case_states(switch_stmt, ctx);
         let case_targets = switch_stmt
