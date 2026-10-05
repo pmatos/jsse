@@ -1160,11 +1160,11 @@ pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
 
 /// The scope statement list a `for (using x = init; test; update)` or
 /// `for (await using x = init; test; update)` head is equivalent to: the
-/// declaration followed by the loop with an empty initializer. `using` bindings are const-like, so ForBodyEvaluation has no
-/// per-iteration copy to preserve and the loop environment's single
-/// DisposeResources at loop exit is exactly a block scope's disposal. The
-/// loop's own `labels` move onto the inner loop, where `continue label` has to
-/// resolve.
+/// declaration followed by the loop with an empty initializer. `using`
+/// bindings are const-like, so ForBodyEvaluation has no per-iteration copy to
+/// preserve and the loop environment's single DisposeResources at loop exit is
+/// exactly a block scope's disposal. The loop's own `labels` move onto the
+/// inner loop, where `continue label` has to resolve.
 pub(crate) fn disposing_for_head_scope(
     f: &ForStatement,
     labels: &[String],
@@ -1172,7 +1172,7 @@ pub(crate) fn disposing_for_head_scope(
     let Some(ForInit::Variable(decl)) = &f.init else {
         return None;
     };
-    if !f.disposes_at_head() && !f.has_plain_using_head() {
+    if !f.has_using_head() {
         return None;
     }
     let inner_loop = Statement::For(ForStatement {
@@ -1709,10 +1709,10 @@ mod tests {
     ];
 
     // `with` and an `await using` for-of loop variable have no per-entry
-    // scope treatment at all. A C-style `for` head with `using` or
-    // `await using` isn't in this list: its own loop environment is isolated
-    // independently of the body (`disposes_at_head`, #787; the plain `using`
-    // head, #855).
+    // scope treatment at all. An `await using` C-style `for` head isn't in
+    // this list: its own loop environment is isolated independently of the
+    // body (`disposes_at_head`, #787). A plain `using` C-style head needs no
+    // blocking arm either: `disposing_for_head_scope` lowers it (#855).
     // A plain `using` for-of loop variable isn't either (jsse#845) — see
     // the `ForOf` arm of `scan_await_using`. A `function` declaration
     // sibling is unsafe for a third, unrelated reason regardless of

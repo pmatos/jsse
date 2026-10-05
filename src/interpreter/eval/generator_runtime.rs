@@ -973,10 +973,10 @@ impl Interpreter {
             let mut scope_exit_error: Option<JsValue> = None;
             while leaves_resources && scope_stack.len() > keep_scopes {
                 let frame = scope_stack.pop().expect("scope stack is non-empty");
-                self.sync_generator_scope_stack(o.id, &scope_stack);
                 let Some(stack) = self.take_dispose_stack(&frame.env) else {
                     continue;
                 };
+                self.sync_generator_scope_stack(o.id, &scope_stack);
                 let seed = match (
                     scope_exit_error.as_ref().or(pending_exception.as_ref()),
                     &pending_return,
@@ -2595,16 +2595,10 @@ impl Interpreter {
                 return self.generator_next_state_machine(this, JsValue::UNDEFINED);
             }
 
-            match self.dispose_resources(&func_env, Completion::Return(return_value)) {
-                Completion::Throw(error) => {
-                    self.retire_generator(o.id);
-                    return Completion::Throw(error);
-                }
-                Completion::Exit(code) => {
-                    self.retire_generator(o.id);
-                    return Completion::Exit(code);
-                }
-                _ => {}
+            let disposed = self.dispose_resources(&func_env, Completion::Return(return_value));
+            if matches!(disposed, Completion::Throw(_) | Completion::Exit(_)) {
+                self.retire_generator(o.id);
+                return disposed;
             }
             obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                 IteratorState::completed_state_machine_generator(
@@ -7037,7 +7031,7 @@ impl Interpreter {
         let envs: Vec<EnvRef> = frames
             .iter()
             .rev()
-            .filter(|frame| frame.for_of_depth > loop_pos)
+            .filter(|frame| frame.for_of_depth > loop_pos && env_has_pending_dispose(&frame.env))
             .map(|frame| frame.env.clone())
             .collect();
         for env in envs {
@@ -7117,7 +7111,10 @@ impl Interpreter {
         let envs: Vec<EnvRef> = frames
             .iter()
             .rev()
-            .filter(|frame| keep_try_depth.is_none_or(|depth| frame.try_depth > depth))
+            .filter(|frame| {
+                keep_try_depth.is_none_or(|depth| frame.try_depth > depth)
+                    && env_has_pending_dispose(&frame.env)
+            })
             .map(|frame| frame.env.clone())
             .collect();
         for env in envs {
