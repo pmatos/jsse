@@ -1165,7 +1165,7 @@ pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
 /// DisposeResources at loop exit is exactly a block scope's disposal. The
 /// loop's own `labels` move onto the inner loop, where `continue label` has to
 /// resolve.
-pub(crate) fn await_using_for_head_scope(
+pub(crate) fn disposing_for_head_scope(
     f: &ForStatement,
     labels: &[String],
 ) -> Option<Vec<Statement>> {
@@ -1638,6 +1638,7 @@ mod tests {
     }
 
     const ISOLATABLE_SOURCES: &[&str] = &[
+        "for (using r = y; ; ) { { await using a = null; } }",
         "{ await using a = null; }",
         "if (c) { await using a = null; } else { x(); }",
         "if (c) x(); else { await using a = null; }",
@@ -1707,12 +1708,11 @@ mod tests {
         "async function g() { { await using a = null; } }",
     ];
 
-    // `with`, an `await using` for-of loop variable, and a plain `using`
-    // C-style `for` loop variable have no per-entry scope treatment at
-    // all (`transform_for_statement`'s `CopyForward` only recognizes
-    // `let`/`const`) — an `await using` C-style `for` loop head is
-    // different: its own loop environment is isolated independently of
-    // the body (`disposes_at_head`, #787), so it's not in this list.
+    // `with` and an `await using` for-of loop variable have no per-entry
+    // scope treatment at all. A C-style `for` head with `using` or
+    // `await using` isn't in this list: its own loop environment is isolated
+    // independently of the body (`disposes_at_head`, #787; the plain `using`
+    // head, #855).
     // A plain `using` for-of loop variable isn't either (jsse#845) — see
     // the `ForOf` arm of `scan_await_using`. A `function` declaration
     // sibling is unsafe for a third, unrelated reason regardless of
@@ -1721,7 +1721,6 @@ mod tests {
     const BLOCKED_SOURCES: &[&str] = &[
         "with (o) { { await using a = null; } }",
         "for (await using r of y) { { await using a = null; } }",
-        "for (using r = y; ; ) { { await using a = null; } }",
         "{ function g() {} { await using a = null; } }",
         "try { function g() {} { await using a = null; } } finally {}",
         "for (let i = 0; i < 2; i++) { await using a = null; function g() {} }",
@@ -1777,23 +1776,12 @@ mod tests {
 
     #[test]
     fn reaches_await_using_block_covers_isolatable_and_blocked() {
-        // The C-style `for (using r = …)` head has no per-iteration disposal
-        // support (`transform_for_statement`'s lowering disposes after
-        // loop-exit code, not at the loop's own exit, regardless of the
-        // body — jsse#855). Routing it into the full transform would trade
-        // this issue's scheduling bug for that one instead of fixing either,
-        // so it's the one `Blocked` shape excluded here.
-        const EXCLUDED: &str = "for (using r = y; ; ) { { await using a = null; } }";
         for src in ISOLATABLE_SOURCES {
             assert!(reaches_first_statement(src), "expected reach: {src}");
         }
-        for src in BLOCKED_SOURCES.iter().filter(|&&src| src != EXCLUDED) {
+        for src in BLOCKED_SOURCES {
             assert!(reaches_first_statement(src), "expected reach: {src}");
         }
-        assert!(
-            !reaches_first_statement(EXCLUDED),
-            "expected no reach: {EXCLUDED}"
-        );
         for src in NONE_SOURCES {
             assert!(!reaches_first_statement(src), "expected no reach: {src}");
         }

@@ -1129,7 +1129,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::For(for_stmt) => {
-            if let Some(scope_stmts) = await_using_for_head_scope(for_stmt, &ctx.iteration_labels) {
+            if let Some(scope_stmts) = disposing_for_head_scope(for_stmt, &ctx.iteration_labels) {
                 let labels = std::mem::take(&mut ctx.iteration_labels);
                 transform_yielding_statement(&Statement::Block(scope_stmts), ctx, after_state);
                 ctx.iteration_labels = labels;
