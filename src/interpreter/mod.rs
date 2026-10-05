@@ -637,7 +637,7 @@ pub(crate) struct LoadedModule {
     pub evaluated: bool,
     pub is_evaluating: bool,
     pub has_tla: bool,
-    pub deferred_only: bool, // loaded via load_module_no_eval, not yet fully loaded
+    pub deferred_only: bool, // linked through deferred loading, not yet eagerly requested
     pub program_ast: Option<crate::ast::Program>,
     /// The module's permanent [[RequestedModules]] graph, retained after its
     /// executable AST is released following synchronous evaluation.
@@ -1367,8 +1367,8 @@ impl Interpreter {
 
     /// Apply AllImportAttributesSupported and host resolution to one static
     /// ModuleRequest. Callers do this in source order before linking any loaded
-    /// dependency, because jsse's `load_module` also links/evaluates and could
-    /// otherwise expose an earlier dependency's link error before a later
+    /// dependency, because Source Text Module loading also links dependencies
+    /// and could otherwise expose an earlier dependency's link error before a later
     /// sibling's host-resolution error.
     fn validate_and_resolve_static_module_request(
         &mut self,
@@ -1424,10 +1424,7 @@ impl Interpreter {
 
         match import_type {
             Some(itype) => self.load_typed_module(key, path, itype),
-            None => match mode {
-                ModuleLoadMode::Evaluate => self.load_module(key, path),
-                ModuleLoadMode::Defer => self.load_module_no_eval(key, path),
-            },
+            None => self.load_source_text_module(key, path, mode),
         }
     }
 
@@ -2616,7 +2613,7 @@ impl Interpreter {
         }
 
         // Validate and host-resolve every request in source order before
-        // `load_module` can expose a dependency's link-phase error.
+        // Source Text Module loading can expose a dependency's link-phase error.
         for item in &program.module_items {
             let Some(req) = module_item_request(item) else {
                 continue;
@@ -2813,8 +2810,8 @@ impl Interpreter {
             .iter()
             .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
 
-        // For deferred imports or when loading in deferred context,
-        // use load_module_no_eval to avoid premature evaluation
+        // Deferred imports and deferred loading contexts link the target without
+        // making an eager request for it.
         let loaded = if is_deferred || self.loading_deferred {
             self.load_module_for_type(&resolved, None, ModuleLoadMode::Defer)?
         } else {
@@ -3193,469 +3190,240 @@ impl Interpreter {
         module.borrow_mut().error = Some(err.clone());
     }
 
-    fn load_module(
+    fn load_source_text_module(
         &mut self,
         key: &ModuleKey,
         path: &Path,
+        mode: ModuleLoadMode,
     ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        self.static_module_load_depth += 1;
-        let result = self.load_module_inner(key, path);
-        self.static_module_load_depth -= 1;
+        let is_deferred = matches!(mode, ModuleLoadMode::Defer);
+        let is_json = path.extension().and_then(|extension| extension.to_str()) == Some("json");
+        // Untyped JSON requests use the evaluated typed-module path in both
+        // modes, including its static-load-depth accounting.
+        let adds_static_depth = !is_deferred || is_json;
+        if adds_static_depth {
+            self.static_module_load_depth += 1;
+        }
+
+        let result = (|| -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+            if is_json {
+                return self.load_typed_module(key, path, ImportModuleType::Json);
+            }
+
+            let canon_path = key.clone();
+            if let Some(existing) = self.module_registry_get(&canon_path) {
+                match mode {
+                    ModuleLoadMode::Evaluate => {
+                        if let Some(error) = existing.borrow().error.clone() {
+                            return Err(error);
+                        }
+                        if existing.borrow().deferred_only {
+                            existing.borrow_mut().deferred_only = false;
+                        }
+                    }
+                    ModuleLoadMode::Defer => {
+                        let (error, evaluated) = {
+                            let module = existing.borrow();
+                            (module.error.clone(), module.evaluated)
+                        };
+                        if !evaluated && let Some(error) = error {
+                            return Err(error);
+                        }
+                    }
+                }
+                return Ok(existing);
+            }
+
+            let source = Self::read_module_text(path)?;
+            let mut parser = match parser::Parser::new(&source) {
+                Ok(parser) => parser,
+                Err(error) => {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!("Parse error in '{}': {:?}", path.display(), error),
+                    ));
+                }
+            };
+            let program = match parser.parse_program_as_module() {
+                Ok(program) => program,
+                Err(error) => {
+                    return Err(self.create_error("SyntaxError", &error.message.to_string()));
+                }
+            };
+
+            let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
+            module_env.borrow_mut().strict = true;
+            module_env.borrow_mut().module_path = Some(canon_path.clone());
+            module_env.borrow_mut().declare("this", BindingKind::Var);
+
+            // Register before traversing dependencies so circular imports see
+            // the same Module Record identity.
+            let loaded_module = Rc::new(RefCell::new(LoadedModule {
+                path: canon_path.clone(),
+                env: module_env.clone(),
+                exports: HashMap::new(),
+                export_bindings: HashMap::new(),
+                cached_namespace: None,
+                cached_deferred_namespace: None,
+                cached_import_meta: None,
+                error: None,
+                namespace_imports: HashMap::new(),
+                synthetic_namespace_imports: HashMap::new(),
+                source_imports: HashMap::new(),
+                module_source: None,
+                star_export_sources: Vec::new(),
+                evaluated: false,
+                is_evaluating: false,
+                deferred_only: is_deferred,
+                has_tla: Self::module_has_tla(&program),
+                program_ast: Some(program.clone()),
+                requested_modules: Vec::new(),
+                async_evaluation_order: None,
+                pending_async_dependencies: 0,
+                async_parent_modules: Vec::new(),
+                cycle_root: None,
+                top_level_capability: None,
+                dfs_index: None,
+                dfs_ancestor_index: None,
+            }));
+            self.module_registry_insert(canon_path.clone(), loaded_module.clone());
+
+            // Seed namespace-visible export names before imports or re-exports
+            // can observe this record through a cycle.
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(export) = item {
+                    for (export_name, binding_name) in self.get_export_bindings(export) {
+                        let mut module = loaded_module.borrow_mut();
+                        module
+                            .exports
+                            .insert(export_name.clone(), JsValue::UNDEFINED);
+                        module.export_bindings.insert(export_name, binding_name);
+                    }
+                    if let ExportDeclaration::All {
+                        source,
+                        exported: None,
+                        ..
+                    } = export
+                    {
+                        loaded_module
+                            .borrow_mut()
+                            .star_export_sources
+                            .push(source.clone());
+                    }
+                }
+            }
+
+            let previous_path = self.current_module_path.replace(canon_path.clone());
+            let previous_loading_deferred = self.loading_deferred;
+            let linked = (|| -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+                for item in &program.module_items {
+                    match item {
+                        ModuleItem::Statement(statement) => {
+                            self.hoist_module_statement(statement, &module_env);
+                        }
+                        ModuleItem::ExportDeclaration(export) => {
+                            self.hoist_export_declaration(export, &module_env);
+                        }
+                        ModuleItem::ImportDeclaration(_) => {}
+                    }
+                }
+
+                if is_deferred {
+                    self.loading_deferred = true;
+                }
+
+                // Resolve every request in source order before linking any
+                // dependency, preserving host-error precedence.
+                for item in &program.module_items {
+                    let Some(request) = module_item_request(item) else {
+                        continue;
+                    };
+                    if let Err(error) =
+                        self.validate_and_resolve_static_module_request(request, Some(path))
+                    {
+                        Self::cache_module_error(&loaded_module, &error);
+                        return Err(error);
+                    }
+                }
+                loaded_module.borrow_mut().requested_modules =
+                    Self::graph_dependency_requests(&program);
+
+                for item in &program.module_items {
+                    let Some(request) = module_item_request(item) else {
+                        continue;
+                    };
+                    let should_cache_error =
+                        is_deferred || (request.import_type().is_none() && !request.is_deferred);
+                    if let Err(error) = self.load_prevalidated_static_module_request(
+                        request,
+                        Some(path),
+                        is_deferred,
+                    ) {
+                        if should_cache_error {
+                            Self::cache_module_error(&loaded_module, &error);
+                        }
+                        return Err(error);
+                    }
+                }
+
+                for item in &program.module_items {
+                    if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
+                        source,
+                        exported,
+                        attributes,
+                    }) = item
+                        && let Err(error) = self.process_star_reexport(
+                            source,
+                            exported.as_ref(),
+                            attributes,
+                            &loaded_module,
+                        )
+                    {
+                        Self::cache_module_error(&loaded_module, &error);
+                        return Err(error);
+                    }
+                }
+
+                for item in &program.module_items {
+                    if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                        specifiers,
+                        source: Some(source),
+                        attributes,
+                        ..
+                    }) = item
+                        && let Err(error) = self.validate_named_reexports(
+                            &canon_path,
+                            source,
+                            attributes,
+                            specifiers,
+                        )
+                    {
+                        Self::cache_module_error(&loaded_module, &error);
+                        return Err(error);
+                    }
+                }
+
+                for item in &program.module_items {
+                    if let ModuleItem::ImportDeclaration(import) = item
+                        && let Err(error) = self.process_import(import, &module_env)
+                    {
+                        Self::cache_module_error(&loaded_module, &error);
+                        return Err(error);
+                    }
+                }
+
+                Ok(loaded_module.clone())
+            })();
+
+            self.loading_deferred = previous_loading_deferred;
+            self.current_module_path = previous_path;
+            linked
+        })();
+
+        if adds_static_depth {
+            self.static_module_load_depth -= 1;
+        }
         result
-    }
-
-    fn load_module_inner(
-        &mut self,
-        key: &ModuleKey,
-        path: &Path,
-    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        // This host also supports untyped `.json` requests. Route them through
-        // the same typed loader so extension- and attribute-selected requests
-        // observe one ParseJSONModule result.
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            return self.load_typed_module(key, path, ImportModuleType::Json);
-        }
-
-        let canon_path = key.clone();
-
-        // Check if module is already loaded
-        if let Some(existing) = self.module_registry_get(&canon_path) {
-            // If the module previously errored, re-throw the same error
-            if let Some(ref err) = existing.borrow().error.clone() {
-                return Err(err.clone());
-            }
-            // If loaded via load_module_no_eval (deferred), evaluate it now
-            // since this is a non-deferred import
-            if existing.borrow().deferred_only {
-                existing.borrow_mut().deferred_only = false;
-            }
-            return Ok(existing);
-        }
-
-        // Read and parse the module
-        let source = Self::read_module_text(path)?;
-
-        let mut parser = match parser::Parser::new(&source) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(self.create_error(
-                    "SyntaxError",
-                    &format!("Parse error in '{}': {:?}", path.display(), e),
-                ));
-            }
-        };
-
-        let program = match parser.parse_program_as_module() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(self.create_error("SyntaxError", &e.message.to_string()));
-            }
-        };
-
-        // Create module environment
-        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
-        module_env.borrow_mut().strict = true;
-        module_env.borrow_mut().module_path = Some(canon_path.clone());
-        {
-            let mut env = module_env.borrow_mut();
-            env.declare("this", BindingKind::Var);
-        }
-
-        // Register module early to handle circular imports
-        let loaded_module = Rc::new(RefCell::new(LoadedModule {
-            path: canon_path.clone(),
-            env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
-            cached_namespace: None,
-            cached_deferred_namespace: None,
-            cached_import_meta: None,
-            error: None,
-            namespace_imports: HashMap::new(),
-            synthetic_namespace_imports: HashMap::new(),
-            source_imports: HashMap::new(),
-            module_source: None,
-            star_export_sources: Vec::new(),
-            evaluated: false,
-            is_evaluating: false,
-            deferred_only: false,
-            has_tla: false,
-            program_ast: None,
-            requested_modules: Vec::new(),
-            async_evaluation_order: None,
-            pending_async_dependencies: 0,
-            async_parent_modules: Vec::new(),
-            cycle_root: None,
-            top_level_capability: None,
-            dfs_index: None,
-            dfs_ancestor_index: None,
-        }));
-        self.module_registry_insert(canon_path.clone(), loaded_module.clone());
-
-        // Collect export names and bindings first (before processing imports) for namespace objects
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(export) = item {
-                let bindings = self.get_export_bindings(export);
-                for (export_name, binding_name) in bindings {
-                    loaded_module
-                        .borrow_mut()
-                        .exports
-                        .insert(export_name.clone(), JsValue::UNDEFINED);
-                    loaded_module
-                        .borrow_mut()
-                        .export_bindings
-                        .insert(export_name, binding_name);
-                }
-                if let ExportDeclaration::All {
-                    source,
-                    exported: None,
-                    ..
-                } = export
-                {
-                    loaded_module
-                        .borrow_mut()
-                        .star_export_sources
-                        .push(source.clone());
-                }
-            }
-        }
-
-        // Detect top-level await
-        let has_tla = Self::module_has_tla(&program);
-        loaded_module.borrow_mut().has_tla = has_tla;
-
-        // Store AST for deferred evaluation
-        loaded_module.borrow_mut().program_ast = Some(program.clone());
-
-        // Execute module with its path set
-        let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(canon_path.clone());
-
-        // First pass: hoist declarations
-        for item in &program.module_items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    self.hoist_module_statement(stmt, &module_env);
-                }
-                ModuleItem::ExportDeclaration(export) => {
-                    self.hoist_export_declaration(export, &module_env);
-                }
-                _ => {}
-            }
-        }
-
-        // Validate and host-resolve every request in source order before
-        // `load_module` can expose a dependency's link-phase error.
-        for item in &program.module_items {
-            let Some(req) = module_item_request(item) else {
-                continue;
-            };
-            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(path)) {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                return Err(e);
-            }
-        }
-        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(&program);
-
-        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
-        // For deferred imports, load without evaluation.
-        // For non-deferred, load normally (which includes evaluation).
-        for item in &program.module_items {
-            let Some(req) = module_item_request(item) else {
-                continue;
-            };
-            let should_cache_error = req.import_type().is_none() && !req.is_deferred;
-            if let Err(e) = self.load_prevalidated_static_module_request(req, Some(path), false) {
-                if should_cache_error {
-                    Self::cache_module_error(&loaded_module, &e);
-                }
-                self.current_module_path = prev_path;
-                return Err(e);
-            }
-        }
-
-        // Second pass: process re-exports (export * from) — before imports
-        // so that self-importing namespaces include star re-exported keys
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                source,
-                exported,
-                attributes,
-            }) = item
-                && let Err(e) = self.process_star_reexport(
-                    source,
-                    exported.as_ref(),
-                    attributes,
-                    &loaded_module,
-                )
-            {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                return Err(e);
-            }
-        }
-
-        // Named re-exports run before imports; see validate_named_reexports.
-        {
-            let canon = canon_path.clone();
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    attributes,
-                    ..
-                }) = item
-                    && let Err(e) =
-                        self.validate_named_reexports(&canon, source, attributes, specifiers)
-                {
-                    self.current_module_path = prev_path;
-                    Self::cache_module_error(&loaded_module, &e);
-                    return Err(e);
-                }
-            }
-        }
-
-        // Third pass: process imports (after re-exports)
-        for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item
-                && let Err(e) = self.process_import(import, &module_env)
-            {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                return Err(e);
-            }
-        }
-
-        // No evaluation — handled by inner_module_evaluation
-
-        self.current_module_path = prev_path;
-        Ok(loaded_module)
-    }
-
-    /// Load a module without evaluating it (for deferred imports).
-    /// Parses, links, resolves exports, but does NOT execute the module body.
-    fn load_module_no_eval(
-        &mut self,
-        key: &ModuleKey,
-        path: &Path,
-    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon_path = key.clone();
-
-        if let Some(existing) = self.module_registry_get(&canon_path) {
-            // Propagate parse/link errors (module never finished loading) eagerly.
-            // Let evaluation errors surface via ensure_deferred_namespace_evaluation
-            // when the deferred namespace is accessed, so identity is preserved
-            // per spec §16.2.1.5.3 (EnsureDeferredNamespaceEvaluation).
-            let (has_error, evaluated, err_clone) = {
-                let b = existing.borrow();
-                (b.error.is_some(), b.evaluated, b.error.clone())
-            };
-            if has_error && !evaluated {
-                return Err(err_clone.unwrap());
-            }
-            return Ok(existing.clone());
-        }
-
-        // JSON modules are always fully evaluated
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            return self.load_module(key, path);
-        }
-
-        let source = Self::read_module_text(path)?;
-
-        let mut parser = match parser::Parser::new(&source) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(self.create_error(
-                    "SyntaxError",
-                    &format!("Parse error in '{}': {:?}", path.display(), e),
-                ));
-            }
-        };
-
-        let program = match parser.parse_program_as_module() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(self.create_error("SyntaxError", &e.message.to_string()));
-            }
-        };
-
-        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
-        module_env.borrow_mut().strict = true;
-        module_env.borrow_mut().module_path = Some(canon_path.clone());
-        {
-            let mut env = module_env.borrow_mut();
-            env.declare("this", BindingKind::Var);
-        }
-
-        let has_tla = Self::module_has_tla(&program);
-
-        let loaded_module = Rc::new(RefCell::new(LoadedModule {
-            path: canon_path.clone(),
-            env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
-            cached_namespace: None,
-            cached_deferred_namespace: None,
-            cached_import_meta: None,
-            error: None,
-            namespace_imports: HashMap::new(),
-            synthetic_namespace_imports: HashMap::new(),
-            source_imports: HashMap::new(),
-            module_source: None,
-            star_export_sources: Vec::new(),
-            evaluated: false,
-            is_evaluating: false,
-            deferred_only: true,
-            has_tla,
-            program_ast: Some(program.clone()),
-            requested_modules: Vec::new(),
-            async_evaluation_order: None,
-            pending_async_dependencies: 0,
-            async_parent_modules: Vec::new(),
-            cycle_root: None,
-            top_level_capability: None,
-            dfs_index: None,
-            dfs_ancestor_index: None,
-        }));
-        self.module_registry_insert(canon_path.clone(), loaded_module.clone());
-
-        // Collect export names and bindings
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(export) = item {
-                let bindings = self.get_export_bindings(export);
-                for (export_name, binding_name) in bindings {
-                    loaded_module
-                        .borrow_mut()
-                        .exports
-                        .insert(export_name.clone(), JsValue::UNDEFINED);
-                    loaded_module
-                        .borrow_mut()
-                        .export_bindings
-                        .insert(export_name, binding_name);
-                }
-                if let ExportDeclaration::All {
-                    source,
-                    exported: None,
-                    ..
-                } = export
-                {
-                    loaded_module
-                        .borrow_mut()
-                        .star_export_sources
-                        .push(source.clone());
-                }
-            }
-        }
-
-        let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(canon_path.clone());
-
-        // Hoist declarations
-        for item in &program.module_items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    self.hoist_module_statement(stmt, &module_env);
-                }
-                ModuleItem::ExportDeclaration(export) => {
-                    self.hoist_export_declaration(export, &module_env);
-                }
-                _ => {}
-            }
-        }
-
-        // Mark as loading deferred context so nested process_import uses load_module_no_eval
-        let prev_loading_deferred = self.loading_deferred;
-        self.loading_deferred = true;
-
-        // Validate and host-resolve every request in source order before
-        // `load_module_no_eval` can expose a transitive failure.
-        for item in &program.module_items {
-            let Some(req) = module_item_request(item) else {
-                continue;
-            };
-            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(path)) {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                self.loading_deferred = prev_loading_deferred;
-                return Err(e);
-            }
-        }
-        loaded_module.borrow_mut().requested_modules = Self::graph_dependency_requests(&program);
-
-        // Pre-load pass: load sub-dependencies
-        for item in &program.module_items {
-            let Some(req) = module_item_request(item) else {
-                continue;
-            };
-            if let Err(e) = self.load_prevalidated_static_module_request(req, Some(path), true) {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                self.loading_deferred = prev_loading_deferred;
-                return Err(e);
-            }
-        }
-
-        // Process re-exports
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                source,
-                exported,
-                attributes,
-            }) = item
-                && let Err(e) = self.process_star_reexport(
-                    source,
-                    exported.as_ref(),
-                    attributes,
-                    &loaded_module,
-                )
-            {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                self.loading_deferred = prev_loading_deferred;
-                return Err(e);
-            }
-        }
-
-        // Named re-exports run before imports; see validate_named_reexports.
-        {
-            let canon = canon_path.clone();
-            for item in &program.module_items {
-                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    specifiers,
-                    source: Some(source),
-                    attributes,
-                    ..
-                }) = item
-                    && let Err(e) =
-                        self.validate_named_reexports(&canon, source, attributes, specifiers)
-                {
-                    self.loading_deferred = prev_loading_deferred;
-                    self.current_module_path = prev_path;
-                    Self::cache_module_error(&loaded_module, &e);
-                    return Err(e);
-                }
-            }
-        }
-
-        // Process imports
-        for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item
-                && let Err(e) = self.process_import(import, &module_env)
-            {
-                Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_path;
-                self.loading_deferred = prev_loading_deferred;
-                return Err(e);
-            }
-        }
-
-        // Async transitive deps are evaluated by inner_module_evaluation, not here
-
-        self.loading_deferred = prev_loading_deferred;
-        self.current_module_path = prev_path;
-        Ok(loaded_module)
     }
 
     fn create_synthetic_default_module(
