@@ -5606,6 +5606,27 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
+                            // §sec-functiondeclarationinstantiation web-compat
+                            // insertion point: run Annex B function hoisting over
+                            // the original body now, at state-machine construction
+                            // time (#842 — see call_async_function for rationale).
+                            if !is_strict {
+                                let mut names = Vec::new();
+                                let mut blocked = Vec::new();
+                                Self::collect_annexb_function_names(
+                                    body.as_slice(),
+                                    &mut names,
+                                    &mut blocked,
+                                );
+                                if !names.is_empty() {
+                                    self.register_annexb_function_names(
+                                        body.as_slice(),
+                                        &exec_env,
+                                        false,
+                                        names,
+                                    );
+                                }
+                            }
                             self.get_object_cell_expect(gen_obj_id).borrow_mut().kind =
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::StateMachineGenerator {
