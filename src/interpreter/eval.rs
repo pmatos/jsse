@@ -4405,9 +4405,20 @@ impl Interpreter {
             for prop in props {
                 // Handle rest: {...rest} = obj
                 if let Expression::Spread(inner) = &prop.value {
-                    let rest_val =
-                        propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
-                    match self.put_value_to_target(inner, rest_val, env) {
+                    // §13.15.5.6 AssignmentRestProperty: evaluate the target's lref
+                    // BEFORE building/copying into the rest object, matching this
+                    // function's own `Init` arm and `destructure_array_assignment`'s
+                    // `Spread` arm. `with_destruct_lref` roots the produced rest value
+                    // across the deferred write, so no manual rooting is needed here.
+                    let precomp = match self.eval_member_lhs_ref(inner, env) {
+                        Ok(MemberLhsRef::Ref(r)) => r,
+                        Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let result = self.with_destruct_lref(precomp, inner, env, |interp| {
+                        interp.bind_object_rest_values(&obj_val, &excluded_keys)
+                    });
+                    match result {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
                     }
