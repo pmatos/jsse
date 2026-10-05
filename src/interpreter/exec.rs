@@ -889,17 +889,9 @@ impl Interpreter {
         names: &mut Vec<String>,
         blocked: &mut Vec<String>,
     ) {
-        let mut lexicals = Vec::new();
-        for s in lists.iter().copied().flatten() {
-            match s {
-                Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(&mut lexicals);
-                    }
-                }
-                Statement::ClassDeclaration(cls) => lexicals.push(cls.name.clone()),
-                _ => {}
-            }
+        let prev_len = blocked.len();
+        for list in lists {
+            blocked.extend(Self::collect_lex_names(list));
         }
         // Only plain functions are Annex B.3.3 candidates.
         for s in lists.iter().copied().flatten() {
@@ -908,14 +900,11 @@ impl Interpreter {
                 && !f.is_async
                 && !names.contains(&f.name)
                 && !blocked.contains(&f.name)
-                && !lexicals.contains(&f.name)
             {
                 names.push(f.name.clone());
             }
         }
         // Nested blocks may not hoist a name this scope already declares.
-        let prev_len = blocked.len();
-        blocked.extend(lexicals);
         for s in lists.iter().copied().flatten() {
             if let Some(f) = super::hoisting::unwrap_labeled_function(s)
                 && !blocked.contains(&f.name)
