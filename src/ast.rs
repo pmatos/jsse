@@ -739,6 +739,16 @@ impl ForStatement {
             Some(ForInit::Variable(decl)) if decl.kind == VarKind::AwaitUsing
         )
     }
+
+    /// Whether the head is `for (using ...;;)`: a sync-dispose C-style head,
+    /// which `transform_for_statement`'s lowering can't dispose per-iteration
+    /// (issue #855).
+    pub(crate) fn has_plain_using_head(&self) -> bool {
+        matches!(
+            &self.init,
+            Some(ForInit::Variable(decl)) if decl.kind == VarKind::Using
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
