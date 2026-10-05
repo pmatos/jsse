@@ -905,11 +905,7 @@ impl Interpreter {
         }
         // Only regular functions (not generators or async) per Annex B.3.3
         for s in inner {
-            let mut stmt = s;
-            while let Statement::Labeled(_, inner_s) = stmt {
-                stmt = inner_s;
-            }
-            if let Statement::FunctionDeclaration(f) = stmt
+            if let Some(f) = super::hoisting::unwrap_labeled_function(s)
                 && !f.is_generator
                 && !f.is_async
                 && !names.contains(&f.name)
@@ -922,11 +918,7 @@ impl Interpreter {
         let prev_len = blocked.len();
         blocked.extend(block_lexicals);
         for s in inner {
-            let mut stmt = s;
-            while let Statement::Labeled(_, inner_s) = stmt {
-                stmt = inner_s;
-            }
-            if let Statement::FunctionDeclaration(f) = stmt
+            if let Some(f) = super::hoisting::unwrap_labeled_function(s)
                 && !blocked.contains(&f.name)
             {
                 blocked.push(f.name.clone());
@@ -947,9 +939,7 @@ impl Interpreter {
     ) {
         for stmt in stmts {
             match stmt {
-                Statement::Block(inner) => {
-                    Self::collect_annexb_in_block(inner, names, blocked);
-                }
+                Statement::Block(inner) => Self::collect_annexb_in_block(inner, names, blocked),
                 Statement::If(if_stmt) => {
                     Self::collect_annexb_function_names(
                         std::slice::from_ref(&*if_stmt.consequent),

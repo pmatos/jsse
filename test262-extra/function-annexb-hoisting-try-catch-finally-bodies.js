@@ -70,6 +70,31 @@ features: [explicit-resource-management]
   assert.sameValue(g, 'lexical', 'an enclosing lexical declaration blocks the hoist');
 })();
 
+(function () {
+  eval('try { function ev() { return 1; } } finally {}');
+  assert.sameValue(typeof ev, 'function', 'try block in direct eval');
+})();
+
+(function () {
+  try { switch (1) { case 1: function sw() {} } } finally {}
+  assert.sameValue(typeof sw, 'function', 'switch case inside a try block');
+})();
+
+(function () {
+  function* gen() {
+    try { yield 1; function gt() {} } finally {}
+    try { throw 1; } catch (e) { yield 2; function gc() {} }
+    try {} finally { yield 3; function gf() {} }
+    return [typeof gt, typeof gc, typeof gf];
+  }
+  var it = gen();
+  it.next(); it.next(); it.next();
+  assert.sameValue(it.next().value.join(), 'function,function,function', 'generator try/catch/finally bodies');
+})();
+
+(0, eval)('try { function globalTry() {} } finally {}');
+assert.sameValue(typeof globalTry, 'function', 'try block in global eval code');
+
 asyncTest(async function () {
   {
     function f() { return 'f'; }
