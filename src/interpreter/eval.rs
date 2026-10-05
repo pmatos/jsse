@@ -4407,7 +4407,15 @@ impl Interpreter {
                 if let Expression::Spread(inner) = &prop.value {
                     let rest_val =
                         propagate!(self.bind_object_rest_values(&obj_val, &excluded_keys));
-                    match self.put_value_to_target(inner, rest_val, env) {
+                    // rest_val is otherwise only a Rust local; put_value_to_target on a
+                    // member target re-evaluates the target's base expression, which can
+                    // run arbitrary user code (and reach a GC safepoint) before the target
+                    // itself roots the value being written.
+                    let put_result = self.with_gc_root_scope(|interp| {
+                        interp.gc_root_value(&rest_val);
+                        interp.put_value_to_target(inner, rest_val, env)
+                    });
+                    match put_result {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
                     }
