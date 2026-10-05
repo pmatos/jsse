@@ -1315,6 +1315,15 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
     }
 }
 
+/// A loop whose per-iteration lexical scope is otherwise isolatable
+/// (`for`/`for-in`/`for-of` with a `let`/`const`/`using` head): a sibling
+/// Annex-B `function` declaration in `loop_body` still blocks it, the same
+/// gap `scan_flattened_list`/`scan_scoped_list` guard against for
+/// `Block`/`try`/`switch`.
+fn blocked_by_annexb_sibling(body: AwaitUsingScan, loop_body: &Statement) -> AwaitUsingScan {
+    body.blocked_if(contains_annexb_function_declaration(loop_body))
+}
+
 /// A statement list the transform flattens into the enclosing state graph.
 /// `Block` and `try`/`catch`/`finally` clause bodies both open their own
 /// per-entry environment once lowered (`ScopeAction::OpenBlock`, `#703`),
@@ -1426,14 +1435,12 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
                 Some(ForInit::Variable(decl))
                     if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
                 {
-                    body.blocked_if(contains_annexb_function_declaration(&f.body))
+                    blocked_by_annexb_sibling(body, &f.body)
                 }
                 _ => body,
             }
         }
-        Statement::ForIn(f) => {
-            scan_await_using(&f.body).blocked_if(contains_annexb_function_declaration(&f.body))
-        }
+        Statement::ForIn(f) => blocked_by_annexb_sibling(scan_await_using(&f.body), &f.body),
         Statement::ForOf(f) => {
             let body = scan_await_using(&f.body);
             match &f.left {
@@ -1445,13 +1452,11 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
                 // `const` head has no per-entry scope treatment beyond what
                 // `for_of_head_lexical` already gives `const`, so each only
                 // needs the Annex-B guard (jsse#845).
-                ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing => {
-                    body.blocked_unless_none()
-                }
+                _ if f.disposes_at_head() => body.blocked_unless_none(),
                 ForInOfLeft::Variable(decl)
                     if matches!(decl.kind, VarKind::Using | VarKind::Let | VarKind::Const) =>
                 {
-                    body.blocked_if(contains_annexb_function_declaration(&f.body))
+                    blocked_by_annexb_sibling(body, &f.body)
                 }
                 _ => body,
             }
@@ -1501,9 +1506,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// `CaseBlock` the same per-entry `ScopeAction::OpenBlock` `#703` gave
 /// `Block`/`try`/`for`/`for-in`) reaching a sibling `function` declaration
 /// (Annex B hoisting isn't implemented by either lowering path — see
-/// `contains_annexb_function_declaration`). A plain `using` (non-`await`)
-/// for-of loop variable is *not* in this excluded set — see the `ForOf` arm
-/// of `scan_await_using` for why (jsse#845).
+/// `contains_annexb_function_declaration`).
 pub(crate) fn has_suspendable_await_using_block(stmt: &Statement) -> bool {
     scan_await_using(stmt) == AwaitUsingScan::Isolatable
 }
@@ -1716,12 +1719,7 @@ mod tests {
             "try { for (await using a = null; ;) {} } finally {}",
             "for (await using a = null; ;) { { await using b = null; } }",
             "while (c) { let j = i; { await using a = null; } }",
-            // A plain `using` (sync-dispose) for-of head has no `Await` of
-            // its own, and `for_of_head_lexical` treats it identically to
-            // `const` for per-iteration environment purposes, so it's as
-            // safe to isolate as `for (const x of y) { await using a = null; }`
-            // above (jsse#845). The `await using` head variant stays blocked
-            // — see `lowering_that_would_flatten_a_lexical_scope_is_blocked`.
+            // Plain `using` for-of head: scoped like `const` (jsse#845).
             "for (using r of y) { { await using a = null; } }",
             // `switch`'s `CaseBlock` now gets the same per-entry
             // `ScopeAction::OpenBlock` scope `#703` gave `Block`/`try`
@@ -1767,15 +1765,12 @@ mod tests {
         // all (`transform_for_statement`'s `CopyForward` only recognizes
         // `let`/`const`) — an `await using` C-style `for` loop head is
         // different: its own loop environment is isolated independently of
-        // the body (`disposes_at_head`, #787), so it's not in this list. A
-        // plain `using` for-of loop variable is *also* not in this list
-        // (moved to `suspendable_await_using_block_through_containers`,
-        // jsse#845): `for_of_head_lexical` already treats it identically to
-        // `const` for per-iteration environment purposes, unlike the
-        // C-style-for `Using` case, which `transform_for_statement` doesn't
-        // scope at all. A `function` declaration sibling is unsafe for a
-        // third, unrelated reason regardless of container: Annex B function
-        // hoisting isn't implemented by either lowering path.
+        // the body (`disposes_at_head`, #787), so it's not in this list.
+        // A plain `using` for-of loop variable isn't either (jsse#845) — see
+        // the `ForOf` arm of `scan_await_using`. A `function` declaration
+        // sibling is unsafe for a third, unrelated reason regardless of
+        // container: Annex B function hoisting isn't implemented by either
+        // lowering path.
         let blocked = [
             "with (o) { { await using a = null; } }",
             "for (await using r of y) { { await using a = null; } }",
