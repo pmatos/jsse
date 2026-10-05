@@ -2036,7 +2036,9 @@ impl Interpreter {
         let result = 'for_loop: {
             loop {
                 self.gc_root_value(&v);
+                self.call_stack_envs.push(iter_env.clone());
                 self.gc_safepoint();
+                self.call_stack_envs.pop();
                 self.gc_unroot_value(&v);
                 if let Some(test) = &f.test {
                     let val = match self.eval_expr(test, &iter_env) {

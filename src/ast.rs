@@ -741,8 +741,7 @@ impl ForStatement {
     }
 
     /// Whether the head is `for (using ...;;)`: a sync-dispose C-style head,
-    /// which `transform_for_statement`'s lowering can't dispose per-iteration
-    /// (issue #855).
+    /// lowered through the same head-scope rewrite as `await using`.
     pub(crate) fn has_plain_using_head(&self) -> bool {
         matches!(
             &self.init,

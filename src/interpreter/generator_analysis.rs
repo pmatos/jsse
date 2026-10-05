@@ -1158,9 +1158,9 @@ pub(crate) fn pattern_needs_await_lowering(pattern: &Pattern) -> bool {
         && pattern_lowering_supported(pattern, PatternLoweringForm::ConstrainedDeclaration)
 }
 
-/// The scope statement list a `for (await using x = init; test; update)` head
-/// is equivalent to: the declaration followed by the loop with an empty
-/// initializer. `using` bindings are const-like, so ForBodyEvaluation has no
+/// The scope statement list a `for (using x = init; test; update)` or
+/// `for (await using x = init; test; update)` head is equivalent to: the
+/// declaration followed by the loop with an empty initializer. `using` bindings are const-like, so ForBodyEvaluation has no
 /// per-iteration copy to preserve and the loop environment's single
 /// DisposeResources at loop exit is exactly a block scope's disposal. The
 /// loop's own `labels` move onto the inner loop, where `continue label` has to
@@ -1172,7 +1172,7 @@ pub(crate) fn await_using_for_head_scope(
     let Some(ForInit::Variable(decl)) = &f.init else {
         return None;
     };
-    if !f.disposes_at_head() {
+    if !f.disposes_at_head() && !f.has_plain_using_head() {
         return None;
     }
     let inner_loop = Statement::For(ForStatement {
@@ -1400,12 +1400,6 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
             }
             let body = scan_await_using(&f.body);
             match &f.init {
-                // A plain `using` head has no per-entry scope treatment
-                // (`transform_for_statement`'s `CopyForward` only handles
-                // `let`/`const`), so it blocks regardless of the body's
-                // shape. `await using` never reaches here: it's handled by
-                // `disposes_at_head()` above.
-                _ if f.has_plain_using_head() => body.blocked_unless_none(),
                 // A `let`/`const` head is `#703`-covered, so only an Annex-B
                 // function-declaration sibling still blocks it. A `var`/no-
                 // declaration head has no observable per-iteration binding to
@@ -1481,20 +1475,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
 /// into the function's single simple-machine state, where the tree-walker has
 /// no state to suspend to and the disposal's `Await` drains the job queue
 /// inline instead (issue #857).
-///
-/// One `Blocked` shape is deliberately excluded: a C-style
-/// `for (using r = …; ; )` loop has no per-iteration disposal support
-/// (`transform_for_statement`'s lowering disposes after loop-exit code, not
-/// at the loop's own exit, regardless of what's in the body — issue #855).
-/// Routing it into the full transform would trade this issue's scheduling
-/// bug for that one instead of fixing either, so it stays excluded — and
-/// keeps draining as it does today — until #855 lands.
 pub(crate) fn reaches_await_using_block(stmt: &Statement) -> bool {
-    if let Statement::For(f) = stmt
-        && f.has_plain_using_head()
-    {
-        return false;
-    }
     scan_await_using(stmt) != AwaitUsingScan::None
 }
 
