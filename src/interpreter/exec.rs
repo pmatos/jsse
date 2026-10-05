@@ -1158,26 +1158,7 @@ impl Interpreter {
                     .map(|id| crate::types::JsObject { id })
                 {
                     if self.get_object_cell(obj_ref.id).is_some() {
-                        let with_env = Rc::new(RefCell::new(Environment {
-                            bindings: Default::default(),
-                            parent: Some(env.clone()),
-                            strict: env.borrow().strict,
-                            is_function_scope: false,
-                            is_arrow_scope: false,
-                            with_object: Some(WithObject { obj_id: obj_ref.id }),
-                            dispose_stack: None,
-                            global_object_id: None,
-                            annexb_function_names: None,
-                            class_private_names: None,
-                            is_field_initializer: false,
-                            arguments_immutable: false,
-                            has_parameter_expressions: false,
-                            has_simple_params: true,
-                            is_simple_catch_scope: false,
-                            is_derived_constructor_scope: false,
-                            indirect_bindings: None,
-                            module_path: None,
-                        }));
+                        let with_env = Environment::new_with_object(env.clone(), obj_ref.id);
                         self.with_scope_depth += 1;
                         self.has_ever_entered_with = true;
                         let c = self.exec_statement(body, &with_env);
