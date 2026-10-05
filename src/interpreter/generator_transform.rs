@@ -281,8 +281,9 @@ pub(crate) struct LoopControlTarget {
     /// Number of block scopes (`EnterScope`/`ExitScope`) open when this
     /// target's loop/label was registered, so `route_loop_control!` never
     /// disposes a scope that lexically encloses the target itself. Only
-    /// async functions emit `EnterScope`/`ExitScope`; generator routing does
-    /// not consume this field.
+    /// async functions emit `EnterScope`/`ExitScope`; generators dispose a
+    /// dropped scope frame at the next state transition instead, so their
+    /// routing does not consume this field.
     pub scope_depth: usize,
 }
 
@@ -1149,12 +1150,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::For(for_stmt) => {
-            let head_scope = if ctx.is_async {
-                await_using_for_head_scope(for_stmt, &ctx.iteration_labels)
-            } else {
-                None
-            };
-            if let Some(scope_stmts) = head_scope {
+            if let Some(scope_stmts) = disposing_for_head_scope(for_stmt, &ctx.iteration_labels) {
                 let labels = std::mem::take(&mut ctx.iteration_labels);
                 transform_yielding_statement(&Statement::Block(scope_stmts), ctx, after_state);
                 ctx.iteration_labels = labels;

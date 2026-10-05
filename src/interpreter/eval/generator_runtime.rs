@@ -919,7 +919,11 @@ impl Interpreter {
                     ForOfTransitionOutcome::Done(next_state) => next_state,
                     ForOfTransitionOutcome::Abrupt(Completion::Throw(error)) => {
                         let error = route_exception!(error);
-                        let disp = self.dispose_resources(&func_env, Completion::Throw(error));
+                        let disp = self.dispose_generator_resources(
+                            o.id,
+                            &func_env,
+                            Completion::Throw(error),
+                        );
                         self.retire_generator(o.id);
                         return disp;
                     }
@@ -957,6 +961,65 @@ impl Interpreter {
                 .last()
                 .map_or(&func_env, ForOfLoopState::effective_env)
                 .clone();
+            // Block scopes the transition leaves are disposed at their exit
+            // (their own DisposeResources), innermost first, before the
+            // reconciliation below discards their frames.
+            let keep_scopes = state_machine.states[current_id].scope_depth;
+            let leaves_resources = scope_stack.get(keep_scopes..).is_some_and(|frames| {
+                frames
+                    .iter()
+                    .any(|frame| env_has_pending_dispose(&frame.env))
+            });
+            let mut scope_exit_error: Option<JsValue> = None;
+            while leaves_resources && scope_stack.len() > keep_scopes {
+                let frame = scope_stack.pop().expect("scope stack is non-empty");
+                let Some(stack) = self.take_dispose_stack(&frame.env) else {
+                    continue;
+                };
+                self.sync_generator_scope_stack(o.id, &scope_stack);
+                let seed = match (
+                    scope_exit_error.as_ref().or(pending_exception.as_ref()),
+                    &pending_return,
+                ) {
+                    (Some(error), _) => Completion::Throw(error.clone()),
+                    (None, Some(value)) => Completion::Return(value.clone()),
+                    (None, None) => Completion::Normal(JsValue::UNDEFINED),
+                };
+                self.in_state_machine = saved_in_state_machine;
+                let completion = self.run_dispose_cursor_holding(
+                    DisposeCursor::new(stack, seed),
+                    &[
+                        scope_exit_error.as_ref(),
+                        pending_exception.as_ref(),
+                        pending_return.as_ref(),
+                    ],
+                );
+                self.in_state_machine = true;
+                match completion {
+                    Completion::Exit(code) => {
+                        self.in_state_machine = saved_in_state_machine;
+                        self.retire_generator(o.id);
+                        return Completion::Exit(code);
+                    }
+                    Completion::Throw(error) => {
+                        if scope_exit_error.is_none() && pending_exception.is_some() {
+                            pending_exception = Some(error);
+                        } else {
+                            pending_return = None;
+                            scope_exit_error = Some(error);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(error) = scope_exit_error {
+                self.in_state_machine = saved_in_state_machine;
+                let error = route_exception!(error);
+                let disp =
+                    self.dispose_generator_resources(o.id, &func_env, Completion::Throw(error));
+                self.retire_generator(o.id);
+                return disp;
+            }
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
                 &state_machine.states[current_id],
@@ -1025,7 +1088,7 @@ impl Interpreter {
                 // above and never reaches here).
                 let e = route_exception!(e);
                 // §27.5.3.3: DisposeResources when generator throws
-                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                let disp = self.dispose_generator_resources(o.id, &func_env, Completion::Throw(e));
                 self.retire_generator(o.id);
                 return disp;
             }
@@ -1344,8 +1407,11 @@ impl Interpreter {
                         match self.eval_operand(e, &term_env) {
                             Operand::Value(v) => v,
                             Operand::Throw(err) => {
-                                let disp =
-                                    self.dispose_resources(&func_env, Completion::Throw(err));
+                                let disp = self.dispose_generator_resources(
+                                    o.id,
+                                    &func_env,
+                                    Completion::Throw(err),
+                                );
                                 self.retire_generator(o.id);
                                 return disp;
                             }
@@ -1393,7 +1459,11 @@ impl Interpreter {
 
                     let throw_val = route_exception!(throw_val);
 
-                    let disp = self.dispose_resources(&func_env, Completion::Throw(throw_val));
+                    let disp = self.dispose_generator_resources(
+                        o.id,
+                        &func_env,
+                        Completion::Throw(throw_val),
+                    );
                     self.retire_generator(o.id);
                     return disp;
                 }
@@ -1472,7 +1542,11 @@ impl Interpreter {
                         Operand::Throw(e) => {
                             let e = route_exception!(e);
                             // §27.5.3.3: DisposeResources when generator throws
-                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            let disp = self.dispose_generator_resources(
+                                o.id,
+                                &func_env,
+                                Completion::Throw(e),
+                            );
                             self.retire_generator(o.id);
                             return disp;
                         }
@@ -1641,7 +1715,11 @@ impl Interpreter {
                         Err(e) => {
                             let e = route_exception!(e);
                             // §27.5.3.3: DisposeResources when generator throws
-                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            let disp = self.dispose_generator_resources(
+                                o.id,
+                                &func_env,
+                                Completion::Throw(e),
+                            );
                             self.retire_generator(o.id);
                             return disp;
                         }
@@ -2101,7 +2179,11 @@ impl Interpreter {
                         Err(e) => {
                             let e = route_exception!(e);
                             // §27.5.3.3: DisposeResources when generator throws
-                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            let disp = self.dispose_generator_resources(
+                                o.id,
+                                &func_env,
+                                Completion::Throw(e),
+                            );
                             self.retire_generator(o.id);
                             return disp;
                         }
@@ -2133,7 +2215,8 @@ impl Interpreter {
                     if let Some(e) = eval_err {
                         let e = route_exception!(e);
                         // §27.5.3.3: DisposeResources when generator throws
-                        let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                        let disp =
+                            self.dispose_generator_resources(o.id, &func_env, Completion::Throw(e));
                         self.retire_generator(o.id);
                         return disp;
                     }
@@ -2142,7 +2225,11 @@ impl Interpreter {
                         Completion::Throw(e) => {
                             let e = route_exception!(e);
                             // §27.5.3.3: DisposeResources when generator throws
-                            let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                            let disp = self.dispose_generator_resources(
+                                o.id,
+                                &func_env,
+                                Completion::Throw(e),
+                            );
                             self.retire_generator(o.id);
                             return disp;
                         }
@@ -2161,9 +2248,17 @@ impl Interpreter {
                     let ret_val = pending_return.take().unwrap_or(JsValue::UNDEFINED);
                     // §27.5.3.3 GeneratorStart: DisposeResources when generator completes
                     let disp = if has_pending_return {
-                        self.dispose_resources(&func_env, Completion::Return(ret_val.clone()))
+                        self.dispose_generator_resources(
+                            o.id,
+                            &func_env,
+                            Completion::Return(ret_val.clone()),
+                        )
                     } else {
-                        self.dispose_resources(&func_env, Completion::Normal(JsValue::UNDEFINED))
+                        self.dispose_generator_resources(
+                            o.id,
+                            &func_env,
+                            Completion::Normal(JsValue::UNDEFINED),
+                        )
                     };
                     let final_val = match disp {
                         Completion::Return(v) => v,
@@ -2433,6 +2528,16 @@ impl Interpreter {
                     false,
                 )
                 .expect_done();
+            // Block scopes inside the intercepting `finally` (all of them when
+            // there is none) dispose before it runs; the rest stay open.
+            let return_completion = match return_completion {
+                Completion::Return(return_value) => self.dispose_generator_scope_frames(
+                    o.id,
+                    finally_idx,
+                    Completion::Return(return_value),
+                ),
+                other => other,
+            };
             let return_value = match return_completion {
                 Completion::Return(return_value) => return_value,
                 Completion::Throw(error) => {
@@ -2490,6 +2595,11 @@ impl Interpreter {
                 return self.generator_next_state_machine(this, JsValue::UNDEFINED);
             }
 
+            let disposed = self.dispose_resources(&func_env, Completion::Return(return_value));
+            if matches!(disposed, Completion::Throw(_) | Completion::Exit(_)) {
+                self.retire_generator(o.id);
+                return disposed;
+            }
             obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                 IteratorState::completed_state_machine_generator(
                     state_machine,
@@ -2774,8 +2884,10 @@ impl Interpreter {
                     return self.generator_next_state_machine(this, JsValue::UNDEFINED);
                 }
                 RouteExceptionOutcome::Throw(error) => {
+                    let disp =
+                        self.dispose_generator_resources(o.id, &func_env, Completion::Throw(error));
                     self.retire_generator(o.id);
-                    return Completion::Throw(error);
+                    return disp;
                 }
                 RouteExceptionOutcome::Exit(code) => {
                     self.retire_generator(o.id);
@@ -6903,7 +7015,7 @@ impl Interpreter {
         ForOfUnwindOutcome::Done(completion)
     }
 
-    /// An `await using` block scope nested inside the async generator for-of
+    /// A `using`/`await using` block scope nested inside the generator for-of
     /// loop at `loop_pos` disposes before that loop's iterator closes. See
     /// [`Self::unwind_generator_for_of_loops`] for `can_park`'s contract.
     fn dispose_scopes_inside_for_of(
@@ -6919,18 +7031,9 @@ impl Interpreter {
         let envs: Vec<EnvRef> = frames
             .iter()
             .rev()
-            .filter(|frame| frame.for_of_depth > loop_pos)
+            .filter(|frame| frame.for_of_depth > loop_pos && env_has_pending_dispose(&frame.env))
             .map(|frame| frame.env.clone())
             .collect();
-        let is_async_generator = self.get_object_cell(generator_id).is_some_and(|obj| {
-            matches!(
-                obj.borrow().iterator_state(),
-                Some(IteratorState::StateMachineAsyncGenerator { .. })
-            )
-        });
-        if !is_async_generator {
-            return ForOfUnwindOutcome::Done(completion);
-        }
         for env in envs {
             completion = match self.dispose_env_for_for_of_unwind(&env, completion, can_park) {
                 ForOfUnwindOutcome::Done(c) => c,
@@ -6989,6 +7092,53 @@ impl Interpreter {
             slot.clear();
             slot.extend_from_slice(for_of_stack);
         }
+    }
+
+    /// Synchronously dispose the resources of the open block scopes recorded
+    /// for `generator_id`, innermost first, skipping frames opened at or
+    /// below `keep_try_depth` (those lie outside the `try` whose `finally`
+    /// is about to take over). Each frame's env is emptied as it is disposed,
+    /// so the frames themselves may stay on the stack.
+    fn dispose_generator_scope_frames(
+        &mut self,
+        generator_id: u64,
+        keep_try_depth: Option<usize>,
+        mut completion: Completion,
+    ) -> Completion {
+        let Some(frames) = self.generator_scope_stacks.get(&generator_id) else {
+            return completion;
+        };
+        let envs: Vec<EnvRef> = frames
+            .iter()
+            .rev()
+            .filter(|frame| {
+                keep_try_depth.is_none_or(|depth| frame.try_depth > depth)
+                    && env_has_pending_dispose(&frame.env)
+            })
+            .map(|frame| frame.env.clone())
+            .collect();
+        for env in envs {
+            completion = self.dispose_resources(&env, completion);
+            if matches!(completion, Completion::Exit(_)) {
+                break;
+            }
+        }
+        completion
+    }
+
+    /// DisposeResources for a sync generator that is finishing: every open
+    /// block scope, innermost first, then the function-level resources.
+    fn dispose_generator_resources(
+        &mut self,
+        generator_id: u64,
+        func_env: &EnvRef,
+        completion: Completion,
+    ) -> Completion {
+        let completion = self.dispose_generator_scope_frames(generator_id, None, completion);
+        if matches!(completion, Completion::Exit(_)) {
+            return completion;
+        }
+        self.dispose_resources(func_env, completion)
     }
 
     /// `sync_generator_for_of_stack`'s counterpart for `generator_scope_stacks`.

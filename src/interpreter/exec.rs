@@ -1963,6 +1963,10 @@ impl Interpreter {
         };
 
         let mut v = JsValue::UNDEFINED;
+        // Keeps a `using` head's resources reachable across the loop-head
+        // safepoints; `iter_env` is `for_env` itself whenever the head can
+        // hold a dispose stack.
+        self.call_stack_envs.push(for_env.clone());
         let result = 'for_loop: {
             loop {
                 self.gc_root_value(&v);
@@ -2002,6 +2006,7 @@ impl Interpreter {
             }
             Completion::Normal(v)
         };
+        self.call_stack_envs.pop();
         if !per_iteration_bindings.is_empty() {
             self.dispose_resources(&iter_env, result)
         } else {
