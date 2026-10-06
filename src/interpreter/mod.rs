@@ -3325,7 +3325,7 @@ impl Interpreter {
             }
 
             let previous_loading_deferred = self.loading_deferred;
-            let linked = self.with_module_key(Some(canon_path.clone()), |interp| {
+            self.with_module_key(Some(canon_path.clone()), |interp| {
                 let linked = (|| -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
                     for item in &program.module_items {
                         match item {
@@ -3427,8 +3427,7 @@ impl Interpreter {
                 })();
                 interp.loading_deferred = previous_loading_deferred;
                 linked
-            });
-            linked
+            })
         })();
 
         if adds_static_depth {
