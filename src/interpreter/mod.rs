@@ -2474,26 +2474,39 @@ impl Interpreter {
         result
     }
 
+    /// Run synchronous work under a Module Key, restoring the caller's key on
+    /// every returned completion. Queued jobs carry their own module identity;
+    /// callers that drain jobs under this key keep the drain inside `body`.
+    fn with_module_key<R>(
+        &mut self,
+        key: Option<ModuleKey>,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = std::mem::replace(&mut self.current_module_path, key);
+        let result = body(self);
+        self.current_module_path = previous;
+        result
+    }
+
     fn run_program_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
-                let prev = self.current_module_path.take();
-                self.current_module_path = Some(ModuleKey::for_file(path.to_path_buf()));
-                let global = self.realm().global_env.clone();
-                if program.body_is_strict {
-                    global.borrow_mut().strict = true;
-                }
-                let r = self.exec_script_body(&program.body, &global);
-                // A top-level `__host_exit` (issue #242) latches its code (read
-                // by `main`) so draining is skipped.
-                if let Completion::Exit(code) = &r {
-                    self.pending_exit = Some(*code);
-                }
-                // Drain microtasks before restoring path so async callbacks can use relative imports
-                self.drain_microtasks_until_idle();
-                self.current_module_path = prev;
-                r
+                self.with_module_key(Some(ModuleKey::for_file(path.to_path_buf())), |interp| {
+                    let global = interp.realm().global_env.clone();
+                    if program.body_is_strict {
+                        global.borrow_mut().strict = true;
+                    }
+                    let r = interp.exec_script_body(&program.body, &global);
+                    // A top-level `__host_exit` (issue #242) latches its code (read
+                    // by `main`) so draining is skipped.
+                    if let Completion::Exit(code) = &r {
+                        interp.pending_exit = Some(*code);
+                    }
+                    // Async callbacks need the file's key for relative imports.
+                    interp.drain_microtasks_until_idle();
+                    r
+                })
             }
             SourceType::Module => {
                 let module_key = ModuleKey::for_file(path.to_path_buf());
@@ -2502,10 +2515,9 @@ impl Interpreter {
                     self.pending_exit = Some(*code);
                 }
                 // Keep path set during microtask draining so async callbacks can use relative imports
-                let prev = self.current_module_path.take();
-                self.current_module_path = Some(module_key);
-                self.drain_microtasks_until_idle();
-                self.current_module_path = prev;
+                self.with_module_key(Some(module_key), |interp| {
+                    interp.drain_microtasks_until_idle()
+                });
                 r
             }
         }
@@ -2523,9 +2535,16 @@ impl Interpreter {
     }
 
     fn run_module(&mut self, program: &Program, module_path: Option<ModuleKey>) -> Completion {
-        let prev_module_path = self.current_module_path.take();
-        self.current_module_path = module_path.clone();
+        self.with_module_key(module_path.clone(), |interp| {
+            interp.run_module_in_context(program, module_path)
+        })
+    }
 
+    fn run_module_in_context(
+        &mut self,
+        program: &Program,
+        module_path: Option<ModuleKey>,
+    ) -> Completion {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         {
@@ -2624,7 +2643,6 @@ impl Interpreter {
                 module_path.as_ref().and_then(ModuleKey::file_path),
             ) {
                 Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
         }
@@ -2646,7 +2664,6 @@ impl Interpreter {
                 if should_cache_error {
                     Self::cache_module_error(&loaded_module, &e);
                 }
-                self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
         }
@@ -2667,7 +2684,6 @@ impl Interpreter {
                 )
             {
                 Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
         }
@@ -2685,7 +2701,6 @@ impl Interpreter {
                         self.validate_named_reexports(canon_path, source, attributes, specifiers)
                 {
                     Self::cache_module_error(&loaded_module, &e);
-                    self.current_module_path = prev_module_path;
                     return Completion::Throw(e);
                 }
             }
@@ -2697,7 +2712,6 @@ impl Interpreter {
                 && let Err(e) = self.process_import(import, &module_env)
             {
                 Self::cache_module_error(&loaded_module, &e);
-                self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
         }
@@ -2717,7 +2731,6 @@ impl Interpreter {
                     }
                 }
             }
-            self.current_module_path = prev_module_path;
             return Completion::Throw(e.clone());
         }
 
@@ -2728,11 +2741,9 @@ impl Interpreter {
         if let Some(module) = self.module_registry_get(&canon_path_entry)
             && let Some(err) = module.borrow().error.clone()
         {
-            self.current_module_path = prev_module_path;
             return Completion::Throw(err);
         }
 
-        self.current_module_path = prev_module_path;
         Completion::Normal(JsValue::UNDEFINED)
     }
 
@@ -3313,110 +3324,110 @@ impl Interpreter {
                 }
             }
 
-            let previous_path = self.current_module_path.replace(canon_path.clone());
             let previous_loading_deferred = self.loading_deferred;
-            let linked = (|| -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-                for item in &program.module_items {
-                    match item {
-                        ModuleItem::Statement(statement) => {
-                            self.hoist_module_statement(statement, &module_env);
+            let linked = self.with_module_key(Some(canon_path.clone()), |interp| {
+                let linked = (|| -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+                    for item in &program.module_items {
+                        match item {
+                            ModuleItem::Statement(statement) => {
+                                interp.hoist_module_statement(statement, &module_env);
+                            }
+                            ModuleItem::ExportDeclaration(export) => {
+                                interp.hoist_export_declaration(export, &module_env);
+                            }
+                            ModuleItem::ImportDeclaration(_) => {}
                         }
-                        ModuleItem::ExportDeclaration(export) => {
-                            self.hoist_export_declaration(export, &module_env);
-                        }
-                        ModuleItem::ImportDeclaration(_) => {}
                     }
-                }
 
-                if is_deferred {
-                    self.loading_deferred = true;
-                }
-
-                // Resolve every request in source order before linking any
-                // dependency, preserving host-error precedence.
-                for item in &program.module_items {
-                    let Some(request) = module_item_request(item) else {
-                        continue;
-                    };
-                    if let Err(error) =
-                        self.validate_and_resolve_static_module_request(request, Some(path))
-                    {
-                        Self::cache_module_error(&loaded_module, &error);
-                        return Err(error);
+                    if is_deferred {
+                        interp.loading_deferred = true;
                     }
-                }
-                loaded_module.borrow_mut().requested_modules =
-                    Self::graph_dependency_requests(&program);
 
-                for item in &program.module_items {
-                    let Some(request) = module_item_request(item) else {
-                        continue;
-                    };
-                    let should_cache_error =
-                        is_deferred || (request.import_type().is_none() && !request.is_deferred);
-                    if let Err(error) = self.load_prevalidated_static_module_request(
-                        request,
-                        Some(path),
-                        is_deferred,
-                    ) {
-                        if should_cache_error {
+                    // Resolve every request in source order before linking any
+                    // dependency, preserving host-error precedence.
+                    for item in &program.module_items {
+                        let Some(request) = module_item_request(item) else {
+                            continue;
+                        };
+                        if let Err(error) =
+                            interp.validate_and_resolve_static_module_request(request, Some(path))
+                        {
                             Self::cache_module_error(&loaded_module, &error);
+                            return Err(error);
                         }
-                        return Err(error);
                     }
-                }
+                    loaded_module.borrow_mut().requested_modules =
+                        Self::graph_dependency_requests(&program);
 
-                for item in &program.module_items {
-                    if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                        source,
-                        exported,
-                        attributes,
-                    }) = item
-                        && let Err(error) = self.process_star_reexport(
-                            source,
-                            exported.as_ref(),
-                            attributes,
-                            &loaded_module,
-                        )
-                    {
-                        Self::cache_module_error(&loaded_module, &error);
-                        return Err(error);
+                    for item in &program.module_items {
+                        let Some(request) = module_item_request(item) else {
+                            continue;
+                        };
+                        let should_cache_error = is_deferred
+                            || (request.import_type().is_none() && !request.is_deferred);
+                        if let Err(error) = interp.load_prevalidated_static_module_request(
+                            request,
+                            Some(path),
+                            is_deferred,
+                        ) {
+                            if should_cache_error {
+                                Self::cache_module_error(&loaded_module, &error);
+                            }
+                            return Err(error);
+                        }
                     }
-                }
 
-                for item in &program.module_items {
-                    if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                        specifiers,
-                        source: Some(source),
-                        attributes,
-                        ..
-                    }) = item
-                        && let Err(error) = self.validate_named_reexports(
-                            &canon_path,
+                    for item in &program.module_items {
+                        if let ModuleItem::ExportDeclaration(ExportDeclaration::All {
                             source,
+                            exported,
                             attributes,
+                        }) = item
+                            && let Err(error) = interp.process_star_reexport(
+                                source,
+                                exported.as_ref(),
+                                attributes,
+                                &loaded_module,
+                            )
+                        {
+                            Self::cache_module_error(&loaded_module, &error);
+                            return Err(error);
+                        }
+                    }
+
+                    for item in &program.module_items {
+                        if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                             specifiers,
-                        )
-                    {
-                        Self::cache_module_error(&loaded_module, &error);
-                        return Err(error);
+                            source: Some(source),
+                            attributes,
+                            ..
+                        }) = item
+                            && let Err(error) = interp.validate_named_reexports(
+                                &canon_path,
+                                source,
+                                attributes,
+                                specifiers,
+                            )
+                        {
+                            Self::cache_module_error(&loaded_module, &error);
+                            return Err(error);
+                        }
                     }
-                }
 
-                for item in &program.module_items {
-                    if let ModuleItem::ImportDeclaration(import) = item
-                        && let Err(error) = self.process_import(import, &module_env)
-                    {
-                        Self::cache_module_error(&loaded_module, &error);
-                        return Err(error);
+                    for item in &program.module_items {
+                        if let ModuleItem::ImportDeclaration(import) = item
+                            && let Err(error) = interp.process_import(import, &module_env)
+                        {
+                            Self::cache_module_error(&loaded_module, &error);
+                            return Err(error);
+                        }
                     }
-                }
 
-                Ok(loaded_module.clone())
-            })();
-
-            self.loading_deferred = previous_loading_deferred;
-            self.current_module_path = previous_path;
+                    Ok(loaded_module.clone())
+                })();
+                interp.loading_deferred = previous_loading_deferred;
+                linked
+            });
             linked
         })();
 
@@ -3576,6 +3587,15 @@ impl Interpreter {
 
     /// Execute a module's body synchronously (no DFS into dependencies).
     fn execute_module_body_sync(&mut self, module_path: &ModuleKey) -> Result<(), JsValue> {
+        self.with_module_key(Some(module_path.clone()), |interp| {
+            interp.execute_module_body_sync_in_context(module_path)
+        })
+    }
+
+    fn execute_module_body_sync_in_context(
+        &mut self,
+        module_path: &ModuleKey,
+    ) -> Result<(), JsValue> {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return Ok(()),
@@ -3585,8 +3605,6 @@ impl Interpreter {
             None => return Ok(()),
         };
         let module_env = module.borrow().env.clone();
-        let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
 
         let err = self.with_ic_body(&program.body, |interp| {
@@ -3670,7 +3688,6 @@ impl Interpreter {
             err
         });
         self.static_module_load_depth -= 1;
-        self.current_module_path = prev_path;
         match err {
             Some(e) => Err(e),
             None => Ok(()),
@@ -3687,14 +3704,13 @@ impl Interpreter {
             None => return,
         };
         let module_env = module.borrow().env.clone();
-        let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.clone());
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(export) = item {
-                self.collect_exports(export, &module_env, &module);
+        self.with_module_key(Some(module_path.clone()), |interp| {
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(export) = item {
+                    interp.collect_exports(export, &module_env, &module);
+                }
             }
-        }
-        self.current_module_path = prev_path;
+        });
     }
 
     fn module_items_to_statements(program: &crate::ast::Program) -> Vec<crate::ast::Statement> {
@@ -3766,11 +3782,10 @@ impl Interpreter {
             "asyncModuleResolve".to_string(),
             0,
             move |interp, _this, _args| {
-                let prev = interp.current_module_path.take();
-                interp.current_module_path = Some(key_for_resolve.clone());
-                interp.async_module_execution_fulfilled(&key_for_resolve);
-                interp.current_module_path = prev;
-                Completion::Normal(JsValue::UNDEFINED)
+                interp.with_module_key(Some(key_for_resolve.clone()), |interp| {
+                    interp.async_module_execution_fulfilled(&key_for_resolve);
+                    Completion::Normal(JsValue::UNDEFINED)
+                })
             },
         ));
         let reject_fn = self.create_function(JsFunction::native(
@@ -3802,19 +3817,18 @@ impl Interpreter {
                 scope_stack: vec![],
             },
         );
-        let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.clone());
-        self.static_module_load_depth += 1;
-        // Module top-level `await` (issue #242): this driver returns `()`, so a
-        // `__host_exit` from top-level module code is recorded in the terminal
-        // `pending_exit` sink rather than carried as a completion.
-        if let Completion::Exit(code) =
-            self.async_function_resume(async_id, JsValue::UNDEFINED, false)
-        {
-            self.pending_exit = Some(code);
-        }
-        self.static_module_load_depth -= 1;
-        self.current_module_path = prev_path;
+        self.with_module_key(Some(module_path.clone()), |interp| {
+            interp.static_module_load_depth += 1;
+            // Module top-level `await` (issue #242): this driver returns `()`, so a
+            // `__host_exit` from top-level module code is recorded in the terminal
+            // `pending_exit` sink rather than carried as a completion.
+            if let Completion::Exit(code) =
+                interp.async_function_resume(async_id, JsValue::UNDEFINED, false)
+            {
+                interp.pending_exit = Some(code);
+            }
+            interp.static_module_load_depth -= 1;
+        });
     }
 
     fn inner_module_evaluation(

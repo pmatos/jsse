@@ -234,12 +234,10 @@ impl Interpreter {
             ));
         }
 
-        // Save and set current_module_path for evaluation
-        let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.clone());
         let mut stack = vec![];
-        let result = self.inner_module_evaluation(&module_path, &mut stack, 0);
-        self.current_module_path = prev_path;
+        let result = self.with_module_key(Some(module_path.clone()), |interp| {
+            interp.inner_module_evaluation(&module_path, &mut stack, 0)
+        });
 
         match result {
             Ok(_) => {
