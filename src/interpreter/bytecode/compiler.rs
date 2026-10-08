@@ -719,38 +719,42 @@ impl Compiler {
         }
     }
 
+    /// A literal `true` has no side effects and cannot end the loop. In
+    /// Mandreel's generated labeled loops this saves LoadTrue and
+    /// JumpIfFalse (including ToBoolean) on every iteration. A missing test
+    /// (`for(;;)`) is equally unconditional.
+    fn test_always_true(test: Option<&Expression>) -> bool {
+        matches!(
+            test,
+            None | Some(Expression::Literal(Literal::Boolean(true)))
+        )
+    }
+
     /// Resolves `break`/`continue`'s target loop frame. Unlabeled forms bind
     /// to the innermost (last-pushed) frame; labeled forms search outward so
     /// a label on an outer loop is reachable past an intervening unlabeled
     /// inner loop. The parser's early-error checks
     /// (`sec-continue-statement-static-semantics-containsundefinedcontinuetarget`,
     /// and `break`'s analogous rule) guarantee a labeled form always names an
-    /// enclosing loop that compiled successfully — this only returns `Err`
+    /// enclosing loop that compiled successfully — this only returns `None`
     /// for a label that targets a non-loop statement or an unlabeled form
     /// with no enclosing loop at all, neither of which this compiler should
     /// ever actually reach given its existing eligibility checks, but it's
     /// cheap defensive coding against a future change that stops being true.
-    fn resolve_loop_frame(
-        &self,
-        label: Option<&str>,
-        bail_reason: &'static str,
-    ) -> Result<usize, CompileError> {
+    fn resolve_loop_frame(&self, label: Option<&str>) -> Option<usize> {
         match label {
-            None => self
-                .loop_frames
-                .len()
-                .checked_sub(1)
-                .ok_or(CompileError::Unsupported(bail_reason)),
+            None => self.loop_frames.len().checked_sub(1),
             Some(name) => self
                 .loop_frames
                 .iter()
-                .rposition(|frame| frame.labels.iter().any(|l| l == name))
-                .ok_or(CompileError::Unsupported(bail_reason)),
+                .rposition(|frame| frame.labels.iter().any(|l| l == name)),
         }
     }
 
     fn compile_break(&mut self, label: Option<&str>) -> Result<(), CompileError> {
-        let idx = self.resolve_loop_frame(label, "statement:Break")?;
+        let idx = self
+            .resolve_loop_frame(label)
+            .ok_or(CompileError::Unsupported("statement:Break"))?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
         let site = self.emit_jump(Op::Jump);
@@ -759,7 +763,9 @@ impl Compiler {
     }
 
     fn compile_continue(&mut self, label: Option<&str>) -> Result<(), CompileError> {
-        let idx = self.resolve_loop_frame(label, "statement:Continue")?;
+        let idx = self
+            .resolve_loop_frame(label)
+            .ok_or(CompileError::Unsupported("statement:Continue"))?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
         match self.loop_frames[idx].continue_target {
@@ -787,13 +793,7 @@ impl Compiler {
             continue_sites: Vec::new(),
             break_sites: Vec::new(),
         });
-        // A literal `true` has no side effects and cannot end the loop. In
-        // Mandreel's generated labeled loops this saves LoadTrue and
-        // JumpIfFalse (including ToBoolean) on every iteration.
-        let exit = if matches!(
-            &while_stmt.test,
-            Expression::Literal(Literal::Boolean(true))
-        ) {
+        let exit = if Self::test_always_true(Some(&while_stmt.test)) {
             None
         } else {
             self.compile_expr(&while_stmt.test)?;
@@ -841,16 +841,16 @@ impl Compiler {
             }
         }
         let loop_start = self.code.len();
-        // As in `compile_while`: a literal `true` test has no side effects
-        // and cannot end the loop, so it's elided like the already-absent
-        // `for(;;)` test.
-        let exit = match &for_stmt.test {
-            None | Some(Expression::Literal(Literal::Boolean(true))) => None,
-            Some(test) => {
-                self.compile_expr(test)?;
-                self.pop_n(1);
-                Some(self.emit_jump(Op::JumpIfFalse))
-            }
+        let exit = if Self::test_always_true(for_stmt.test.as_ref()) {
+            None
+        } else {
+            let test = for_stmt
+                .test
+                .as_ref()
+                .expect("test_always_true(None) is true");
+            self.compile_expr(test)?;
+            self.pop_n(1);
+            Some(self.emit_jump(Op::JumpIfFalse))
         };
         self.loop_frames.push(LoopFrame {
             labels,
