@@ -14,9 +14,9 @@ fn run(chunk: Chunk) -> Completion {
 }
 
 #[test]
-fn bytecode_enabled_defaults_to_false() {
+fn bytecode_enabled_defaults_to_true() {
     let interp = Interpreter::new();
-    assert!(!interp.bytecode_enabled);
+    assert!(interp.bytecode_enabled);
 }
 
 #[test]

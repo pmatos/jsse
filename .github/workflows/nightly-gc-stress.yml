@@ -49,6 +49,6 @@ jobs:
       - name: GC stress sample (JSSE_GC_STRESS=2)
         run: JSSE_GC_STRESS=2 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.003 --seed "$GC_STRESS_SEED" --timeout 300
 
-      - name: GC stress sample (JSSE_GC_STRESS=2, bytecode VM)
+      - name: GC stress sample (JSSE_GC_STRESS=2, tree-walker)
         if: ${{ !cancelled() }}
-        run: JSSE_GC_STRESS=2 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.003 --seed "$GC_STRESS_SEED" --bytecode --timeout 300
+        run: JSSE_GC_STRESS=2 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.003 --seed "$GC_STRESS_SEED" --no-bytecode --timeout 300

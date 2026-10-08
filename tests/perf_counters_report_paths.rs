@@ -239,7 +239,7 @@ fn generator_replay_does_not_inflate_the_ast_invocation_count() {
     .expect("write main");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["--bytecode", "main.js"])
+        .args(["main.js"])
         .output()
         .expect("run jsse");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -292,7 +292,7 @@ fn script_body_records_its_compile_outcome_but_not_a_function_invocation() {
     let perf = |file: &str, key: &str| -> u64 {
         let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
             .current_dir(&dir)
-            .args(["--bytecode", file])
+            .args([file])
             .output()
             .expect("run jsse");
         let stderr = String::from_utf8_lossy(&out.stderr);
