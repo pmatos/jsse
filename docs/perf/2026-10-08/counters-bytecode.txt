@@ -1,0 +1,121 @@
+PERF	vm_ops	417373178
+PERF	ast_stmt_execs	183020925
+PERF	ast_expr_evals	988150306
+PERF	ast_work_units	1171171231
+PERF	body_dispatch_compiled	13045650
+PERF	body_dispatch_ast	150257
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	31.99
+PERF	ast_units_in_functions	1171163486
+PERF	ast_units_per_ast_body	7794.40
+PERF	compile_ok	114
+PERF	compile_bail	73
+PERF	calls_from_vm	825352
+PERF	calls_to_native	396328
+PERF	calls_to_user	13195907
+PERF	gc_minor	1
+PERF	gc_major	2
+PERF	gc_ms	2
+BAIL	statement:Labeled	56
+BAIL	expression:Function	3
+BAIL	expression:Typeof	3
+BAIL	lexical declaration	2
+BAIL	statement:Try	2
+BAIL	call callee	1
+BAIL	constant pool overflow	1
+BAIL	direct eval call	1
+BAIL	expression:Array	1
+BAIL	expression:Object	1
+BAIL	literal	1
+BAIL	statement:Break	1
+BODY	_ZN20btAxisSweep3InternalItE11sortMinDownEitP12btDispatcherb	514810993	43.96%	15078	statement:Labeled
+BODY	_ZN20btAxisSweep3InternalItE11sortMaxDownEitP12btDispatcherb	430101850	36.72%	14086	statement:Labeled
+BODY	_ZN16btCollisionWorld18addCollisionObjectEP17btCollisionObjectss	45469952	3.88%	1922	statement:Labeled
+BODY	_ZL10insertleafP6btDbvtP10btDbvtNodeS2_	42321640	3.61%	9603	statement:Labeled
+BODY	_ZN20btAxisSweep3InternalItE7setAabbEP17btBroadphaseProxyRK9btVector3S5_P12btDispatcher	20238093	1.73%	19220	statement:Labeled
+BODY	_ZN16btDbvtBroadphase7setAabbEP17btBroadphaseProxyRK9btVector3S4_P12btDispatcher	16141381	1.38%	19220	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld16solveConstraintsER19btContactSolverInfo	15798384	1.35%	20	statement:Labeled
+BODY	_ZN20btAlignedObjectArrayI9btElementE17quickSortInternalI31btUnionFindElementSortPredicateEEvT_ii	9505760	0.81%	10220	statement:Labeled
+BODY	_ZN16btCollisionWorld11updateAabbsEv	8539000	0.73%	20	statement:Labeled
+BODY	_ZZN23btDiscreteDynamicsWorld16solveConstraintsER19btContactSolverInfoEN27InplaceSolverIslandCallback13ProcessIslandEPP17btCollisionObjectiPP20btPersistentManifoldii	7500840	0.64%	19200	statement:Labeled
+BODY	block_locate_free	6997159	0.60%	8072	statement:Labeled
+BODY	_ZN20btAxisSweep3InternalItE9sortMaxUpEitP12btDispatcherb	6367457	0.54%	931	statement:Labeled
+BODY	_ZL10removeleafP6btDbvtP10btDbvtNode	6229117	0.53%	7681	statement:Labeled
+BODY	_ZN6btDbvt6updateEP10btDbvtNodeR12btDbvtAabbMmRK9btVector3f	5688338	0.49%	19220	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld21updateActivationStateEf	4614500	0.39%	20	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld19integrateTransformsEf	4441860	0.38%	20	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld12applyGravityEv	3975500	0.34%	20	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld25predictUnconstraintMotionEf	3827100	0.33%	20	statement:Labeled
+BODY	_ZN25btSimulationIslandManager21updateActivationStateEP16btCollisionWorldP12btDispatcher	3511565	0.30%	20	statement:Labeled
+BODY	_ZN25btSimulationIslandManager26storeIslandActivationStateEP16btCollisionWorld	3190340	0.27%	20	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld11clearForcesEv	2151360	0.18%	20	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld18saveKinematicStateEf	2115320	0.18%	20	statement:Labeled
+BODY	_ZN13BenchmarkDemo11initPhysicsEv	1931936	0.16%	2	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld23synchronizeMotionStatesEv	1753600	0.15%	20	statement:Labeled
+BODY	_ZNK17btConvexHullShape49batchedUnitVectorGetSupportingVertexWithoutMarginEPK9btVector3PS0_i	1410282	0.12%	90	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld12addRigidBodyEP11btRigidBody	949076	0.08%	1922	statement:Labeled
+BODY	global_init	612070	0.05%	1	constant pool overflow
+BODY	_ZN31btDefaultCollisionConfiguration31getCollisionAlgorithmCreateFuncEii	352196	0.03%	2592	statement:Labeled
+BODY	memset	272700	0.02%	90	statement:Labeled
+BODY	_ZN15CProfileManager13Start_ProfileEPKc	110100	0.01%	320	statement:Labeled
+BODY	__mandreel_internal_update	36180	0.00%	20	statement:Labeled
+BODY	_ZN17btConvexHullShape8addPointERK9btVector3	29372	0.00%	86	statement:Labeled
+BODY	_ZN12CProfileNode5ResetEv	20140	0.00%	133	statement:Labeled
+BODY	_ZN16btCollisionWorld33performDiscreteCollisionDetectionEv	19660	0.00%	20	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld28internalSingleStepSimulationEf	16540	0.00%	20	statement:Labeled
+BODY	_GLOBAL__I__ZN5my_gl14glAttachShaderEjj	15322	0.00%	2	statement:Labeled
+BODY	tlsf_create	14144	0.00%	2	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld14stepSimulationEfif	13440	0.00%	20	statement:Labeled
+BODY	__v_printf	9382	0.00%	4	statement:Labeled
+BODY	_ZN23btDiscreteDynamicsWorld14debugDrawWorldEv	8340	0.00%	20	statement:Labeled
+OP	LoadName	134811290	32.30%
+OP	Pop	47358856	11.35%
+OP	LoadConst	43472080	10.42%
+OP	JumpIfFalse	25268921	6.05%
+OP	ResolveName	18747378	4.49%
+OP	StoreResolvedName	18747378	4.49%
+OP	SetElement	16264157	3.90%
+OP	GetElement	13538994	3.24%
+OP	GtEq	12395710	2.97%
+OP	Return	12349543	2.96%
+OP	Lt	12336899	2.96%
+OP	Jump	12246228	2.93%
+OP	Div	12055258	2.89%
+OP	UpdateName	11960872	2.87%
+OP	Add	11469818	2.75%
+OP	Mul	4398326	1.05%
+OP	Shr	3056068	0.73%
+OP	BitOr	1215508	0.29%
+OP	Neg	972597	0.23%
+OP	Sub	928634	0.22%
+OP	Call	825352	0.20%
+OP	ReturnUndefined	696107	0.17%
+OP	LoadCalleeName	432504	0.10%
+OP	BitAnd	380968	0.09%
+OP	LoadMethod	358134	0.09%
+OP	LoadResolvedName	201498	0.05%
+OP	Gt	178430	0.04%
+OP	LtEq	134798	0.03%
+OP	NotEq	120214	0.03%
+OP	Eq	102907	0.02%
+OP	Not	97820	0.02%
+OP	UShr	91077	0.02%
+OP	Shl	58007	0.01%
+OP	GetProp	40185	0.01%
+OP	LoadMethodElement	34714	0.01%
+OP	BitXor	16504	0.00%
+OP	BitNot	8589	0.00%
+OP	Mod	727	0.00%
+OP	LoadTrue	21	0.00%
+OP	JumpIfTruthyKeep	21	0.00%
+OP	LoadFalse	20	0.00%
+OP	JumpIfFalsyKeep	20	0.00%
+OP	Construct	19	0.00%
+OP	SetProp	11	0.00%
+OP	StrictEq	8	0.00%
+OP	LoadThis	6	0.00%
+OP	LoadNull	2	0.00%
+
+real	0m46.262s
+user	0m48.551s
+sys	0m0.881s

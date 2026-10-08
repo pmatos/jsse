@@ -1,0 +1,114 @@
+PERF	vm_ops	171366656
+PERF	ast_stmt_execs	75372136
+PERF	ast_expr_evals	431519026
+PERF	ast_work_units	506891162
+PERF	body_dispatch_compiled	6272664
+PERF	body_dispatch_ast	14037
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	27.32
+PERF	ast_units_in_functions	506883424
+PERF	ast_units_per_ast_body	36110.52
+PERF	compile_ok	84
+PERF	compile_bail	38
+PERF	calls_from_vm	100056
+PERF	calls_to_native	22119
+PERF	calls_to_user	6286701
+PERF	gc_minor	1
+PERF	gc_major	2
+PERF	gc_ms	4
+BAIL	statement:Labeled	25
+BAIL	expression:Function	3
+BAIL	expression:Typeof	3
+BAIL	statement:Try	2
+BAIL	call callee	1
+BAIL	constant pool overflow	1
+BAIL	expression:Object	1
+BAIL	literal	1
+BAIL	statement:Break	1
+BODY	_ZN20btAxisSweep3InternalItE11sortMinDownEitP12btDispatcherb	256796593	50.66%	2883	statement:Labeled
+BODY	_ZN20btAxisSweep3InternalItE11sortMaxDownEitP12btDispatcherb	214564205	42.33%	2883	statement:Labeled
+BODY	_ZN16btCollisionWorld18addCollisionObjectEP17btCollisionObjectss	22734976	4.49%	961	statement:Labeled
+BODY	_ZL10insertleafP6btDbvtP10btDbvtNodeS2_	6271509	1.24%	961	statement:Labeled
+BODY	block_locate_free	3397239	0.67%	3917	statement:Labeled
+BODY	_ZN13BenchmarkDemo11initPhysicsEv	965968	0.19%	1	statement:Labeled
+BODY	_ZNK17btConvexHullShape49batchedUnitVectorGetSupportingVertexWithoutMarginEPK9btVector3PS0_i	705141	0.14%	45	statement:Labeled
+BODY	global_init	612070	0.12%	1	constant pool overflow
+BODY	_ZN23btDiscreteDynamicsWorld12addRigidBodyEP11btRigidBody	474538	0.09%	961	statement:Labeled
+BODY	_ZN31btDefaultCollisionConfiguration31getCollisionAlgorithmCreateFuncEii	176098	0.03%	1296	statement:Labeled
+BODY	memset	136350	0.03%	45	statement:Labeled
+BODY	_ZN17btConvexHullShape8addPointERK9btVector3	14686	0.00%	43	statement:Labeled
+BODY	<script body>	7738	0.00%	1	expression:Typeof
+BODY	_GLOBAL__I__ZN5my_gl14glAttachShaderEjj	7661	0.00%	1	statement:Labeled
+BODY	tlsf_create	7072	0.00%	1	statement:Labeled
+BODY	__v_printf	4691	0.00%	2	statement:Labeled
+BODY	__mandreel_internal_init	3711	0.00%	1	statement:Labeled
+BODY	get_string_from_ptr	3324	0.00%	6	statement:Break
+BODY	fopen	2984	0.00%	2	statement:Labeled
+BODY	memcpy	1785	0.00%	2	statement:Labeled
+BODY	_ZN28btHashedOverlappingPairCache10growTablesEv	857	0.00%	1	statement:Labeled
+BODY	strncmp	468	0.00%	4	statement:Labeled
+BODY	_ZN17btConvexHullShapeC1EPKfii	259	0.00%	1	statement:Labeled
+BODY	_GLOBAL__I__ZN4__rw9__catfindEPNS_8__rw_catE	232	0.00%	1	statement:Labeled
+BODY	strcmp	217	0.00%	1	statement:Labeled
+BODY	mandreelAppStart	155	0.00%	1	expression:Typeof
+BODY	<anonymous#3879>	132	0.00%	1	statement:Try
+BODY	mandreel_fopen	118	0.00%	2	literal
+BODY	_ZN23btDiscreteDynamicsWorld10setGravityERK9btVector3	103	0.00%	1	statement:Labeled
+BODY	_ZN20btAlignedObjectArrayI9btVector3E6resizeEiRKS0_	73	0.00%	1	statement:Labeled
+BODY	_ZN12CProfileNode5ResetEv	72	0.00%	1	statement:Labeled
+BODY	Mandreel_Element	32	0.00%	4	expression:Function
+BODY	setupMandreel	32	0.00%	1	expression:Typeof
+BODY	mandreelLoadFat	29	0.00%	1	expression:Function
+BODY	startApp	16	0.00%	1	expression:Object
+BODY	<anonymous#3776>	12	0.00%	1	expression:Function
+BODY	<anonymous#3809>	10	0.00%	1	call callee
+BODY	<anonymous#3797>	6	0.00%	1	statement:Try
+OP	LoadName	56140716	32.76%
+OP	LoadConst	20021175	11.68%
+OP	Pop	18156213	10.59%
+OP	JumpIfFalse	14149006	8.26%
+OP	SetElement	8652478	5.05%
+OP	Lt	8000026	4.67%
+OP	Jump	7992850	4.66%
+OP	UpdateName	7983623	4.66%
+OP	Div	7958277	4.64%
+OP	GtEq	6092926	3.56%
+OP	Return	6089508	3.55%
+OP	GetElement	4362317	2.55%
+OP	ResolveName	1481244	0.86%
+OP	StoreResolvedName	1481244	0.86%
+OP	Add	1142213	0.67%
+OP	Shr	415674	0.24%
+OP	BitOr	224363	0.13%
+OP	ReturnUndefined	183156	0.11%
+OP	LoadResolvedName	156568	0.09%
+OP	Mul	105460	0.06%
+OP	Call	100056	0.06%
+OP	Neg	98652	0.06%
+OP	BitAnd	89679	0.05%
+OP	LoadCalleeName	69420	0.04%
+OP	UShr	42915	0.03%
+OP	Sub	40810	0.02%
+OP	Shl	27421	0.02%
+OP	LoadMethod	22899	0.01%
+OP	Eq	22312	0.01%
+OP	Gt	12416	0.01%
+OP	NotEq	11637	0.01%
+OP	Not	9821	0.01%
+OP	LtEq	9680	0.01%
+OP	BitXor	7793	0.00%
+OP	LoadMethodElement	7737	0.00%
+OP	BitNot	3910	0.00%
+OP	GetProp	410	0.00%
+OP	Construct	19	0.00%
+OP	SetProp	11	0.00%
+OP	StrictEq	8	0.00%
+OP	LoadThis	6	0.00%
+OP	Mod	3	0.00%
+OP	LoadNull	2	0.00%
+OP	LoadTrue	1	0.00%
+OP	JumpIfTruthyKeep	1	0.00%
+
+real	0m20.896s
+user	0m21.609s
+sys	0m0.437s
