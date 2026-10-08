@@ -790,14 +790,26 @@ impl Compiler {
             continue_sites: Vec::new(),
             break_sites: Vec::new(),
         });
-        self.compile_expr(&while_stmt.test)?;
-        self.pop_n(1);
-        let exit = self.emit_jump(Op::JumpIfFalse);
+        // A literal `true` has no side effects and cannot end the loop. In
+        // Mandreel's generated labeled loops this saves LoadTrue and
+        // JumpIfFalse (including ToBoolean) on every iteration.
+        let exit = if matches!(
+            &while_stmt.test,
+            Expression::Literal(Literal::Boolean(true))
+        ) {
+            None
+        } else {
+            self.compile_expr(&while_stmt.test)?;
+            self.pop_n(1);
+            Some(self.emit_jump(Op::JumpIfFalse))
+        };
         self.compile_statement(&while_stmt.body)?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
         self.emit_jump_to(Op::Jump, loop_start)?;
-        self.patch_jump(exit)?;
+        if let Some(exit) = exit {
+            self.patch_jump(exit)?;
+        }
         let frame = self
             .loop_frames
             .pop()
