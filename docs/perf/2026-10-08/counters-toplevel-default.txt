@@ -1,0 +1,61 @@
+PERF	vm_ops	0
+PERF	ast_stmt_execs	106181960
+PERF	ast_expr_evals	554413241
+PERF	ast_work_units	660595201
+PERF	body_dispatch_compiled	0
+PERF	body_dispatch_ast	6286701
+PERF	body_non_function_execs	1
+PERF	ast_units_in_functions	660587463
+PERF	ast_units_per_ast_body	105.08
+PERF	compile_ok	0
+PERF	compile_bail	0
+PERF	calls_from_vm	0
+PERF	calls_to_native	22119
+PERF	calls_to_user	6286701
+PERF	gc_minor	0
+PERF	gc_major	1
+PERF	gc_ms	1
+BODY	_ZN20btAxisSweep3InternalItE11sortMinDownEitP12btDispatcherb	256796593	38.87%	2883	-
+BODY	_ZN20btAxisSweep3InternalItE11sortMaxDownEitP12btDispatcherb	214564205	32.48%	2883	-
+BODY	my_mandreel_call_constructors	55681055	8.43%	1	-
+BODY	initHeap	47726644	7.22%	1	-
+BODY	uint	36522608	5.53%	6087087	-
+BODY	_ZN16btCollisionWorld18addCollisionObjectEP17btCollisionObjectss	22734976	3.44%	961	-
+BODY	_ZL10insertleafP6btDbvtP10btDbvtNodeS2_	6271509	0.95%	961	-
+BODY	block_locate_free	3397239	0.51%	3917	-
+BODY	block_prepare_used	3030822	0.46%	3917	-
+BODY	_ZN20btAxisSweep3InternalItE11createProxyERK9btVector3S3_iPvssP12btDispatcherS4_	1394411	0.21%	961	-
+BODY	_Z15btTransformAabbRK9btVector3S1_fRK11btTransformRS_S5_	1239045	0.19%	1921	-
+BODY	_ZN11btRigidBody14setupRigidBodyERKNS_27btRigidBodyConstructionInfoE	1157941	0.18%	961	-
+BODY	_ZN15DemoApplication20localCreateRigidBodyEfRK11btTransformP16btCollisionShape	1079040	0.16%	960	-
+BODY	emit_16	983040	0.15%	98304	-
+BODY	_ZN13BenchmarkDemo11initPhysicsEv	965968	0.15%	1	-
+BODY	tlsf_malloc	771391	0.12%	3917	-
+BODY	_ZN16btDbvtBroadphase11createProxyERK9btVector3S2_iPvssP12btDispatcherS3_	739957	0.11%	961	-
+BODY	_ZNK17btConvexHullShape49batchedUnitVectorGetSupportingVertexWithoutMarginEPK9btVector3PS0_i	705141	0.11%	45	-
+BODY	global_init	612070	0.09%	1	-
+BODY	_ZNK20btAxisSweep3InternalItE8quantizeEPtRK9btVector3i	597742	0.09%	1922	-
+BODY	emit_32	535270	0.08%	53527	-
+BODY	_ZN23btDiscreteDynamicsWorld12addRigidBodyEP11btRigidBody	474538	0.07%	961	-
+BODY	_ZN11btRigidBody19updateInertiaTensorEv	467046	0.07%	961	-
+BODY	_ZNK23btPolyhedralConvexShape21calculateLocalInertiaEfR9btVector3	453592	0.07%	961	-
+BODY	_ZN11btRigidBody12setMassPropsEfRK9btVector3	302690	0.05%	961	-
+BODY	_ZNK34btPolyhedralConvexAabbCachingShape7getAabbERK11btTransformR9btVector3S4_	301597	0.05%	1921	-
+BODY	emit_string	246529	0.04%	406	-
+BODY	_ZN31btDefaultCollisionConfiguration31getCollisionAlgorithmCreateFuncEii	176098	0.03%	1296	-
+BODY	malloc	160628	0.02%	3917	-
+BODY	memset	136350	0.02%	45	-
+BODY	_ZNK21btConvexInternalShape9getMarginEv	112437	0.02%	2883	-
+BODY	_ZN23btDiscreteDynamicsWorld18addCollisionObjectEP17btCollisionObjectss	74958	0.01%	961	-
+BODY	_ZN17btCollisionObject17setCollisionShapeEP16btCollisionShape	48050	0.01%	961	-
+BODY	Malloc	15579	0.00%	779	-
+BODY	tlsf_free	14857	0.00%	28	-
+BODY	_ZN17btConvexHullShape8addPointERK9btVector3	14686	0.00%	43	-
+BODY	_ZN34btPolyhedralConvexAabbCachingShape15recalcLocalAabbEv	12198	0.00%	45	-
+BODY	updateMandreelStats	10571	0.00%	961	-
+BODY	register_delegate	8684	0.00%	668	-
+BODY	<script body>	7738	0.00%	1	-
+
+real	0m22.473s
+user	0m23.162s
+sys	0m0.482s

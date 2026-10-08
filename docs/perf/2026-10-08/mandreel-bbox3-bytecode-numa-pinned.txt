@@ -1,0 +1,10 @@
+# NUMA pinning probe — buildbox3, 2026-10-08
+
+Command: taskset -c 0-7,64-71 timeout 600 target/release/jsse --bytecode /tmp/mandreel-assembled.js
+Engine time output (2> capture):
+    222.08s user 0.44s system 99% cpu 3:42.63 total
+Harness result (last line of stdout):
+    {"results":[125814],"iterations":1,"worstCaseCount":4}
+
+Compare unpinned N=3 (mandreel-bbox3-bytecode.json): benchmark-internal 109.1-112.9s, process wall 191.1-196.4s.
+Pinning to a single NUMA node is ~15% slower; the unpinned runner protocol on this box is representative.
