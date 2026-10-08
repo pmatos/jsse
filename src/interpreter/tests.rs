@@ -872,6 +872,61 @@ fn source_text_module_loader_preserves_mode_identity_and_context() {
 }
 
 #[test]
+fn entry_module_restores_module_key_after_success_and_link_error() {
+    let dir = temp_case_dir("entry-module-key-scope");
+    let entry_path = write_case_file(&dir, "entry.js", "export {};");
+    let _child_path = write_case_file(&dir, "child.js", "export const value = 7;");
+    let sentinel_path = write_case_file(&dir, "sentinel.js", "export {};");
+
+    let mut interp = Interpreter::new();
+    let sentinel = ModuleKey::for_file(sentinel_path);
+    let entry = ModuleKey::for_file(entry_path);
+    interp.current_module_path = Some(sentinel.clone());
+
+    let success =
+        parse_module_program("import { value } from './child.js'; globalThis.entryValue = value;");
+    assert!(matches!(
+        interp.run_module(&success, Some(entry.clone())),
+        Completion::Normal(_)
+    ));
+    assert_eq!(global_number(&interp, "entryValue"), 7.0);
+    assert_eq!(interp.current_module_path, Some(sentinel.clone()));
+
+    let missing = parse_module_program("import { missing } from './child.js';");
+    assert!(matches!(
+        interp.run_module(&missing, Some(entry)),
+        Completion::Throw(_)
+    ));
+    assert_eq!(interp.current_module_path, Some(sentinel));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn module_key_scope_restores_nested_and_abrupt_contexts() {
+    let mut interp = Interpreter::new();
+    let sentinel = ModuleKey::for_file(PathBuf::from("sentinel.js"));
+    let entry = ModuleKey::for_file(PathBuf::from("entry.js"));
+    interp.current_module_path = Some(sentinel.clone());
+
+    let result: Result<(), &str> = interp.with_module_key(Some(entry.clone()), |interp| {
+        assert_eq!(interp.current_module_path, Some(entry.clone()));
+        let inner = interp.with_module_key(None, |interp| {
+            assert_eq!(interp.current_module_path, None);
+            Err("inner failure")
+        });
+        assert_eq!(interp.current_module_path, Some(entry));
+        inner
+    });
+    assert_eq!(result, Err("inner failure"));
+    assert_eq!(interp.current_module_path, Some(sentinel.clone()));
+
+    let completion = interp.with_module_key(None, |_| Completion::Exit(7));
+    assert!(matches!(completion, Completion::Exit(7)));
+    assert_eq!(interp.current_module_path, Some(sentinel));
+}
+
+#[test]
 fn module_top_level_call_and_member_evaluate() {
     let dir = temp_case_dir("module-ic-fallback");
     let main_path = write_case_file(

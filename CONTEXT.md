@@ -36,6 +36,10 @@ _Avoid_: cache table, IC map.
 The canonical host identity of a resolved ECMAScript module, whether it is backed by a file or supplied directly by the host.
 _Avoid_: module path, registry path
 
+**Module Key Scope**:
+The synchronous interpreter context in which relative module requests resolve under a selected Module Key. `with_module_key` installs that key (or deliberately clears it), runs the caller's work including any required microtask drain, then restores the prior key on every returned completion. Module async continuations carry their identity in `AsyncFunctionState`; a scope never spans a suspension.
+_Avoid_: saved module path, manual path restoration.
+
 **Seam**:
 A place where one module's interface ends and another's begins. In JSSE, the seams between the AST, the inline-cache system, and the interpreter are intentionally narrow: the AST carries site identifiers, the runtime carries slot values, and the interpreter maps one to the other.
 _Avoid_: boundary, layer.
