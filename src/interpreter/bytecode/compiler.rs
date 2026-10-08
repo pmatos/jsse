@@ -722,15 +722,14 @@ impl Compiler {
     /// Resolves `break`/`continue`'s target loop frame. Unlabeled forms bind
     /// to the innermost (last-pushed) frame; labeled forms search outward so
     /// a label on an outer loop is reachable past an intervening unlabeled
-    /// inner loop (slice 5). The parser's early-error checks
+    /// inner loop. The parser's early-error checks
     /// (`sec-continue-statement-static-semantics-containsundefinedcontinuetarget`,
     /// and `break`'s analogous rule) guarantee a labeled form always names an
     /// enclosing loop that compiled successfully — this only returns `Err`
-    /// for a label that targets a non-loop statement (slice 7) or an
-    /// unlabeled form with no enclosing loop at all, neither of which this
-    /// compiler should ever actually reach given its existing eligibility
-    /// checks, but it's cheap defensive coding against a future change
-    /// that stops being true.
+    /// for a label that targets a non-loop statement or an unlabeled form
+    /// with no enclosing loop at all, neither of which this compiler should
+    /// ever actually reach given its existing eligibility checks, but it's
+    /// cheap defensive coding against a future change that stops being true.
     fn resolve_loop_frame(
         &self,
         label: Option<&str>,
@@ -782,8 +781,6 @@ impl Compiler {
         // only when the body produces a non-empty value.
         self.reset_script_completion();
         let loop_start = self.code.len();
-        // `continue_target` is known up front, so `continue` always lowers
-        // to a direct backward jump; `continue_sites` stays empty.
         self.loop_frames.push(LoopFrame {
             labels,
             continue_target: Some(loop_start),
@@ -844,17 +841,17 @@ impl Compiler {
             }
         }
         let loop_start = self.code.len();
-        let exit = if let Some(test) = &for_stmt.test {
-            self.compile_expr(test)?;
-            self.pop_n(1);
-            Some(self.emit_jump(Op::JumpIfFalse))
-        } else {
-            None
+        // As in `compile_while`: a literal `true` test has no side effects
+        // and cannot end the loop, so it's elided like the already-absent
+        // `for(;;)` test.
+        let exit = match &for_stmt.test {
+            None | Some(Expression::Literal(Literal::Boolean(true))) => None,
+            Some(test) => {
+                self.compile_expr(test)?;
+                self.pop_n(1);
+                Some(self.emit_jump(Op::JumpIfFalse))
+            }
         };
-        // `continue`'s target — the position between body and update — isn't
-        // known until the body has compiled, so it starts `None`; any
-        // `continue` compiled against this frame defers through
-        // `continue_sites` and gets patched below, right before the update.
         self.loop_frames.push(LoopFrame {
             labels,
             continue_target: None,

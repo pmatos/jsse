@@ -1766,6 +1766,32 @@ fn labeled_literal_true_while_omits_repeated_test_dispatch() {
 }
 
 #[test]
+fn labeled_literal_true_for_omits_repeated_test_dispatch() {
+    use crate::ast::ForStatement;
+
+    let body = vec![Statement::Labeled(
+        "loop".to_string(),
+        Box::new(Statement::For(ForStatement {
+            init: None,
+            test: Some(Expression::Literal(Literal::Boolean(true))),
+            update: None,
+            body: Box::new(Statement::Break(Some("loop".to_string()))),
+        })),
+    )];
+    let chunk = compile_body(&body).expect("compile labeled for(;true;)");
+    assert_eq!(chunk.code[0], Op::Safepoint as u8);
+    assert_eq!(
+        chunk.code[1],
+        Op::Jump as u8,
+        "the loop body should start without LoadTrue and JumpIfFalse"
+    );
+    match run(chunk) {
+        Completion::Return(value) if value.is_undefined() => {}
+        other => panic!("expected Return(Undefined), got {other:?}"),
+    }
+}
+
+#[test]
 fn unlabeled_continue_in_while_retests_condition() {
     let source = "var __r = (function(){ var i = 0, n = 0; while (i < 5) { i++; if (i % 2 === 0) continue; n += i; } return n; })();";
     assert_parity_number(source, 9.0);
