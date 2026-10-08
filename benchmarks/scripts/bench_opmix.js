@@ -61,6 +61,42 @@ function mixed(n) {
   return heap32[fp];
 }
 
+// Mandreel's own loop shape (issue #873): a labeled while(true) with a
+// labeled break terminating the loop and a labeled continue skipping part
+// of the body, carrying elem's register traffic. Runs exactly n iterations
+// (the increment and break check happen before the continue), so timing is
+// comparable to the other op-mix variants above.
+function labeledLoop(n) {
+  var fp = 16;
+  var i = 0;
+  loop: while (true) {
+    if (i >= n) break loop;
+    var r0 = heap32[fp];
+    r0 = (r0 + 4) | 0;
+    heap32[fp] = r0;
+    i++;
+    if ((i & 1) === 0) continue loop;
+    var r1 = heap32[(fp + 1)];
+    r1 = (r0 + r1) | 0;
+    r1 = r1 & 65535;
+    heap32[(fp + 1)] = r1;
+  }
+  return heap32[fp];
+}
+
+// Isolates the test and branch dispatch in Mandreel's labeled while(true)
+// shape. Fifty million iterations keep this otherwise tiny body long enough
+// for Date.now() to resolve a small per-iteration change under host load.
+function labeledControl(n) {
+  var i = 0;
+  loop: while (true) {
+    if (i >= n) break loop;
+    i++;
+    continue loop;
+  }
+  return i;
+}
+
 function bench(label, fn, n) {
   fn(1000);
   var t = Date.now();
@@ -72,3 +108,5 @@ bench("arith", arith, N);
 bench("elem", elem, N);
 bench("called", called, N);
 bench("mixed", mixed, N);
+bench("labeledLoop", labeledLoop, N);
+bench("labeledControl", labeledControl, N * 50);
