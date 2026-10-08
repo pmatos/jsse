@@ -753,7 +753,7 @@ impl Interpreter {
             call_ic_hit_count: std::cell::Cell::new(0),
             call_ic_slow_path_count: std::cell::Cell::new(0),
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
-            bytecode_enabled: false,
+            bytecode_enabled: true,
             bytecode_chunks_executed: 0,
             #[cfg(feature = "perf-counters")]
             perf: perf_counters::PerfCounters::default(),

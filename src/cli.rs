@@ -27,9 +27,9 @@ struct Cli {
     #[arg(long = "can-block")]
     can_block: bool,
 
-    /// Enable the bytecode compiler + VM for eligible functions
-    #[arg(long = "bytecode")]
-    bytecode: bool,
+    /// Disable the bytecode compiler + VM (run everything on the tree-walker)
+    #[arg(long = "no-bytecode")]
+    no_bytecode: bool,
 
     /// Enable the Node host-compat syscall floor (issue #229): installs the
     /// internal, non-enumerable `__host_*` globals (byte I/O, OS entropy,
@@ -229,16 +229,16 @@ pub(crate) fn run_main() -> ExitCode {
                 cli.module,
                 None,
                 cli.can_block,
-                cli.bytecode,
+                !cli.no_bytecode,
                 cli.node,
             );
         }
 
         if let Some(path) = &cli.file {
-            return run_file(path, cli.module, cli.can_block, cli.bytecode, cli.node);
+            return run_file(path, cli.module, cli.can_block, !cli.no_bytecode, cli.node);
         }
 
-        let mut interp = new_interp(cli.can_block, cli.bytecode, cli.node);
+        let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node);
         let code = run_repl(&mut interp);
         #[cfg(feature = "perf-counters")]
         report_perf_counters(&interp);
@@ -246,7 +246,7 @@ pub(crate) fn run_main() -> ExitCode {
     }
 
     // With preludes, we need to use a single interpreter instance
-    let mut interp = new_interp(cli.can_block, cli.bytecode, cli.node);
+    let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node);
 
     // Run prelude files as scripts
     for prelude_path in &cli.prelude {

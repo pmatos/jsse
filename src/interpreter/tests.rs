@@ -31,6 +31,17 @@ fn run_script(source: &str) -> Interpreter {
     interp
 }
 
+/// Runs `source` with the bytecode VM disabled — for tests that assert on
+/// tree-walker internals (IC counters, hoist-cache reuse, the eval-depth
+/// guard), which the VM's default-on dispatch never reaches. The `--no-bytecode`
+/// counterpart of the default `run_script`.
+fn run_script_tree_walker(source: &str) -> Interpreter {
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = false;
+    run_step(&mut interp, source);
+    interp
+}
+
 /// Runs `source` as a script on the engine stack — the stack the
 /// `CALL_DEPTH_*`/`EVAL_DEPTH_LIMIT` guards are calibrated against — returning
 /// a `Send`-safe verdict. `Interpreter` and `Completion` are `Rc`-based and not
@@ -41,6 +52,7 @@ fn run_source_on_engine_stack(source: &str) -> Result<(), String> {
     crate::run_on_engine_stack(move || {
         let program = parse_program(source);
         let mut interp = Interpreter::new();
+        interp.bytecode_enabled = false;
         match interp.run(&program) {
             Completion::Throw(err) => Err(interp.format_value(&err)),
             _ => Ok(()),
@@ -2931,7 +2943,7 @@ fn ic_polymorphic_after_two_distinct_objects_at_same_site() {
     // the second promotes the site to a two-entry Poly([a, b]); the third
     // access re-sees `a` and must HIT the poly entry (not fall to the slow
     // path). Correctness AND the hit counter are asserted.
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var a = {x: 1};
         var b = {x: 2};
@@ -2954,7 +2966,7 @@ fn ic_polymorphic_after_two_distinct_objects_at_same_site() {
 fn ic_polymorphic_two_shapes_hit_in_hot_loop() {
     // A site alternating between two long-lived objects must cache both and hit
     // on every steady-state access after the two-iteration warmup.
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var a = {x: 10};
         var b = {x: 20};
@@ -2979,7 +2991,7 @@ fn ic_polymorphic_four_shapes_hit() {
     // Four distinct objects fill the polymorphic slot to its arity; each is
     // re-hit in steady state. Correctness plus a positive hit count prove all
     // four entries are served from the cache.
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var a = {x: 1}, b = {x: 2}, c = {x: 3}, d = {x: 4};
         function read(o) { return o.x; }
@@ -3007,7 +3019,7 @@ fn ic_megamorphic_after_fifth_distinct_shape() {
     // previously-cached object must NOT re-enter the cache and hit. The warmup
     // itself produces no hits (each object is first-seen), so a zero total hit
     // count proves the site went — and stayed — megamorphic.
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var a = {x: 1}, b = {x: 2}, c = {x: 3}, d = {x: 4}, e = {x: 5};
         function read(o) { return o.x; }
@@ -3046,7 +3058,7 @@ fn ic_record_uses_pre_slow_path_slot_snapshot() {
     // never hit. Snapshotting before the slow path yields Empty+None → Empty,
     // so the loop re-primes Mono(a) and hits. A positive hit count proves the
     // site was not wrongly terminalized.
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var a = {x: 1};
         var b = {x: 2};
@@ -3075,7 +3087,7 @@ fn ic_megamorphic_stays_terminal_after_non_cacheable_miss() {
     // Megamorphic and stay there — never demoted back to Empty. If it were
     // demoted, the final hot reads of `a.x` would re-enter the cache and hit.
     // This exercises the `Poly + None -> Megamorphic` transition specifically.
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var a = {x: 1};
         var b = {x: 2};
@@ -3531,7 +3543,7 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
 
 #[test]
 fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         function f(n) { var acc = 0; for (var i = 0; i < n; i++) { acc += i; } return acc; }
         var total = 0;

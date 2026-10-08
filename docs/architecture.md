@@ -1,9 +1,9 @@
 # JSSE Architecture Overview
 
-JSSE is a from-scratch JavaScript engine in Rust. The default execution model is
-a direct AST-walking interpreter. An experimental `--bytecode` mode compiles
-eligible function Bodies to stack bytecode and conservatively falls back to the
-tree-walker for unsupported syntax.
+Execution compiles eligible function Bodies (and script top levels) to stack
+bytecode by default and runs them on a VM, conservatively falling back to the
+tree-walker for unsupported syntax; `--no-bytecode` runs everything on the
+tree-walker.
 
 ## Pipeline
 
