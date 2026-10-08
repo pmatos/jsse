@@ -58,14 +58,13 @@ peels consecutive nested `Labeled` wrappers (`a: b: while (...) {}`) into one
 `Vec<String>` before dispatching to `compile_while`/`compile_for`, rather
 than nesting one frame per label. This mirrors LabelledEvaluation's
 label-set semantics (`sec-runtime-semantics-labelledevaluation`) -- a label
-set, tried independently against the same iteration statement -- and reaches
-the same outcome as the tree-walker's handling of the same construct
-(`exec.rs`'s `Statement::Labeled` arm), though by a different mechanism: the
-tree-walker has no label-set collection step and instead resolves a stacked
-label by letting an unmatched `Completion::Break`/`Continue` propagate
-outward through each enclosing `Statement::Labeled` layer until one's own
-label matches. `break a;` and `break b;` on `a: b: while (...)` must exit
-the same loop, not two different ones.
+set, tried independently against the same iteration statement. For `break`,
+the tree-walker reaches the same result by propagating an unmatched
+`Completion::Break` through each enclosing `Statement::Labeled` layer until
+the target matches. `break a;` and `break b;` on `a: b: while (...)` must
+exit the same loop, not two different ones. JSSE's parser currently rejects
+`continue a;` in that stacked-label example before either execution path
+runs, so this PR does not establish source-level support for that form.
 
 **Labels on non-loop statements stay unsupported.** `Statement::Labeled`
 dispatches to `compile_while`/`compile_for` only when the peeled statement is
