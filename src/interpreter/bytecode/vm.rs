@@ -273,21 +273,21 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                let local_value = {
+                let (local_value, strict) = {
                     let scope = env.borrow();
-                    if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
-                        scope
-                            .bindings
-                            .get(name.as_ref())
-                            .and_then(|binding| binding.initialized.then(|| binding.value.clone()))
-                    } else {
-                        None
-                    }
+                    let value =
+                        if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
+                            scope.bindings.get(name.as_ref()).and_then(|binding| {
+                                binding.initialized.then(|| binding.value.clone())
+                            })
+                        } else {
+                            None
+                        };
+                    (value, scope.strict)
                 };
                 if let Some(value) = local_value {
                     push_value(interp, &mut stack, value);
                 } else {
-                    let strict = env.borrow().strict;
                     match interp.resolve_identifier(name, env, strict) {
                         Completion::Normal(v) => push_value(interp, &mut stack, v),
                         abrupt => return abrupt,
@@ -354,25 +354,17 @@ fn run_chunk_inner(
                 let id_ref = refs
                     .pop()
                     .expect("reference stack underflow on StoreResolvedName");
-                let value = stack
-                    .last()
-                    .expect("stack underflow on StoreResolvedName")
-                    .clone();
+                let value = stack.last().expect("stack underflow on StoreResolvedName");
                 let local_store = if let IdentifierRef::SpecificEnv(local_env) = &id_ref {
                     let mut scope = local_env.borrow_mut();
-                    if scope.global_object_id.is_none() && scope.indirect_bindings.is_none() {
-                        if let Some(binding) = scope.bindings.get_mut(name.as_ref()) {
-                            if binding.initialized
-                                && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
-                            {
-                                binding.value = value.clone();
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
+                    if scope.global_object_id.is_none()
+                        && scope.indirect_bindings.is_none()
+                        && let Some(binding) = scope.bindings.get_mut(name.as_ref())
+                        && binding.initialized
+                        && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
+                    {
+                        binding.value = value.clone();
+                        true
                     } else {
                         false
                     }
@@ -380,7 +372,8 @@ fn run_chunk_inner(
                     false
                 };
                 if !local_store
-                    && let Completion::Throw(e) = interp.put_value_by_ref(name, value, &id_ref, env)
+                    && let Completion::Throw(e) =
+                        interp.put_value_by_ref(name, value.clone(), &id_ref, env)
                 {
                     return Completion::Throw(e);
                 }
