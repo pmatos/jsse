@@ -84,6 +84,19 @@ function labeledLoop(n) {
   return heap32[fp];
 }
 
+// Isolates the test and branch dispatch in Mandreel's labeled while(true)
+// shape. Fifty million iterations keep this otherwise tiny body long enough
+// for Date.now() to resolve a small per-iteration change under host load.
+function labeledControl(n) {
+  var i = 0;
+  loop: while (true) {
+    if (i >= n) break loop;
+    i++;
+    continue loop;
+  }
+  return i;
+}
+
 function bench(label, fn, n) {
   fn(1000);
   var t = Date.now();
@@ -96,3 +109,4 @@ bench("elem", elem, N);
 bench("called", called, N);
 bench("mixed", mixed, N);
 bench("labeledLoop", labeledLoop, N);
+bench("labeledControl", labeledControl, N * 50);
