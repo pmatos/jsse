@@ -272,11 +272,26 @@ fn run_chunk_inner(
             Op::LoadName => {
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
-                let name = chunk.names[idx as usize].clone();
-                let strict = env.borrow().strict;
-                match interp.resolve_identifier(&name, env, strict) {
-                    Completion::Normal(v) => push_value(interp, &mut stack, v),
-                    abrupt => return abrupt,
+                let name = &chunk.names[idx as usize];
+                let (local_value, strict) = {
+                    let scope = env.borrow();
+                    let value =
+                        if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
+                            scope.bindings.get(name.as_ref()).and_then(|binding| {
+                                binding.initialized.then(|| binding.value.clone())
+                            })
+                        } else {
+                            None
+                        };
+                    (value, scope.strict)
+                };
+                if let Some(value) = local_value {
+                    push_value(interp, &mut stack, value);
+                } else {
+                    match interp.resolve_identifier(name, env, strict) {
+                        Completion::Normal(v) => push_value(interp, &mut stack, v),
+                        abrupt => return abrupt,
+                    }
                 }
             }
             Op::LoadThis => match interp.resolve_this_binding(env) {
@@ -305,9 +320,19 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                match interp.resolve_identifier_ref(name, env) {
-                    Ok(id_ref) => refs.push(id_ref),
-                    Err(e) => return Completion::Throw(e),
+                let local_ref = {
+                    let scope = env.borrow();
+                    scope.with_object.is_none()
+                        && scope.indirect_bindings.is_none()
+                        && scope.bindings.contains_key(name.as_ref())
+                };
+                if local_ref {
+                    refs.push(IdentifierRef::SpecificEnv(env.clone()));
+                } else {
+                    match interp.resolve_identifier_ref(name, env) {
+                        Ok(id_ref) => refs.push(id_ref),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 }
             }
             Op::LoadResolvedName => {
@@ -329,11 +354,27 @@ fn run_chunk_inner(
                 let id_ref = refs
                     .pop()
                     .expect("reference stack underflow on StoreResolvedName");
-                let value = stack
-                    .last()
-                    .expect("stack underflow on StoreResolvedName")
-                    .clone();
-                if let Completion::Throw(e) = interp.put_value_by_ref(name, value, &id_ref, env) {
+                let value = stack.last().expect("stack underflow on StoreResolvedName");
+                let local_store = if let IdentifierRef::SpecificEnv(local_env) = &id_ref {
+                    let mut scope = local_env.borrow_mut();
+                    if scope.global_object_id.is_none()
+                        && scope.indirect_bindings.is_none()
+                        && let Some(binding) = scope.bindings.get_mut(name.as_ref())
+                        && binding.initialized
+                        && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
+                    {
+                        binding.value = value.clone();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !local_store
+                    && let Completion::Throw(e) =
+                        interp.put_value_by_ref(name, value.clone(), &id_ref, env)
+                {
                     return Completion::Throw(e);
                 }
             }
@@ -453,6 +494,17 @@ fn run_chunk_inner(
                 }
             }
             Op::SetElement => {
+                let len = stack.len();
+                if len >= 3
+                    && let Some(index) = stack[len - 2].as_number()
+                    && interp.numeric_index_fast_set(&stack[len - 3], index, &stack[len - 1])
+                {
+                    let rhs = pop_value(interp, &mut stack, "stack underflow on SetElement rhs");
+                    pop_value(interp, &mut stack, "stack underflow on SetElement key");
+                    pop_value(interp, &mut stack, "stack underflow on SetElement base");
+                    push_value(interp, &mut stack, rhs);
+                    continue;
+                }
                 let gc_frame = root_operand_stack(interp, &stack);
                 let rhs = stack.pop().expect("stack underflow on SetElement rhs");
                 let key_val = stack.pop().expect("stack underflow on SetElement key");

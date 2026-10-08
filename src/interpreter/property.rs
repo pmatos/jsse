@@ -179,6 +179,35 @@ impl Interpreter {
         None
     }
 
+    /// Complete a computed numeric-index write when both the index and value
+    /// are already primitive numbers and the receiver is an in-bounds numeric
+    /// TypedArray. No user conversion or property trap is possible here.
+    pub(super) fn numeric_index_fast_set(
+        &self,
+        obj_val: &JsValue,
+        index: f64,
+        value: &JsValue,
+    ) -> bool {
+        if value.as_number().is_none() {
+            return false;
+        }
+        let Some(obj_id) = obj_val.as_object_id() else {
+            return false;
+        };
+        let Some(obj_rc) = self.get_object_cell(obj_id) else {
+            return false;
+        };
+        let obj_borrow = obj_rc.borrow();
+        let Some(ta) = obj_borrow.typed_array_info() else {
+            return false;
+        };
+        if ta.kind.is_bigint() || !crate::interpreter::types::is_valid_integer_index(ta, index) {
+            return false;
+        }
+        crate::interpreter::types::typed_array_set_index(ta, index as usize, value);
+        true
+    }
+
     fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,

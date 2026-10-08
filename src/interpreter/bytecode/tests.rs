@@ -1635,6 +1635,11 @@ fn script_completion_composes_with_break_and_continue() {
     // Target matches the label, which happens at the outer (labeled) loop,
     // carrying the inner loop's reset-to-undefined V out as the final value.
     assert_script_completion_undefined("x: while (true) { 5; while (true) { break x; } }");
+    // DoWhileLoopEvaluation evaluates the body before its test and carries
+    // the body's last value through a matching break or a false test.
+    assert_script_completion_number("do { 4; break; } while (false);", 4.0);
+    assert_script_completion_number("do { 3; } while (false);", 3.0);
+    assert_script_completion_undefined("1; do { break; } while (false);");
 }
 
 #[test]
@@ -1808,6 +1813,12 @@ fn unlabeled_break_and_continue_in_for_loop() {
 fn labeled_while_with_matching_break_and_continue() {
     let source = "var __r = (function(){ var n = 0; outer: while (true) { n++; if (n === 2) continue outer; if (n === 4) break outer; } return n; })();";
     assert_parity_number(source, 4.0);
+}
+
+#[test]
+fn labeled_do_while_continue_evaluates_test_before_next_body() {
+    let source = "var __r = (function(){ var i = 0, tests = 0; loop: do { i++; if (i < 3) continue loop; } while (++tests < 2); return i * 10 + tests; })();";
+    assert_parity_number(source, 22.0);
 }
 
 #[test]

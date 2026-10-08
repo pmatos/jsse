@@ -1,8 +1,8 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
 use crate::ast::{
-    AssignOp, BinaryOp, CallSiteId, Expression, ForInit, ForStatement, Literal, LogicalOp,
-    MemberProperty, Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
+    AssignOp, BinaryOp, CallSiteId, DoWhileStatement, Expression, ForInit, ForStatement, Literal,
+    LogicalOp, MemberProperty, Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
     WhileStatement,
 };
 use crate::types::JsString;
@@ -23,7 +23,7 @@ enum CompileGoal {
     Script,
 }
 
-/// Tracks one in-progress `while`/`for` loop so `break`/`continue` can
+/// Tracks one in-progress loop so `break`/`continue` can
 /// resolve their target without re-walking the AST. Stacked labels on one
 /// loop (`a: b: while (...) {}`) collect into a single frame's `labels`,
 /// mirroring LabelledEvaluation's label-set semantics (`sec-runtime-semantics-labelledevaluation`)
@@ -32,10 +32,8 @@ struct LoopFrame {
     labels: Vec<String>,
     /// `while`'s continue target (`loop_start`) is known before the body
     /// compiles, so it starts `Some` and `continue` lowers to a direct
-    /// backward jump. `for`'s continue target — the position between body
-    /// and update — isn't known until the body has finished compiling, so it
-    /// starts `None`; any `continue` compiled while it's still `None` defers
-    /// through `continue_sites` instead.
+    /// backward jump. `for` and `do-while` continue targets follow their
+    /// bodies, so they start `None` and defer through `continue_sites`.
     continue_target: Option<usize>,
     continue_sites: Vec<usize>,
     /// The position after the loop is never known while compiling the body,
@@ -677,6 +675,7 @@ impl Compiler {
                 Ok(())
             }
             Statement::While(while_stmt) => self.compile_while(while_stmt, Vec::new()),
+            Statement::DoWhile(do_while_stmt) => self.compile_do_while(do_while_stmt, Vec::new()),
             Statement::For(for_stmt) => self.compile_for(for_stmt, Vec::new()),
             Statement::Labeled(label, inner) => {
                 let mut labels = vec![label.clone()];
@@ -687,6 +686,9 @@ impl Compiler {
                 }
                 match current {
                     Statement::While(while_stmt) => self.compile_while(while_stmt, labels),
+                    Statement::DoWhile(do_while_stmt) => {
+                        self.compile_do_while(do_while_stmt, labels)
+                    }
                     Statement::For(for_stmt) => self.compile_for(for_stmt, labels),
                     _ => Err(CompileError::Unsupported("statement:Labeled")),
                 }
@@ -815,6 +817,44 @@ impl Compiler {
             frame.continue_sites.is_empty(),
             "while's continue resolves immediately, never deferred"
         );
+        for site in frame.break_sites {
+            self.patch_jump(site)?;
+        }
+        Ok(())
+    }
+
+    fn compile_do_while(
+        &mut self,
+        do_while_stmt: &DoWhileStatement,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        // DoWhileLoopEvaluation starts V at undefined and evaluates its test
+        // only after the body, including after a matching continue.
+        self.reset_script_completion();
+        let loop_start = self.code.len();
+        self.loop_frames.push(LoopFrame {
+            labels,
+            continue_target: None,
+            continue_sites: Vec::new(),
+            break_sites: Vec::new(),
+        });
+        self.compile_statement(&do_while_stmt.body)?;
+        let frame = self
+            .loop_frames
+            .pop()
+            .expect("pushed above, not re-entrant");
+        for site in frame.continue_sites {
+            self.patch_jump(site)?;
+        }
+        if Self::test_always_true(Some(&do_while_stmt.test)) {
+            self.emit_jump_to(Op::Jump, loop_start)?;
+        } else {
+            self.compile_expr(&do_while_stmt.test)?;
+            self.pop_n(1);
+            let exit = self.emit_jump(Op::JumpIfFalse);
+            self.emit_jump_to(Op::Jump, loop_start)?;
+            self.patch_jump(exit)?;
+        }
         for site in frame.break_sites {
             self.patch_jump(site)?;
         }
