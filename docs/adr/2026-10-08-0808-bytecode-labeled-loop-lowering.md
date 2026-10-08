@@ -43,6 +43,14 @@ records a placeholder `emit_jump` site in `continue_sites`, which
 update. `break` always defers through `break_sites` in both loop kinds,
 since the post-loop position is never known while the body compiles.
 
+**A literal `while(true)` omits its test bytecode.** When the test AST is
+exactly the boolean literal `true`, `compile_while` emits the body and its
+backward jump without `LoadTrue` or `JumpIfFalse`. The loop's continue target
+is then the body start; break patch sites still target the point after the
+backward jump. The literal has no side effects, and the backward jump still
+reaches the VM's GC safepoint. Other while tests keep the generic lowering.
+This saves two VM dispatches per iteration in Mandreel's generated loops.
+
 **Stacked labels on one loop share a single frame.** `Statement::Labeled`
 peels consecutive nested `Labeled` wrappers (`a: b: while (...) {}`) into one
 `Vec<String>` before dispatching to `compile_while`/`compile_for`, rather
