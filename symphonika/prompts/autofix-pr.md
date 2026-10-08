@@ -32,16 +32,17 @@ if you need the PR number — do not assume one. Stay on branch
   modify the `spec/` or `test262/` submodules either.
 - If you genuinely cannot make progress (e.g. the failure requires a
   product decision), post a `gh pr comment` on the PR explaining what
-  blocked you and **exit non-zero (e.g. `exit 1`)**. A non-zero exit
-  routes the FSM through `provider_success: false` to the `to: failed`
-  catch-all and terminates the run as `blocked`. Exiting 0 here would
-  set `provider_success: true`, return the FSM to `wait_for_pr`, which
-  would observe the same failing PR signals and route straight back
-  into this state — an infinite loop. Do not self-apply `sym:human-needed`.
+  blocked you, then end with a `blocked` claim carrying the same
+  explanation. A Bash tool call's `exit 1` only ends that subshell, not the
+  provider session — ending without a `blocked` claim would silently return
+  the FSM to `wait_for_pr`, which would observe the same failing PR signals
+  and route straight back into this state, an infinite loop. The final
+  claim is what the FSM actually gates this state's advance on. Do not
+  self-apply `sym:human-needed`.
 
 ## Exit
 
-Exit 0 once the local quality gate passes and you have pushed the fix. The
-orchestrator will re-enter the wait state, re-check the PR, and either
-loop back here, advance to merge, or terminate based on the next PR
-signal snapshot.
+Once the local quality gate passes and you have pushed the fix, end with a
+`success` claim. The orchestrator will re-enter the wait state, re-check
+the PR, and either loop back here, advance to merge, or terminate based on
+the next PR signal snapshot.

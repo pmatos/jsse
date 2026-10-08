@@ -11,8 +11,8 @@ against it, apply any fixes it finds, and exit.
 request on branch `{{branch.name}}`.** Let it apply its own findings to the
 working tree.
 
-If it made no changes, exit 0 without committing. If it changed any file,
-run the full local quality gate from `impl.md` step 4 — `./scripts/lint.sh`,
+If it made no changes, do not commit and end with a `success` claim. If it changed
+any file, run the full local quality gate from `impl.md` step 4 — `./scripts/lint.sh`,
 `cargo build --release`, `cargo test --release`, and the full `uv run python
 scripts/run-test262.py -j 32` — and only then commit and push to
 `{{branch.name}}`. The review fixes it applied landed after the
@@ -40,17 +40,16 @@ if you need the PR number — do not assume one. Stay on branch
   modify the `spec/` or `test262/` submodules either.
 - If `/code-review --fix` genuinely cannot proceed (e.g. no open PR found
   for this branch), post `gh issue comment {{issue.number}}` explaining
-  what blocked you, write the same explanation to
-  `{{workspace.path}}/EVIDENCE.md`, and **exit non-zero (e.g. `exit 1`)**.
-  Comment on the **issue**, not the PR: the blocking case named above is
-  that no PR exists, and `gh pr comment` resolves its target from the
-  branch's PR — it would fail and post nothing, losing the only record of
-  why the run stopped. A non-zero exit routes the FSM through
-  `provider_success: false` to the `to: failed` catch-all and terminates
-  the run as blocked.
+  what blocked you, then end with a `blocked` claim carrying the same
+  explanation. Comment on the **issue**, not the PR: the blocking case named
+  above is that no PR exists, and `gh pr comment` resolves its target from
+  the branch's PR — it would fail and post nothing, losing the only record
+  of why the run stopped. A Bash tool call's `exit 1` only ends that
+  subshell, not the provider session, so the final claim is what routes the
+  run to its blocked exit.
 
 ## Exit
 
-Exit 0 once `/code-review --fix` has run and any fixes it made are pushed
-(or it found nothing to fix). The orchestrator will advance to the next
-state on success.
+Once `/code-review --fix` has run and any fixes it made are pushed
+(or it found nothing to fix), end with a `success` claim. The orchestrator
+will advance to the next state on success.

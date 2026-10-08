@@ -1,6 +1,6 @@
 # JSSE implementation stage: issue #{{issue.number}} {{issue.title}}
 
-You are the **implementation** agent. A planning pass has written and committed `{{workspace.path}}/PLAN.md`. Read it first. If it is missing or stale, re-derive the slices from the issue body before writing code.
+You are the **implementation** agent. A planning pass has written and committed `{{workspace.path}}/PLAN.md`. Read it first and execute it. If it is missing or stale, re-derive the slices from the issue body (`gh issue view {{issue.number}}`) before writing code.
 
 ## This stage's deliverable is an open PR, not a commit
 
@@ -105,9 +105,9 @@ Then confirm the branch adds nothing but the real change:
 git diff --stat main...HEAD   # must not list PLAN.md
 ```
 
-Do this as your last commit, after the quality gate has passed — you may want to
-re-read the plan up to that point. If `git diff --stat main...HEAD` still lists
-`PLAN.md`, the removal did not land; fix it before opening the PR.
+Do this as your last commit before pushing and opening the PR, after the quality gate has
+passed — you may want to re-read the plan up to that point. If `git diff --stat main...HEAD`
+still lists `PLAN.md`, the removal did not land; fix it before opening the PR.
 
 ## Open the PR
 
@@ -139,19 +139,19 @@ The PR must be **non-draft**. Do not use `--web`, `--draft`, or any flag that op
 - Do **not** apply `needs-human` or any `sym:*` label as an exit strategy. The operator owns those.
 - Do **not** merge the PR, and do **not** wait on it. The orchestrator owns the merge: once the
   PR is open it drives the `wait_for_pr` / `merge` states and squash-merges when checks pass,
-  the branch is mergeable, and there are no unresolved review threads. Exit as soon as the PR
-  is open.
+  the branch is mergeable, and there are no unresolved review threads. Once the PR is open and
+  `agent-ready` is removed, end with a `success` claim.
 
 ## If you cannot proceed
 
-Post one explanatory comment with `gh issue comment {{issue.number}} --body "<what blocked you and what would unblock it>"`, write the same explanation to `{{workspace.path}}/EVIDENCE.md`, and **exit non-zero (e.g. `exit 1`)**. Do not self-apply `needs-human` or any handoff label.
+Post one explanatory comment with `gh issue comment {{issue.number}} --body "<what blocked you and what would unblock it>"`, then end with a `blocked` claim carrying the same explanation. Do not self-apply `needs-human` or any handoff label.
 
-The non-zero exit is what routes this run to `failed`. Exiting 0 sets
-`provider_success: true`, and if you had already committed even one TDD slice the
-`implement` transition's other two gates (`branch_ahead_of_base`,
-`branch_advanced_since_attempt_start`) are satisfied too — so a blocked run would advance to
-`code_review_fix`, which expects an open PR that does not exist. The four repair prompts in
-this contract exit non-zero on their blocked paths for the same reason.
+A Bash tool call's `exit 1` only ends that subshell, not the provider session, so it cannot signal a
+blocked run. The final claim is what the FSM gates this state's advance on: without a `blocked`
+claim, a run that had already committed even one TDD slice satisfies the `implement` transition's
+`branch_ahead_of_base` and `branch_advanced_since_attempt_start` gates and would advance to
+`code_review_fix`, which expects an open PR that does not exist. The four repair prompts in this
+contract end with a `blocked` claim on their blocked paths for the same reason.
 
 ## Defer to this contract
 
