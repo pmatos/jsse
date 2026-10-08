@@ -787,12 +787,37 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
 }
 
 fn class_contains_yield(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
-    class_scope_exprs(super_class, elements).any(expr_contains_yield)
+    class_contains(super_class, elements, SuspensionTarget::Yield)
 }
 
-pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SuspensionTarget {
+    Yield,
+    Await,
+    Either,
+}
+
+fn class_contains(
+    super_class: Option<&Expression>,
+    elements: &[ClassElement],
+    target: SuspensionTarget,
+) -> bool {
+    class_scope_exprs(super_class, elements).any(|expr| expr_contains(expr, target))
+}
+
+/// Find a suspension in the expressions evaluated by this expression.
+/// Function bodies are separate scopes; class heritage and computed keys are
+/// evaluated in the enclosing scope. A nonmatching `yield`/`await` must still
+/// be searched for the other kind inside its operand.
+fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
     match expr {
-        Expression::Yield(_, _) => true,
+        Expression::Yield(inner, _) => {
+            target != SuspensionTarget::Await
+                || inner.as_ref().is_some_and(|e| expr_contains(e, target))
+        }
+        Expression::Await(inner) => {
+            target != SuspensionTarget::Yield || expr_contains(inner, target)
+        }
         Expression::Literal(_)
         | Expression::Identifier(_)
         | Expression::This
@@ -800,49 +825,52 @@ pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
         | Expression::NewTarget
         | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => false,
-        Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_yield),
+        Expression::Array(elems, _) => elems.iter().flatten().any(|e| expr_contains(e, target)),
         Expression::Object(props, _) => props.iter().any(|p| {
-            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_yield(e))
-                || expr_contains_yield(&p.value)
+            matches!(&p.key, PropertyKey::Computed(e) if expr_contains(e, target))
+                || expr_contains(&p.value, target)
         }),
         Expression::Function(_) | Expression::ArrowFunction(_) => false,
-        Expression::Class(c) => class_contains_yield(c.super_class.as_deref(), &c.body),
+        Expression::Class(c) => class_contains(c.super_class.as_deref(), &c.body, target),
         Expression::Unary(_, e)
         | Expression::Typeof(e)
         | Expression::Void(e)
         | Expression::Delete(e)
         | Expression::Spread(e)
-        | Expression::Await(e)
-        | Expression::Update(_, _, e) => expr_contains_yield(e),
+        | Expression::Update(_, _, e) => expr_contains(e, target),
         Expression::Import(e, opts)
         | Expression::ImportDefer(e, opts)
         | Expression::ImportSource(e, opts) => {
-            expr_contains_yield(e) || opts.as_ref().is_some_and(|o| expr_contains_yield(o))
+            expr_contains(e, target) || opts.as_ref().is_some_and(|o| expr_contains(o, target))
         }
         Expression::Binary(_, l, r)
         | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => expr_contains_yield(l) || expr_contains_yield(r),
+        | Expression::Assign(_, l, r) => expr_contains(l, target) || expr_contains(r, target),
         Expression::Conditional(t, c, a) => {
-            expr_contains_yield(t) || expr_contains_yield(c) || expr_contains_yield(a)
+            expr_contains(t, target) || expr_contains(c, target) || expr_contains(a, target)
         }
         Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-            expr_contains_yield(callee) || args.iter().any(expr_contains_yield)
+            expr_contains(callee, target) || args.iter().any(|arg| expr_contains(arg, target))
         }
         Expression::Member(obj, prop, _) => {
-            expr_contains_yield(obj)
-                || matches!(prop, MemberProperty::Computed(e) if expr_contains_yield(e))
+            expr_contains(obj, target)
+                || matches!(prop, MemberProperty::Computed(e) if expr_contains(e, target))
         }
         Expression::OptionalChain(base, chain) => {
-            expr_contains_yield(base) || expr_contains_yield(chain)
+            expr_contains(base, target) || expr_contains(chain, target)
         }
         Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-            exprs.iter().any(expr_contains_yield)
+            exprs.iter().any(|e| expr_contains(e, target))
         }
         Expression::TaggedTemplate(tag, tpl) => {
-            expr_contains_yield(tag) || tpl.expressions.iter().any(expr_contains_yield)
+            expr_contains(tag, target) || tpl.expressions.iter().any(|e| expr_contains(e, target))
         }
-        Expression::Template(tpl) => tpl.expressions.iter().any(expr_contains_yield),
+        Expression::Template(tpl) => tpl.expressions.iter().any(|e| expr_contains(e, target)),
     }
+}
+
+pub(crate) fn expr_contains_yield(expr: &Expression) -> bool {
+    expr_contains(expr, SuspensionTarget::Yield)
 }
 
 pub(crate) fn for_in_of_left_contains_suspension(left: &ForInOfLeft) -> bool {
@@ -892,121 +920,13 @@ fn for_in_of_variable_head_contains_await(left: &ForInOfLeft) -> bool {
 }
 
 pub(crate) fn expr_contains_suspension(expr: &Expression) -> bool {
-    match expr {
-        Expression::Yield(_, _) | Expression::Await(_) => true,
-        Expression::Literal(_)
-        | Expression::Identifier(_)
-        | Expression::This
-        | Expression::Super
-        | Expression::NewTarget
-        | Expression::ImportMeta
-        | Expression::PrivateIdentifier(_) => false,
-        Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_suspension),
-        Expression::Object(props, _) => props.iter().any(|p| {
-            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_suspension(e))
-                || expr_contains_suspension(&p.value)
-        }),
-        Expression::Function(_) | Expression::ArrowFunction(_) => false,
-        Expression::Class(c) => class_contains_suspension(c.super_class.as_deref(), &c.body),
-        Expression::Unary(_, e)
-        | Expression::Typeof(e)
-        | Expression::Void(e)
-        | Expression::Delete(e)
-        | Expression::Spread(e)
-        | Expression::Update(_, _, e) => expr_contains_suspension(e),
-        Expression::Import(e, opts)
-        | Expression::ImportDefer(e, opts)
-        | Expression::ImportSource(e, opts) => {
-            expr_contains_suspension(e)
-                || opts.as_ref().is_some_and(|o| expr_contains_suspension(o))
-        }
-        Expression::Binary(_, l, r)
-        | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => expr_contains_suspension(l) || expr_contains_suspension(r),
-        Expression::Conditional(t, c, a) => {
-            expr_contains_suspension(t)
-                || expr_contains_suspension(c)
-                || expr_contains_suspension(a)
-        }
-        Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-            expr_contains_suspension(callee) || args.iter().any(expr_contains_suspension)
-        }
-        Expression::Member(obj, prop, _) => {
-            expr_contains_suspension(obj)
-                || matches!(prop, MemberProperty::Computed(e) if expr_contains_suspension(e))
-        }
-        Expression::OptionalChain(base, chain) => {
-            expr_contains_suspension(base) || expr_contains_suspension(chain)
-        }
-        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-            exprs.iter().any(expr_contains_suspension)
-        }
-        Expression::TaggedTemplate(tag, tpl) => {
-            expr_contains_suspension(tag) || tpl.expressions.iter().any(expr_contains_suspension)
-        }
-        Expression::Template(tpl) => tpl.expressions.iter().any(expr_contains_suspension),
-    }
-}
-
-fn class_contains_await(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
-    class_scope_exprs(super_class, elements).any(expr_contains_await)
+    expr_contains(expr, SuspensionTarget::Either)
 }
 
 /// Like `expr_contains_yield`, but for `await`: a `yield` is only looked
 /// through, never reported.
 pub(crate) fn expr_contains_await(expr: &Expression) -> bool {
-    match expr {
-        Expression::Await(_) => true,
-        Expression::Literal(_)
-        | Expression::Identifier(_)
-        | Expression::This
-        | Expression::Super
-        | Expression::NewTarget
-        | Expression::ImportMeta
-        | Expression::PrivateIdentifier(_) => false,
-        Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_await),
-        Expression::Object(props, _) => props.iter().any(|p| {
-            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_await(e))
-                || expr_contains_await(&p.value)
-        }),
-        Expression::Function(_) | Expression::ArrowFunction(_) => false,
-        Expression::Class(c) => class_contains_await(c.super_class.as_deref(), &c.body),
-        Expression::Yield(inner, _) => inner.as_ref().is_some_and(|e| expr_contains_await(e)),
-        Expression::Unary(_, e)
-        | Expression::Typeof(e)
-        | Expression::Void(e)
-        | Expression::Delete(e)
-        | Expression::Spread(e)
-        | Expression::Update(_, _, e) => expr_contains_await(e),
-        Expression::Import(e, opts)
-        | Expression::ImportDefer(e, opts)
-        | Expression::ImportSource(e, opts) => {
-            expr_contains_await(e) || opts.as_ref().is_some_and(|o| expr_contains_await(o))
-        }
-        Expression::Binary(_, l, r)
-        | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => expr_contains_await(l) || expr_contains_await(r),
-        Expression::Conditional(t, c, a) => {
-            expr_contains_await(t) || expr_contains_await(c) || expr_contains_await(a)
-        }
-        Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-            expr_contains_await(callee) || args.iter().any(expr_contains_await)
-        }
-        Expression::Member(obj, prop, _) => {
-            expr_contains_await(obj)
-                || matches!(prop, MemberProperty::Computed(e) if expr_contains_await(e))
-        }
-        Expression::OptionalChain(base, chain) => {
-            expr_contains_await(base) || expr_contains_await(chain)
-        }
-        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-            exprs.iter().any(expr_contains_await)
-        }
-        Expression::TaggedTemplate(tag, tpl) => {
-            expr_contains_await(tag) || tpl.expressions.iter().any(expr_contains_await)
-        }
-        Expression::Template(tpl) => tpl.expressions.iter().any(expr_contains_await),
-    }
+    expr_contains(expr, SuspensionTarget::Await)
 }
 
 fn pattern_any_expr(pattern: &Pattern, has: &dyn Fn(&Expression) -> bool) -> bool {
@@ -1572,7 +1492,7 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
 }
 
 fn class_contains_suspension(super_class: Option<&Expression>, elements: &[ClassElement]) -> bool {
-    class_scope_exprs(super_class, elements).any(expr_contains_suspension)
+    class_contains(super_class, elements, SuspensionTarget::Either)
 }
 
 #[cfg(test)]
@@ -1917,6 +1837,47 @@ mod tests {
 
         assert!(contains_yield(&stmt_with_yield));
         assert!(!contains_yield(&stmt_without_yield));
+    }
+
+    #[test]
+    fn expression_suspension_query_preserves_nested_operands_and_class_scope() {
+        let yield_await = Expression::Yield(Some(ExprBox::new(make_await())), false);
+        for target in [
+            SuspensionTarget::Yield,
+            SuspensionTarget::Await,
+            SuspensionTarget::Either,
+        ] {
+            assert!(expr_contains(&yield_await, target));
+        }
+
+        let await_yield = Expression::Await(ExprBox::new(make_yield(false)));
+        for target in [
+            SuspensionTarget::Yield,
+            SuspensionTarget::Await,
+            SuspensionTarget::Either,
+        ] {
+            assert!(expr_contains(&await_yield, target));
+        }
+
+        assert!(expr_contains(&make_yield(false), SuspensionTarget::Yield));
+        assert!(!expr_contains(&make_yield(false), SuspensionTarget::Await));
+        assert!(expr_contains(&make_await(), SuspensionTarget::Await));
+        assert!(!expr_contains(&make_await(), SuspensionTarget::Yield));
+
+        let class = Expression::Class(ClassExpr {
+            name: None,
+            super_class: Some(Box::new(make_await())),
+            body: vec![computed_method(make_yield(false))],
+            source_text: None,
+        });
+        assert!(expr_contains(&class, SuspensionTarget::Yield));
+        assert!(expr_contains(&class, SuspensionTarget::Await));
+        assert!(expr_contains(&class, SuspensionTarget::Either));
+
+        let mut nested = make_function_expr();
+        nested.body = Body::new(vec![Statement::Expression(make_await())]);
+        let function = Expression::Function(nested);
+        assert!(!expr_contains(&function, SuspensionTarget::Either));
     }
 
     #[test]
