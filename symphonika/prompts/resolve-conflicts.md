@@ -38,15 +38,17 @@ second PR.
   editing it mid-run changes the rules you are running under. Do not
   modify the `spec/` or `test262/` submodules either.
 - If conflicts are genuinely unresolvable without a product decision,
-  post a `gh pr comment` describing what blocked you and **exit non-zero
-  (e.g. `exit 1`)**. A non-zero exit routes the FSM through
-  `provider_success: false` to the `to: failed` catch-all and terminates
-  the run as `blocked`. Exiting 0 here would set `provider_success: true`,
-  return the FSM to `wait_for_pr`, which would observe the same
-  `mergeable: false` signal and route straight back into this state —
-  an infinite loop. Do not self-apply `sym:human-needed`.
+  post a `gh pr comment` describing what blocked you, then end with a
+  `blocked` claim carrying the same explanation. A Bash tool call's
+  `exit 1` only ends that subshell, not the provider session — ending
+  without a `blocked` claim would silently return the FSM to
+  `wait_for_pr`, which would observe the same `mergeable: false` signal and
+  route straight back into this state, an infinite loop. The final claim is
+  what the FSM actually gates this state's advance on. Do not self-apply
+  `sym:human-needed`.
 
 ## Exit
 
-Exit 0 once the rebase/merge is clean and pushed. The orchestrator will
-re-check `mergeable` on the next tick and route accordingly.
+Once the rebase/merge is clean and pushed, end with a `success` claim. The
+orchestrator will re-check `mergeable` on the next tick and route
+accordingly.
