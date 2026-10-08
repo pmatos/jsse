@@ -1616,6 +1616,28 @@ fn script_statement_list_completion_matches_tree_walker() {
 }
 
 #[test]
+fn script_completion_composes_with_break_and_continue() {
+    // WhileLoopEvaluation's UpdateEmpty(stmtResult, V) step: the break
+    // completion's Value is non-empty (1, from the body's own last
+    // completion), so UpdateEmpty leaves it as-is.
+    assert_script_completion_number("while (true) { 1; break; }", 1.0);
+    // Entering the while resets V to undefined (reset_script_completion);
+    // the bare `break;`'s completion Value stays empty through the body, so
+    // UpdateEmpty sets it to that reset V, overwriting the `1;` before the
+    // loop.
+    assert_script_completion_undefined("1; while (true) { break; }");
+    // ForBodyEvaluation: continue still updates V from the body's last
+    // completion (`i`) each iteration, then runs the update, before the
+    // test ends the loop at i === 3 with V's last-set value (2).
+    assert_script_completion_number("for (var i = 0; i < 3; i++) { i; continue; }", 2.0);
+    // The inner loop's own reset sets its V to undefined before `break x`
+    // fires; LabelledEvaluation only converts a break to Normal(Value) when
+    // Target matches the label, which happens at the outer (labeled) loop,
+    // carrying the inner loop's reset-to-undefined V out as the final value.
+    assert_script_completion_undefined("x: while (true) { 5; while (true) { break x; } }");
+}
+
+#[test]
 fn script_completion_value_is_rooted_across_nested_gc() {
     use crate::parser::Parser;
 
@@ -1711,10 +1733,56 @@ fn lexical_for_loop_falls_back_to_tree_walker() {
 }
 
 #[test]
-fn loop_with_break_falls_back_to_tree_walker() {
-    let source = "var __r = (function(){ var i = 0; while (true) { i++; break; } return i; })();";
+fn loop_with_break_takes_bytecode_path() {
+    let source =
+        "var __r = (function(){ var i = 0; while (true) { i++; if (i > 2) break; } return i; })();";
     let (value, count) = eval_with_mode(source, true);
-    assert_eq!(count, 0, "break lowering is not part of this slice");
+    assert!(count >= 1, "break lowering must take the bytecode path");
+    assert_eq!(value.as_number(), Some(3.0));
+}
+
+#[test]
+fn unlabeled_continue_in_while_retests_condition() {
+    let source = "var __r = (function(){ var i = 0, n = 0; while (i < 5) { i++; if (i % 2 === 0) continue; n += i; } return n; })();";
+    assert_parity_number(source, 9.0);
+}
+
+#[test]
+fn unlabeled_break_and_continue_in_for_loop() {
+    // continue skips n += i at i===2; break stops before n += i at i===5.
+    let source = "var __r = (function(){ var n = 0; for (var i = 0; i < 10; i++) { if (i === 2) continue; if (i === 5) break; n += i; } return n; })();";
+    assert_parity_number(source, 8.0);
+}
+
+#[test]
+fn labeled_while_with_matching_break_and_continue() {
+    let source = "var __r = (function(){ var n = 0; outer: while (true) { n++; if (n === 2) continue outer; if (n === 4) break outer; } return n; })();";
+    assert_parity_number(source, 4.0);
+}
+
+#[test]
+fn labeled_continue_reaches_past_inner_loop() {
+    let source = "var __r = (function(){ var n = 0; outer: for (var i = 0; i < 3; i++) { for (var j = 0; j < 3; j++) { if (j === 1) continue outer; n++; } } return n; })();";
+    assert_parity_number(source, 3.0);
+}
+
+#[test]
+fn stacked_labels_on_one_loop_either_label_breaks_it() {
+    let source_a = "var __r = (function(){ var n = 0; a: b: while (n < 5) { n++; if (n === 3) break a; } return n; })();";
+    assert_parity_number(source_a, 3.0);
+
+    let source_b = "var __r = (function(){ var n = 0; a: b: while (n < 5) { n++; if (n === 3) break b; } return n; })();";
+    assert_parity_number(source_b, 3.0);
+}
+
+#[test]
+fn labeled_non_loop_statement_still_bails_to_tree_walker() {
+    let source = "var __r = (function(){ outer: { break outer; } return 1; })();";
+    let (value, count) = eval_with_mode(source, true);
+    assert_eq!(
+        count, 0,
+        "labeled non-loop statements are out of scope for this slice"
+    );
     assert_eq!(value.as_number(), Some(1.0));
 }
 

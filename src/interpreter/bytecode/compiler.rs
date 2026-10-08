@@ -1,8 +1,9 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
 use crate::ast::{
-    AssignOp, BinaryOp, CallSiteId, Expression, ForInit, Literal, LogicalOp, MemberProperty,
-    Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
+    AssignOp, BinaryOp, CallSiteId, Expression, ForInit, ForStatement, Literal, LogicalOp,
+    MemberProperty, Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
+    WhileStatement,
 };
 use crate::types::JsString;
 
@@ -22,6 +23,26 @@ enum CompileGoal {
     Script,
 }
 
+/// Tracks one in-progress `while`/`for` loop so `break`/`continue` can
+/// resolve their target without re-walking the AST. Stacked labels on one
+/// loop (`a: b: while (...) {}`) collect into a single frame's `labels`,
+/// mirroring LabelledEvaluation's label-set semantics (`sec-runtime-semantics-labelledevaluation`)
+/// rather than nesting one frame per label.
+struct LoopFrame {
+    labels: Vec<String>,
+    /// `while`'s continue target (`loop_start`) is known before the body
+    /// compiles, so it starts `Some` and `continue` lowers to a direct
+    /// backward jump. `for`'s continue target — the position between body
+    /// and update — isn't known until the body has finished compiling, so it
+    /// starts `None`; any `continue` compiled while it's still `None` defers
+    /// through `continue_sites` instead.
+    continue_target: Option<usize>,
+    continue_sites: Vec<usize>,
+    /// The position after the loop is never known while compiling the body,
+    /// in either loop kind, so `break` always defers through here.
+    break_sites: Vec<usize>,
+}
+
 struct Compiler {
     goal: CompileGoal,
     code: Vec<u8>,
@@ -39,6 +60,10 @@ struct Compiler {
     /// runs `pc` off the end of `code` and panics in the VM dispatch loop. The
     /// motivating case is a one-armed `if` whose consequent ends in `return`.
     max_jump_target: usize,
+    /// Innermost loop last. `break`/`continue` resolution for the unlabeled
+    /// form reads the last entry; the labeled form searches outward from the
+    /// end via `resolve_loop_frame`.
+    loop_frames: Vec<LoopFrame>,
 }
 
 impl Compiler {
@@ -54,6 +79,7 @@ impl Compiler {
             current_refs: 0,
             max_refs: 0,
             max_jump_target: 0,
+            loop_frames: Vec::new(),
         }
     }
 
@@ -650,58 +676,23 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Statement::While(while_stmt) => {
-                // WhileLoopEvaluation starts its local V at undefined and
-                // updates it only when the body produces a non-empty value.
-                self.reset_script_completion();
-                let loop_start = self.code.len();
-                self.compile_expr(&while_stmt.test)?;
-                self.pop_n(1);
-                let exit = self.emit_jump(Op::JumpIfFalse);
-                self.compile_statement(&while_stmt.body)?;
-                debug_assert_eq!(self.current_stack, 0);
-                debug_assert_eq!(self.current_refs, 0);
-                self.emit_jump_to(Op::Jump, loop_start)?;
-                self.patch_jump(exit)?;
-                Ok(())
+            Statement::While(while_stmt) => self.compile_while(while_stmt, Vec::new()),
+            Statement::For(for_stmt) => self.compile_for(for_stmt, Vec::new()),
+            Statement::Labeled(label, inner) => {
+                let mut labels = vec![label.clone()];
+                let mut current: &Statement = inner;
+                while let Statement::Labeled(next_label, next_inner) = current {
+                    labels.push(next_label.clone());
+                    current = next_inner;
+                }
+                match current {
+                    Statement::While(while_stmt) => self.compile_while(while_stmt, labels),
+                    Statement::For(for_stmt) => self.compile_for(for_stmt, labels),
+                    _ => Err(CompileError::Unsupported("statement:Labeled")),
+                }
             }
-            Statement::For(for_stmt) => {
-                // ForBodyEvaluation has the same V accumulator semantics as
-                // while. Reset once before the initializer, not at the loop
-                // backedge, so later empty iterations retain the prior V.
-                self.reset_script_completion();
-                if let Some(init) = &for_stmt.init {
-                    match init {
-                        ForInit::Variable(decl) => self.compile_var_declaration(decl)?,
-                        ForInit::Expression(expr) => {
-                            self.compile_expr(expr)?;
-                            self.emit(Op::Pop);
-                            self.pop_n(1);
-                        }
-                    }
-                }
-                let loop_start = self.code.len();
-                let exit = if let Some(test) = &for_stmt.test {
-                    self.compile_expr(test)?;
-                    self.pop_n(1);
-                    Some(self.emit_jump(Op::JumpIfFalse))
-                } else {
-                    None
-                };
-                self.compile_statement(&for_stmt.body)?;
-                if let Some(update) = &for_stmt.update {
-                    self.compile_expr(update)?;
-                    self.emit(Op::Pop);
-                    self.pop_n(1);
-                }
-                debug_assert_eq!(self.current_stack, 0);
-                debug_assert_eq!(self.current_refs, 0);
-                self.emit_jump_to(Op::Jump, loop_start)?;
-                if let Some(exit) = exit {
-                    self.patch_jump(exit)?;
-                }
-                Ok(())
-            }
+            Statement::Break(label) => self.compile_break(label.as_deref()),
+            Statement::Continue(label) => self.compile_continue(label.as_deref()),
             Statement::Return(_) if self.goal == CompileGoal::Script => {
                 Err(CompileError::Unsupported("return in script"))
             }
@@ -726,6 +717,161 @@ impl Compiler {
             }
             _ => Err(CompileError::Unsupported(statement_kind(stmt))),
         }
+    }
+
+    /// Resolves `break`/`continue`'s target loop frame. Unlabeled forms bind
+    /// to the innermost (last-pushed) frame; labeled forms search outward so
+    /// a label on an outer loop is reachable past an intervening unlabeled
+    /// inner loop (slice 5). The parser's early-error checks
+    /// (`sec-continue-statement-static-semantics-containsundefinedcontinuetarget`,
+    /// and `break`'s analogous rule) guarantee a labeled form always names an
+    /// enclosing loop that compiled successfully — this only returns `Err`
+    /// for a label that targets a non-loop statement (slice 7) or an
+    /// unlabeled form with no enclosing loop at all, neither of which this
+    /// compiler should ever actually reach given its existing eligibility
+    /// checks, but it's cheap defensive coding against a future change
+    /// that stops being true.
+    fn resolve_loop_frame(
+        &self,
+        label: Option<&str>,
+        bail_reason: &'static str,
+    ) -> Result<usize, CompileError> {
+        match label {
+            None => self
+                .loop_frames
+                .len()
+                .checked_sub(1)
+                .ok_or(CompileError::Unsupported(bail_reason)),
+            Some(name) => self
+                .loop_frames
+                .iter()
+                .rposition(|frame| frame.labels.iter().any(|l| l == name))
+                .ok_or(CompileError::Unsupported(bail_reason)),
+        }
+    }
+
+    fn compile_break(&mut self, label: Option<&str>) -> Result<(), CompileError> {
+        let idx = self.resolve_loop_frame(label, "statement:Break")?;
+        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_refs, 0);
+        let site = self.emit_jump(Op::Jump);
+        self.loop_frames[idx].break_sites.push(site);
+        Ok(())
+    }
+
+    fn compile_continue(&mut self, label: Option<&str>) -> Result<(), CompileError> {
+        let idx = self.resolve_loop_frame(label, "statement:Continue")?;
+        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_refs, 0);
+        match self.loop_frames[idx].continue_target {
+            Some(target) => self.emit_jump_to(Op::Jump, target),
+            None => {
+                let site = self.emit_jump(Op::Jump);
+                self.loop_frames[idx].continue_sites.push(site);
+                Ok(())
+            }
+        }
+    }
+
+    fn compile_while(
+        &mut self,
+        while_stmt: &WhileStatement,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        // WhileLoopEvaluation starts its local V at undefined and updates it
+        // only when the body produces a non-empty value.
+        self.reset_script_completion();
+        let loop_start = self.code.len();
+        // `continue_target` is known up front, so `continue` always lowers
+        // to a direct backward jump; `continue_sites` stays empty.
+        self.loop_frames.push(LoopFrame {
+            labels,
+            continue_target: Some(loop_start),
+            continue_sites: Vec::new(),
+            break_sites: Vec::new(),
+        });
+        self.compile_expr(&while_stmt.test)?;
+        self.pop_n(1);
+        let exit = self.emit_jump(Op::JumpIfFalse);
+        self.compile_statement(&while_stmt.body)?;
+        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_refs, 0);
+        self.emit_jump_to(Op::Jump, loop_start)?;
+        self.patch_jump(exit)?;
+        let frame = self
+            .loop_frames
+            .pop()
+            .expect("pushed above, not re-entrant");
+        debug_assert!(
+            frame.continue_sites.is_empty(),
+            "while's continue resolves immediately, never deferred"
+        );
+        for site in frame.break_sites {
+            self.patch_jump(site)?;
+        }
+        Ok(())
+    }
+
+    fn compile_for(
+        &mut self,
+        for_stmt: &ForStatement,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        // ForBodyEvaluation has the same V accumulator semantics as while.
+        // Reset once before the initializer, not at the loop backedge, so
+        // later empty iterations retain the prior V.
+        self.reset_script_completion();
+        if let Some(init) = &for_stmt.init {
+            match init {
+                ForInit::Variable(decl) => self.compile_var_declaration(decl)?,
+                ForInit::Expression(expr) => {
+                    self.compile_expr(expr)?;
+                    self.emit(Op::Pop);
+                    self.pop_n(1);
+                }
+            }
+        }
+        let loop_start = self.code.len();
+        let exit = if let Some(test) = &for_stmt.test {
+            self.compile_expr(test)?;
+            self.pop_n(1);
+            Some(self.emit_jump(Op::JumpIfFalse))
+        } else {
+            None
+        };
+        // `continue`'s target — the position between body and update — isn't
+        // known until the body has compiled, so it starts `None`; any
+        // `continue` compiled against this frame defers through
+        // `continue_sites` and gets patched below, right before the update.
+        self.loop_frames.push(LoopFrame {
+            labels,
+            continue_target: None,
+            continue_sites: Vec::new(),
+            break_sites: Vec::new(),
+        });
+        self.compile_statement(&for_stmt.body)?;
+        let frame = self
+            .loop_frames
+            .pop()
+            .expect("pushed above, not re-entrant");
+        for site in frame.continue_sites {
+            self.patch_jump(site)?;
+        }
+        if let Some(update) = &for_stmt.update {
+            self.compile_expr(update)?;
+            self.emit(Op::Pop);
+            self.pop_n(1);
+        }
+        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_refs, 0);
+        self.emit_jump_to(Op::Jump, loop_start)?;
+        if let Some(exit) = exit {
+            self.patch_jump(exit)?;
+        }
+        for site in frame.break_sites {
+            self.patch_jump(site)?;
+        }
+        Ok(())
     }
 
     fn finish(mut self) -> Chunk {
