@@ -53,6 +53,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `shadow_realm.rs` — setup_shadow_realm
     - `primitive_constructors.rs` — Symbol, String, Number and Boolean constructors, Number statics, String.raw, String.fromCharCode
     - `global_functions.rs` — setup_global_functions (parseInt, parseFloat, isNaN, isFinite, URI functions, escape/unescape)
+    - `global_object.rs` — setup_global_object (globalThis, global-object wiring, $262)
     - `array.rs` — setup_array_prototype
     - `string.rs` — setup_string_prototype
     - `number.rs` — setup_number_prototype, setup_boolean_prototype, setup_symbol_prototype
