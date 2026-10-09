@@ -1,7 +1,89 @@
 use super::super::*;
 
+/// Built-in global names mirrored onto the global object (§19.1) and removed from the declarative bootstrap bindings (§9.1.1.4).
+const BUILTIN_GLOBAL_NAMES: &[&str] = &[
+    "Object",
+    "Function",
+    "Array",
+    "String",
+    "Number",
+    "Boolean",
+    "Symbol",
+    "Error",
+    "SyntaxError",
+    "TypeError",
+    "ReferenceError",
+    "RangeError",
+    "URIError",
+    "EvalError",
+    "Date",
+    "RegExp",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "WeakRef",
+    "FinalizationRegistry",
+    "Promise",
+    "ArrayBuffer",
+    "DataView",
+    "JSON",
+    "Math",
+    "Reflect",
+    "Proxy",
+    "eval",
+    "parseInt",
+    "parseFloat",
+    "isNaN",
+    "isFinite",
+    "encodeURI",
+    "decodeURI",
+    "encodeURIComponent",
+    "decodeURIComponent",
+    "NaN",
+    "Infinity",
+    "undefined",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+    "BigInt",
+    "AggregateError",
+    "SharedArrayBuffer",
+    "Atomics",
+    "Temporal",
+    "Intl",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
+    "escape",
+    "unescape",
+    "DisposableStack",
+    "AsyncDisposableStack",
+    "SuppressedError",
+    "ShadowRealm",
+    "Iterator",
+];
+
 impl Interpreter {
     pub(super) fn setup_global_object(&mut self) {
+        let global_obj_id = self.create_global_object();
+        self.populate_global_object(global_obj_id);
+        self.fix_builtin_constructor_prototypes();
+        self.install_global_object(global_obj_id);
+        self.setup_dollar_262();
+    }
+
+    fn create_global_object(&mut self) -> u64 {
         // globalThis - create a global object
         let global_obj_id = self.create_object_id();
         let global_val = JsValue::object(global_obj_id);
@@ -20,82 +102,13 @@ impl Interpreter {
                 deletable: false,
             },
         );
+        global_obj_id
+    }
 
+    fn populate_global_object(&mut self, global_obj_id: u64) {
         // Populate globalThis with built-in constructors and functions as
         // non-enumerable, writable, configurable properties (per spec §19.1)
-        let global_names = [
-            "Object",
-            "Function",
-            "Array",
-            "String",
-            "Number",
-            "Boolean",
-            "Symbol",
-            "Error",
-            "SyntaxError",
-            "TypeError",
-            "ReferenceError",
-            "RangeError",
-            "URIError",
-            "EvalError",
-            "Date",
-            "RegExp",
-            "Map",
-            "Set",
-            "WeakMap",
-            "WeakSet",
-            "WeakRef",
-            "FinalizationRegistry",
-            "Promise",
-            "ArrayBuffer",
-            "DataView",
-            "JSON",
-            "Math",
-            "Reflect",
-            "Proxy",
-            "eval",
-            "parseInt",
-            "parseFloat",
-            "isNaN",
-            "isFinite",
-            "encodeURI",
-            "decodeURI",
-            "encodeURIComponent",
-            "decodeURIComponent",
-            "NaN",
-            "Infinity",
-            "undefined",
-            "Int8Array",
-            "Uint8Array",
-            "Uint8ClampedArray",
-            "Int16Array",
-            "Uint16Array",
-            "Int32Array",
-            "Uint32Array",
-            "Float16Array",
-            "Float32Array",
-            "Float64Array",
-            "BigInt64Array",
-            "BigUint64Array",
-            "BigInt",
-            "AggregateError",
-            "SharedArrayBuffer",
-            "Atomics",
-            "Temporal",
-            "Intl",
-            "setTimeout",
-            "setInterval",
-            "clearTimeout",
-            "clearInterval",
-            "escape",
-            "unescape",
-            "DisposableStack",
-            "AsyncDisposableStack",
-            "SuppressedError",
-            "ShadowRealm",
-            "Iterator",
-        ];
-        let vals: Vec<(String, JsValue)> = global_names
+        let vals: Vec<(String, JsValue)> = BUILTIN_GLOBAL_NAMES
             .iter()
             .filter_map(|name| self.get_global_var(name).map(|v| (name.to_string(), v)))
             .collect();
@@ -119,7 +132,9 @@ impl Interpreter {
                 "globalThis".to_string(),
                 PropertyDescriptor::data(gt_val, true, false, true),
             );
+    }
 
+    fn fix_builtin_constructor_prototypes(&mut self) {
         // Fix .prototype descriptors on built-in constructors.
         // create_function sets writable=true (correct for user-defined constructors per §10.2.5),
         // but built-in constructors need writable=false per their respective spec sections.
@@ -160,7 +175,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn install_global_object(&mut self, global_obj_id: u64) {
         // Wire up global object as backing for global environment lookups
         // Per spec §9.1.1.4, the Global Environment Record has an Object Environment
         // Record whose binding object is the global object. Variable lookups in global
@@ -176,7 +193,7 @@ impl Interpreter {
         // (ImmutableValue bindings that must shadow global object writes).
         {
             let mut env = self.realm().global_env.borrow_mut();
-            for name in &global_names {
+            for name in BUILTIN_GLOBAL_NAMES {
                 match *name {
                     "NaN" | "Infinity" | "undefined" => continue,
                     _ => {
@@ -185,7 +202,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn setup_dollar_262(&mut self) {
         // $262 test harness object (must be after global object is created)
         {
             let realm_id = self.current_realm_id;
