@@ -5,6 +5,26 @@ impl Interpreter {
         let reflect_obj_id = self.create_object_id();
         let reflect_id = reflect_obj_id;
 
+        self.add_reflect_call_and_define_methods(reflect_obj_id);
+        self.add_reflect_query_methods(reflect_obj_id);
+        self.add_reflect_mutation_methods(reflect_obj_id);
+
+        // @@toStringTag
+        self.define_to_string_tag(reflect_obj_id, "Reflect");
+
+        // Register Reflect as global
+        let reflect_val = JsValue::object(reflect_id);
+        self.realm()
+            .global_env
+            .borrow_mut()
+            .declare("Reflect", BindingKind::Const);
+        self.realm()
+            .global_env
+            .borrow_mut()
+            .initialize_binding("Reflect", reflect_val);
+    }
+
+    fn add_reflect_call_and_define_methods(&mut self, reflect_obj_id: u64) {
         // Reflect.apply(target, thisArg, argsList)
         let apply_fn = self.create_function(JsFunction::native(
             "apply".to_string(),
@@ -258,7 +278,9 @@ impl Interpreter {
         self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("deleteProperty".to_string(), del_prop_fn);
+    }
 
+    fn add_reflect_query_methods(&mut self, reflect_obj_id: u64) {
         // Reflect.get(target, key, receiver?)
         let get_fn = self.create_function(JsFunction::native(
             "get".to_string(),
@@ -505,7 +527,9 @@ impl Interpreter {
         self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("ownKeys".to_string(), own_keys_fn);
+    }
 
+    fn add_reflect_mutation_methods(&mut self, reflect_obj_id: u64) {
         // Reflect.preventExtensions(target)
         let pe_fn = self.create_function(JsFunction::native(
             "preventExtensions".to_string(),
@@ -958,19 +982,5 @@ impl Interpreter {
         self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("setPrototypeOf".to_string(), spo_fn);
-
-        // @@toStringTag
-        self.define_to_string_tag(reflect_obj_id, "Reflect");
-
-        // Register Reflect as global
-        let reflect_val = JsValue::object(reflect_id);
-        self.realm()
-            .global_env
-            .borrow_mut()
-            .declare("Reflect", BindingKind::Const);
-        self.realm()
-            .global_env
-            .borrow_mut()
-            .initialize_binding("Reflect", reflect_val);
     }
 }
