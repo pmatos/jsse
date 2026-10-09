@@ -9,10 +9,10 @@ info: |
     5. Else,
       a. Let type be TypedArrayElementType(typedArray).
       b. If IsUnclampedIntegerElementType(type) is false and IsBigIntElementType(type) is false, throw a TypeError exception.
-features: [Atomics, Atomics.waitAsync, SharedArrayBuffer, TypedArray, Float32Array, Float64Array]
+features: [Atomics, Atomics.waitAsync, SharedArrayBuffer, TypedArray, Float16Array, Float32Array, Float64Array]
 ---*/
 
-var ctors = [Float32Array, Float64Array, Uint8ClampedArray];
+var ctors = [Float16Array, Float32Array, Float64Array, Uint8ClampedArray];
 var buffers = [ArrayBuffer, SharedArrayBuffer];
 var ops = ["load", "store", "add", "sub", "and", "or", "xor", "exchange",
            "compareExchange", "wait", "notify", "waitAsync"];

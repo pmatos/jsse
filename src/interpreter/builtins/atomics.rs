@@ -14,20 +14,33 @@ struct WaiterEntry {
 static WAITER_MAP: LazyLock<Mutex<FxHashMap<(u64, usize), Vec<WaiterEntry>>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
-fn check_ta_detached(interp: &mut Interpreter, ta_val: &JsValue) -> Result<(), JsValue> {
-    let detached = if let Some(ta_id) = ta_val.as_object_id() {
-        interp.get_object_cell(ta_id).is_some_and(|cell| {
-            cell.borrow()
-                .typed_array_info()
-                .is_some_and(|info| info.is_detached.get())
-        })
-    } else {
-        false
-    };
-    if detached {
-        return Err(interp.create_type_error("typed array is detached"));
+/// RevalidateAtomicAccess: re-checks bounds after argument coercion, which can
+/// detach or resize the buffer. `byte_index_in_buffer` includes the view's byteOffset.
+fn revalidate_atomic_access(
+    interp: &mut Interpreter,
+    ta_val: &JsValue,
+    byte_index_in_buffer: usize,
+) -> Result<(), JsValue> {
+    let state = ta_val
+        .as_object_id()
+        .and_then(|ta_id| interp.get_object_cell(ta_id))
+        .and_then(|cell| {
+            cell.borrow().typed_array_info().map(|info| {
+                (
+                    crate::interpreter::types::is_typed_array_out_of_bounds(info),
+                    info.buffer.borrow().len(),
+                )
+            })
+        });
+    match state {
+        Some((true, _)) => {
+            Err(interp.create_type_error("typed array is detached or out of bounds"))
+        }
+        Some((false, buffer_len)) if byte_index_in_buffer >= buffer_len => {
+            Err(interp.create_error("RangeError", "index out of range"))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBufferInner>, usize)> {
@@ -112,10 +125,10 @@ impl Interpreter {
                 Ok(i) => i,
                 Err(e) => return Completion::Throw(e),
             };
-            if let Err(e) = check_ta_detached(interp, &ta_val) {
+            let offset = byte_offset + byte_index;
+            if let Err(e) = revalidate_atomic_access(interp, &ta_val, offset) {
                 return Completion::Throw(e);
             }
-            let offset = byte_offset + byte_index;
             if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
                 return atomic_load_shared(&sab, offset, kind, is_bigint);
             }
@@ -163,10 +176,10 @@ impl Interpreter {
                 };
                 (JsValue::number(n), JsValue::number(int_val))
             };
-            if let Err(e) = check_ta_detached(interp, &ta_val) {
+            let offset = byte_offset + byte_index;
+            if let Err(e) = revalidate_atomic_access(interp, &ta_val, offset) {
                 return Completion::Throw(e);
             }
-            let offset = byte_offset + byte_index;
             if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
                 atomic_store_shared(&sab, offset, kind, is_bigint, &converted);
                 return Completion::Normal(return_val);
@@ -222,10 +235,10 @@ impl Interpreter {
                     };
                     (exp, rep)
                 };
-                if let Err(e) = check_ta_detached(interp, &ta_val) {
+                let offset = byte_offset + byte_index;
+                if let Err(e) = revalidate_atomic_access(interp, &ta_val, offset) {
                     return Completion::Throw(e);
                 }
-                let offset = byte_offset + byte_index;
                 if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
                     return atomic_compare_exchange_shared(
                         &sab,
@@ -1073,7 +1086,7 @@ fn validate_integer_typed_array(
                     info.kind,
                     info.buffer.clone(),
                     info.byte_offset,
-                    info.is_detached.get(),
+                    crate::interpreter::types::is_typed_array_out_of_bounds(info),
                     info.buffer_object_id,
                 )
             })
@@ -1174,10 +1187,10 @@ fn atomics_rmw(
             Err(e) => return Completion::Throw(e),
         }
     };
-    if let Err(e) = check_ta_detached(interp, &ta_val) {
+    let offset = byte_offset + byte_index;
+    if let Err(e) = revalidate_atomic_access(interp, &ta_val, offset) {
         return Completion::Throw(e);
     }
-    let offset = byte_offset + byte_index;
 
     if let Some((sab, _)) = get_sab_info(interp, &ta_val) {
         return atomic_rmw_shared(&sab, offset, kind, is_bigint, &converted, num_op, bigint_op);
