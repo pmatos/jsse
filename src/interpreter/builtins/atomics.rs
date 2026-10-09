@@ -1,5 +1,7 @@
 use super::super::*;
-use crate::interpreter::types::{BufferData, SharedBufferInner};
+use crate::interpreter::types::{
+    BufferData, SharedBufferInner, TypedArrayInfo, is_typed_array_out_of_bounds, typed_array_length,
+};
 use crate::types::{JsBigInt, JsValue};
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{
@@ -14,6 +16,16 @@ struct WaiterEntry {
 static WAITER_MAP: LazyLock<Mutex<FxHashMap<(u64, usize), Vec<WaiterEntry>>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
+fn with_typed_array_info<R>(
+    interp: &Interpreter,
+    ta_val: &JsValue,
+    f: impl FnOnce(&TypedArrayInfo) -> R,
+) -> Option<R> {
+    let cell = interp.get_object_cell(ta_val.as_object_id()?)?;
+    let obj = cell.borrow();
+    obj.typed_array_info().map(f)
+}
+
 /// RevalidateAtomicAccess: re-checks bounds after argument coercion, which can
 /// detach or resize the buffer. `byte_index_in_buffer` includes the view's byteOffset.
 fn revalidate_atomic_access(
@@ -21,17 +33,12 @@ fn revalidate_atomic_access(
     ta_val: &JsValue,
     byte_index_in_buffer: usize,
 ) -> Result<(), JsValue> {
-    let state = ta_val
-        .as_object_id()
-        .and_then(|ta_id| interp.get_object_cell(ta_id))
-        .and_then(|cell| {
-            cell.borrow().typed_array_info().map(|info| {
-                (
-                    crate::interpreter::types::is_typed_array_out_of_bounds(info),
-                    info.buffer.borrow().len(),
-                )
-            })
-        });
+    let state = with_typed_array_info(interp, ta_val, |info| {
+        (
+            is_typed_array_out_of_bounds(info),
+            info.buffer.borrow().len(),
+        )
+    });
     match state {
         Some((true, _)) => {
             Err(interp.create_type_error("typed array is detached or out of bounds"))
@@ -1078,22 +1085,15 @@ fn validate_integer_typed_array(
     ),
     JsValue,
 > {
-    let info_snapshot = if let Some(ta_id) = ta_val.as_object_id() {
-        interp.get_object_cell(ta_id).and_then(|cell| {
-            let obj_ref = cell.borrow();
-            obj_ref.typed_array_info().map(|info| {
-                (
-                    info.kind,
-                    info.buffer.clone(),
-                    info.byte_offset,
-                    crate::interpreter::types::is_typed_array_out_of_bounds(info),
-                    info.buffer_object_id,
-                )
-            })
-        })
-    } else {
-        None
-    };
+    let info_snapshot = with_typed_array_info(interp, ta_val, |info| {
+        (
+            info.kind,
+            info.buffer.clone(),
+            info.byte_offset,
+            is_typed_array_out_of_bounds(info),
+            info.buffer_object_id,
+        )
+    });
     if let Some((kind, buffer, byte_offset, is_detached, buffer_object_id)) = info_snapshot {
         if waitable {
             if !matches!(kind, TypedArrayKind::Int32 | TypedArrayKind::BigInt64) {
@@ -1138,15 +1138,7 @@ fn validate_atomic_access(
 ) -> Result<usize, JsValue> {
     // ValidateAtomicAccess reads TypedArrayLength before coercing the index, so
     // a resize triggered by index coercion does not change the bound.
-    let array_length = ta_val
-        .as_object_id()
-        .and_then(|ta_id| interp.get_object_cell(ta_id))
-        .and_then(|obj| {
-            obj.borrow()
-                .typed_array_info()
-                .map(crate::interpreter::types::typed_array_length)
-        })
-        .unwrap_or(0);
+    let array_length = with_typed_array_info(interp, ta_val, typed_array_length).unwrap_or(0);
     let idx = match interp.to_index(index_val) {
         Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
         Completion::Throw(e) => return Err(e),
