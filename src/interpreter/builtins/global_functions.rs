@@ -2,6 +2,13 @@ use super::super::*;
 
 impl Interpreter {
     pub(super) fn setup_global_functions(&mut self) {
+        self.add_number_parsing_functions();
+        self.add_number_test_functions();
+        self.add_uri_functions();
+        self.add_annex_b_escape_functions();
+    }
+
+    fn add_number_parsing_functions(&mut self) {
         // Global functions
         self.register_global_fn(
             "parseInt",
@@ -143,7 +150,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn add_number_test_functions(&mut self) {
         self.register_global_fn(
             "isNaN",
             BindingKind::Var,
@@ -169,7 +178,9 @@ impl Interpreter {
                 Completion::Normal(JsValue::boolean(n.is_finite()))
             }),
         );
+    }
 
+    fn add_uri_functions(&mut self) {
         self.register_global_fn(
             "encodeURI",
             BindingKind::Var,
@@ -247,7 +258,9 @@ impl Interpreter {
                 },
             ),
         );
+    }
 
+    fn add_annex_b_escape_functions(&mut self) {
         // Annex B: escape()
         self.register_global_fn(
             "escape",
