@@ -45,6 +45,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `object.rs` — setup_object_statics (Object constructor statics and Object.prototype methods)
     - `reflect.rs` — setup_reflect (the `Reflect` namespace object)
     - `function.rs` — setup_function_prototype (call, apply, bind, toString)
+    - `function_constructors.rs` — setup_function_constructors (eval, Function, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction and their prototype wiring)
     - `host.rs` — setup_host_globals (console, print, timers)
     - `errors.rs` — setup_error_builtins (Error, native errors, AggregateError, SuppressedError)
     - `math.rs` — setup_math (the `Math` namespace object and its f16/precise-sum helpers)
