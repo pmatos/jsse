@@ -13,7 +13,71 @@ impl Interpreter {
 
         // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
         self.define_to_string_tag(proto_id, "ShadowRealm");
+        self.add_shadow_realm_evaluate(proto_id, my_realm_id);
+        self.add_shadow_realm_import_value(proto_id, my_realm_id);
 
+        let proto_val = JsValue::object(proto_id);
+
+        // ShadowRealm constructor
+        let proto_val_for_ctor = proto_val.clone();
+        let shadow_realm_ctor = self.create_function(JsFunction::constructor(
+            "ShadowRealm".to_string(),
+            0,
+            move |interp, _this, _args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("ShadowRealm must be called with 'new'"),
+                    );
+                }
+
+                let new_realm_id = interp.create_new_realm();
+
+                let obj_id = interp.create_object_id();
+                {
+                    let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
+                    o.class_name = "ShadowRealm".to_string();
+                    o.kind = crate::interpreter::types::ObjectKind::ShadowRealm(new_realm_id);
+                    if let Some(proto_id) = proto_val_for_ctor.as_object_id() {
+                        o.prototype_id = Some(proto_id);
+                    }
+                }
+                Completion::Normal(JsValue::object(obj_id))
+            },
+        ));
+
+        // Set ShadowRealm.prototype on constructor
+        if let Some(constructor_id) = shadow_realm_ctor.as_object_id()
+            && let Some(ctor_obj) = self.get_object_cell(constructor_id)
+        {
+            ctor_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
+        }
+
+        // Set ShadowRealm.prototype.constructor = ShadowRealm
+        if let Some(proto_id) = proto_val.as_object_id()
+            && let Some(proto_obj) = self.get_object_cell(proto_id)
+        {
+            proto_obj
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), shadow_realm_ctor.clone());
+        }
+
+        // Store prototype in realm
+        self.realm_mut().shadow_realm_prototype = Some(proto_id);
+
+        // Register ShadowRealm as global
+        let global_env = self.realm().global_env.clone();
+        global_env
+            .borrow_mut()
+            .declare("ShadowRealm", BindingKind::Var);
+        let _ = global_env
+            .borrow_mut()
+            .set("ShadowRealm", shadow_realm_ctor);
+    }
+
+    fn add_shadow_realm_evaluate(&mut self, proto_id: u64, my_realm_id: usize) {
         // ShadowRealm.prototype.evaluate
         let evaluate_fn = self.create_function(JsFunction::native(
             "evaluate".to_string(),
@@ -49,7 +113,9 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("evaluate".to_string(), evaluate_fn);
+    }
 
+    fn add_shadow_realm_import_value(&mut self, proto_id: u64, my_realm_id: usize) {
         // ShadowRealm.prototype.importValue
         let import_value_fn = self.create_function(JsFunction::native(
             "importValue".to_string(),
@@ -180,65 +246,5 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("importValue".to_string(), import_value_fn);
-
-        let proto_val = JsValue::object(proto_id);
-
-        // ShadowRealm constructor
-        let proto_val_for_ctor = proto_val.clone();
-        let shadow_realm_ctor = self.create_function(JsFunction::constructor(
-            "ShadowRealm".to_string(),
-            0,
-            move |interp, _this, _args| {
-                if interp.new_target.is_none() {
-                    return Completion::Throw(
-                        interp.create_type_error("ShadowRealm must be called with 'new'"),
-                    );
-                }
-
-                let new_realm_id = interp.create_new_realm();
-
-                let obj_id = interp.create_object_id();
-                {
-                    let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                    o.class_name = "ShadowRealm".to_string();
-                    o.kind = crate::interpreter::types::ObjectKind::ShadowRealm(new_realm_id);
-                    if let Some(proto_id) = proto_val_for_ctor.as_object_id() {
-                        o.prototype_id = Some(proto_id);
-                    }
-                }
-                Completion::Normal(JsValue::object(obj_id))
-            },
-        ));
-
-        // Set ShadowRealm.prototype on constructor
-        if let Some(constructor_id) = shadow_realm_ctor.as_object_id()
-            && let Some(ctor_obj) = self.get_object_cell(constructor_id)
-        {
-            ctor_obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
-        }
-
-        // Set ShadowRealm.prototype.constructor = ShadowRealm
-        if let Some(proto_id) = proto_val.as_object_id()
-            && let Some(proto_obj) = self.get_object_cell(proto_id)
-        {
-            proto_obj
-                .borrow_mut()
-                .insert_builtin("constructor".to_string(), shadow_realm_ctor.clone());
-        }
-
-        // Store prototype in realm
-        self.realm_mut().shadow_realm_prototype = Some(proto_id);
-
-        // Register ShadowRealm as global
-        let global_env = self.realm().global_env.clone();
-        global_env
-            .borrow_mut()
-            .declare("ShadowRealm", BindingKind::Var);
-        let _ = global_env
-            .borrow_mut()
-            .set("ShadowRealm", shadow_realm_ctor);
     }
 }
