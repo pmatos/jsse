@@ -3,6 +3,22 @@ use super::super::*;
 impl Interpreter {
     pub(super) fn setup_json(&mut self) {
         let json_obj_id = self.create_object_id();
+        self.add_json_stringify(json_obj_id);
+        self.add_json_parse(json_obj_id);
+        self.add_json_raw_json(json_obj_id);
+        self.add_json_is_raw_json(json_obj_id);
+        // @@toStringTag
+        self.define_to_string_tag(json_obj_id, "JSON");
+        let json_val = JsValue::object(json_obj_id);
+        self.realm()
+            .global_env
+            .borrow_mut()
+            .declare("JSON", BindingKind::Var);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "JSON", json_val);
+    }
+
+    fn add_json_stringify(&mut self, json_obj_id: u64) {
         let json_stringify = self.create_function(JsFunction::native(
             "stringify".to_string(),
             3,
@@ -60,6 +76,12 @@ impl Interpreter {
                 }
             },
         ));
+        self.get_object_cell_expect(json_obj_id)
+            .borrow_mut()
+            .insert_builtin("stringify".to_string(), json_stringify);
+    }
+
+    fn add_json_parse(&mut self, json_obj_id: u64) {
         let json_parse = self.create_function(JsFunction::native(
             "parse".to_string(),
             2,
@@ -117,6 +139,12 @@ impl Interpreter {
                 }
             },
         ));
+        self.get_object_cell_expect(json_obj_id)
+            .borrow_mut()
+            .insert_builtin("parse".to_string(), json_parse);
+    }
+
+    fn add_json_raw_json(&mut self, json_obj_id: u64) {
         let json_raw_json = self.create_function(JsFunction::native(
             "rawJSON".to_string(),
             1,
@@ -184,6 +212,12 @@ impl Interpreter {
                 Completion::Normal(JsValue::object(id))
             },
         ));
+        self.get_object_cell_expect(json_obj_id)
+            .borrow_mut()
+            .insert_builtin("rawJSON".to_string(), json_raw_json);
+    }
+
+    fn add_json_is_raw_json(&mut self, json_obj_id: u64) {
         let json_is_raw_json = self.create_function(JsFunction::native(
             "isRawJSON".to_string(),
             1,
@@ -199,24 +233,6 @@ impl Interpreter {
         ));
         self.get_object_cell_expect(json_obj_id)
             .borrow_mut()
-            .insert_builtin("stringify".to_string(), json_stringify);
-        self.get_object_cell_expect(json_obj_id)
-            .borrow_mut()
-            .insert_builtin("parse".to_string(), json_parse);
-        self.get_object_cell_expect(json_obj_id)
-            .borrow_mut()
-            .insert_builtin("rawJSON".to_string(), json_raw_json);
-        self.get_object_cell_expect(json_obj_id)
-            .borrow_mut()
             .insert_builtin("isRawJSON".to_string(), json_is_raw_json);
-        // @@toStringTag
-        self.define_to_string_tag(json_obj_id, "JSON");
-        let json_val = JsValue::object(json_obj_id);
-        self.realm()
-            .global_env
-            .borrow_mut()
-            .declare("JSON", BindingKind::Var);
-        let env = self.realm().global_env.clone();
-        let _ = self.env_set(&env, "JSON", json_val);
     }
 }
