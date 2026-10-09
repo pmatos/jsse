@@ -3553,4 +3553,34 @@ impl Interpreter {
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
     }
+
+    pub(super) fn setup_array_constructor(&mut self) {
+        // Array constructor (must be before setup_array_prototype so statics can be added)
+        self.register_global_fn(
+            "Array",
+            BindingKind::Var,
+            JsFunction::constructor("Array".to_string(), 1, |interp, _this, args| {
+                let arr = if args.len() == 1
+                    && let Some(n) = args[0].as_number()
+                {
+                    let len = n;
+                    let uint32_len = len as u32;
+                    if (uint32_len as f64) != len {
+                        let err = interp.create_range_error("Invalid array length");
+                        return Completion::Throw(err);
+                    }
+                    interp.create_array_with_length(uint32_len as usize)
+                } else {
+                    interp.create_array(args.to_vec())
+                };
+                if let Some(array_id) = arr.as_object_id() {
+                    let default_proto_id = interp.realm().array_prototype;
+                    interp.apply_new_target_prototype(array_id, default_proto_id, |realm| {
+                        realm.array_prototype
+                    });
+                }
+                Completion::Normal(arr)
+            }),
+        );
+    }
 }
