@@ -50,6 +50,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `errors.rs` — setup_error_builtins (Error, native errors, AggregateError, SuppressedError)
     - `math.rs` — setup_math (the `Math` namespace object and its f16/precise-sum helpers)
     - `json.rs` — setup_json (the `JSON` namespace object)
+    - `shadow_realm.rs` — setup_shadow_realm
     - `primitive_constructors.rs` — Symbol, String, Number and Boolean constructors, Number statics, String.raw, String.fromCharCode
     - `global_functions.rs` — setup_global_functions (parseInt, parseFloat, isNaN, isFinite, URI functions, escape/unescape)
     - `array.rs` — setup_array_prototype
