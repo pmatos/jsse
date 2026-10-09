@@ -2371,4 +2371,46 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("fromEntries".to_string(), from_entries_fn);
     }
+
+    pub(super) fn setup_object_constructor(&mut self) {
+        // Object constructor (minimal)
+        self.register_global_fn(
+            "Object",
+            BindingKind::Var,
+            JsFunction::constructor("Object".to_string(), 1, |interp, _this, args| {
+                // §20.1.1 Object(value): Step 1 — if NewTarget is not undefined and is not
+                // the active function (Object), return OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
+                if let Some(ref nt) = interp.new_target.clone() {
+                    // Check if new_target is different from the Object constructor itself
+                    let object_fn = interp
+                        .get_global_var("Object")
+                        .unwrap_or(JsValue::UNDEFINED);
+                    let nt_is_object = object_fn
+                        .as_object_id()
+                        .zip(nt.as_object_id())
+                        .is_some_and(|(object_id, new_target_id)| object_id == new_target_id);
+                    if !nt_is_object {
+                        // OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
+                        let default_proto = interp.realm().object_prototype;
+                        let new_obj_rc_id = interp.create_object_id();
+                        let no_id = new_obj_rc_id;
+                        interp.apply_new_target_prototype(no_id, default_proto, |realm| {
+                            realm.object_prototype
+                        });
+                        let new_obj_val = JsValue::object(no_id);
+                        return Completion::Normal(new_obj_val);
+                    }
+                }
+                match args.first() {
+                    Some(val) if (val).is_object() => Completion::Normal(val.clone()),
+                    Some(val) if !(val).is_nullish() => interp.to_object(val),
+                    _ => {
+                        let obj_id = interp.create_object_id();
+                        let id = obj_id;
+                        Completion::Normal(JsValue::object(id))
+                    }
+                }
+            }),
+        );
+    }
 }

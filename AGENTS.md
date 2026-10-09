@@ -42,7 +42,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `scheduler.rs` — Job scheduler: microtask queue, async-generator/async-function state, and the `setTimeout`/`setInterval` timer queue serviced by the event loop
   - `builtins/` — Built-in object setup
     - `mod.rs` — setup_globals, setup_proxy
-    - `object.rs` — setup_object_statics (Object constructor statics and Object.prototype methods)
+    - `object.rs` — setup_object_constructor, setup_object_statics (Object constructor statics and Object.prototype methods)
     - `reflect.rs` — setup_reflect (the `Reflect` namespace object)
     - `function.rs` — setup_function_prototype (call, apply, bind, toString)
     - `function_constructors.rs` — setup_function_constructors (eval, Function, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction and their prototype wiring)
@@ -50,6 +50,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `errors.rs` — setup_error_builtins (Error, native errors, AggregateError, SuppressedError)
     - `math.rs` — setup_math (the `Math` namespace object and its f16/precise-sum helpers)
     - `json.rs` — setup_json (the `JSON` namespace object)
+    - `primitive_constructors.rs` — Symbol, String, Number and Boolean constructors, Number statics, String.raw, String.fromCharCode
     - `global_functions.rs` — setup_global_functions (parseInt, parseFloat, isNaN, isFinite, URI functions, escape/unescape)
     - `array.rs` — setup_array_prototype
     - `string.rs` — setup_string_prototype
