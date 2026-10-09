@@ -1123,22 +1123,21 @@ fn validate_atomic_access(
     index_val: &JsValue,
     element_size: usize,
 ) -> Result<usize, JsValue> {
+    // ValidateAtomicAccess reads TypedArrayLength before coercing the index, so
+    // a resize triggered by index coercion does not change the bound.
+    let array_length = ta_val
+        .as_object_id()
+        .and_then(|ta_id| interp.get_object_cell(ta_id))
+        .and_then(|obj| {
+            obj.borrow()
+                .typed_array_info()
+                .map(crate::interpreter::types::typed_array_length)
+        })
+        .unwrap_or(0);
     let idx = match interp.to_index(index_val) {
         Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
         Completion::Throw(e) => return Err(e),
         _ => 0,
-    };
-    let array_length = if let Some(ta_id) = ta_val.as_object_id()
-        && let Some(obj) = interp.get_object_cell(ta_id)
-    {
-        let obj_ref = obj.borrow();
-        if let Some(info) = obj_ref.typed_array_info() {
-            info.array_length
-        } else {
-            0
-        }
-    } else {
-        0
     };
     if idx >= array_length {
         return Err(interp.create_error("RangeError", "index out of range"));
