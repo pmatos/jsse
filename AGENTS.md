@@ -41,9 +41,10 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `property.rs` — Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic, chain walkers)
   - `scheduler.rs` — Job scheduler: microtask queue, async-generator/async-function state, and the `setTimeout`/`setInterval` timer queue serviced by the event loop
   - `builtins/` — Built-in object setup
-    - `mod.rs` — setup_globals, setup_proxy, setup_function_prototype
+    - `mod.rs` — setup_globals, setup_proxy
     - `object.rs` — setup_object_statics (Object constructor statics and Object.prototype methods)
     - `reflect.rs` — setup_reflect (the `Reflect` namespace object)
+    - `function.rs` — setup_function_prototype (call, apply, bind, toString)
     - `array.rs` — setup_array_prototype
     - `string.rs` — setup_string_prototype
     - `number.rs` — setup_number_prototype, setup_boolean_prototype, setup_symbol_prototype
