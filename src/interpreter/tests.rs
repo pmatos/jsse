@@ -2211,6 +2211,36 @@ fn atomics_wait_zero_timeout_on_blocking_agent_returns_timed_out_immediately() {
 }
 
 #[test]
+fn atomics_wait_timeout_on_blocking_agent_removes_waiter() {
+    let interp = run_script_as_blocking_agent(
+        r#"
+        var sab = new SharedArrayBuffer(8);
+        var view = new Int32Array(sab);
+        var waited = Atomics.wait(view, 1, 0, 10);
+        var notified = Atomics.notify(view, 1);
+        var result = waited + ":" + notified;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "timed-out:0");
+}
+
+#[test]
+fn atomics_wait_validates_index_against_grown_length_tracking_view() {
+    let interp = run_script_as_blocking_agent(
+        r#"
+        var gsab = new SharedArrayBuffer(8, { maxByteLength: 32 });
+        var view = new Int32Array(gsab);
+        var before;
+        try { Atomics.wait(view, 3, 0, 0); before = "no-throw"; } catch (e) { before = e.constructor.name; }
+        gsab.grow(16);
+        var after = Atomics.wait(view, 3, 0, 0);
+        var result = before + ":" + after;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "RangeError:timed-out");
+}
+
+#[test]
 fn atomics_notify_on_non_shared_buffer_returns_zero_without_throwing() {
     let interp = run_script(
         r#"
