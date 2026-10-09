@@ -595,6 +595,7 @@ impl Interpreter {
                 let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
                 let gc_frame_promise = interp.gc_root_frame();
                 interp.gc_root_value(&promise_val);
+                interp.pin_native_root(&promise_val, &resolve_fn);
 
                 if let Some((sab, _)) = sab_info {
                     let key = (sab.id, offset);

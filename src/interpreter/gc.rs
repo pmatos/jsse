@@ -502,6 +502,9 @@ impl Interpreter {
         // Queued microtasks, pending async-generator requests and armed timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
+        // Promises a host worker will settle later may be reachable only through
+        // that worker's captured resolving function.
+        roots.extend(self.scheduler.pending_async_promise_ids_lock().iter());
         for val in &self.pending_iter_close {
             Self::collect_value_roots(val, &mut roots);
         }
