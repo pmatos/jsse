@@ -1,3 +1,37 @@
+# [0.11.0](https://github.com/pmatos/jsse/compare/v0.10.0...v0.11.0) (2026-10-09)
+
+
+### Bug Fixes
+
+* **atomics:** validate index against current length of length-tracking views ([#884](https://github.com/pmatos/jsse/issues/884)) ([7428647](https://github.com/pmatos/jsse/commit/7428647c3f69c82c7fa2d3708b909316c9d84374)), closes [#882](https://github.com/pmatos/jsse/issues/882)
+* **disposable:** relax await-using gate for using-headed for-of loops ([#856](https://github.com/pmatos/jsse/issues/856)) ([948dff8](https://github.com/pmatos/jsse/commit/948dff868144c44fcf9cb6601fa9296906622833))
+* **disposable:** suspend await-using disposal in a with-wrapped block ([#860](https://github.com/pmatos/jsse/issues/860)) ([8a63354](https://github.com/pmatos/jsse/commit/8a63354dddafb1ccd757a842fd52f61379946247))
+* **disposable:** suspend await-using disposal in for(let)/for-in/try bodies ([#846](https://github.com/pmatos/jsse/issues/846)) ([e2d53df](https://github.com/pmatos/jsse/commit/e2d53df252271c48b9c166a1ceb54f083247c354))
+* **gc:** root Object.fromEntries's result, iterator, and entry locals ([#851](https://github.com/pmatos/jsse/issues/851)) ([8082010](https://github.com/pmatos/jsse/commit/808201043d63edcb06838787f8d1a05c5bae6789))
+* **gc:** root Object.groupBy's iterator and result under GC stress ([#837](https://github.com/pmatos/jsse/issues/837)) ([264fe0f](https://github.com/pmatos/jsse/commit/264fe0f54e734f9869ec332f24364c4c063b2d5f))
+* **gc:** root rest-destructuring objects across CopyDataProperties ([#852](https://github.com/pmatos/jsse/issues/852)) ([51c4181](https://github.com/pmatos/jsse/commit/51c4181c8038e58cc339a22900b4b77a26c7c19e))
+* **gc:** stop yield* retrying sync GetIterator after async iterator error ([#850](https://github.com/pmatos/jsse/issues/850)) ([8af27c7](https://github.com/pmatos/jsse/commit/8af27c7bd72d2b07e782dbce7922925624fc1af1))
+* **generator:** dispose using-headed C-style for at loop exit ([#868](https://github.com/pmatos/jsse/issues/868)) ([a0ceb89](https://github.com/pmatos/jsse/commit/a0ceb893061e1ac2df293530e897bb5deda6991d))
+* **generator:** give switch CaseBlock one shared per-entry lexical scope ([#853](https://github.com/pmatos/jsse/issues/853)) ([9ab52df](https://github.com/pmatos/jsse/commit/9ab52df1d9f8a752026e24eb2ac07d76a104c411))
+* **generator:** suspend Blocked await-using disposal, not just Isolatable ([#859](https://github.com/pmatos/jsse/issues/859)) ([9347418](https://github.com/pmatos/jsse/commit/9347418accbdee82ee839b1a4ea89ffa2df5e368))
+* **generator:** suspend with-wrapped await-using disposal in async generators ([#869](https://github.com/pmatos/jsse/issues/869)) ([931f637](https://github.com/pmatos/jsse/commit/931f6377d10a8f28f733075169d7731446743b93))
+* **interpreter:** hoist Annex B functions declared directly in try/catch/finally blocks ([#865](https://github.com/pmatos/jsse/issues/865)) ([51d1950](https://github.com/pmatos/jsse/commit/51d19505effafd7d36f7d7789ab4200e939f03fb))
+* **interpreter:** hoist Annex B functions declared in try/catch/finally bodies ([#866](https://github.com/pmatos/jsse/issues/866)) ([19845aa](https://github.com/pmatos/jsse/commit/19845aa50cbdbd52f583669784002ebf8e6fc36c))
+* **interpreter:** restore Annex B hoisting in lowered function bodies ([#854](https://github.com/pmatos/jsse/issues/854)) ([2e1b796](https://github.com/pmatos/jsse/commit/2e1b796ad19d2a4505d5475a1ad4ec1d10bf6408))
+
+
+### Features
+
+* add pm-plan planning stage and claim-based workflow gates ([#879](https://github.com/pmatos/jsse/issues/879)) ([50b6d8d](https://github.com/pmatos/jsse/commit/50b6d8d761731241bd466dd863c6a41f11e90cec))
+* **bytecode:** compile labeled while/for loops with break/continue ([#876](https://github.com/pmatos/jsse/issues/876)) ([7f8d4e2](https://github.com/pmatos/jsse/commit/7f8d4e2f7afe54b09b1df62ea07cc3879a646599))
+* **bytecode:** compile member-expression call callees ([#864](https://github.com/pmatos/jsse/issues/864)) ([3d77e54](https://github.com/pmatos/jsse/commit/3d77e541a9fd238b3e0a1eebb2844943c5320131))
+* **cli:** enable the bytecode VM by default (--no-bytecode opts out) ([#875](https://github.com/pmatos/jsse/issues/875)) ([37339f3](https://github.com/pmatos/jsse/commit/37339f311f0f0b2d15ed03975819b5969bf961f3))
+
+
+### Performance Improvements
+
+* **bytecode:** bring Mandreel under 120 seconds ([#878](https://github.com/pmatos/jsse/issues/878)) ([6408e77](https://github.com/pmatos/jsse/commit/6408e77e764930fe4a2c396d1ab2fcc28f03f035))
+
 # [0.10.0](https://github.com/pmatos/jsse/compare/v0.9.1...v0.10.0) (2026-10-04)
 
 
