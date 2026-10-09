@@ -2,6 +2,12 @@ use super::super::*;
 
 impl Interpreter {
     pub(super) fn setup_function_prototype(&mut self, obj_proto_id: u64) {
+        self.add_function_prototype_call_and_apply(obj_proto_id);
+        self.add_function_prototype_bind(obj_proto_id);
+        self.add_function_prototype_to_string(obj_proto_id);
+    }
+
+    fn add_function_prototype_call_and_apply(&mut self, obj_proto_id: u64) {
         let fn_proto_realm_id = self.current_realm_id;
         // Add call to Object.prototype (simplified - applies to all functions via prototype chain)
         let call_fn = self.create_function(JsFunction::native(
@@ -71,7 +77,9 @@ impl Interpreter {
         self.get_object_cell_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("apply".to_string(), apply_fn);
+    }
 
+    fn add_function_prototype_bind(&mut self, obj_proto_id: u64) {
         // Function.prototype.bind
         let bind_fn = self.create_function(JsFunction::native(
             "bind".to_string(),
@@ -242,7 +250,9 @@ impl Interpreter {
         self.get_object_cell_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("bind".to_string(), bind_fn);
+    }
 
+    fn add_function_prototype_to_string(&mut self, obj_proto_id: u64) {
         // Function.prototype.toString — §20.2.3.5
         let fn_tostring = self.create_function(JsFunction::native(
             "toString".to_string(),
