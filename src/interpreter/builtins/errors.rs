@@ -2,6 +2,15 @@ use super::super::*;
 
 impl Interpreter {
     pub(super) fn setup_error_builtins(&mut self) {
+        let error_prototype = self.setup_error_constructor();
+        self.setup_error_is_error();
+        self.setup_test262_error(error_prototype.clone());
+        self.setup_native_error_constructors(error_prototype.clone());
+        self.setup_suppressed_error(error_prototype.clone());
+        self.setup_aggregate_error(error_prototype);
+    }
+
+    fn setup_error_constructor(&mut self) -> Option<ObjectHandle> {
         // Error constructor
         {
             let error_name = "Error".to_string();
@@ -273,7 +282,10 @@ impl Interpreter {
                     .insert_builtin("constructor".to_string(), error_ctor);
             }
         }
+        error_prototype
+    }
 
+    fn setup_error_is_error(&mut self) {
         // Error.isError() static method
         {
             let is_error_fn = self.create_function(JsFunction::native(
@@ -300,7 +312,9 @@ impl Interpreter {
                     .insert_builtin("isError".to_string(), is_error_fn);
             }
         }
+    }
 
+    fn setup_test262_error(&mut self, error_prototype: Option<ObjectHandle>) {
         // Test262Error
         {
             let error_proto_clone = error_prototype.clone();
@@ -355,7 +369,9 @@ impl Interpreter {
                 ),
             );
         }
+    }
 
+    fn setup_native_error_constructors(&mut self, error_prototype: Option<ObjectHandle>) {
         // Error subtype constructors
         for name in [
             "SyntaxError",
@@ -505,7 +521,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn setup_suppressed_error(&mut self, error_prototype: Option<ObjectHandle>) {
         // SuppressedError constructor
         {
             let suppressed_proto_id = self.create_object_id();
@@ -593,7 +611,9 @@ impl Interpreter {
                 .declare("SuppressedError", BindingKind::Var);
             let _ = self.env_set(&global_env, "SuppressedError", suppressed_ctor);
         }
+    }
 
+    fn setup_aggregate_error(&mut self, error_prototype: Option<ObjectHandle>) {
         // AggregateError constructor
         {
             let agg_proto_id = self.create_object_id();
