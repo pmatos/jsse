@@ -47,6 +47,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `function.rs` — setup_function_prototype (call, apply, bind, toString)
     - `host.rs` — setup_host_globals (console, print, timers)
     - `errors.rs` — setup_error_builtins (Error, native errors, AggregateError, SuppressedError)
+    - `math.rs` — setup_math (the `Math` namespace object and its f16/precise-sum helpers)
     - `array.rs` — setup_array_prototype
     - `string.rs` — setup_string_prototype
     - `number.rs` — setup_number_prototype, setup_boolean_prototype, setup_symbol_prototype
