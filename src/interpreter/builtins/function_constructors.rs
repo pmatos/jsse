@@ -2,6 +2,18 @@ use super::super::*;
 
 impl Interpreter {
     pub(super) fn setup_function_constructors(&mut self) {
+        self.setup_eval();
+        self.setup_function_constructor();
+        self.retrofit_function_prototype();
+        self.install_function_prototype();
+        self.link_native_error_constructors();
+        self.setup_async_function_prototype();
+        self.setup_async_function_constructor();
+        self.setup_generator_function_constructor();
+        self.setup_async_generator_function_constructor();
+    }
+
+    fn setup_eval(&mut self) {
         // eval
         {
             let eval_realm_id = self.current_realm_id;
@@ -35,7 +47,9 @@ impl Interpreter {
                 )))
             }),
         );
+    }
 
+    fn setup_function_constructor(&mut self) {
         // Function constructor
         // Capture realm_id so that functions created by `new other.Function()` are
         // registered in the realm where the Function constructor was defined (§10.3).
@@ -181,7 +195,9 @@ impl Interpreter {
                 .declare("Function", BindingKind::Var);
             let _ = self.env_set(&global_env, "Function", fn_ctor_fn);
         }
+    }
 
+    fn retrofit_function_prototype(&mut self) {
         // Per spec §20.2.3, Function.prototype is itself a function object.
         // If we already have an early-created function_prototype, update it;
         // otherwise update the auto-created one from the Function constructor.
@@ -236,7 +252,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn install_function_prototype(&mut self) {
         // Store Function.prototype for use as [[Prototype]] of all function objects
         {
             let func_val = self.get_global_var("Function");
@@ -559,7 +577,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn link_native_error_constructors(&mut self) {
         // Set NativeError constructors' [[Prototype]] to %Error% (spec §20.5.6.1)
         // Must happen after the Function.prototype retroactive fix above
         {
@@ -587,7 +607,9 @@ impl Interpreter {
                 }
             }
         }
+    }
 
+    fn setup_async_function_prototype(&mut self) {
         // %AsyncFunction.prototype%
         // Per spec, this should inherit from Function.prototype_id
         {
@@ -614,7 +636,9 @@ impl Interpreter {
 
             self.realm_mut().async_function_prototype = Some(af_proto_id);
         }
+    }
 
+    fn setup_async_function_constructor(&mut self) {
         // AsyncFunction constructor (not a global per spec)
         // Create the constructor and wire it up with AsyncFunction.prototype_id
         if let Some(af_proto_id) = self.realm().async_function_prototype
@@ -769,7 +793,9 @@ impl Interpreter {
                 );
             }
         }
+    }
 
+    fn setup_generator_function_constructor(&mut self) {
         // GeneratorFunction constructor (not a global per spec)
         // Create the constructor and wire it up with GeneratorFunction.prototype_id
         if let Some(gf_proto_id) = self.realm().generator_function_prototype
@@ -922,7 +948,9 @@ impl Interpreter {
                 );
             }
         }
+    }
 
+    fn setup_async_generator_function_constructor(&mut self) {
         // AsyncGeneratorFunction constructor (not a global per spec)
         // Create the constructor and wire it up with AsyncGeneratorFunction.prototype_id
         if let Some(agf_proto_id) = self.realm().async_generator_function_prototype
