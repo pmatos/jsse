@@ -90,6 +90,12 @@ fn disarm_timer(interp: &mut Interpreter, args: &[JsValue]) -> Completion {
 
 impl Interpreter {
     pub(super) fn setup_host_globals(&mut self) {
+        self.setup_console();
+        self.setup_print();
+        self.setup_timers();
+    }
+
+    fn setup_console(&mut self) {
         let console_id = self.create_object_id();
         {
             let log_fn = self.create_function(JsFunction::native(
@@ -166,7 +172,9 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .initialize_binding("console", console_val);
+    }
 
+    fn setup_print(&mut self) {
         // print global (needed by test262 async harness doneprintHandle.js)
         {
             let print_fn = self.create_function(JsFunction::native(
@@ -184,7 +192,9 @@ impl Interpreter {
             let env = self.realm().global_env.clone();
             let _ = self.env_set(&env, "print", print_fn);
         }
+    }
 
+    fn setup_timers(&mut self) {
         // Host timers. Not ECMAScript intrinsics, but the test262 atomics
         // harness needs setTimeout, and real-world libraries need the whole
         // family. They are serviced on the event loop rather than by a thread
