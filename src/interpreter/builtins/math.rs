@@ -326,6 +326,25 @@ impl Interpreter {
                 );
             }
         }
+        self.add_math_unary_methods(math_obj_id);
+        self.add_math_rounding_and_extrema_methods(math_obj_id);
+        self.add_math_misc_methods(math_obj_id);
+
+        // @@toStringTag
+        self.define_to_string_tag(math_obj_id, "Math");
+
+        let math_val = JsValue::object(math_id);
+        self.realm()
+            .global_env
+            .borrow_mut()
+            .declare("Math", BindingKind::Const);
+        self.realm()
+            .global_env
+            .borrow_mut()
+            .initialize_binding("Math", math_val);
+    }
+
+    fn add_math_unary_methods(&mut self, math_obj_id: u64) {
         // Add Math methods
         #[allow(clippy::type_complexity)]
         let math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
@@ -370,6 +389,9 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_builtin(name.to_string(), fn_val);
         }
+    }
+
+    fn add_math_rounding_and_extrema_methods(&mut self, math_obj_id: u64) {
         // Math.round — spec-correct: -0 for x in [-0.5,0), +0 for x in [0,0.5), integer shortcut
         let round_fn = self.create_function(JsFunction::native(
             "round".to_string(),
@@ -489,7 +511,9 @@ impl Interpreter {
         self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("random".to_string(), random_fn);
+    }
 
+    fn add_math_misc_methods(&mut self, math_obj_id: u64) {
         // Math.atan2
         let atan2_fn = self.create_function(JsFunction::native(
             "atan2".to_string(),
@@ -723,18 +747,5 @@ impl Interpreter {
         self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("sumPrecise".to_string(), sum_precise_fn);
-
-        // @@toStringTag
-        self.define_to_string_tag(math_obj_id, "Math");
-
-        let math_val = JsValue::object(math_id);
-        self.realm()
-            .global_env
-            .borrow_mut()
-            .declare("Math", BindingKind::Const);
-        self.realm()
-            .global_env
-            .borrow_mut()
-            .initialize_binding("Math", math_val);
     }
 }
