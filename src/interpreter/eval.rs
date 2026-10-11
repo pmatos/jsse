@@ -5827,7 +5827,10 @@ impl Interpreter {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
                             } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                // `arguments` is unobservable by name here (no
+                                // reference, declaration or direct eval), so no
+                                // binding is created; sloppy frames keep the args
+                                // for the legacy `fn.arguments` accessor.
                                 if !is_strict && !env_strict {
                                     call_frame_arguments = CallFrameArguments::Deferred {
                                         args: DeferredCallArguments::new(args),

@@ -562,25 +562,31 @@ const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 /// registry key, so it never reaches a real file of the same name.
 pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 
+/// Arguments a sloppy frame keeps for the legacy `fn.arguments` accessor.
+/// Inline for the common arities so a call that never reads them does not
+/// allocate.
 pub(crate) struct DeferredCallArguments {
-    first: Option<JsValue>,
-    rest: Vec<JsValue>,
+    values: smallvec::SmallVec<[JsValue; 6]>,
 }
 
 impl DeferredCallArguments {
     pub(crate) fn new(args: &[JsValue]) -> Self {
         Self {
-            first: args.first().cloned(),
-            rest: args.get(1..).unwrap_or(&[]).to_vec(),
+            values: args.iter().cloned().collect(),
         }
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &JsValue> {
-        self.first.iter().chain(self.rest.iter())
+        self.values.iter()
     }
 
     fn to_vec(&self) -> Vec<JsValue> {
-        self.values().cloned().collect()
+        self.values.iter().cloned().collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_spilled(&self) -> bool {
+        self.values.spilled()
     }
 }
 
