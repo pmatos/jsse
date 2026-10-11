@@ -1,6 +1,7 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
 use crate::interpreter::generator_analysis::block_has_await_using;
+use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
 use crate::interpreter::property::SetOutcome;
 
 mod access;
@@ -1787,14 +1788,13 @@ impl Interpreter {
     /// function literal), so it is built once and shared by every call (#914).
     pub(super) fn state_machine_for(
         &mut self,
-        kind: crate::interpreter::generator_transform::StateMachineKind,
+        kind: StateMachineKind,
         body: &Body,
         params: &[Pattern],
         func_obj_id: u64,
-    ) -> Rc<crate::interpreter::generator_transform::GeneratorStateMachine> {
+    ) -> Rc<GeneratorStateMachine> {
         use crate::interpreter::generator_transform::{
-            StateMachineKind, transform_async_function, transform_async_generator,
-            transform_generator,
+            transform_async_function, transform_async_generator, transform_generator,
         };
         let machine = match self.state_machine_memo.get(body) {
             Some((cached_kind, machine)) if cached_kind == kind => machine,
@@ -1828,6 +1828,56 @@ impl Interpreter {
         }
     }
 
+    /// The bytecode compile verdict for `body`, recorded on the function
+    /// object. It depends on the Body alone, so every closure of one function
+    /// literal shares the memoised verdict (#900).
+    fn shared_bytecode_verdict(
+        &mut self,
+        func_obj_id: u64,
+        body: &Body,
+    ) -> crate::interpreter::bytecode::BytecodeCacheState {
+        use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
+        let state = match self.bytecode_memo.get(body) {
+            Some(state) => {
+                // BAIL counts each literal once; the BODY row of every closure
+                // still names the reason.
+                #[cfg(feature = "perf-counters")]
+                {
+                    if let BytecodeCacheState::Ineligible(reason) = &state {
+                        let key = self.perf_body_name(func_obj_id);
+                        self.perf.bail_by_name.insert(key, reason);
+                    }
+                }
+                state
+            }
+            None => {
+                let state = match compiler::compile_body(body.as_slice()) {
+                    Ok(c) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.compile_ok += 1;
+                        }
+                        BytecodeCacheState::Compiled(Rc::new(c))
+                    }
+                    Err(compiler::CompileError::Unsupported(reason)) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            let (name, seq) = self.perf_body_name(func_obj_id);
+                            self.perf.record_bail(reason, name, seq);
+                        }
+                        BytecodeCacheState::Ineligible(reason)
+                    }
+                };
+                self.bytecode_memo.insert(body, state.clone());
+                state
+            }
+        };
+        if let Some(o) = self.get_object(func_obj_id) {
+            o.borrow_mut().bytecode_cache = state.clone();
+        }
+        state
+    }
+
     pub(super) fn dispatch_body(
         &mut self,
         func_obj_id: u64,
@@ -1836,62 +1886,17 @@ impl Interpreter {
         this_val: &JsValue,
     ) -> Completion {
         if self.bytecode_enabled {
-            use crate::interpreter::bytecode::{BytecodeCacheState, compiler, vm};
-            let cache_state = self
+            use crate::interpreter::bytecode::{BytecodeCacheState, vm};
+            let cached = self
                 .get_object(func_obj_id)
-                .map(|o| o.borrow().bytecode_cache.clone())
-                .unwrap_or(BytecodeCacheState::Untried);
-            let chunk = match cache_state {
-                BytecodeCacheState::Compiled(c) => Some(c),
-                BytecodeCacheState::Ineligible(_) => None,
-                BytecodeCacheState::Untried => {
-                    // The verdict depends on the Body alone, so every closure of
-                    // one function literal shares it (#900).
-                    let shared = match self.bytecode_memo.get(body) {
-                        Some(state) => {
-                            // BAIL counts each literal once; the BODY row of
-                            // every closure still names the reason.
-                            #[cfg(feature = "perf-counters")]
-                            {
-                                if let BytecodeCacheState::Ineligible(reason) = &state {
-                                    let key = self.perf_body_name(func_obj_id);
-                                    self.perf.bail_by_name.insert(key, reason);
-                                }
-                            }
-                            state
-                        }
-                        None => {
-                            let state = match compiler::compile_body(body.as_slice()) {
-                                Ok(c) => {
-                                    #[cfg(feature = "perf-counters")]
-                                    {
-                                        self.perf.compile_ok += 1;
-                                    }
-                                    BytecodeCacheState::Compiled(Rc::new(c))
-                                }
-                                Err(compiler::CompileError::Unsupported(reason)) => {
-                                    #[cfg(feature = "perf-counters")]
-                                    {
-                                        let (name, seq) = self.perf_body_name(func_obj_id);
-                                        self.perf.record_bail(reason, name, seq);
-                                    }
-                                    BytecodeCacheState::Ineligible(reason)
-                                }
-                            };
-                            self.bytecode_memo.insert(body, state.clone());
-                            state
-                        }
-                    };
-                    if let Some(o) = self.get_object(func_obj_id) {
-                        o.borrow_mut().bytecode_cache = shared.clone();
-                    }
-                    match shared {
-                        BytecodeCacheState::Compiled(c) => Some(c),
-                        _ => None,
-                    }
+                .map(|o| o.borrow().bytecode_cache.clone());
+            let cache_state = match cached {
+                Some(BytecodeCacheState::Untried) | None => {
+                    self.shared_bytecode_verdict(func_obj_id, body)
                 }
+                Some(known) => known,
             };
-            if let Some(chunk) = chunk {
+            if let BytecodeCacheState::Compiled(chunk) = cache_state {
                 #[cfg(feature = "perf-counters")]
                 {
                     self.perf.body_compiled += 1;
@@ -5439,7 +5444,7 @@ impl Interpreter {
                             };
 
                             let state_machine = self.state_machine_for(
-                                crate::interpreter::generator_transform::StateMachineKind::AsyncGenerator,
+                                StateMachineKind::AsyncGenerator,
                                 &body,
                                 &params,
                                 o.id,
@@ -5628,7 +5633,7 @@ impl Interpreter {
                             };
 
                             let state_machine = self.state_machine_for(
-                                crate::interpreter::generator_transform::StateMachineKind::Generator,
+                                StateMachineKind::Generator,
                                 &body,
                                 &params,
                                 o.id,
@@ -8043,7 +8048,7 @@ impl Interpreter {
             interp.in_tail_position = false;
 
             let sm = interp.state_machine_for(
-                crate::interpreter::generator_transform::StateMachineKind::AsyncFunction,
+                StateMachineKind::AsyncFunction,
                 body,
                 params,
                 _func_obj_id,

@@ -1182,6 +1182,14 @@ impl Interpreter {
             entries.iter().flatten().any(|e| same_value_zero(e, val))
         }
 
+        /// Whether the live O.[[SetData]] of `obj` contains `val`, checked under
+        /// a borrow rather than on a copy of the entries.
+        fn live_set_has(obj: &ObjectHandle, val: &JsValue) -> bool {
+            obj.borrow()
+                .set_data()
+                .is_some_and(|current| set_data_has(current, val))
+        }
+
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
             let new_obj_id = interp.create_object_id();
             interp
@@ -1291,11 +1299,7 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    let in_this = obj
-                        .borrow()
-                        .set_data()
-                        .is_some_and(|current| set_data_has(current, &value));
-                    if in_this {
+                    if live_set_has(&obj, &value) {
                         let val = canonicalize_key(value);
                         if !set_data_has(&new_entries, &val) {
                             new_entries.push(Some(val));
@@ -1392,11 +1396,7 @@ impl Interpreter {
                 };
                 let val = canonicalize_key(value);
                 // Check against live O.[[SetData]]
-                let in_this = obj
-                    .borrow()
-                    .set_data()
-                    .is_some_and(|current| set_data_has(current, &val));
-                if in_this {
+                if live_set_has(&obj, &val) {
                     for entry in new_entries.iter_mut() {
                         if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
                             *entry = None;
@@ -1477,11 +1477,7 @@ impl Interpreter {
                     Ok(None) => break,
                     Err(c) => return c,
                 };
-                let in_this = obj
-                    .borrow()
-                    .set_data()
-                    .is_some_and(|current| set_data_has(current, &value));
-                if !in_this {
+                if !live_set_has(&obj, &value) {
                     interp.iterator_close(&keys_iter, JsValue::UNDEFINED);
                     return Completion::Normal(JsValue::boolean(false));
                 }
@@ -1537,11 +1533,7 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    let in_this = obj
-                        .borrow()
-                        .set_data()
-                        .is_some_and(|current| set_data_has(current, &value));
-                    if in_this {
+                    if live_set_has(&obj, &value) {
                         interp.iterator_close(&keys_iter, JsValue::UNDEFINED);
                         return Completion::Normal(JsValue::boolean(false));
                     }
