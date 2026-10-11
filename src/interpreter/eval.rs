@@ -545,29 +545,8 @@ impl Interpreter {
                     self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
                 // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
-                } else if *op == BinaryOp::Add
-                    && !lval.is_object()
-                    && !rval.is_object()
-                    && (lval.is_string() || rval.is_string())
-                {
-                    if lval.is_symbol() || rval.is_symbol() {
-                        Completion::Throw(
-                            self.create_type_error("Cannot convert a Symbol value to a string"),
-                        )
-                    } else {
-                        let mut code_units = if lval.is_string() {
-                            lval.into_string().expect("kind checked").into_vec()
-                        } else {
-                            js_value_to_code_units(&lval)
-                        };
-                        if rval
-                            .with_string(|s| code_units.extend_from_slice(s))
-                            .is_none()
-                        {
-                            code_units.extend(js_value_to_code_units(&rval));
-                        }
-                        Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
-                    }
+                } else if *op == BinaryOp::Add && is_primitive_string_concat(&lval, &rval) {
+                    self.concat_owned_primitives(lval, rval)
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
@@ -1897,6 +1876,30 @@ impl Interpreter {
         self.perf_name_cache
             .insert(func_obj_id, (interned.clone(), seq));
         (interned, seq)
+    }
+
+    /// `+` on two primitives where at least one is a String, taking the
+    /// operands by value so a uniquely owned left string (an intermediate such
+    /// as `t + "ab"` in `t + "ab" + j`) is extended in place instead of copied.
+    /// Callers check [`is_primitive_string_concat`] first.
+    pub(super) fn concat_owned_primitives(&mut self, lval: JsValue, rval: JsValue) -> Completion {
+        if lval.is_symbol() || rval.is_symbol() {
+            return Completion::Throw(
+                self.create_type_error("Cannot convert a Symbol value to a string"),
+            );
+        }
+        let mut code_units = if lval.is_string() {
+            lval.into_string().expect("kind checked").into_vec()
+        } else {
+            js_value_to_code_units(&lval)
+        };
+        if rval
+            .with_string(|s| code_units.extend_from_slice(s))
+            .is_none()
+        {
+            code_units.extend(js_value_to_code_units(&rval));
+        }
+        Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
     }
 
     pub(super) fn eval_binary(
@@ -10372,6 +10375,12 @@ impl Interpreter {
             None => Completion::Normal(JsValue::UNDEFINED),
         }
     }
+}
+
+/// True when `l + r` is a string concatenation that needs no ToPrimitive call:
+/// both operands are primitives and at least one is a String.
+pub(super) fn is_primitive_string_concat(l: &JsValue, r: &JsValue) -> bool {
+    !l.is_object() && !r.is_object() && (l.is_string() || r.is_string())
 }
 
 /// §7.2.13 IsLessThan — the numeric comparison of a BigInt against a Number.
