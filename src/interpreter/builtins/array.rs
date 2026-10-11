@@ -2440,22 +2440,21 @@ impl Interpreter {
                         _ => return std::cmp::Ordering::Equal,
                     }
                 }
-                // IsLessThan compares UTF-16 code units, lone surrogates included.
-                let xs = match interp.to_js_string(x) {
+                let xs = match interp.to_string_value(x) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                let ys = match interp.to_js_string(y) {
+                let ys = match interp.to_string_value(y) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                xs.code_units[..].cmp(&ys.code_units[..])
+                xs.cmp(&ys)
             });
             if let Some(e) = sort_error {
                 return Completion::Throw(e);
@@ -2550,22 +2549,21 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                // IsLessThan compares UTF-16 code units, lone surrogates included.
-                let xs = match interp.to_js_string(x) {
+                let xs = match interp.to_string_value(x) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                let ys = match interp.to_js_string(y) {
+                let ys = match interp.to_string_value(y) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                xs.code_units[..].cmp(&ys.code_units[..])
+                xs.cmp(&ys)
             });
             if let Some(e) = sort_error {
                 return Completion::Throw(e);
