@@ -5354,8 +5354,6 @@ impl Interpreter {
                                 if is_strict || !is_simple_ag {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_ag {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -5538,8 +5536,6 @@ impl Interpreter {
                                 if is_strict || !is_simple_g {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_g {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -5726,15 +5722,12 @@ impl Interpreter {
                                 if is_strict || !is_simple {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                if !is_strict && !env_strict {
-                                    call_frame_arguments = CallFrameArguments::Deferred {
-                                        args: DeferredCallArguments::new(args),
-                                        func_env: func_env.clone(),
-                                        mapped: is_simple,
-                                    };
-                                }
+                            } else if !is_strict && !env_strict {
+                                call_frame_arguments = CallFrameArguments::Deferred {
+                                    args: DeferredCallArguments::new(args),
+                                    func_env: func_env.clone(),
+                                    mapped: is_simple,
+                                };
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -7966,8 +7959,6 @@ impl Interpreter {
                     if is_strict || !is_simple {
                         func_env.borrow_mut().arguments_immutable = true;
                     }
-                } else {
-                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
                 }
             }
             {
