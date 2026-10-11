@@ -289,6 +289,70 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
     Ok(())
 }
 
+// §23.1.3.30.1 SortIndexedProperties + §23.1.3.30.2 CompareArrayElements,
+// shared by `sort` and `toSorted`. Undefineds sort last without reaching the
+// comparator. Without a comparator, each remaining element is converted with
+// ToString once (the spec leaves the number and order of SortCompare calls
+// implementation-defined) and the keys are compared by UTF-16 code units,
+// which is the order IsLessThan defines for Strings.
+fn sort_values(
+    interp: &mut Interpreter,
+    items: &mut Vec<JsValue>,
+    compare_fn: Option<&JsValue>,
+) -> Result<(), JsValue> {
+    let compare_fn = compare_fn.filter(|cf| !cf.is_undefined()).cloned();
+    interp.with_gc_root_scope(|interp| {
+        for v in items.iter() {
+            interp.gc_root_value(v);
+        }
+        if let Some(cf) = &compare_fn {
+            interp.gc_root_value(cf);
+        }
+        let undefined_count = items.iter().filter(|v| v.is_undefined()).count();
+        items.retain(|v| !v.is_undefined());
+        if let Some(cf) = compare_fn {
+            let mut sort_error: Option<JsValue> = None;
+            items.sort_by(|x, y| {
+                if sort_error.is_some() {
+                    return std::cmp::Ordering::Equal;
+                }
+                let result =
+                    interp.call_function(&cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]);
+                let v = match result {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        sort_error = Some(e);
+                        return std::cmp::Ordering::Equal;
+                    }
+                    _ => return std::cmp::Ordering::Equal,
+                };
+                match interp.to_number_value(&v) {
+                    Ok(n) if n < 0.0 => std::cmp::Ordering::Less,
+                    Ok(n) if n > 0.0 => std::cmp::Ordering::Greater,
+                    Ok(_) => std::cmp::Ordering::Equal,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        std::cmp::Ordering::Equal
+                    }
+                }
+            });
+            if let Some(e) = sort_error {
+                return Err(e);
+            }
+        } else if items.len() > 1 {
+            let mut keyed: Vec<(JsString, JsValue)> = Vec::with_capacity(items.len());
+            for v in items.drain(..) {
+                let key = interp.to_js_string(&v)?;
+                keyed.push((key, v));
+            }
+            keyed.sort_by(|(a, _), (b, _)| a.code_units.as_slice().cmp(b.code_units.as_slice()));
+            items.extend(keyed.into_iter().map(|(_, v)| v));
+        }
+        items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
+        Ok(())
+    })
+}
+
 fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<bool, JsValue> {
     if let Some(obj_id) = o.as_object_id() {
         interp.proxy_has_property(obj_id, key)
@@ -2396,71 +2460,7 @@ impl Interpreter {
                     _ => {}
                 }
             }
-            let cmp_fn = compare_fn.clone();
-            let mut sort_error: Option<JsValue> = None;
-            items.sort_by(|x, y| {
-                if sort_error.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
-                if (x).is_undefined() && (y).is_undefined() {
-                    return std::cmp::Ordering::Equal;
-                }
-                if (x).is_undefined() {
-                    return std::cmp::Ordering::Greater;
-                }
-                if (y).is_undefined() {
-                    return std::cmp::Ordering::Less;
-                }
-                if let Some(ref cf) = cmp_fn
-                    && !(cf).is_undefined()
-                    && interp.is_callable(cf)
-                {
-                    let result =
-                        interp.call_function(cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]);
-                    match result {
-                        Completion::Normal(v) => {
-                            let n = match interp.to_number_value(&v) {
-                                Ok(n) => n,
-                                Err(e) => {
-                                    sort_error = Some(e);
-                                    return std::cmp::Ordering::Equal;
-                                }
-                            };
-                            if n.is_nan() {
-                                return std::cmp::Ordering::Equal;
-                            }
-                            if n < 0.0 {
-                                return std::cmp::Ordering::Less;
-                            }
-                            if n > 0.0 {
-                                return std::cmp::Ordering::Greater;
-                            }
-                            return std::cmp::Ordering::Equal;
-                        }
-                        Completion::Throw(e) => {
-                            sort_error = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                        _ => return std::cmp::Ordering::Equal,
-                    }
-                }
-                let xs = match interp.to_string_value(x) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return std::cmp::Ordering::Equal;
-                    }
-                };
-                let ys = match interp.to_string_value(y) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return std::cmp::Ordering::Equal;
-                    }
-                };
-                xs.cmp(&ys)
-            });
-            if let Some(e) = sort_error {
+            if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
                 return Completion::Throw(e);
             }
             // Write back
@@ -2505,71 +2505,7 @@ impl Interpreter {
                     Err(c) => return c,
                 });
             }
-            let cmp_fn = compare_fn.clone();
-            let mut sort_error: Option<JsValue> = None;
-            items.sort_by(|x, y| {
-                if sort_error.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
-                if (x).is_undefined() && (y).is_undefined() {
-                    return std::cmp::Ordering::Equal;
-                }
-                if (x).is_undefined() {
-                    return std::cmp::Ordering::Greater;
-                }
-                if (y).is_undefined() {
-                    return std::cmp::Ordering::Less;
-                }
-                if let Some(ref cf) = cmp_fn
-                    && !(cf).is_undefined()
-                    && interp.is_callable(cf)
-                {
-                    let result =
-                        interp.call_function(cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]);
-                    match result {
-                        Completion::Normal(v) => {
-                            let n = match interp.to_number_value(&v) {
-                                Ok(n) => n,
-                                Err(e) => {
-                                    sort_error = Some(e);
-                                    return std::cmp::Ordering::Equal;
-                                }
-                            };
-                            if n.is_nan() {
-                                return std::cmp::Ordering::Equal;
-                            }
-                            if n < 0.0 {
-                                return std::cmp::Ordering::Less;
-                            }
-                            if n > 0.0 {
-                                return std::cmp::Ordering::Greater;
-                            }
-                            return std::cmp::Ordering::Equal;
-                        }
-                        Completion::Throw(e) => {
-                            sort_error = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                        _ => {}
-                    }
-                }
-                let xs = match interp.to_string_value(x) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return std::cmp::Ordering::Equal;
-                    }
-                };
-                let ys = match interp.to_string_value(y) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return std::cmp::Ordering::Equal;
-                    }
-                };
-                xs.cmp(&ys)
-            });
-            if let Some(e) = sort_error {
+            if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
                 return Completion::Throw(e);
             }
             Completion::Normal(interp.create_array(items))
