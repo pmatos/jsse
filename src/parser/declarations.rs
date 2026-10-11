@@ -1052,9 +1052,13 @@ impl<'a> Parser<'a> {
         self.in_async = false;
         self.in_generator = false;
         // Increment in_function to prevent module-level await from matching
-        // (class field initializers use [~Await] per spec)
+        // (class field initializers use [~Await] per spec). An initializer is
+        // a method, so `new.target` is allowed in it (Contains does not look
+        // into class bodies, §8.5.1).
         self.in_function += 1;
+        self.in_non_arrow_function += 1;
         let result = self.parse_assignment_expression();
+        self.in_non_arrow_function -= 1;
         self.in_function -= 1;
         self.in_async = prev_async;
         self.in_generator = prev_gen;
