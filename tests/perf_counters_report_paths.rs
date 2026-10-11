@@ -351,7 +351,8 @@ fn module_body_gets_its_own_attribution_row() {
 
 /// Two distinct functions sharing a name merged into one `BODY` row with
 /// combined work, so the ranking could identify neither (#537 review, third
-/// pass). The id disambiguates them; unique names must stay bare.
+/// pass). The id disambiguates them; unique names must stay bare. `BODY` rows
+/// count tree-walker work only, so this runs with `--no-bytecode`.
 #[test]
 fn same_named_functions_get_separate_body_rows() {
     let dir = scratch("same-name");
@@ -364,7 +365,7 @@ fn same_named_functions_get_separate_body_rows() {
     .expect("write main");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["main.js"])
+        .args(["--no-bytecode", "main.js"])
         .output()
         .expect("run jsse");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -377,6 +378,22 @@ fn same_named_functions_get_separate_body_rows() {
         same_rows.len(),
         2,
         "both `same` functions must appear separately; stderr:\n{stderr}"
+    );
+    // Separate rows are not enough: each must carry only its own work (900 vs
+    // 30 iterations), not the merged total the original bug reported.
+    let mut work: Vec<u64> = same_rows
+        .iter()
+        .map(|l| {
+            l.split('\t')
+                .nth(2)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("unparsable BODY row {l:?}"))
+        })
+        .collect();
+    work.sort_unstable();
+    assert!(
+        work[1] > work[0] * 10,
+        "each `same` row must hold its own work, got {work:?}; stderr:\n{stderr}"
     );
     assert!(
         !stderr.lines().any(|l| l.starts_with("BODY\tsame\t")),
