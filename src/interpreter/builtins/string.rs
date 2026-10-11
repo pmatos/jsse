@@ -49,7 +49,7 @@ fn utf16_units(s: &str) -> Vec<u16> {
 
 // clamp(pos, 0, len) for an already-integral (or ±∞) position.
 fn clamp_index(pos: f64, len: usize) -> usize {
-    pos.max(0.0).min(len as f64) as usize
+    pos.clamp(0.0, len as f64) as usize
 }
 
 // §6.1.4.1 StringIndexOf over UTF-16 code units, so lone surrogates only match
@@ -89,6 +89,19 @@ fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result
         .get_object_cell(obj_id)
         .map(|obj| obj.borrow().class_name == "RegExp")
         .unwrap_or(false))
+}
+
+// Steps 3-4 of includes/startsWith/endsWith: throw a TypeError when the search
+// argument IsRegExp.
+fn reject_regexp(interp: &mut Interpreter, arg: &JsValue, method: &str) -> Result<(), Completion> {
+    if let Some(object_id) = arg.as_object_id()
+        && is_regexp(interp, object_id, arg).map_err(Completion::Throw)?
+    {
+        return Err(Completion::Throw(interp.create_type_error(&format!(
+            "First argument to String.prototype.{method} must not be a regular expression"
+        ))));
+    }
+    Ok(())
 }
 
 fn utf16_substring(units: &[u16], from: usize, to: usize) -> String {
@@ -193,14 +206,10 @@ impl Interpreter {
                 1,
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let search = match args.first() {
-                        Some(v) => propagate!(interp.to_js_string(v)),
-                        None => JsString::from_str("undefined"),
-                    };
-                    let pos = match args.get(1) {
-                        Some(v) => propagate!(to_int_or_inf(interp, v)),
-                        None => 0.0,
-                    };
+                    let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let search = propagate!(interp.to_js_string(&search_arg));
+                    let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let pos = propagate!(interp.to_integer_or_infinity_value(&position));
                     let units = &s.code_units;
                     let start = clamp_index(pos, units.len());
                     let index = string_index_of(units, &search.code_units, start);
@@ -212,14 +221,10 @@ impl Interpreter {
                 1,
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let search = match args.first() {
-                        Some(v) => propagate!(interp.to_js_string(v)),
-                        None => JsString::from_str("undefined"),
-                    };
-                    let num_pos = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => propagate!(to_num(interp, v)),
-                        _ => f64::NAN,
-                    };
+                    let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let search = propagate!(interp.to_js_string(&search_arg));
+                    let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let num_pos = propagate!(interp.to_number_value(&position));
                     let units = &s.code_units;
                     let start = if num_pos.is_nan() {
                         units.len()
@@ -236,22 +241,10 @@ impl Interpreter {
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if let Some(object_id) = search_arg.as_object_id() {
-                        match is_regexp(interp, object_id, &search_arg) {
-                            Ok(true) => {
-                                return Completion::Throw(interp.create_type_error(
-                                    "First argument to String.prototype.includes must not be a regular expression",
-                                ));
-                            }
-                            Err(e) => return Completion::Throw(e),
-                            _ => {}
-                        }
-                    }
+                    propagate!(reject_regexp(interp, &search_arg, "includes"));
                     let search = propagate!(interp.to_js_string(&search_arg));
-                    let pos = match args.get(1) {
-                        Some(v) => propagate!(to_int_or_inf(interp, v)),
-                        None => 0.0,
-                    };
+                    let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let pos = propagate!(interp.to_integer_or_infinity_value(&position));
                     let units = &s.code_units;
                     let start = clamp_index(pos, units.len());
                     let found = string_index_of(units, &search.code_units, start).is_some();
@@ -264,22 +257,10 @@ impl Interpreter {
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if let Some(object_id) = search_arg.as_object_id() {
-                        match is_regexp(interp, object_id, &search_arg) {
-                            Ok(true) => {
-                                return Completion::Throw(interp.create_type_error(
-                                    "First argument to String.prototype.startsWith must not be a regular expression",
-                                ));
-                            }
-                            Err(e) => return Completion::Throw(e),
-                            _ => {}
-                        }
-                    }
+                    propagate!(reject_regexp(interp, &search_arg, "startsWith"));
                     let search = propagate!(interp.to_js_string(&search_arg));
-                    let pos = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => propagate!(to_int_or_inf(interp, v)),
-                        _ => 0.0,
-                    };
+                    let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let pos = propagate!(interp.to_integer_or_infinity_value(&position));
                     let units = &s.code_units;
                     let start = clamp_index(pos, units.len());
                     let result = units[start..].starts_with(&search.code_units);
@@ -292,23 +273,14 @@ impl Interpreter {
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    if let Some(object_id) = search_arg.as_object_id() {
-                        match is_regexp(interp, object_id, &search_arg) {
-                            Ok(true) => {
-                                return Completion::Throw(interp.create_type_error(
-                                    "First argument to String.prototype.endsWith must not be a regular expression",
-                                ));
-                            }
-                            Err(e) => return Completion::Throw(e),
-                            _ => {}
-                        }
-                    }
+                    propagate!(reject_regexp(interp, &search_arg, "endsWith"));
                     let search = propagate!(interp.to_js_string(&search_arg));
                     let units = &s.code_units;
                     let end = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => {
-                            clamp_index(propagate!(to_int_or_inf(interp, v)), units.len())
-                        }
+                        Some(v) if !v.is_undefined() => clamp_index(
+                            propagate!(interp.to_integer_or_infinity_value(v)),
+                            units.len(),
+                        ),
                         _ => units.len(),
                     };
                     let result = units[..end].ends_with(&search.code_units);
