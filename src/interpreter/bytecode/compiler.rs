@@ -10,10 +10,8 @@ use crate::types::JsString;
 #[derive(Debug)]
 pub(crate) enum CompileError {
     /// The string carries a construction-site label for greppable
-    /// documentation and to surface in `{:?}` traces when debugging the
-    /// eligibility membrane. Callers only ever match `Err(_)`, hence the
-    /// allow.
-    #[allow(dead_code)]
+    /// documentation, `{:?}` traces when debugging the eligibility membrane,
+    /// and the counters build's BAIL table.
     Unsupported(&'static str),
 }
 

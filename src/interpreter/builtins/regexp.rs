@@ -8319,6 +8319,13 @@ fn regexp_exec_raw(
 }
 
 fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<JsPropertyKey> {
+    // None until the Symbol constructor has registered the well-known symbols.
+    if interp.well_known_symbols.is_empty() {
+        return None;
+    }
+    if let Some(key) = JsPropertyKey::cached_well_known_symbol(name) {
+        return Some(key.clone());
+    }
     interp
         .well_known_symbols
         .get(name)

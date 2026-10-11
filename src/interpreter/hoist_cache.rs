@@ -2,28 +2,21 @@
 //!
 //! `dispatch_body` needs the var and Annex-B declared names of the Body it is
 //! about to run, and re-walking the statements on every call is pure waste, so
-//! the collection is memoised per Body (#72). Each entry pins its Body — the
-//! ABA contract on `Body::key` — which means an unbounded map would retain
-//! every Body it has ever seen, including the short-lived ones that
-//! `new Function` and `eval` produce (#165). The cache is therefore
-//! capacity-bounded with approximate-LRU eviction. Entries are pure
+//! the collection is memoised per Body (#72) in a `BodyMemo`, which pins each
+//! Body it keys and stays capacity-bounded so the short-lived Bodies that
+//! `new Function` and `eval` produce can be freed (#165). Entries are pure
 //! memoisation, so eviction only ever costs a re-walk.
 //!
 //! `super::ic_store` independently pins the same Bodies, so both caches must
 //! remain bounded for dead dynamic-function and eval Bodies to be freed
 //! (#165, #468).
 
-use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use super::body_memo::{BodyMemo, DEFAULT_CAPACITY};
 use crate::ast::{Body, Statement};
 use crate::interpreter::Interpreter;
-
-/// Maximum number of memoised Bodies. Large enough that a program with a fixed
-/// set of functions never evicts; the bound is there for Body-churning
-/// workloads (`new Function` / `eval` in a loop), which retain a Body per entry.
-pub(crate) const DEFAULT_CAPACITY: usize = 8192;
 
 /// The cached half of one Body's hoisting analysis (#72).
 ///
@@ -39,22 +32,10 @@ pub(crate) struct HoistAnalysis {
     pub(crate) annexb_names: Vec<String>,
 }
 
-struct Entry {
-    analysis: Rc<HoistAnalysis>,
-    /// Recency tick of this entry's most recent call.
-    last_used: u64,
-    /// Pins the Body for as long as this entry's key lives, per `Body::key`.
-    _body: Rc<Vec<Statement>>,
-}
-
 /// Capacity-bounded, approximate-LRU memo of `HoistAnalysis`, keyed by
-/// `Body::key`. It owns the key, the recency metadata, the pin, and the
-/// analysis itself, so no caller can pair a key with a different analysis or
-/// update one part of an entry without the others.
+/// `Body::key`.
 pub(crate) struct HoistCache {
-    entries: FxHashMap<*const Vec<Statement>, Entry>,
-    capacity: usize,
-    clock: u64,
+    memo: BodyMemo<Rc<HoistAnalysis>>,
     #[cfg(test)]
     hits: u64,
 }
@@ -66,9 +47,7 @@ impl HoistCache {
 
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            entries: FxHashMap::default(),
-            capacity: capacity.max(2),
-            clock: 0,
+            memo: BodyMemo::with_capacity(capacity),
             #[cfg(test)]
             hits: 0,
         }
@@ -77,12 +56,7 @@ impl HoistCache {
     /// Return `body`'s analysis, collecting and memoising it on a miss — which
     /// is either a Body not seen before or one whose entry has been evicted.
     pub(crate) fn analysis_for(&mut self, body: &Body) -> Rc<HoistAnalysis> {
-        let key = body.key();
-        self.clock += 1;
-        let tick = self.clock;
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.last_used = tick;
-            let analysis = entry.analysis.clone();
+        if let Some(analysis) = self.memo.get(body) {
             #[cfg(test)]
             {
                 self.hits += 1;
@@ -90,43 +64,20 @@ impl HoistCache {
             return analysis;
         }
         let analysis = Rc::new(collect_names(body.as_slice()));
-        if self.entries.len() >= self.capacity {
-            self.evict_older_half();
-        }
-        self.entries.insert(
-            key,
-            Entry {
-                analysis: analysis.clone(),
-                last_used: tick,
-                _body: body.statements.clone(),
-            },
-        );
+        self.memo.insert(body, analysis.clone());
         analysis
     }
 
     /// Number of memoised Bodies.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+        self.memo.len()
     }
 
     /// Number of calls served from the memo.
     #[cfg(test)]
     pub(crate) fn hits(&self) -> u64 {
         self.hits
-    }
-
-    /// Drop the older half of the entries by `last_used`, keeping the newer
-    /// `ceil(len / 2)` — so the most-recently-used entry always survives, and
-    /// with the capacity floored at two a sweep always frees a slot for the
-    /// incoming Body. Halving rather than evicting a single entry keeps this an
-    /// amortised O(1)-per-insert sweep. Ticks are unique, one per call, so the
-    /// cutoff cannot tie. Each removal drops the entry's pin with its key.
-    fn evict_older_half(&mut self) {
-        let mut ticks: Vec<u64> = self.entries.values().map(|e| e.last_used).collect();
-        let mid = ticks.len() / 2;
-        let (_, &mut cutoff, _) = ticks.select_nth_unstable(mid);
-        self.entries.retain(|_, e| e.last_used >= cutoff);
     }
 }
 
