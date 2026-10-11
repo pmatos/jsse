@@ -2,50 +2,22 @@ use super::super::*;
 use crate::interpreter::helpers::is_ecma_whitespace;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 
-// §22.1.3 thisStringValue — RequireObjectCoercible + extract primitive from String wrapper
-fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String, Completion> {
-    if this.is_nullish() {
-        return Err(Completion::Throw(interp.create_type_error(
-            "String.prototype method called on null or undefined",
-        )));
-    }
-    if let Some(string) = this.as_string() {
-        return Ok(string.to_rust_string());
-    }
-    if let Some(object_id) = this.as_object_id()
-        && let Some(obj) = interp.get_object_cell(object_id)
-    {
-        let object = obj.borrow();
-        if object.class_name == "String"
-            && let Some(string) = object.primitive_value.as_ref().and_then(JsValue::as_string)
-        {
-            return Ok(string.to_rust_string());
-        }
-    }
-    interp.to_string_value(this).map_err(Completion::Throw)
-}
-
-// Extract the raw JsString (preserving lone surrogates) from this value
+// `? RequireObjectCoercible(this value)` then `? ToString(O)`, keeping the
+// exact code units (lone surrogates included). A String wrapper goes through
+// ToPrimitive like any other object, so an own or inherited toString /
+// @@toPrimitive override is observed.
 fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, Completion> {
     if this.is_nullish() {
         return Err(Completion::Throw(interp.create_type_error(
             "String.prototype method called on null or undefined",
         )));
     }
-    if let Some(string) = this.as_string() {
-        return Ok(string);
-    }
-    if let Some(object_id) = this.as_object_id()
-        && let Some(obj) = interp.get_object_cell(object_id)
-    {
-        let object = obj.borrow();
-        if object.class_name == "String"
-            && let Some(string) = object.primitive_value.as_ref().and_then(JsValue::as_string)
-        {
-            return Ok(string);
-        }
-    }
     interp.to_js_string(this).map_err(Completion::Throw)
+}
+
+// `this_js_string` decoded to a Rust `String` (lone surrogates become U+FFFD).
+fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String, Completion> {
+    this_js_string(interp, this).map(|string| string.to_rust_string())
 }
 
 fn to_str(interp: &mut Interpreter, val: &JsValue) -> Result<String, Completion> {

@@ -22,16 +22,16 @@ info: |
 ---*/
 
 assert.sameValue("a\ud800".lastIndexOf("\udc00"), -1, "different lone surrogates do not match");
-assert.sameValue("𐀀".lastIndexOf("\udc00\ud800"), -1, "reordered pair does not match");
+assert.sameValue("\ud800\udc00".lastIndexOf("\udc00\ud800"), -1, "reordered pair does not match");
 assert.sameValue("\ud800a\ud800".lastIndexOf("\ud800"), 2, "identical lone surrogate matches last");
 assert.sameValue("\ud800a\ud800".lastIndexOf("\ud800", 1), 0, "position limits the search");
-assert.sameValue("\ud800".lastIndexOf("�"), -1, "a lone surrogate is not U+FFFD");
-assert.sameValue("�".lastIndexOf("\udfff"), -1, "U+FFFD is not a lone surrogate");
+assert.sameValue("\ud800".lastIndexOf("\ufffd"), -1, "a lone surrogate is not U+FFFD");
+assert.sameValue("\ufffd".lastIndexOf("\udfff"), -1, "U+FFFD is not a lone surrogate");
 
 // Halves of a surrogate pair are individually searchable.
-assert.sameValue("😀😀".lastIndexOf("\ud83d"), 2, "last leading half");
-assert.sameValue("😀😀".lastIndexOf("\ude00", 2), 1, "trailing half before position");
-assert.sameValue("😀".lastIndexOf("\ude00", 0), -1, "position before the trailing half");
+assert.sameValue("\ud83d\ude00\ud83d\ude00".lastIndexOf("\ud83d"), 2, "last leading half");
+assert.sameValue("\ud83d\ude00\ud83d\ude00".lastIndexOf("\ude00", 2), 1, "trailing half before position");
+assert.sameValue("\ud83d\ude00".lastIndexOf("\ude00", 0), -1, "position before the trailing half");
 
 var searchObj = { toString: function () { return "\udc00"; } };
 assert.sameValue("\ud800\ud800".lastIndexOf(searchObj), -1, "search string from toString");

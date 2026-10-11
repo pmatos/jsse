@@ -25,16 +25,16 @@ info: |
 ---*/
 
 assert.sameValue("\ud800x".startsWith("\udc00"), false, "different lone surrogates do not match");
-assert.sameValue("\ud800x".startsWith("�"), false, "a lone surrogate is not U+FFFD");
-assert.sameValue("�x".startsWith("\ud800"), false, "U+FFFD is not a lone surrogate");
+assert.sameValue("\ud800x".startsWith("\ufffd"), false, "a lone surrogate is not U+FFFD");
+assert.sameValue("\ufffdx".startsWith("\ud800"), false, "U+FFFD is not a lone surrogate");
 assert.sameValue("\ud800x".startsWith("\ud800"), true, "identical lone surrogate matches");
 assert.sameValue("x\udc00".startsWith("\ud800", 1), false, "different lone surrogate at position");
 assert.sameValue("x\udc00".startsWith("\udc00", 1), true, "identical lone surrogate at position");
 
 // Halves of a surrogate pair are individually searchable.
-assert.sameValue("😀".startsWith("\ud83d"), true, "leading half of a pair");
-assert.sameValue("😀".startsWith("\ude00", 1), true, "trailing half at position");
-assert.sameValue("😀".startsWith("\ude00"), false, "trailing half is not a prefix");
+assert.sameValue("\ud83d\ude00".startsWith("\ud83d"), true, "leading half of a pair");
+assert.sameValue("\ud83d\ude00".startsWith("\ude00", 1), true, "trailing half at position");
+assert.sameValue("\ud83d\ude00".startsWith("\ude00"), false, "trailing half is not a prefix");
 
 var searchObj = { toString: function () { return "\udc00"; } };
 assert.sameValue("\ud800".startsWith(searchObj), false, "search string from toString");

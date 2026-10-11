@@ -24,15 +24,15 @@ info: |
 
 assert.sameValue("\ud800".includes("\udc00"), false, "different lone surrogates do not match");
 assert.sameValue("\udbff".includes("\udfff"), false, "different lone surrogates do not match (max)");
-assert.sameValue("\ud800".includes("�"), false, "a lone surrogate is not U+FFFD");
-assert.sameValue("�".includes("\ud800"), false, "U+FFFD is not a lone surrogate");
+assert.sameValue("\ud800".includes("\ufffd"), false, "a lone surrogate is not U+FFFD");
+assert.sameValue("\ufffd".includes("\ud800"), false, "U+FFFD is not a lone surrogate");
 assert.sameValue("ab\udc00".includes("\udc00"), true, "identical lone surrogate matches");
 assert.sameValue("ab\udc00".includes("\udc00", 3), false, "position past the lone surrogate");
 
 // Halves of a surrogate pair are individually searchable.
-assert.sameValue("😀".includes("\ud83d"), true, "leading half of a pair");
-assert.sameValue("😀".includes("\ude00", 1), true, "trailing half at position");
-assert.sameValue("😀".includes("\ude00", 2), false, "position past the trailing half");
+assert.sameValue("\ud83d\ude00".includes("\ud83d"), true, "leading half of a pair");
+assert.sameValue("\ud83d\ude00".includes("\ude00", 1), true, "trailing half at position");
+assert.sameValue("\ud83d\ude00".includes("\ude00", 2), false, "position past the trailing half");
 
 var searchObj = { toString: function () { return "\udc00"; } };
 assert.sameValue("\ud800".includes(searchObj), false, "search string from toString");

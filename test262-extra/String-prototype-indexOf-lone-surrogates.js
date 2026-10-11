@@ -30,16 +30,16 @@ info: |
 assert.sameValue("\ud800".indexOf("\udc00"), -1, "different lone surrogates do not match");
 assert.sameValue("\udc00".indexOf("\ud800"), -1, "different lone surrogates do not match (reversed)");
 assert.sameValue("\ud800".indexOf("\ud800"), 0, "identical lone surrogate matches");
-assert.sameValue("\ud800".indexOf("�"), -1, "a lone surrogate is not U+FFFD");
-assert.sameValue("�".indexOf("\ud800"), -1, "U+FFFD is not a lone surrogate");
+assert.sameValue("\ud800".indexOf("\ufffd"), -1, "a lone surrogate is not U+FFFD");
+assert.sameValue("\ufffd".indexOf("\ud800"), -1, "U+FFFD is not a lone surrogate");
 assert.sameValue("a\ud800b\udc00".indexOf("\udc00"), 3, "lone trail surrogate found at its own index");
 assert.sameValue("a\ud800b\udc00".indexOf("b\udc00"), 2, "substring ending in a lone surrogate");
 
 // Halves of a surrogate pair are individually searchable.
-assert.sameValue("😀".indexOf("\ud83d"), 0, "leading half of a pair");
-assert.sameValue("😀".indexOf("\ude00"), 1, "trailing half of a pair");
-assert.sameValue("x😀".indexOf("\ude00", 2), 2, "trailing half at position");
-assert.sameValue("😀".indexOf("\ude00", 2), -1, "position past the trailing half");
+assert.sameValue("\ud83d\ude00".indexOf("\ud83d"), 0, "leading half of a pair");
+assert.sameValue("\ud83d\ude00".indexOf("\ude00"), 1, "trailing half of a pair");
+assert.sameValue("x\ud83d\ude00".indexOf("\ude00", 2), 2, "trailing half at position");
+assert.sameValue("\ud83d\ude00".indexOf("\ude00", 2), -1, "position past the trailing half");
 assert.sameValue("\ud800\ud800".indexOf("\ud800", 1), 1, "position skips the first lone surrogate");
 
 // ToString of objects keeps lone surrogates.
