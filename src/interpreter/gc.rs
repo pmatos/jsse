@@ -25,12 +25,9 @@ pub(crate) struct GcPacer {
     minor_requested: bool,
     /// A full collection has been requested and not yet performed.
     major_requested: bool,
-    /// Dense mutation or high survival made routine minor collection
-    /// counterproductive. Run a major after the next nursery budget.
+    /// A dense remembered set made routine minor collection counterproductive.
+    /// Run a major after the next nursery budget.
     minor_suppressed: bool,
-    /// Consecutive minor collections in which at least 90% of the nursery
-    /// survived. Two saturated minors switch back to major pacing.
-    high_survival_minors: u8,
     /// Debug stress mode: force a collection every `stress_period` safepoints
     /// that would otherwise not collect. Zero disables it.
     stress_period: u32,
@@ -81,7 +78,6 @@ impl GcPacer {
             minor_requested: false,
             major_requested: false,
             minor_suppressed: false,
-            high_survival_minors: 0,
             stress_period: stress_period_from_env(),
             stress_count: 0,
             #[cfg(test)]
@@ -166,17 +162,14 @@ impl GcPacer {
         }
     }
 
-    pub(crate) fn end_minor_collection(&mut self, survived: usize, examined: usize) {
+    /// Reset the nursery cycle after a minor collection. High survival does not
+    /// switch to major pacing: a minor costs about the same per nursery
+    /// whatever the live-set size, while forcing a major every nursery traced
+    /// the whole growing heap per 8,192 allocations (#908). Majors stay on the
+    /// live-set-proportional byte budget.
+    pub(crate) fn end_minor_collection(&mut self) {
         self.nursery_alloc_count = 0;
         self.nursery_bytes = 0;
-        if examined > 0 && survived.saturating_mul(10) >= examined.saturating_mul(9) {
-            self.high_survival_minors = self.high_survival_minors.saturating_add(1);
-            if self.high_survival_minors >= 2 {
-                self.minor_suppressed = true;
-            }
-        } else {
-            self.high_survival_minors = 0;
-        }
     }
 
     /// Pause minor collection after an unproductive scavenge. Nursery objects
@@ -198,7 +191,6 @@ impl GcPacer {
         self.nursery_alloc_count = 0;
         self.nursery_bytes = 0;
         self.minor_suppressed = false;
-        self.high_survival_minors = 0;
     }
 
     #[cfg(test)]
@@ -773,27 +765,22 @@ impl Interpreter {
         }
 
         let nursery = self.objects.take_nursery();
-        let examined = nursery.len();
-        let mut survived = 0;
-        let mut survivors = Vec::with_capacity(examined);
+        let mut survivors = Vec::with_capacity(nursery.len());
         for id in nursery {
             let Some(handle) = self.objects.get(id) else {
                 continue;
             };
             if !handle.is_young_marked() {
                 self.free_gc_object(id);
+            } else if handle.age_survivor(GC_PROMOTION_AGE) {
+                handle.promote();
             } else {
-                survived += 1;
-                if handle.age_survivor(GC_PROMOTION_AGE) {
-                    handle.promote();
-                } else {
-                    handle.clear_young_mark();
-                    survivors.push(id);
-                }
+                handle.clear_young_mark();
+                survivors.push(id);
             }
         }
         self.objects.replace_nursery(survivors);
-        self.gc.end_minor_collection(survived, examined);
+        self.gc.end_minor_collection();
     }
 
     fn free_gc_object(&mut self, id: u64) {
@@ -1563,7 +1550,7 @@ mod tests {
         assert!(pacer.is_requested());
         assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
         assert_eq!(pacer.alloc_count(), nursery_objects);
-        pacer.end_minor_collection(0, nursery_objects);
+        pacer.end_minor_collection();
         assert_eq!(
             pacer.alloc_count(),
             0,
@@ -1640,23 +1627,33 @@ mod tests {
     }
 
     #[test]
-    fn repeated_high_nursery_survival_suppresses_minors_until_major() {
+    fn high_nursery_survival_keeps_minor_pacing_and_major_budget() {
+        // #908: saturated minors used to force a major every nursery, tracing
+        // the whole growing heap per 8,192 allocations. Majors now come only
+        // from the live-set-proportional budget.
         let mut pacer = GcPacer::new();
         pacer.end_major_collection(100_000);
-
-        pacer.end_minor_collection(90, 100);
-        assert!(!pacer.minor_suppressed);
-        pacer.end_minor_collection(99, 100);
-        assert!(pacer.minor_suppressed);
-
-        for _ in 0..GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD {
-            pacer.charge_object(true);
+        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
+        let mut majors = 0;
+        let mut minors = 0;
+        while majors == 0 {
+            pacer.charge_object(false);
+            match pacer.begin_collection() {
+                Some(CollectionKind::Minor) => {
+                    minors += 1;
+                    pacer.end_minor_collection();
+                }
+                Some(CollectionKind::Major) => majors += 1,
+                None => {}
+            }
         }
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-
-        pacer.end_major_collection(100_000);
         assert!(!pacer.minor_suppressed);
-        assert_eq!(pacer.high_survival_minors, 0);
+        let budget_objects =
+            (100_000 * GC_OBJECT_OVERHEAD * (GC_GROWTH_FACTOR - 1)) / GC_OBJECT_OVERHEAD;
+        assert!(
+            minors >= budget_objects / nursery_objects - 1,
+            "the major waits for the live-set budget, got {minors} minors first"
+        );
     }
 
     #[test]
