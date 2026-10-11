@@ -847,6 +847,43 @@ pub(crate) struct SwitchCase {
     pub consequent: Vec<Statement>,
 }
 
+/// Facts about a function literal that are pure functions of its AST. Computed
+/// once on first closure creation and shared (by `Rc`) by every closure of the
+/// literal, so creating a closure costs O(1) instead of O(literal size).
+#[derive(Debug)]
+pub(crate) struct FunctionLiteralInfo {
+    pub params: Rc<Vec<Pattern>>,
+    pub uses_arguments: bool,
+    pub has_simple_params: bool,
+}
+
+/// Lazily filled cache of a function literal's [`FunctionLiteralInfo`]. It is
+/// filled on first closure creation, which is after the last post-parse pass
+/// that mutates the node, and `Clone` yields an empty cell, so a cloned-then-
+/// mutated node can never carry a stale value.
+#[derive(Debug, Default)]
+pub(crate) struct LiteralInfoCell(std::cell::OnceCell<Rc<FunctionLiteralInfo>>);
+
+impl Clone for LiteralInfoCell {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl LiteralInfoCell {
+    fn get_or_init(&self, params: &[Pattern], body: Option<&Body>) -> Rc<FunctionLiteralInfo> {
+        self.0
+            .get_or_init(|| {
+                Rc::new(FunctionLiteralInfo {
+                    params: Rc::new(params.to_vec()),
+                    uses_arguments: body.is_some_and(|b| func_uses_arguments(params, b)),
+                    has_simple_params: params_are_simple(params),
+                })
+            })
+            .clone()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionDecl {
     pub name: String,
@@ -856,6 +893,13 @@ pub(crate) struct FunctionDecl {
     pub is_generator: bool,
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
+    pub info: LiteralInfoCell,
+}
+
+impl FunctionDecl {
+    pub(crate) fn info(&self) -> Rc<FunctionLiteralInfo> {
+        self.info.get_or_init(&self.params, Some(&self.body))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -867,6 +911,13 @@ pub(crate) struct FunctionExpr {
     pub is_generator: bool,
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
+    pub info: LiteralInfoCell,
+}
+
+impl FunctionExpr {
+    pub(crate) fn info(&self) -> Rc<FunctionLiteralInfo> {
+        self.info.get_or_init(&self.params, Some(&self.body))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -876,6 +927,15 @@ pub(crate) struct ArrowFunction {
     pub is_async: bool,
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
+    pub info: LiteralInfoCell,
+}
+
+impl ArrowFunction {
+    /// Arrows never have their own `arguments`, so `uses_arguments` is false
+    /// and the body is not walked.
+    pub(crate) fn info(&self) -> Rc<FunctionLiteralInfo> {
+        self.info.get_or_init(&self.params, None)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2246,6 +2306,7 @@ mod ic_site_tests {
             is_generator: false,
             source_text: None,
             body_is_strict: false,
+            info: Default::default(),
         };
         let mut outer = body_with(vec![expr_stmt(call(
             Expression::Function(func),

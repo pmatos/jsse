@@ -375,11 +375,12 @@ impl Interpreter {
         // Create constructor function (classes are always strict mode)
         let (ctor_params, ctor_body, uses_arguments, has_simple_params) =
             if let Some(cm) = ctor_method {
+                let info = cm.value.info();
                 (
-                    Rc::new(cm.value.params.clone()),
+                    info.params.clone(),
                     cm.value.body.clone(),
-                    func_uses_arguments(&cm.value.params, &cm.value.body),
-                    crate::ast::params_are_simple(&cm.value.params),
+                    info.uses_arguments,
+                    info.has_simple_params,
                 )
             } else if super_val.is_some() {
                 // default derived constructor takes `...args` (rest) — not simple
@@ -615,9 +616,10 @@ impl Interpreter {
                             method_closure
                                 .borrow_mut()
                                 .initialize_binding("__home_object__", priv_home_target);
+                            let info = m.value.info();
                             let method_func = JsFunction::User {
                                 name: Some(format!("#{name}")),
-                                params: Rc::new(m.value.params.clone()),
+                                params: info.params.clone(),
                                 body: m.value.body.clone(),
                                 closure: method_closure,
                                 is_arrow: false,
@@ -627,8 +629,8 @@ impl Interpreter {
                                 is_method: true,
                                 source_text: m.value.source_text.clone(),
                                 captured_new_target: None,
-                                uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
-                                has_simple_params: crate::ast::params_are_simple(&m.value.params),
+                                uses_arguments: info.uses_arguments,
+                                has_simple_params: info.has_simple_params,
                             };
                             let method_val = self.create_function(method_func);
 
@@ -794,11 +796,12 @@ impl Interpreter {
                     method_closure
                         .borrow_mut()
                         .initialize_binding("__home_object__", home_target);
+                    let info = m.value.info();
                     let method_func = JsFunction::User {
                         // create_function installs an empty configurable name, then
                         // SetFunctionName below replaces it without a lossy Rust String seam.
                         name: Some(String::new()),
-                        params: Rc::new(m.value.params.clone()),
+                        params: info.params.clone(),
                         body: m.value.body.clone(),
                         closure: method_closure,
                         is_arrow: false,
@@ -808,8 +811,8 @@ impl Interpreter {
                         is_method: true,
                         source_text: m.value.source_text.clone(),
                         captured_new_target: None,
-                        uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
-                        has_simple_params: crate::ast::params_are_simple(&m.value.params),
+                        uses_arguments: info.uses_arguments,
+                        has_simple_params: info.has_simple_params,
                     };
                     let method_val = self.create_function(method_func);
                     self.set_function_name(&method_val, &method_display_name);

@@ -6170,3 +6170,168 @@ fn synthesized_default_constructors_share_one_body_per_shape() {
         interp.bytecode_memo.len()
     );
 }
+
+fn user_function_params(
+    interp: &Interpreter,
+    name: &str,
+) -> (u64, *const Vec<crate::ast::Pattern>) {
+    let id = global_object_id(interp, name);
+    let obj = interp
+        .get_object_cell(id)
+        .expect("function object must be live")
+        .borrow();
+    match obj.callable.as_ref() {
+        Some(JsFunction::User { params, .. }) => (id, Rc::as_ptr(params)),
+        other => panic!("global {name} must be a user function, got {other:?}"),
+    }
+}
+
+fn assert_literal_params_shared(setup: &str) {
+    for bytecode in [true, false] {
+        let mut interp = Interpreter::new();
+        interp.bytecode_enabled = bytecode;
+        run_step(&mut interp, setup);
+        let (id_a, params_a) = user_function_params(&interp, "a");
+        let (id_b, params_b) = user_function_params(&interp, "b");
+        assert_ne!(id_a, id_b, "closures must be distinct objects: {setup}");
+        assert!(
+            std::ptr::eq(params_a, params_b),
+            "closures of one literal must share parameter patterns (bytecode={bytecode}): {setup}"
+        );
+    }
+}
+
+#[test]
+fn closures_of_one_function_expression_share_params() {
+    assert_literal_params_shared(
+        "function mk() { return function (x, y = 1) { return x + y; }; }
+         var a = mk(), b = mk();",
+    );
+}
+
+#[test]
+fn closures_of_one_arrow_share_params() {
+    assert_literal_params_shared(
+        "function mk() { return (x, [y]) => x + y; }
+         var a = mk(), b = mk();",
+    );
+}
+
+#[test]
+fn hoisted_function_declarations_share_params() {
+    assert_literal_params_shared(
+        "function outer() { function inner(p) { return p; } return inner; }
+         var a = outer(), b = outer();",
+    );
+}
+
+#[test]
+fn switch_case_function_declarations_share_params() {
+    assert_literal_params_shared(
+        "function outer() { switch (1) { case 1: function inner(p) { return p; } return inner; } }
+         var a = outer(), b = outer();",
+    );
+}
+
+#[test]
+fn object_literal_methods_and_accessors_share_params() {
+    let setup =
+        "function mk() { return { m(p) { return p; }, get g() { return 1; }, set s(v) {} }; }
+         var o1 = mk(), o2 = mk();";
+    assert_literal_params_shared(&format!("{setup} var a = o1.m, b = o2.m;"));
+    assert_literal_params_shared(&format!(
+        "{setup} var a = Object.getOwnPropertyDescriptor(o1, 'g').get,
+             b = Object.getOwnPropertyDescriptor(o2, 'g').get;"
+    ));
+    assert_literal_params_shared(&format!(
+        "{setup} var a = Object.getOwnPropertyDescriptor(o1, 's').set,
+             b = Object.getOwnPropertyDescriptor(o2, 's').set;"
+    ));
+}
+
+#[test]
+fn class_elements_share_params_across_evaluations() {
+    let setup = "function mk() {
+           return class { constructor(p) { this.p = p; } m(q) { return q; }
+             get g() { return 1; } static s(r) { return r; } };
+         }
+         var C1 = mk(), C2 = mk();";
+    for (a, b) in [
+        ("C1", "C2"),
+        ("C1.prototype.m", "C2.prototype.m"),
+        (
+            "Object.getOwnPropertyDescriptor(C1.prototype, 'g').get",
+            "Object.getOwnPropertyDescriptor(C2.prototype, 'g').get",
+        ),
+        ("C1.s", "C2.s"),
+    ] {
+        assert_literal_params_shared(&format!("{setup} var a = {a}, b = {b};"));
+    }
+}
+
+#[test]
+fn closures_created_in_generator_and_async_bodies_share_params() {
+    assert_literal_params_shared(
+        "function* gen() { var f = function (p) { return p; }; yield f; }
+         var a = gen().next().value, b = gen().next().value;",
+    );
+    assert_literal_params_shared(
+        "var made = [];
+         async function f() { made.push(function (p) { return p; }); }
+         f(); f();
+         var a = made[0], b = made[1];",
+    );
+}
+
+fn first_function_decl(program: &Program) -> &crate::ast::FunctionDecl {
+    program
+        .body
+        .as_slice()
+        .iter()
+        .find_map(|s| match s {
+            crate::ast::Statement::FunctionDeclaration(f) => Some(f),
+            _ => None,
+        })
+        .expect("function declaration")
+}
+
+#[test]
+fn literal_info_matches_direct_analysis() {
+    let cases = [
+        "function f() {}",
+        "function f(a, b) { return a; }",
+        "function f(a = 1) {}",
+        "function f(...rest) {}",
+        "function f({ a }, [b]) {}",
+        "function f(a = arguments[0]) {}",
+        "function f() { return () => arguments; }",
+        "function f() { return function () { return arguments; }; }",
+        "function f(a) { return arguments.length; }",
+    ];
+    for src in cases {
+        let program = parse_program(src);
+        let f = first_function_decl(&program);
+        let info = f.info();
+        assert_eq!(
+            info.uses_arguments,
+            crate::ast::func_uses_arguments(&f.params, &f.body),
+            "uses_arguments: {src}"
+        );
+        assert_eq!(
+            info.has_simple_params,
+            crate::ast::params_are_simple(&f.params),
+            "has_simple_params: {src}"
+        );
+        assert_eq!(info.params.len(), f.params.len(), "{src}");
+        assert!(Rc::ptr_eq(&info, &f.info()), "info must be cached: {src}");
+    }
+}
+
+#[test]
+fn literal_info_cell_resets_on_clone() {
+    let program = parse_program("function f(a) { return arguments; }");
+    let f = first_function_decl(&program);
+    let original = f.info();
+    let cloned = f.clone();
+    assert!(!Rc::ptr_eq(&original, &cloned.info()));
+}

@@ -5129,9 +5129,10 @@ impl Interpreter {
             }
             Statement::FunctionDeclaration(f) => {
                 env.borrow_mut().declare(&f.name, BindingKind::Var);
+                let info = f.info();
                 let func = JsFunction::User {
                     name: Some(f.name.clone()),
-                    params: Rc::new(f.params.clone()),
+                    params: info.params.clone(),
                     body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
@@ -5141,8 +5142,8 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&f.params, &f.body),
-                    has_simple_params: crate::ast::params_are_simple(&f.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let val = self.create_function(func);
                 let _ = self.env_set(env, &f.name, val);
@@ -5174,13 +5175,14 @@ impl Interpreter {
                     f.name.clone()
                 };
                 env.borrow_mut().declare(&name, BindingKind::Const);
+                let info = f.info();
                 let func = JsFunction::User {
                     name: Some(if f.name.is_empty() {
                         "default".to_string()
                     } else {
                         f.name.clone()
                     }),
-                    params: Rc::new(f.params.clone()),
+                    params: info.params.clone(),
                     body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
@@ -5190,8 +5192,8 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&f.params, &f.body),
-                    has_simple_params: crate::ast::params_are_simple(&f.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let val = self.create_function(func);
                 env.borrow_mut().initialize_binding(&name, val);
@@ -5359,9 +5361,10 @@ impl Interpreter {
                     func.name.clone()
                 };
                 let enclosing_strict = env.borrow().strict;
+                let info = func.info();
                 let js_func = JsFunction::User {
                     name: Some(name),
-                    params: Rc::new(func.params.clone()),
+                    params: info.params.clone(),
                     body: func.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
@@ -5371,8 +5374,8 @@ impl Interpreter {
                     is_method: false,
                     source_text: func.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&func.params, &func.body),
-                    has_simple_params: crate::ast::params_are_simple(&func.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
