@@ -135,10 +135,12 @@ impl BindingMap {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -157,7 +159,7 @@ impl BindingMap {
         self.index = None;
     }
 
-    #[inline]
+    #[cfg(test)]
     pub(crate) fn position<K: BindingKey + ?Sized>(&self, key: &K) -> Option<usize> {
         key.find_in(self)
     }
@@ -233,10 +235,6 @@ impl BindingMap {
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &Binding> {
         self.entries.iter().map(|(_, b)| b)
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Atom, &Binding)> {
-        self.entries.iter().map(|(a, b)| (a, b))
     }
 
     fn build_index(&mut self) {

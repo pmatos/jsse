@@ -60,12 +60,17 @@ struct Compiler {
     /// form reads the last entry; the labeled form searches outward from the
     /// end via `resolve_loop_frame`.
     loop_frames: Vec<LoopFrame>,
+    /// Frame binding order for a function body whose locals are known: slot
+    /// `i` is the expected position of that name in the call's binding
+    /// vector. Empty when no local ops are emitted.
+    locals: Vec<String>,
 }
 
 impl Compiler {
     fn new(goal: CompileGoal) -> Self {
         Self {
             goal,
+            locals: Vec::new(),
             code: Vec::new(),
             constants: Vec::new(),
             names: Vec::new(),
@@ -201,8 +206,28 @@ impl Compiler {
 
     fn compile_load_name(&mut self, name: &str) -> Result<(), CompileError> {
         let idx = self.add_name(name)?;
-        self.emit_load_name(idx);
+        if let Some(slot) = self.local_slot(name) {
+            self.emit(Op::LoadLocal);
+            self.emit_u16(idx);
+            self.emit_u16(slot);
+            self.push_n(1);
+        } else {
+            self.emit_load_name(idx);
+        }
         Ok(())
+    }
+
+    fn local_slot(&self, name: &str) -> Option<u16> {
+        self.locals
+            .iter()
+            .position(|n| n == name)
+            .and_then(|i| u16::try_from(i).ok())
+    }
+
+    fn emit_store_local(&mut self, name_idx: u16, slot: u16) {
+        self.emit(Op::StoreLocal);
+        self.emit_u16(name_idx);
+        self.emit_u16(slot);
     }
 
     fn reset_script_completion(&mut self) {
@@ -291,6 +316,28 @@ impl Compiler {
                 Ok(())
             }
             Expression::Assign(op, target, value) => match target.as_ref() {
+                Expression::Identifier(name) if self.local_slot(name).is_some() => {
+                    // A local of this frame: no `with`, closure or direct eval
+                    // can change what the name resolves to while the
+                    // right-hand side runs, so the reference needs no early
+                    // resolution.
+                    let idx = self.add_name(name)?;
+                    let slot = self.local_slot(name).expect("checked by the guard");
+                    if *op != AssignOp::Assign {
+                        self.emit(Op::LoadLocal);
+                        self.emit_u16(idx);
+                        self.emit_u16(slot);
+                        self.push_n(1);
+                    }
+                    self.compile_expr(value)?;
+                    if *op != AssignOp::Assign {
+                        self.emit(Self::compound_binary_op(*op)?);
+                        self.pop_n(2);
+                        self.push_n(1);
+                    }
+                    self.emit_store_local(idx, slot);
+                    Ok(())
+                }
                 Expression::Identifier(name) => {
                     let idx = self.add_name(name)?;
                     self.emit_resolve_name(idx);
@@ -375,8 +422,14 @@ impl Compiler {
                     return Err(CompileError::Unsupported("update target"));
                 };
                 let idx = self.add_name(name)?;
-                self.emit(Op::UpdateName);
-                self.emit_u16(idx);
+                if let Some(slot) = self.local_slot(name) {
+                    self.emit(Op::UpdateLocal);
+                    self.emit_u16(idx);
+                    self.emit_u16(slot);
+                } else {
+                    self.emit(Op::UpdateName);
+                    self.emit_u16(idx);
+                }
                 let mode = match (op, prefix) {
                     (UpdateOp::Increment, false) => 0,
                     (UpdateOp::Increment, true) => 1,
@@ -556,9 +609,14 @@ impl Compiler {
             };
             let idx = self.add_var_name(name)?;
             if let Some(init) = &declarator.init {
-                self.emit_resolve_name(idx);
-                self.compile_expr(init)?;
-                self.emit_store_resolved_name(idx);
+                if let Some(slot) = self.local_slot(name) {
+                    self.compile_expr(init)?;
+                    self.emit_store_local(idx, slot);
+                } else {
+                    self.emit_resolve_name(idx);
+                    self.compile_expr(init)?;
+                    self.emit_store_resolved_name(idx);
+                }
                 self.emit(Op::Pop);
                 self.pop_n(1);
             }
@@ -1043,6 +1101,48 @@ fn expression_kind(node: &Expression) -> &'static str {
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
     let mut c = Compiler::new(CompileGoal::Function);
+    c.compile_statement_list(body)?;
+    Ok(c.finish())
+}
+
+/// What the call path will have put in the frame before the chunk runs: the
+/// `arguments` binding when the call declares it, then the simple parameters
+/// in order. Names the body `var`-declares follow in first-use order.
+pub(crate) struct FrameShape<'a> {
+    pub(crate) arguments_slot: bool,
+    pub(crate) simple_params: &'a [String],
+}
+
+/// Compiles a function body, resolving the frame's own names through local
+/// slot ops. The first pass finds the names the chunk's var prologue will
+/// declare; the second emits `LoadLocal`/`StoreLocal`/`UpdateLocal` for the
+/// frame's names. Slots are hints verified at run time (see `Op::LoadLocal`),
+/// so a frame laid out differently only costs the by-name fallback.
+pub(crate) fn compile_function_body(
+    body: &[Statement],
+    shape: &FrameShape<'_>,
+) -> Result<Chunk, CompileError> {
+    let first = compile_body(body)?;
+    let mut locals: Vec<String> = Vec::new();
+    let mut push = |name: &str| {
+        if !locals.iter().any(|n| n == name) {
+            locals.push(name.to_string());
+        }
+    };
+    if shape.arguments_slot {
+        push("arguments");
+    }
+    for param in shape.simple_params {
+        push(param);
+    }
+    for &idx in &first.var_names {
+        push(first.names[idx as usize].as_str());
+    }
+    if locals.is_empty() {
+        return Ok(first);
+    }
+    let mut c = Compiler::new(CompileGoal::Function);
+    c.locals = locals;
     c.compile_statement_list(body)?;
     Ok(c.finish())
 }

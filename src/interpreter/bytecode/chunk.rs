@@ -1,5 +1,5 @@
-use crate::types::{JsString, JsValue};
 use crate::interpreter::Atom;
+use crate::types::{JsString, JsValue};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Constant {

@@ -1,7 +1,7 @@
 use crate::ast::*;
+use crate::interpreter::Atom;
 use crate::interpreter::PropertyMap;
 use crate::interpreter::binding_map::{BindingMap, BindingName};
-use crate::interpreter::Atom;
 use crate::interpreter::generator_transform::{
     GeneratorStateMachine, LoopControlTarget, SentValueBinding,
 };
@@ -1275,10 +1275,8 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow_mut().set(name, value)
         } else {
-            self.bindings.insert(
-                name,
-                Binding::new(value, BindingKind::Var, true),
-            );
+            self.bindings
+                .insert(name, Binding::new(value, BindingKind::Var, true));
             Ok(())
         }
     }

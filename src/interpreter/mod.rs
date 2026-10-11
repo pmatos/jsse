@@ -30,7 +30,7 @@ pub(crate) use dispose::{
 mod atom;
 mod binding_map;
 pub(crate) use atom::Atom;
-pub(crate) use binding_map::{BindingKey, BindingName};
+pub(crate) use binding_map::BindingName;
 mod body_memo;
 mod env_helpers;
 mod eval;

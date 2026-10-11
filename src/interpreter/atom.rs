@@ -30,12 +30,16 @@ pub(crate) struct Atom(Rc<AtomData>);
 
 impl Atom {
     pub(crate) fn intern(text: &str) -> Atom {
+        #[cfg(feature = "perf-counters")]
+        INTERN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         INTERNER.with(|i| i.borrow_mut().intern(text))
     }
 
     /// The atom for `text` if one is currently alive. A `None` means no
     /// environment/chunk anywhere holds that name, and inserts nothing.
     pub(crate) fn lookup(text: &str) -> Option<Atom> {
+        #[cfg(feature = "perf-counters")]
+        LOOKUP_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         INTERNER.with(|i| i.borrow().lookup(text))
     }
 
@@ -43,6 +47,7 @@ impl Atom {
         &self.0.text
     }
 
+    #[cfg(test)]
     pub(crate) fn precomputed_hash(&self) -> u64 {
         self.0.hash
     }
@@ -158,6 +163,24 @@ impl Interner {
 
 thread_local! {
     static INTERNER: RefCell<Interner> = RefCell::new(Interner::new());
+}
+
+/// Calls into the (hashing) interner, for the `perf-counters` report: a call
+/// path that interns or looks up per call shows up as counts that scale with
+/// the call count.
+#[cfg(feature = "perf-counters")]
+static INTERN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "perf-counters")]
+static LOOKUP_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(feature = "perf-counters")]
+pub(crate) fn intern_calls() -> u64 {
+    INTERN_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(feature = "perf-counters")]
+pub(crate) fn lookup_calls() -> u64 {
+    LOOKUP_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(test)]

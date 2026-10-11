@@ -1377,15 +1377,15 @@ mod tests {
     fn collect_env_roots_walks_parent_chain_and_terminates_on_cycle() {
         // (a) child binds "a"=Object(30), parent binds "b"=Object(31) → {30,31}
         let parent = Environment::new(None);
-        parent.borrow_mut().bindings.insert(
-            "b",
-            Binding::new(obj(31), BindingKind::Var, true),
-        );
+        parent
+            .borrow_mut()
+            .bindings
+            .insert("b", Binding::new(obj(31), BindingKind::Var, true));
         let child = Environment::new(Some(parent.clone()));
-        child.borrow_mut().bindings.insert(
-            "a",
-            Binding::new(obj(30), BindingKind::Var, true),
-        );
+        child
+            .borrow_mut()
+            .bindings
+            .insert("a", Binding::new(obj(30), BindingKind::Var, true));
 
         let mut worklist = Vec::new();
         Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
@@ -1394,10 +1394,10 @@ mod tests {
         // (b) self-referential env (parent points to itself) binds "c"=Object(32)
         // → terminates without infinite loop, contains 32 exactly once.
         let cyclic = Environment::new(None);
-        cyclic.borrow_mut().bindings.insert(
-            "c",
-            Binding::new(obj(32), BindingKind::Var, true),
-        );
+        cyclic
+            .borrow_mut()
+            .bindings
+            .insert("c", Binding::new(obj(32), BindingKind::Var, true));
         cyclic.borrow_mut().parent = Some(cyclic.clone());
 
         let mut worklist = Vec::new();
@@ -1419,10 +1419,9 @@ mod tests {
     #[test]
     fn environment_roots_are_scanned_once_per_collection() {
         let env = Environment::new(None);
-        env.borrow_mut().bindings.insert(
-            "shared",
-            Binding::new(obj(33), BindingKind::Var, true),
-        );
+        env.borrow_mut()
+            .bindings
+            .insert("shared", Binding::new(obj(33), BindingKind::Var, true));
         let mut worklist = Vec::new();
         let mut seen_envs = HashSet::new();
 
@@ -1734,10 +1733,9 @@ mod tests {
         assert!(interp.objects.get_cell_expect(owner).is_old());
 
         let child = interp.alloc_object(JsObjectData::new());
-        env.borrow_mut().bindings.insert(
-            "captured",
-            Binding::new(obj(child), BindingKind::Var, true),
-        );
+        env.borrow_mut()
+            .bindings
+            .insert("captured", Binding::new(obj(child), BindingKind::Var, true));
         interp.gc.request_minor();
         interp.gc_safepoint();
 

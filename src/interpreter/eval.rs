@@ -1853,7 +1853,33 @@ impl Interpreter {
                 state
             }
             None => {
-                let state = match compiler::compile_body(body.as_slice()) {
+                let shape = self
+                    .get_object(func_obj_id)
+                    .and_then(|o| match &o.borrow().callable {
+                        Some(JsFunction::User {
+                            params,
+                            is_arrow,
+                            uses_arguments,
+                            has_simple_params,
+                            ..
+                        }) if *has_simple_params => Some((
+                            !*is_arrow && *uses_arguments,
+                            params
+                                .iter()
+                                .filter_map(|p| match p {
+                                    Pattern::Identifier(name) => Some(name.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<String>>(),
+                        )),
+                        _ => None,
+                    });
+                let (arguments_slot, simple_params) = shape.unwrap_or((false, Vec::new()));
+                let frame_shape = compiler::FrameShape {
+                    arguments_slot,
+                    simple_params: &simple_params,
+                };
+                let state = match compiler::compile_function_body(body.as_slice(), &frame_shape) {
                     Ok(c) => {
                         #[cfg(feature = "perf-counters")]
                         {
@@ -2377,7 +2403,6 @@ impl Interpreter {
         key: &N,
         env: &EnvRef,
     ) -> Completion {
-        let name = key.as_name();
         // Fast path: identifier is a Number in the local scope chain (no with/module)
         {
             let env_borrow = env.borrow();
