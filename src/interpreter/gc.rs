@@ -1,7 +1,5 @@
 use super::*;
 
-const GC_SATURATED_MAJOR_NURSERIES: usize = 1;
-
 /// Allocation-pressure pacing for the garbage collector.
 ///
 /// Owns the accounting that decides *when* to collect: how many objects and
@@ -97,12 +95,12 @@ impl GcPacer {
         self.nursery_alloc_count += 1;
         self.nursery_bytes += GC_OBJECT_OVERHEAD;
         self.major_bytes_since_gc += GC_OBJECT_OVERHEAD;
-        let probe_threshold =
-            GC_NURSERY_THRESHOLD_BYTES.saturating_mul(GC_SATURATED_MAJOR_NURSERIES);
-        if self.minor_suppressed && self.nursery_bytes >= probe_threshold {
-            self.major_requested = true;
-        } else if !self.minor_suppressed && self.nursery_bytes >= GC_NURSERY_THRESHOLD_BYTES {
-            self.minor_requested = true;
+        if self.nursery_bytes >= GC_NURSERY_THRESHOLD_BYTES {
+            if self.minor_suppressed {
+                self.major_requested = true;
+            } else {
+                self.minor_requested = true;
+            }
         }
         if self.major_bytes_since_gc >= self.major_threshold_bytes {
             self.major_requested = true;
@@ -1648,8 +1646,7 @@ mod tests {
             }
         }
         assert!(!pacer.minor_suppressed);
-        let budget_objects =
-            (100_000 * GC_OBJECT_OVERHEAD * (GC_GROWTH_FACTOR - 1)) / GC_OBJECT_OVERHEAD;
+        let budget_objects = 100_000 * (GC_GROWTH_FACTOR - 1);
         assert!(
             minors >= budget_objects / nursery_objects - 1,
             "the major waits for the live-set budget, got {minors} minors first"

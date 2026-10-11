@@ -1291,8 +1291,11 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                    if set_data_has(&current, &value) {
+                    let in_this = obj
+                        .borrow()
+                        .set_data()
+                        .is_some_and(|current| set_data_has(current, &value));
+                    if in_this {
                         let val = canonicalize_key(value);
                         if !set_data_has(&new_entries, &val) {
                             new_entries.push(Some(val));
@@ -1389,8 +1392,10 @@ impl Interpreter {
                 };
                 let val = canonicalize_key(value);
                 // Check against live O.[[SetData]]
-                let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                let in_this = set_data_has(&current, &val);
+                let in_this = obj
+                    .borrow()
+                    .set_data()
+                    .is_some_and(|current| set_data_has(current, &val));
                 if in_this {
                     for entry in new_entries.iter_mut() {
                         if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
@@ -1472,8 +1477,11 @@ impl Interpreter {
                     Ok(None) => break,
                     Err(c) => return c,
                 };
-                let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                if !set_data_has(&current, &value) {
+                let in_this = obj
+                    .borrow()
+                    .set_data()
+                    .is_some_and(|current| set_data_has(current, &value));
+                if !in_this {
                     interp.iterator_close(&keys_iter, JsValue::UNDEFINED);
                     return Completion::Normal(JsValue::boolean(false));
                 }
@@ -1529,8 +1537,11 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                    if set_data_has(&current, &value) {
+                    let in_this = obj
+                        .borrow()
+                        .set_data()
+                        .is_some_and(|current| set_data_has(current, &value));
+                    if in_this {
                         interp.iterator_close(&keys_iter, JsValue::UNDEFINED);
                         return Completion::Normal(JsValue::boolean(false));
                     }

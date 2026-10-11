@@ -1843,12 +1843,23 @@ impl Interpreter {
                 .unwrap_or(BytecodeCacheState::Untried);
             let chunk = match cache_state {
                 BytecodeCacheState::Compiled(c) => Some(c),
-                BytecodeCacheState::Ineligible => None,
+                BytecodeCacheState::Ineligible(_) => None,
                 BytecodeCacheState::Untried => {
                     // The verdict depends on the Body alone, so every closure of
                     // one function literal shares it (#900).
                     let shared = match self.bytecode_memo.get(body) {
-                        Some(state) => state,
+                        Some(state) => {
+                            // BAIL counts each literal once; the BODY row of
+                            // every closure still names the reason.
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                if let BytecodeCacheState::Ineligible(reason) = &state {
+                                    let key = self.perf_body_name(func_obj_id);
+                                    self.perf.bail_by_name.insert(key, reason);
+                                }
+                            }
+                            state
+                        }
                         None => {
                             let state = match compiler::compile_body(body.as_slice()) {
                                 Ok(c) => {
@@ -1858,16 +1869,13 @@ impl Interpreter {
                                     }
                                     BytecodeCacheState::Compiled(Rc::new(c))
                                 }
-                                Err(_e) => {
+                                Err(compiler::CompileError::Unsupported(reason)) => {
                                     #[cfg(feature = "perf-counters")]
                                     {
-                                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
-                                            reason,
-                                        ) = _e;
                                         let (name, seq) = self.perf_body_name(func_obj_id);
                                         self.perf.record_bail(reason, name, seq);
                                     }
-                                    BytecodeCacheState::Ineligible
+                                    BytecodeCacheState::Ineligible(reason)
                                 }
                             };
                             self.bytecode_memo.insert(body, state.clone());
@@ -2035,18 +2043,7 @@ impl Interpreter {
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    let mut code_units = if lprim.is_string() {
-                        lprim.into_string().expect("kind checked").into_vec()
-                    } else {
-                        js_value_to_code_units(&lprim)
-                    };
-                    if rprim
-                        .with_string(|s| code_units.extend_from_slice(s))
-                        .is_none()
-                    {
-                        code_units.extend(js_value_to_code_units(&rprim));
-                    }
-                    Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                    self.concat_owned_primitives(lprim, rprim)
                 } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
                     Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
                         &a.value, &b.value,
@@ -3588,25 +3585,8 @@ impl Interpreter {
             AssignOp::AddAssign => {
                 // Fast path: both primitives and at least one is a string — avoid
                 // to_primitive/js_value_to_code_units clones in eval_binary.
-                if !lval.is_object() && !rval.is_object() && (lval.is_string() || rval.is_string())
-                {
-                    if lval.is_symbol() || rval.is_symbol() {
-                        return Completion::Throw(
-                            self.create_type_error("Cannot convert a Symbol value to a string"),
-                        );
-                    }
-                    let mut code_units = if lval.is_string() {
-                        lval.into_string().expect("kind checked").into_vec()
-                    } else {
-                        js_value_to_code_units(&lval)
-                    };
-                    if rval
-                        .with_string(|s| code_units.extend_from_slice(s))
-                        .is_none()
-                    {
-                        code_units.extend(js_value_to_code_units(&rval));
-                    }
-                    return Completion::Normal(JsValue::string(JsString::from_vec(code_units)));
+                if is_primitive_string_concat(&lval, &rval) {
+                    return self.concat_owned_primitives(lval, rval);
                 }
                 self.eval_binary(BinaryOp::Add, &lval, &rval)
             }

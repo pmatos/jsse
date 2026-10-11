@@ -2,20 +2,24 @@
 //!
 //! Closures created from the same function literal share one `Body` (its
 //! statements `Rc`), so anything derived from the Body alone can be computed
-//! once and reused by every closure and every call: the bytecode compile
-//! verdict (#900) and the generator/async state machine (#914).
+//! once and reused by every closure and every call: the hoisting analysis
+//! (#72, `hoist_cache`), the bytecode compile verdict (#900) and the
+//! generator/async state machine (#914).
 //!
-//! Each entry pins its Body — the ABA contract on `Body::key` — so the memo is
-//! capacity-bounded with the same approximate-LRU halving as `hoist_cache`,
-//! letting the short-lived Bodies that `new Function` and `eval` produce be
-//! freed (#165). Entries are pure memoisation: eviction only costs a recompute.
+//! Each entry pins its Body — the ABA contract on `Body::key` — which means an
+//! unbounded memo would retain every Body it has ever seen, including the
+//! short-lived ones that `new Function` and `eval` produce (#165). The memo is
+//! therefore capacity-bounded with approximate-LRU eviction. Entries are pure
+//! memoisation: eviction only costs a recompute.
 
 use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
 use crate::ast::{Body, Statement};
 
-/// Maximum number of memoised Bodies, matching `hoist_cache` and `ic_store`.
+/// Maximum number of memoised Bodies, matching `ic_store`. Large enough that a
+/// program with a fixed set of functions never evicts; the bound is there for
+/// Body-churning workloads (`new Function` / `eval` in a loop).
 pub(crate) const DEFAULT_CAPACITY: usize = 8192;
 
 struct Entry<V> {
@@ -37,7 +41,7 @@ impl<V: Clone> BodyMemo<V> {
         Self::with_capacity(DEFAULT_CAPACITY)
     }
 
-    fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: FxHashMap::default(),
             capacity: capacity.max(2),
@@ -78,9 +82,11 @@ impl<V: Clone> BodyMemo<V> {
     }
 
     /// Drop the older half of the entries by `last_used`, keeping the newer
-    /// `ceil(len / 2)`, so a sweep always frees a slot for the incoming Body.
-    /// Ticks are unique, so the cutoff cannot tie. Each removal drops the
-    /// entry's pin with its key.
+    /// `ceil(len / 2)` — so the most-recently-used entry always survives, and
+    /// with the capacity floored at two a sweep always frees a slot for the
+    /// incoming Body. Halving rather than evicting a single entry keeps this an
+    /// amortised O(1)-per-insert sweep. Ticks are unique, so the cutoff cannot
+    /// tie. Each removal drops the entry's pin with its key.
     fn evict_older_half(&mut self) {
         let mut ticks: Vec<u64> = self.entries.values().map(|e| e.last_used).collect();
         let mid = ticks.len() / 2;

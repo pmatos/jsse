@@ -12,6 +12,9 @@ use std::rc::Rc;
 pub(crate) enum BytecodeCacheState {
     #[default]
     Untried,
-    Ineligible,
+    /// The compile-bail reason, kept so a counters build can label the BODY
+    /// row of every closure that shares the verdict, not just the first.
+    #[cfg_attr(not(feature = "perf-counters"), allow(dead_code))]
+    Ineligible(&'static str),
     Compiled(Rc<chunk::Chunk>),
 }
