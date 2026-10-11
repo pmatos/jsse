@@ -352,9 +352,7 @@ fn module_body_gets_its_own_attribution_row() {
 /// Two distinct functions sharing a name merged into one `BODY` row with
 /// combined work, so the ranking could identify neither (#537 review, third
 /// pass). The id disambiguates them; unique names must stay bare. `BODY` rows
-/// cover tree-walker work only, so the run disables the bytecode VM: once the
-/// compiler accepted these bodies, a default run had no `same` rows left to
-/// check.
+/// count tree-walker work only, so this runs with `--no-bytecode`.
 #[test]
 fn same_named_functions_get_separate_body_rows() {
     let dir = scratch("same-name");
