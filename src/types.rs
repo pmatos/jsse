@@ -284,6 +284,35 @@ impl JsPropertyKey {
         }
     }
 
+    /// The canonical key for array index `index`. Small indices are shared
+    /// from a per-thread table (a clone is a refcount bump, not an
+    /// allocation); larger ones format into a stack buffer first.
+    pub(crate) fn from_index(index: usize) -> Self {
+        const SMALL_INDEX_KEYS: usize = 64;
+        thread_local! {
+            static SMALL: Vec<JsPropertyKey> = (0..SMALL_INDEX_KEYS)
+                .map(|i| JsPropertyKey::from_str(&i.to_string()))
+                .collect();
+        }
+        if index < SMALL_INDEX_KEYS {
+            return SMALL.with(|keys| keys[index].clone());
+        }
+        let mut buf = [0u8; 20];
+        let mut pos = buf.len();
+        let mut n = index;
+        loop {
+            pos -= 1;
+            buf[pos] = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                break;
+            }
+        }
+        Self {
+            bytes: Arc::from(&buf[pos..]),
+        }
+    }
+
     pub(crate) fn from_js_string(s: &JsString) -> Self {
         let units = s.as_units();
         let mut bytes = Vec::with_capacity(units.len() * 3);

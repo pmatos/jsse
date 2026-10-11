@@ -2260,26 +2260,14 @@ impl Interpreter {
             } => (args.to_vec(), func_env.clone(), *mapped, frame.func_obj_id),
         };
 
-        let param_names = if mapped {
+        let params = if mapped {
             self.get_object_cell(func_obj_id)
-                .and_then(|obj| {
-                    let obj = obj.borrow();
-                    match &obj.callable {
-                        Some(JsFunction::User { params, .. }) => Some(
-                            params
-                                .iter()
-                                .filter_map(|param| match param {
-                                    Pattern::Identifier(name) => Some(name.clone()),
-                                    _ => None,
-                                })
-                                .collect(),
-                        ),
-                        _ => None,
-                    }
+                .and_then(|obj| match &obj.borrow().callable {
+                    Some(JsFunction::User { params, .. }) => Some(params.clone()),
+                    _ => None,
                 })
-                .unwrap_or_default()
         } else {
-            Vec::new()
+            None
         };
         let callee = JsValue::object(func_obj_id);
         let arguments = self.create_arguments_object(
@@ -2287,136 +2275,105 @@ impl Interpreter {
             callee,
             false,
             mapped.then_some(&func_env),
-            &param_names,
+            params.as_deref().map_or(&[], |p| p.as_slice()),
         );
         self.call_stack_frames[frame_index].arguments =
             CallFrameArguments::Materialized(arguments.clone());
         arguments
     }
 
+    /// CreateMappedArgumentsObject (§10.4.4.7) when `func_env` is `Some`
+    /// (`params` are then all plain identifiers), CreateUnmappedArgumentsObject
+    /// (§10.4.4.6) otherwise. The object is fresh and extensible, so its
+    /// properties are installed directly, in the spec's creation order.
     fn create_arguments_object(
         &mut self,
         args: &[JsValue],
         callee: JsValue,
         _is_strict: bool,
         func_env: Option<&EnvRef>,
-        param_names: &[String],
+        params: &[Pattern],
     ) -> JsValue {
+        let thrower = if func_env.is_none() {
+            Some(
+                self.realm()
+                    .throw_type_error
+                    .clone()
+                    .unwrap_or_else(|| self.create_thrower_function()),
+            )
+        } else {
+            None
+        };
+        let array_values = self.realm().array_prototype_values.clone();
+        let iterator_key = self.get_symbol_iterator_key();
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "Arguments".to_string();
+            o.property_order.reserve(args.len() + 3);
 
-            // length property: writable, not enumerable, configurable
-            o.define_own_property(
-                "length".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::number(args.len() as f64)),
-                    writable: Some(true),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
+            o.insert_property(
+                "length",
+                PropertyDescriptor::data(JsValue::number(args.len() as f64), true, false, true),
             );
-
-            // Index properties: writable, enumerable, configurable
             for (i, val) in args.iter().enumerate() {
-                o.define_own_property(
-                    i.to_string(),
-                    PropertyDescriptor {
-                        value: Some(val.clone()),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    },
+                o.insert_property(
+                    JsPropertyKey::from_index(i),
+                    PropertyDescriptor::data(val.clone(), true, true, true),
                 );
             }
 
-            if let Some(env) = func_env {
-                // Mapped (sloppy + simple params): callee is a data property
-                o.define_own_property(
-                    "callee".to_string(),
-                    PropertyDescriptor {
-                        value: Some(callee),
-                        writable: Some(true),
-                        enumerable: Some(false),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    },
-                );
-
-                let mut map = HashMap::new();
-                let mut mapped_names: HashSet<&str> = HashSet::new();
-                for i in (0..param_names.len()).rev() {
-                    let name = &param_names[i];
-                    if mapped_names.contains(name.as_str()) {
-                        continue;
+            match (func_env, thrower) {
+                (Some(env), _) => {
+                    o.insert_property(
+                        "callee",
+                        PropertyDescriptor::data(callee, true, false, true),
+                    );
+                    // Only the last occurrence of a duplicated parameter name
+                    // stays mapped, and only indices that received an argument.
+                    let mut map = HashMap::new();
+                    for (i, param) in params.iter().enumerate().take(args.len()) {
+                        let Pattern::Identifier(name) = param else {
+                            continue;
+                        };
+                        let shadowed = params[i + 1..]
+                            .iter()
+                            .any(|later| matches!(later, Pattern::Identifier(n) if n == name));
+                        if !shadowed {
+                            map.insert(i.to_string(), (env.clone(), name.clone()));
+                        }
                     }
-                    mapped_names.insert(name.as_str());
-                    if i < args.len() {
-                        map.insert(i.to_string(), (env.clone(), name.clone()));
+                    if !map.is_empty() {
+                        o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
                     }
                 }
-                if !map.is_empty() {
-                    o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
+                (None, Some(thrower)) => {
+                    o.insert_property(
+                        "callee",
+                        PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            get: Some(thrower.clone()),
+                            set: Some(thrower),
+                            enumerable: Some(false),
+                            configurable: Some(false),
+                        },
+                    );
                 }
+                (None, None) => unreachable!("unmapped arguments always get a thrower"),
             }
-        }
 
-        let result_id = obj_id;
-        let result = JsValue::object(result_id);
-
-        // Unmapped (strict OR non-simple params): callee is a throw accessor
-        if func_env.is_none() {
-            let thrower = self
-                .realm()
-                .throw_type_error
-                .clone()
-                .unwrap_or_else(|| self.create_thrower_function());
-            if let Some(o) = (result)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(obj_rc) = self.get_object_cell(o.id)
+            // @@iterator is %Array.prototype.values% (§10.4.4.6 step 20 /
+            // §10.4.4.7 step 22), the intrinsic captured at realm creation —
+            // not whatever Array.prototype[@@iterator] currently holds.
+            if let Some(key) = iterator_key
+                && let Some(values) = array_values
             {
-                obj_rc.borrow_mut().define_own_property(
-                    "callee".to_string(),
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        get: Some(thrower.clone()),
-                        set: Some(thrower),
-                        enumerable: Some(false),
-                        configurable: Some(false),
-                    },
-                );
+                o.insert_property(key, PropertyDescriptor::data(values, true, false, true));
             }
+            o.shape_id = crate::interpreter::types::fresh_shape_id();
         }
-
-        // Add Symbol.iterator = %Array.prototype.values% (spec §10.4.4.6 step 20 / §10.4.4.7 step 22)
-        // Must be the exact same function object as Array.prototype[@@iterator]
-        if let Some(key) = self.get_symbol_iterator_key() {
-            let array_iter_fn = self
-                .realm()
-                .array_prototype
-                .map(|id| self.get_property_on_id(id, &key));
-            if let Some(iter_fn) = array_iter_fn
-                && !(iter_fn).is_undefined()
-                && let Some(o) = (result)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                && let Some(obj_rc) = self.get_object_cell(o.id)
-            {
-                obj_rc
-                    .borrow_mut()
-                    .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
-            }
-        }
-
-        result
+        JsValue::object(obj_id)
     }
 
     /// Convert an internal property key back to its ECMAScript String or Symbol value.

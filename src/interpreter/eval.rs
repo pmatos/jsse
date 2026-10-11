@@ -5410,20 +5410,6 @@ impl Interpreter {
                             if uses_arguments {
                                 let env_strict_ag = func_env.borrow().strict;
                                 let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
-                                let param_names_ag: Vec<String> = if use_mapped_ag {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env_ag =
                                     if use_mapped_ag { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
@@ -5431,7 +5417,7 @@ impl Interpreter {
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env_ag,
-                                    &param_names_ag,
+                                    &params,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
@@ -5598,20 +5584,6 @@ impl Interpreter {
                             if uses_arguments {
                                 let env_strict_g = func_env.borrow().strict;
                                 let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
-                                let param_names_g: Vec<String> = if use_mapped_g {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env_g =
                                     if use_mapped_g { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
@@ -5619,7 +5591,7 @@ impl Interpreter {
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env_g,
-                                    &param_names_g,
+                                    &params,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
@@ -5797,27 +5769,13 @@ impl Interpreter {
                             let env_strict = func_env.borrow().strict;
                             if uses_arguments {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
-                                let param_names: Vec<String> = if use_mapped {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env = if use_mapped { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
                                     args,
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env,
-                                    &param_names,
+                                    &params,
                                 );
                                 call_frame_arguments =
                                     CallFrameArguments::Materialized(arguments_obj.clone());
@@ -8053,27 +8011,13 @@ impl Interpreter {
                     let is_simple = has_simple_params;
                     let env_strict = func_env.borrow().strict;
                     let use_mapped = is_simple && !is_strict && !env_strict;
-                    let param_names: Vec<String> = if use_mapped {
-                        params
-                            .iter()
-                            .filter_map(|p| {
-                                if let Pattern::Identifier(name) = p {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
                     let mapped_env = if use_mapped { Some(&func_env) } else { None };
                     let arguments_obj = interp.create_arguments_object(
                         args,
                         func_val.clone(),
                         is_strict,
                         mapped_env,
-                        &param_names,
+                        &params,
                     );
                     func_env.borrow_mut().declare("arguments", BindingKind::Var);
                     let _ = interp.env_set(&func_env, "arguments", arguments_obj);
