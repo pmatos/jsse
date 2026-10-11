@@ -1,0 +1,116 @@
+# callgrind self-cost categories (instructions), jsse HEAD (line-tables-only release build), startup (empty script) subtracted
+# cat.py groups self cost by function family; /call = divided by the number of JS calls (or iterations) given.
+
+## fib(22): 57,313 calls
+total 398803510 per call 6958.342958840054
+   95,029,116  23.8%    1658.1/call  siphash (std HashMap<String,..> hashing)
+   63,616,707  16.0%    1110.0/call  VM dispatch loop
+   58,840,184  14.8%    1026.6/call  malloc/free (libc)
+   44,483,186  11.2%     776.1/call  other
+   40,263,726  10.1%     702.5/call  eval.rs (call_function_inner_impl etc.)
+   39,863,562  10.0%     695.5/call  Environment / types.rs
+   36,720,975   9.2%     640.7/call  hashbrown (insert/find/drop/clear)
+   11,728,280   2.9%     204.6/call  rust alloc shims / RawVec
+    8,257,774   2.1%     144.1/call  mem*
+
+  37,111,851   9.3%    647.5/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## closure_create small (10,000 iterations: makeAdder() + closure creation + 1 call)
+total 392168515 per call 39216.8515
+  113,603,690  29.0%   11360.4/call  malloc/free (libc)
+   75,878,575  19.3%    7587.9/call  other
+   72,491,714  18.5%    7249.2/call  siphash (std HashMap<String,..> hashing)
+   29,256,278   7.5%    2925.6/call  hashbrown (insert/find/drop/clear)
+   26,063,288   6.6%    2606.3/call  VM dispatch loop
+   24,326,777   6.2%    2432.7/call  Environment / types.rs
+   17,000,176   4.3%    1700.0/call  mem*
+   16,911,271   4.3%    1691.1/call  eval.rs (call_function_inner_impl etc.)
+   16,636,746   4.2%    1663.7/call  rust alloc shims / RawVec
+
+  33,947,961   8.7%   3394.8/call ./malloc/./malloc/malloc.c:_int_free
+
+## closure_call small (40,000 iterations)
+total 485980810 per call 12149.52025
+  168,618,842  34.7%    4215.5/call  siphash (std HashMap<String,..> hashing)
+   85,321,130  17.6%    2133.0/call  VM dispatch loop
+   50,579,613  10.4%    1264.5/call  other
+   46,484,282   9.6%    1162.1/call  Environment / types.rs
+   43,169,554   8.9%    1079.2/call  hashbrown (insert/find/drop/clear)
+   39,002,119   8.0%     975.1/call  eval.rs (call_function_inner_impl etc.)
+   32,581,983   6.7%     814.5/call  malloc/free (libc)
+   11,329,135   2.3%     283.2/call  mem*
+    8,894,152   1.8%     222.4/call  rust alloc shims / RawVec
+
+  65,927,417  13.6%   1648.2/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## leaf small (40,000 iterations)
+total 402358816 per call 10058.9704
+  113,251,517  28.1%    2831.3/call  siphash (std HashMap<String,..> hashing)
+   69,840,535  17.4%    1746.0/call  VM dispatch loop
+   48,524,210  12.1%    1213.1/call  malloc/free (libc)
+   45,196,631  11.2%    1129.9/call  other
+   38,166,195   9.5%     954.2/call  hashbrown (insert/find/drop/clear)
+   37,042,737   9.2%     926.1/call  Environment / types.rs
+   31,121,285   7.7%     778.0/call  eval.rs (call_function_inner_impl etc.)
+   10,649,415   2.6%     266.2/call  rust alloc shims / RawVec
+    8,566,291   2.1%     214.2/call  mem*
+
+  44,804,564  11.1%   1120.1/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## method small (10,000 iterations = 50,000 calls)
+total 476392423 per call 9527.84846
+  105,765,026  22.2%    2115.3/call  VM dispatch loop
+   92,220,865  19.4%    1844.4/call  other
+   89,133,890  18.7%    1782.7/call  siphash (std HashMap<String,..> hashing)
+   72,643,382  15.2%    1452.9/call  Environment / types.rs
+   33,833,989   7.1%     676.7/call  eval.rs (call_function_inner_impl etc.)
+   32,295,383   6.8%     645.9/call  hashbrown (insert/find/drop/clear)
+   28,575,159   6.0%     571.5/call  malloc/free (libc)
+   12,878,189   2.7%     257.6/call  mem*
+    9,046,540   1.9%     180.9/call  rust alloc shims / RawVec
+
+  34,423,453   7.2%    688.5/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## ctor small (10,000 iterations = 20,000 constructs)
+total 474594291 per call 23729.71455
+  110,843,926  23.4%    5542.2/call  siphash (std HashMap<String,..> hashing)
+   94,838,711  20.0%    4741.9/call  other
+   69,221,301  14.6%    3461.1/call  malloc/free (libc)
+   57,250,613  12.1%    2862.5/call  VM dispatch loop
+   50,368,180  10.6%    2518.4/call  Environment / types.rs
+   39,304,282   8.3%    1965.2/call  hashbrown (insert/find/drop/clear)
+   20,891,269   4.4%    1044.6/call  eval.rs (call_function_inner_impl etc.)
+   19,210,424   4.0%     960.5/call  mem*
+   12,665,585   2.7%     633.3/call  rust alloc shims / RawVec
+
+  44,518,952   9.4%   2225.9/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## args small (10,000 iterations)
+total 600077492 per call 60007.7492
+  160,519,589  26.7%   16052.0/call  siphash (std HashMap<String,..> hashing)
+  106,795,801  17.8%   10679.6/call  other
+   92,086,536  15.3%    9208.7/call  malloc/free (libc)
+   78,880,533  13.1%    7888.1/call  VM dispatch loop
+   49,540,341   8.3%    4954.0/call  Environment / types.rs
+   47,277,172   7.9%    4727.7/call  hashbrown (insert/find/drop/clear)
+   22,635,649   3.8%    2263.6/call  rust alloc shims / RawVec
+   22,511,337   3.8%    2251.1/call  eval.rs (call_function_inner_impl etc.)
+   19,830,534   3.3%    1983.1/call  mem*
+
+  65,247,693  10.9%   6524.8/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## delta-blue (JetStream, iterations=1): 2,266,466 user calls
+total 18751596482 per call 8273.49560152237
+4,353,838,553  23.2%    1921.0/call  siphash (std HashMap<String,..> hashing)
+3,460,565,881  18.5%    1526.9/call  other
+3,003,291,319  16.0%    1325.1/call  VM dispatch loop
+2,562,198,705  13.7%    1130.5/call  Environment / types.rs
+1,625,679,724   8.7%     717.3/call  malloc/free (libc)
+1,458,064,034   7.8%     643.3/call  hashbrown (insert/find/drop/clear)
+1,413,675,505   7.5%     623.7/call  eval.rs (call_function_inner_impl etc.)
+  477,844,476   2.5%     210.8/call  mem*
+  396,438,285   2.1%     174.9/call  rust alloc shims / RawVec
+
+1,712,273,134   9.1%    755.5/call /rustc/330d317121e16b5db8e5adc63595910528ff2ee7/library/core/src/hash/sip.rs:<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write
+
+## total Ir: boa fib(22) 169,863,032 (startup 40,316,844) -> 2,260 instr/call
