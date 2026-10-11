@@ -830,6 +830,14 @@ pub(crate) mod number_ops {
     }
 
     pub(crate) fn remainder(x: f64, y: f64) -> f64 {
+        // Fast path for int32 operands: f64 `%` lowers to a software fmod.
+        // A zero dividend falls through so -0 keeps its sign, and a zero result
+        // takes the dividend's sign (§6.1.6.1.6 step 6, e.g. -4 % 2 is -0).
+        let (xi, yi) = (x as i32, y as i32);
+        if xi as f64 == x && yi as f64 == y && xi != 0 && yi != 0 {
+            let r = xi.wrapping_rem(yi);
+            return if r == 0 && xi < 0 { -0.0 } else { r as f64 };
+        }
         // IEEE 754 remainder
         x % y
     }
@@ -919,6 +927,11 @@ pub(crate) mod number_ops {
     // step is done in f64 (exact for integer-valued doubles) so it stays correct
     // for magnitudes beyond the i64 range, where an `as i64` cast would saturate.
     pub(crate) fn to_uint32(x: f64) -> u32 {
+        // Fast path: below 2^63 the saturating `as i64` cast truncates exactly
+        // and wrapping to u32 is the modulo-2^32 step. NaN fails the compare.
+        if x.abs() < 9.0e18 {
+            return (x as i64) as u32;
+        }
         if !x.is_finite() || x == 0.0 {
             return 0;
         }
@@ -1121,6 +1134,25 @@ mod tests {
         assert_eq!(number_ops::to_int32(18446744073709551616.0), 0); // 2^64
         assert_eq!(number_ops::to_int32(-9223372036854775808.0), 0); // -(2^63)
         assert_eq!(number_ops::to_int32(1e21), -559939584);
+    }
+
+    // §6.1.6.1.6 Number::remainder — the int32 fast path must keep the sign
+    // rules of the general path.
+    #[test]
+    fn remainder_int32_fast_path() {
+        let neg_zero = |v: f64| v == 0.0 && v.is_sign_negative();
+        assert_eq!(number_ops::remainder(7.0, 3.0), 1.0);
+        assert_eq!(number_ops::remainder(-7.0, 3.0), -1.0);
+        assert_eq!(number_ops::remainder(7.0, -3.0), 1.0);
+        assert!(neg_zero(number_ops::remainder(-6.0, 3.0)));
+        assert!(neg_zero(number_ops::remainder(-0.0, 5.0)));
+        assert!(neg_zero(number_ops::remainder(-2147483648.0, -1.0)));
+        assert!(!neg_zero(number_ops::remainder(6.0, 3.0)));
+        assert!(number_ops::remainder(5.0, 0.0).is_nan());
+        assert!(number_ops::remainder(5.0, -0.0).is_nan());
+        assert_eq!(number_ops::remainder(5.5, 2.0), 1.5);
+        assert_eq!(number_ops::remainder(2147483648.0, 3.0), 2.0);
+        assert_eq!(number_ops::remainder(3.0, f64::INFINITY), 3.0);
     }
 
     #[test]
