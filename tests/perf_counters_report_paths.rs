@@ -381,6 +381,22 @@ fn same_named_functions_get_separate_body_rows() {
         2,
         "both `same` functions must appear separately; stderr:\n{stderr}"
     );
+    // Separate rows are not enough: each must carry only its own work (900 vs
+    // 30 iterations), not the merged total the original bug reported.
+    let mut work: Vec<u64> = same_rows
+        .iter()
+        .map(|l| {
+            l.split('\t')
+                .nth(2)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("unparsable BODY row {l:?}"))
+        })
+        .collect();
+    work.sort_unstable();
+    assert!(
+        work[1] > work[0] * 10,
+        "each `same` row must hold its own work, got {work:?}; stderr:\n{stderr}"
+    );
     assert!(
         !stderr.lines().any(|l| l.starts_with("BODY\tsame\t")),
         "the merged bare-name row must be gone; stderr:\n{stderr}"
