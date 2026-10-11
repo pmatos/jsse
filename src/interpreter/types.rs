@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::interpreter::PropertyMap;
-use crate::interpreter::binding_map::BindingMap;
+use crate::interpreter::binding_map::{BindingMap, BindingName};
+use crate::interpreter::Atom;
 use crate::interpreter::generator_transform::{
     GeneratorStateMachine, LoopControlTarget, SentValueBinding,
 };
@@ -1115,6 +1116,19 @@ impl Environment {
         self.parent.as_ref().and_then(|p| p.borrow().get_this())
     }
 
+    /// `declare` for an already-interned name: no hashing, no allocation.
+    pub(crate) fn declare_atom(&mut self, name: &Atom, kind: BindingKind) {
+        self.bindings.insert_atom(
+            name,
+            Binding {
+                value: JsValue::UNDEFINED,
+                kind,
+                initialized: kind == BindingKind::Var,
+                deletable: false,
+            },
+        );
+    }
+
     pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
             name,
@@ -1315,9 +1329,12 @@ impl Environment {
         }
     }
 
-    pub(crate) fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
+    pub(crate) fn find_binding_env<N: BindingName + ?Sized>(
+        env: &EnvRef,
+        name: &N,
+    ) -> Option<EnvRef> {
         let e = env.borrow();
-        if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
+        if e.is_indirect_binding(name.as_name()) || e.bindings.contains_key(name) {
             return Some(env.clone());
         }
         if e.global_object_id.is_some() {

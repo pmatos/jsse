@@ -39,12 +39,13 @@ impl Interpreter {
     /// Mirrors `Environment::set`'s old chain walk + global-object mirror,
     /// preserving sloppy-mode implicit globals and the var-binding mirror at
     /// the global env.
-    pub(crate) fn env_set(
+    pub(crate) fn env_set<N: BindingName + ?Sized>(
         &mut self,
         env: &EnvRef,
-        name: &str,
+        key: &N,
         value: JsValue,
     ) -> Result<(), JsValue> {
+        let name = key.as_name();
         let mut current = env.clone();
         loop {
             // A declarative local write needs no re-entrant object operation,
@@ -57,7 +58,7 @@ impl Interpreter {
                 }
                 let strict = e.strict;
                 let global_object_id = e.global_object_id;
-                if let Some(binding) = e.bindings.get_mut(name) {
+                if let Some(binding) = e.bindings.get_mut(key) {
                     if !binding.initialized
                         && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
                     {
@@ -118,7 +119,7 @@ impl Interpreter {
                         }
                     }
                     let mut e = current.borrow_mut();
-                    if let Some(b) = e.bindings.get_mut(name) {
+                    if let Some(b) = e.bindings.get_mut(key) {
                         b.value = value;
                         b.initialized = true;
                     }
@@ -142,15 +143,15 @@ impl Interpreter {
                     if already_on_global {
                         return Ok(());
                     }
-                    current.borrow_mut().bindings.insert(
-                        name,
+                    key.insert_into(
+                        &mut current.borrow_mut().bindings,
                         Binding::new(value, BindingKind::Var, true),
                     );
                     return Ok(());
                 }
                 EnvSetAction::CreateBinding => {
-                    current.borrow_mut().bindings.insert(
-                        name,
+                    key.insert_into(
+                        &mut current.borrow_mut().bindings,
                         Binding::new(value, BindingKind::Var, true),
                     );
                     return Ok(());
@@ -263,7 +264,12 @@ impl Interpreter {
     /// Walk the scope chain and check what error (if any) setting a binding
     /// would produce. Mirrors the static `Environment::check_set_binding` but
     /// reads the global object via the slab.
-    pub(crate) fn env_check_set_binding(&self, env: &EnvRef, name: &str) -> SetBindingCheck {
+    pub(crate) fn env_check_set_binding<N: BindingName + ?Sized>(
+        &self,
+        env: &EnvRef,
+        key: &N,
+    ) -> SetBindingCheck {
+        let name = key.as_name();
         let mut current = env.clone();
         loop {
             let next = {
@@ -271,7 +277,7 @@ impl Interpreter {
                 if e.is_indirect_binding(name) {
                     return SetBindingCheck::ConstAssign;
                 }
-                if let Some(binding) = e.bindings.get(name) {
+                if let Some(binding) = e.bindings.get(key) {
                     if !binding.initialized && binding.kind != BindingKind::Var {
                         return SetBindingCheck::TdzError;
                     }

@@ -1,5 +1,5 @@
 use crate::types::{JsString, JsValue};
-use std::rc::Rc;
+use crate::interpreter::Atom;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Constant {
@@ -20,7 +20,7 @@ impl Constant {
 pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
     pub(crate) constants: Vec<Constant>,
-    pub(crate) names: Vec<Rc<str>>,
+    pub(crate) names: Vec<Atom>,
     pub(crate) var_names: Vec<u16>,
     pub(crate) max_stack: u16,
     pub(crate) max_refs: u16,

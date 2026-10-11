@@ -43,7 +43,7 @@ struct Compiler {
     goal: CompileGoal,
     code: Vec<u8>,
     constants: Vec<Constant>,
-    names: Vec<std::rc::Rc<str>>,
+    names: Vec<crate::interpreter::Atom>,
     var_names: Vec<u16>,
     current_stack: u16,
     max_stack: u16,
@@ -89,14 +89,14 @@ impl Compiler {
     }
 
     fn add_name(&mut self, name: &str) -> Result<u16, CompileError> {
-        if let Some(i) = self.names.iter().position(|n| n.as_ref() == name) {
+        if let Some(i) = self.names.iter().position(|n| n.as_str() == name) {
             return Ok(i as u16);
         }
         let idx = self.names.len();
         if idx > u16::MAX as usize {
             return Err(CompileError::Unsupported("name pool overflow"));
         }
-        self.names.push(std::rc::Rc::from(name));
+        self.names.push(crate::interpreter::Atom::intern(name));
         Ok(idx as u16)
     }
 

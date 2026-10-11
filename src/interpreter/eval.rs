@@ -2328,12 +2328,13 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn get_identifier_value_by_ref(
+    pub(super) fn get_identifier_value_by_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         id_ref: &IdentifierRef,
         env: &EnvRef,
     ) -> Completion {
+        let name = key.as_name();
         let strict = env.borrow().strict;
         match id_ref {
             IdentifierRef::WithObject(obj_id) => self.with_get_binding_value(*obj_id, name, strict),
@@ -2341,28 +2342,24 @@ impl Interpreter {
                 Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                let (indirect, has_binding) = {
+                let local = {
                     let specific = specific_env.borrow();
-                    (
-                        specific.resolve_indirect_binding(name),
-                        specific.bindings.contains_key(name),
-                    )
+                    match specific.resolve_indirect_binding(name) {
+                        Some(resolved) => Some(resolved),
+                        None => specific
+                            .bindings
+                            .get(key)
+                            .map(|b| b.initialized.then(|| b.value.clone())),
+                    }
                 };
-                if let Some(resolved) = indirect {
+                if let Some(resolved) = local {
                     match resolved {
                         Some(value) => Completion::Normal(value),
                         None => Completion::Throw(self.create_reference_error(&format!(
                             "Cannot access '{name}' before initialization"
                         ))),
                     }
-                } else if has_binding {
-                    match self.env_get(specific_env, name) {
-                        Some(value) => Completion::Normal(value),
-                        None => Completion::Throw(self.create_reference_error(&format!(
-                            "Cannot access '{name}' before initialization"
-                        ))),
-                    }
-                } else if let Some(result) = self.resolve_global_getter(name, specific_env) {
+                } else if let Some(result) = self.resolve_global_getter(key, specific_env) {
                     result
                 } else {
                     Completion::Throw(
@@ -2373,18 +2370,19 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn eval_identifier_update(
+    pub(super) fn eval_identifier_update<N: BindingName + ?Sized>(
         &mut self,
         op: UpdateOp,
         prefix: bool,
-        name: &str,
+        key: &N,
         env: &EnvRef,
     ) -> Completion {
+        let name = key.as_name();
         // Fast path: identifier is a Number in the local scope chain (no with/module)
         {
             let env_borrow = env.borrow();
             if env_borrow.with_object.is_none()
-                && let Some(binding) = env_borrow.bindings.get(name)
+                && let Some(binding) = env_borrow.bindings.get(key)
                 && binding.initialized
                 && binding.kind != BindingKind::Const
                 && binding.kind != BindingKind::FunctionName
@@ -2398,18 +2396,18 @@ impl Interpreter {
                 };
                 let new_val = JsValue::number(new_num);
                 drop(env_borrow);
-                if let Err(e) = self.env_set(env, name, new_val) {
+                if let Err(e) = self.env_set(env, key, new_val) {
                     return Completion::Throw(e);
                 }
                 return Completion::Normal(JsValue::number(if prefix { new_num } else { old_num }));
             }
         }
 
-        let id_ref = match self.resolve_identifier_ref(name, env) {
+        let id_ref = match self.resolve_identifier_ref(key, env) {
             Ok(r) => r,
             Err(e) => return Completion::Throw(e),
         };
-        let raw_val = match self.get_identifier_value_by_ref(name, &id_ref, env) {
+        let raw_val = match self.get_identifier_value_by_ref(key, &id_ref, env) {
             Completion::Normal(v) => v,
             other => return other,
         };
@@ -2417,7 +2415,7 @@ impl Interpreter {
             Ok(pair) => pair,
             Err(e) => return Completion::Throw(e),
         };
-        match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+        match self.put_value_by_ref(key, new_val.clone(), &id_ref, env) {
             Completion::Normal(_) => {}
             other => return other,
         }
@@ -4976,6 +4974,56 @@ impl Interpreter {
         })
     }
 
+    /// Simple-parameter binding for the hot call path: the parameter atoms
+    /// are interned once per Body, so a call hashes no names (#898).
+    fn bind_simple_parameters(
+        &mut self,
+        body: &Body,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+    ) {
+        let atoms = match self.frame_layout_memo.get(body) {
+            Some(atoms)
+                if atoms.len() == params.len()
+                    && atoms.iter().zip(params).all(|(atom, param)| {
+                        matches!(param, Pattern::Identifier(name) if name == atom.as_str())
+                    }) =>
+            {
+                atoms
+            }
+            _ => {
+                let atoms = Rc::new(
+                    params
+                        .iter()
+                        .map(|param| {
+                            let Pattern::Identifier(name) = param else {
+                                unreachable!(
+                                    "simple parameter metadata must match the parameter list"
+                                );
+                            };
+                            Atom::intern(name)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                self.frame_layout_memo.insert(body, atoms.clone());
+                atoms
+            }
+        };
+        let mut env = func_env.borrow_mut();
+        for (index, atom) in atoms.iter().enumerate() {
+            env.bindings.insert_atom(
+                atom,
+                Binding {
+                    value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+                    kind: BindingKind::Var,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
+        }
+    }
+
     fn bind_function_parameters(
         &mut self,
         params: &[Pattern],
@@ -5744,9 +5792,13 @@ impl Interpreter {
                             func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
-                        if let Err(error) =
+                        let bound = if is_simple {
+                            self.bind_simple_parameters(&body, &params, args, &func_env);
+                            Ok(())
+                        } else {
                             self.bind_function_parameters(&params, args, &func_env, is_simple)
-                        {
+                        };
+                        if let Err(error) = bound {
                             self.current_realm_id = caller_realm;
                             self.recycle_function_environment(func_env);
                             return Completion::Throw(error);
@@ -7486,20 +7538,21 @@ impl Interpreter {
     }
 
     /// Resolve an identifier to a reference (for capturing before RHS evaluation).
-    pub(super) fn resolve_identifier_ref(
+    pub(super) fn resolve_identifier_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         env: &EnvRef,
     ) -> Result<IdentifierRef, JsValue> {
+        let name = key.as_name();
         if (self.with_scope_depth > 0 || self.has_ever_entered_with)
             && let Some(obj_id) = self.resolve_with_has_binding(name, env)?
         {
             return Ok(IdentifierRef::WithObject(obj_id));
         }
-        if let Some(specific_env) = Environment::find_binding_env(env, name) {
+        if let Some(specific_env) = Environment::find_binding_env(env, key) {
             let (has_binding, global_obj_id) = {
                 let e = specific_env.borrow();
-                let in_bindings = e.bindings.contains_key(name) || e.is_indirect_binding(name);
+                let in_bindings = e.bindings.contains_key(key) || e.is_indirect_binding(name);
                 if in_bindings {
                     (true, None)
                 } else if let Some(gid) = e.global_object_id {
@@ -7565,13 +7618,14 @@ impl Interpreter {
     }
 
     /// Write a value through a captured identifier reference.
-    pub(super) fn put_value_by_ref(
+    pub(super) fn put_value_by_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         value: JsValue,
         id_ref: &IdentifierRef,
         env: &EnvRef,
     ) -> Completion {
+        let name = key.as_name();
         match id_ref {
             IdentifierRef::WithObject(obj_id) => {
                 let strict = env.borrow().strict;
@@ -7581,7 +7635,7 @@ impl Interpreter {
                 }
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                match self.env_check_set_binding(specific_env, name) {
+                match self.env_check_set_binding(specific_env, key) {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
                     )),
@@ -7628,7 +7682,7 @@ impl Interpreter {
                     SetBindingCheck::Ok => {
                         // If binding is not in env.bindings but found via global object's
                         // has_property (prototype chain), use [[Set]] to respect setters/proxies
-                        let in_bindings = specific_env.borrow().bindings.contains_key(name);
+                        let in_bindings = specific_env.borrow().bindings.contains_key(key);
                         if !in_bindings {
                             let global_obj_id = specific_env.borrow().global_object_id;
                             if let Some(gid) = global_obj_id {
@@ -7657,7 +7711,7 @@ impl Interpreter {
                                 }
                             }
                         }
-                        match self.env_set(specific_env, name, value.clone()) {
+                        match self.env_set(specific_env, key, value.clone()) {
                             Ok(()) => Completion::Normal(value),
                             Err(_) => Completion::Throw(
                                 self.create_type_error("Assignment to constant variable."),
@@ -7681,12 +7735,13 @@ impl Interpreter {
 
     /// Single-pass identifier resolution: combines with-scope check, binding lookup,
     /// and global getter resolution into one scope chain walk.
-    pub(super) fn resolve_identifier(
+    pub(super) fn resolve_identifier<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         env: &EnvRef,
         strict: bool,
     ) -> Completion {
+        let name = key.as_name();
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
@@ -7730,7 +7785,7 @@ impl Interpreter {
             }
 
             // 3. Check local bindings
-            if let Some(binding) = env_borrow.bindings.get(name) {
+            if let Some(binding) = env_borrow.bindings.get(key) {
                 if !binding.initialized {
                     drop(env_borrow);
                     return Completion::Throw(self.create_reference_error(&format!(
@@ -7782,7 +7837,12 @@ impl Interpreter {
     /// Returns Some(Completion) if the name resolves to a property on the global object
     /// or its prototype chain (including through Proxy has/get traps).
     /// Returns None if no property found — caller should use env.get().
-    fn resolve_global_getter(&mut self, name: &str, env: &EnvRef) -> Option<Completion> {
+    fn resolve_global_getter<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+    ) -> Option<Completion> {
+        let name = key.as_name();
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
@@ -7791,7 +7851,7 @@ impl Interpreter {
                 current = env_ref.borrow().parent.clone();
                 continue;
             }
-            if env_borrow.bindings.contains_key(name) {
+            if env_borrow.bindings.contains_key(key) {
                 return None;
             }
             if let Some(gid) = env_borrow.global_object_id {

@@ -244,11 +244,14 @@ fn run_chunk_inner(
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
     if declare_chunk_vars {
-        let var_scope = Environment::find_var_scope(env);
-        for &name_idx in &chunk.var_names {
-            let name = &chunk.names[name_idx as usize];
-            if !var_scope.borrow().bindings.contains_key(name.as_ref()) {
-                var_scope.borrow_mut().declare(name, BindingKind::Var);
+        if !chunk.var_names.is_empty() {
+            let var_scope = Environment::find_var_scope(env);
+            let mut scope = var_scope.borrow_mut();
+            for &name_idx in &chunk.var_names {
+                let name = &chunk.names[name_idx as usize];
+                if !scope.bindings.contains_key(name) {
+                    scope.declare_atom(name, BindingKind::Var);
+                }
             }
         }
     }
@@ -277,7 +280,7 @@ fn run_chunk_inner(
                     let scope = env.borrow();
                     let value =
                         if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
-                            scope.bindings.get(name.as_ref()).and_then(|binding| {
+                            scope.bindings.get(name).and_then(|binding| {
                                 binding.initialized.then(|| binding.value.clone())
                             })
                         } else {
@@ -324,7 +327,7 @@ fn run_chunk_inner(
                     let scope = env.borrow();
                     scope.with_object.is_none()
                         && scope.indirect_bindings.is_none()
-                        && scope.bindings.contains_key(name.as_ref())
+                        && scope.bindings.contains_key(name)
                 };
                 if local_ref {
                     refs.push(IdentifierRef::SpecificEnv(env.clone()));
@@ -359,7 +362,7 @@ fn run_chunk_inner(
                     let mut scope = local_env.borrow_mut();
                     if scope.global_object_id.is_none()
                         && scope.indirect_bindings.is_none()
-                        && let Some(binding) = scope.bindings.get_mut(name.as_ref())
+                        && let Some(binding) = scope.bindings.get_mut(name)
                         && binding.initialized
                         && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
                     {

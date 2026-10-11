@@ -73,6 +73,53 @@ impl BindingKey for std::rc::Rc<str> {
     }
 }
 
+/// A [`BindingKey`] that is also script text: it can be shown in messages,
+/// handed to property operations, and inserted as a new binding.
+pub(crate) trait BindingName: BindingKey {
+    fn as_name(&self) -> &str;
+    fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding>;
+}
+
+impl BindingName for str {
+    #[inline]
+    fn as_name(&self) -> &str {
+        self
+    }
+    fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
+        map.insert(self, binding)
+    }
+}
+
+impl BindingName for String {
+    #[inline]
+    fn as_name(&self) -> &str {
+        self
+    }
+    fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
+        map.insert(self, binding)
+    }
+}
+
+impl BindingName for Atom {
+    #[inline]
+    fn as_name(&self) -> &str {
+        self.as_str()
+    }
+    fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
+        map.insert_atom(self, binding)
+    }
+}
+
+impl<T: BindingName + ?Sized> BindingName for &T {
+    #[inline]
+    fn as_name(&self) -> &str {
+        (**self).as_name()
+    }
+    fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
+        (**self).insert_into(map, binding)
+    }
+}
+
 impl BindingMap {
     pub(crate) fn new() -> Self {
         BindingMap {

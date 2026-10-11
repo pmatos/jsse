@@ -29,6 +29,8 @@ pub(crate) use dispose::{
 };
 mod atom;
 mod binding_map;
+pub(crate) use atom::Atom;
+pub(crate) use binding_map::{BindingKey, BindingName};
 mod body_memo;
 mod env_helpers;
 mod eval;
@@ -385,6 +387,9 @@ pub(crate) struct Interpreter {
     /// Per-body bytecode compile verdict shared by every closure of a function
     /// literal (#900). See `body_memo`.
     pub(crate) bytecode_memo: body_memo::BodyMemo<bytecode::BytecodeCacheState>,
+    /// Interned simple-parameter names per Body, so a call binds parameters
+    /// without hashing them (#898).
+    pub(crate) frame_layout_memo: body_memo::BodyMemo<Rc<Vec<Atom>>>,
     /// Per-body generator/async state machine, built once per function literal
     /// instead of on every call (#914). See `body_memo`.
     pub(crate) state_machine_memo: body_memo::BodyMemo<(
@@ -779,6 +784,7 @@ impl Interpreter {
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
             bytecode_memo: body_memo::BodyMemo::new(),
+            frame_layout_memo: body_memo::BodyMemo::new(),
             state_machine_memo: body_memo::BodyMemo::new(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: None,
