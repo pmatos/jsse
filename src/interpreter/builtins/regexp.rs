@@ -457,7 +457,7 @@ impl RegexInput {
     fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
         self.unicode_boundaries.get_or_init(|| {
             let view = self.as_str(true);
-            let code_units = &self.subject.as_units();
+            let code_units = self.subject.as_units();
             let mut boundaries =
                 Vec::with_capacity(code_units.len() / BOUNDARY_SAMPLE_INTERVAL + 2);
             let mut byte = 0;
@@ -501,7 +501,7 @@ impl RegexInput {
         // to the character that starts at the preceding code-unit boundary, so
         // stop at the last character beginning at or before `target`.
         let view = self.as_str(true);
-        let code_units = &self.subject.as_units();
+        let code_units = self.subject.as_units();
         let mut byte = start.byte;
         let mut utf16 = start.utf16;
         while utf16 < target {
@@ -528,7 +528,7 @@ impl RegexInput {
             Err(index) => boundaries[index.saturating_sub(1)],
         };
 
-        let code_units = &self.subject.as_units();
+        let code_units = self.subject.as_units();
         let mut byte = start.byte;
         let mut utf16 = start.utf16;
         while byte < target {
@@ -7850,7 +7850,7 @@ fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usiz
     if !unicode {
         return index + 1;
     }
-    let code_units = &input.subject.as_units();
+    let code_units = input.subject.as_units();
     if index + 1 >= code_units.len() {
         return index + 1;
     }
@@ -8571,7 +8571,7 @@ impl Interpreter {
                 }
 
                 let source_js = match pattern_js {
-                    Some(js) if !js.as_units().is_empty() => js,
+                    Some(js) if !js.is_empty() => js,
                     _ => JsString::from_str("(?:)"),
                 };
 
@@ -8758,7 +8758,7 @@ impl Interpreter {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let is_empty = match_js_str.as_units().is_empty();
+                            let is_empty = match_js_str.is_empty();
                             results.push(JsValue::string(match_js_str));
                             if is_empty {
                                 let rx_val2 = JsValue::object(rx_id);
@@ -9300,7 +9300,7 @@ impl Interpreter {
                             }
                         };
                         // Compute matchLength in UTF-16 code units for tail_pos calculation.
-                        let match_length_utf16 = matched_js.as_units().len();
+                        let match_length_utf16 = matched_js.len();
 
                         // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
                         let index_val =
@@ -10350,7 +10350,7 @@ impl Interpreter {
                 }
 
                 // Empty source → "(?:)" per spec
-                let source_js = if pattern_js.as_units().is_empty() {
+                let source_js = if pattern_js.is_empty() {
                     JsString::from_str("(?:)")
                 } else {
                     pattern_js
@@ -10626,9 +10626,7 @@ impl Interpreter {
                                 )),
                             }
                             let legacy = &interp.regexp_legacy;
-                            let end = legacy
-                                .left_context_end
-                                .min(legacy.context_input.as_units().len());
+                            let end = legacy.left_context_end.min(legacy.context_input.len());
                             Completion::Normal(JsValue::string(JsString::from_vec(
                                 legacy.context_input.as_units()[..end].to_vec(),
                             )))
@@ -10662,9 +10660,7 @@ impl Interpreter {
                                 )),
                             }
                             let legacy = &interp.regexp_legacy;
-                            let start = legacy
-                                .right_context_start
-                                .min(legacy.context_input.as_units().len());
+                            let start = legacy.right_context_start.min(legacy.context_input.len());
                             Completion::Normal(JsValue::string(JsString::from_vec(
                                 legacy.context_input.as_units()[start..].to_vec(),
                             )))

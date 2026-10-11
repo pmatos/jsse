@@ -16,46 +16,49 @@ var t = '';
 for (var j = 0; j < 300; j++) { t = t + 'ab' + j; }
 var expected = '';
 for (var j = 0; j < 300; j++) { expected += 'ab' + String(j); }
-if (t !== expected) {
-  throw new Test262Error('chain mismatch: length ' + t.length + ' vs ' + expected.length);
-}
-if (t.length !== expected.length || t.charCodeAt(t.length - 1) !== expected.charCodeAt(expected.length - 1)) {
-  throw new Test262Error('chain tail mismatch');
-}
+assert.sameValue(t, expected, 'chain');
 
 // Number, boolean, null, undefined and BigInt operands on the right.
 var base = '';
 for (var i = 0; i < 100; i++) { base += 'b'; }
-var r = base + 1 + true + null + undefined + 10n;
-if (r !== base + '1truenullundefined10') {
-  throw new Test262Error('mixed operands: got ' + r.slice(100));
-}
+assert.sameValue(base + 1 + true + null + undefined + 10n, base + '1truenullundefined10', 'mixed operands');
 
 // Non-String on the left.
 var l = 1 + base;
-if (l.charAt(0) !== '1' || l.length !== 101) {
-  throw new Test262Error('number + string: got length ' + l.length);
-}
+assert.sameValue(l.charAt(0), '1', 'number + string head');
+assert.sameValue(l.length, 101, 'number + string length');
 
 // Empty operands.
-var e1 = '' + base;
-var e2 = base + '';
-if (e1 !== base || e2 !== base || e1.length !== 100 || e2.length !== 100) {
-  throw new Test262Error('empty operand handling');
-}
+assert.sameValue('' + base, base, 'empty left');
+assert.sameValue(base + '', base, 'empty right');
+assert.sameValue('' + 1, '1', 'empty left, number right');
 
 // Symbol operand still throws TypeError.
-var threw = false;
-try { base + Symbol('s'); } catch (e) { threw = e instanceof TypeError; }
-if (!threw) { throw new Test262Error('string + symbol must throw TypeError'); }
+assert.throws(TypeError, function () { base + Symbol('s'); }, 'string + symbol');
 
-// Object operands use ToPrimitive (valueOf/toString order for default hint).
+// Object operands use ToPrimitive (valueOf first for the default hint).
 var calls = [];
 var obj = {
   valueOf: function () { calls.push('valueOf'); return 'V'; },
   toString: function () { calls.push('toString'); return 'S'; }
 };
-var o = base + obj;
-if (o.slice(100) !== 'V' || calls.join() !== 'valueOf') {
-  throw new Test262Error('object operand: got ' + o.slice(100) + ' / ' + calls.join());
+assert.sameValue((base + obj).slice(100), 'V', 'object operand');
+assert.sameValue(calls.join(), 'valueOf', 'ToPrimitive order');
+
+// Template literals starting with a substitution extend the string and leave
+// earlier values untouched.
+var acc = '';
+var snapshots = [];
+for (var k = 0; k < 200; k++) {
+  acc = `${acc}${k},`;
+  if (k % 50 === 0) { snapshots.push(acc); }
 }
+var tplExpected = '';
+for (var k = 0; k < 200; k++) { tplExpected += k + ','; }
+assert.sameValue(acc, tplExpected, 'template accumulation');
+assert.sameValue(tplExpected.indexOf(snapshots[2]), 0, 'template snapshot is a prefix');
+var sib1 = `${acc}x`;
+var sib2 = `${acc}y`;
+assert.sameValue(sib1.slice(-1) + sib2.slice(-1), 'xy', 'template siblings');
+assert.sameValue(`${acc}`, acc, 'single substitution');
+assert.sameValue(`${1}${acc}`.slice(0, 3), '10,', 'non-string first substitution');

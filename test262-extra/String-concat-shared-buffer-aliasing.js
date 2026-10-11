@@ -13,12 +13,6 @@ description: >
 // Concatenation yields a new String; earlier values, their copies, and values
 // derived from a common prefix must never observe a later append.
 
-function assertEq(actual, expected, message) {
-  if (actual !== expected) {
-    throw new Test262Error(message + ': expected ' + String(expected) + ', got ' + String(actual));
-  }
-}
-
 function longPrefix() {
   var s = '';
   for (var i = 0; i < 200; i++) { s += 'p'; }
@@ -29,67 +23,67 @@ function longPrefix() {
 var s = longPrefix();
 var a = s + 'x';
 var b = s + 'y';
-assertEq(a.length, 201, 'a.length');
-assertEq(b.length, 201, 'b.length');
-assertEq(a.charAt(200), 'x', 'a tail');
-assertEq(b.charAt(200), 'y', 'b tail');
-assertEq(s.length, 200, 'prefix length unchanged');
-assertEq(a === b, false, 'siblings differ');
-assertEq(a.slice(0, 200), s, 'a prefix equals s');
+assert.sameValue(a.length, 201, 'a.length');
+assert.sameValue(b.length, 201, 'b.length');
+assert.sameValue(a.charAt(200), 'x', 'a tail');
+assert.sameValue(b.charAt(200), 'y', 'b tail');
+assert.sameValue(s.length, 200, 'prefix length unchanged');
+assert.sameValue(a === b, false, 'siblings differ');
+assert.sameValue(a.slice(0, 200), s, 'a prefix equals s');
 
 // Appending to a stale view after the tail moved on still gives the right value.
 var base = longPrefix();
 var first = base + 'A';
 var second = first + 'B';
 var stale = first + 'C';
-assertEq(first.slice(200), 'A', 'first');
-assertEq(second.slice(200), 'AB', 'second');
-assertEq(stale.slice(200), 'AC', 'stale');
-assertEq(base.length, 200, 'base length');
+assert.sameValue(first.slice(200), 'A', 'first');
+assert.sameValue(second.slice(200), 'AB', 'second');
+assert.sameValue(stale.slice(200), 'AC', 'stale');
+assert.sameValue(base.length, 200, 'base length');
 
 // Compound assignment on aliased variables.
 var p = longPrefix();
 var q = p;
 p += '1';
 q += '2';
-assertEq(p.slice(200), '1', 'p after +=');
-assertEq(q.slice(200), '2', 'q after +=');
+assert.sameValue(p.slice(200), '1', 'p after +=');
+assert.sameValue(q.slice(200), '2', 'q after +=');
 
 // Surrogate halves joined across the boundary are plain code units.
 var hi = longPrefix() + '\uD83D';
 var joined = hi + '\uDE00';
-assertEq(joined.length, 202, 'surrogate join length');
-assertEq(joined.charCodeAt(200), 0xD83D, 'high surrogate kept');
-assertEq(joined.charCodeAt(201), 0xDE00, 'low surrogate kept');
-assertEq(hi.length, 201, 'lone high surrogate string untouched');
-assertEq(hi.charCodeAt(200), 0xD83D, 'lone high surrogate preserved');
-assertEq(joined.codePointAt(200), 0x1F600, 'pair forms a code point');
+assert.sameValue(joined.length, 202, 'surrogate join length');
+assert.sameValue(joined.charCodeAt(200), 0xD83D, 'high surrogate kept');
+assert.sameValue(joined.charCodeAt(201), 0xDE00, 'low surrogate kept');
+assert.sameValue(hi.length, 201, 'lone high surrogate string untouched');
+assert.sameValue(hi.charCodeAt(200), 0xD83D, 'lone high surrogate preserved');
+assert.sameValue(joined.codePointAt(200), 0x1F600, 'pair forms a code point');
 var lonely = hi + 'z';
-assertEq(lonely.charCodeAt(200), 0xD83D, 'high surrogate then BMP');
-assertEq(lonely.charCodeAt(201), 0x7A, 'BMP after high surrogate');
+assert.sameValue(lonely.charCodeAt(200), 0xD83D, 'high surrogate then BMP');
+assert.sameValue(lonely.charCodeAt(201), 0x7A, 'BMP after high surrogate');
 
 // Derived property keys and Map keys use the content, not the buffer.
 var k = longPrefix();
 var o = {};
 o[k + 'a'] = 1;
 o[k + 'b'] = 2;
-assertEq(o[k + 'a'], 1, 'key a');
-assertEq(o[k + 'b'], 2, 'key b');
-assertEq(Object.keys(o).length, 2, 'two keys');
+assert.sameValue(o[k + 'a'], 1, 'key a');
+assert.sameValue(o[k + 'b'], 2, 'key b');
+assert.sameValue(Object.keys(o).length, 2, 'two keys');
 var m = new Map();
 m.set(k + 'a', 'A');
 m.set(k + 'b', 'B');
-assertEq(m.get(k + 'a'), 'A', 'map a');
-assertEq(m.get(k + 'b'), 'B', 'map b');
-assertEq(m.has(k + 'c'), false, 'map missing');
+assert.sameValue(m.get(k + 'a'), 'A', 'map a');
+assert.sameValue(m.get(k + 'b'), 'B', 'map b');
+assert.sameValue(m.has(k + 'c'), false, 'map missing');
 
 // Views sharing a buffer compare by content.
 var t = longPrefix();
 var t1 = t + 'q';
 var t2 = longPrefix() + 'q';
-assertEq(t1 === t2, true, 'equal content, different buffers');
-assertEq(t1 < t + 'r', true, 'ordering by code units');
-assertEq(t < t1, true, 'prefix sorts first');
+assert.sameValue(t1 === t2, true, 'equal content, different buffers');
+assert.sameValue(t1 < t + 'r', true, 'ordering by code units');
+assert.sameValue(t < t1, true, 'prefix sorts first');
 
 // Concatenating onto the subject from inside a replace callback.
 var subject = longPrefix() + '-tail';
@@ -99,9 +93,9 @@ var replaced = subject.replace(/-/, function (match) {
   seen.push(extended.length);
   return '+';
 });
-assertEq(seen[0], 206, 'callback observed extended subject');
-assertEq(subject.length, 205, 'subject unchanged');
-assertEq(replaced.slice(200), '+tail', 'replace result');
+assert.sameValue(seen[0], 206, 'callback observed extended subject');
+assert.sameValue(subject.length, 205, 'subject unchanged');
+assert.sameValue(replaced.slice(200), '+tail', 'replace result');
 
 // Many appends then reads stay consistent.
 var acc = '';
@@ -110,8 +104,8 @@ for (var i = 0; i < 500; i++) {
   acc += String.fromCharCode(97 + (i % 26));
   if (i % 100 === 0) { parts.push(acc); }
 }
-assertEq(acc.length, 500, 'acc length');
+assert.sameValue(acc.length, 500, 'acc length');
 for (var j = 0; j < parts.length; j++) {
-  assertEq(acc.indexOf(parts[j]), 0, 'snapshot ' + j + ' is a prefix');
-  assertEq(parts[j].length, j * 100 + 1, 'snapshot ' + j + ' length');
+  assert.sameValue(acc.indexOf(parts[j]), 0, 'snapshot ' + j + ' is a prefix');
+  assert.sameValue(parts[j].length, j * 100 + 1, 'snapshot ' + j + ' length');
 }

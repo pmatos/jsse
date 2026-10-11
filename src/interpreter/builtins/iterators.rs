@@ -1307,7 +1307,7 @@ impl Interpreter {
                         done,
                     }) = state
                     {
-                        if done || position >= string.as_units().len() {
+                        if done || position >= string.len() {
                             obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                                 IteratorState::StringIterator {
                                     string: string.clone(),
@@ -1320,18 +1320,17 @@ impl Interpreter {
                             );
                         }
                         let cu = string.as_units()[position];
-                        let (result_units, advance) = if (0xD800..=0xDBFF).contains(&cu)
-                            && position + 1 < string.as_units().len()
-                        {
-                            let next_cu = string.as_units()[position + 1];
-                            if (0xDC00..=0xDFFF).contains(&next_cu) {
-                                (vec![cu, next_cu], 2)
+                        let (result_units, advance) =
+                            if (0xD800..=0xDBFF).contains(&cu) && position + 1 < string.len() {
+                                let next_cu = string.as_units()[position + 1];
+                                if (0xDC00..=0xDFFF).contains(&next_cu) {
+                                    (vec![cu, next_cu], 2)
+                                } else {
+                                    (vec![cu], 1)
+                                }
                             } else {
                                 (vec![cu], 1)
-                            }
-                        } else {
-                            (vec![cu], 1)
-                        };
+                            };
                         obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StringIterator {
                                 string: string.clone(),

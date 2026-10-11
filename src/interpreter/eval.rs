@@ -535,12 +535,6 @@ impl Interpreter {
                     }
                 };
                 self.gc_root_value(&rval);
-                // The fast string-concat arm below moves lval/rval, so snapshot
-                // the object operands now for a targeted unroot afterwards. Only
-                // objects are ever rooted, and that arm runs only for primitives,
-                // so these are cheap handle copies or None.
-                let lroot = lval.is_object().then(|| lval.clone());
-                let rroot = rval.is_object().then(|| rval.clone());
                 let result = if *op == BinaryOp::Instanceof {
                     self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
@@ -560,13 +554,8 @@ impl Interpreter {
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
-                // Unroot only the operands rooted for this expression.
-                if let Some(ref r) = rroot {
-                    self.gc_unroot_value(r);
-                }
-                if let Some(ref l) = lroot {
-                    self.gc_unroot_value(l);
-                }
+                self.gc_unroot_value(&rval);
+                self.gc_unroot_value(&lval);
                 result
             }
             Expression::Logical(op, left, right) => {
@@ -1145,6 +1134,9 @@ impl Interpreter {
             }
             Expression::Template(tmpl) => {
                 let mut code_units: Vec<u16> = Vec::new();
+                // `${s}...` with an empty leading quasi extends `s` in place,
+                // keeping `s = `${s}${x}`` loops linear.
+                let mut base: Option<JsString> = None;
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
                     if let Some(q) = quasi {
                         code_units.extend_from_slice(q);
@@ -1154,12 +1146,21 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let Err(e) = self.append_js_string(&mut code_units, &val) {
+                        if base.is_none()
+                            && code_units.is_empty()
+                            && let Some(s) = val.as_string()
+                        {
+                            base = Some(s);
+                        } else if let Err(e) = self.append_js_string(&mut code_units, &val) {
                             return Completion::Throw(e);
                         }
                     }
                 }
-                Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                let joined = match base {
+                    Some(base) => base.concat_units(&code_units),
+                    None => JsString::from_vec(code_units),
+                };
+                Completion::Normal(JsValue::string(joined))
             }
             Expression::OptionalChain(base, prop) => {
                 let (base_val, base_this) = match self.eval_oc_base(base, env) {
@@ -1266,8 +1267,7 @@ impl Interpreter {
         } else if let Some(s) = base_val.as_string() {
             if name.eq_str("length") {
                 Completion::Normal(JsValue::number(s.len() as f64))
-            } else if let Some(idx) =
-                crate::interpreter::types::string_exotic_index(&name, s.as_units().len())
+            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(&name, s.len())
             {
                 Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else if let Some(sp_id) = self.realm().string_prototype {

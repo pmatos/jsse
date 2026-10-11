@@ -52,19 +52,25 @@ pub(crate) enum ValueKind {
 // any outstanding `&[u16]` borrow stays valid. `a + b` whose left operand is
 // the buffer's tail owner claims the spare capacity and appends in place
 // (amortised O(1) for `s += x`); every other view keeps its own prefix.
+// A short-lived prefix view keeps the whole grown buffer alive.
 struct StrBuf {
     ptr: *mut u16,
     cap: usize,
     tail: AtomicUsize,
+    /// Created by a concatenation copy, i.e. part of a growth chain. Only
+    /// such buffers are over-allocated on the next copy, so one-shot results
+    /// stay exact-fit.
+    grown: bool,
 }
 
 impl StrBuf {
-    fn from_vec(v: Vec<u16>) -> Self {
+    fn from_vec(v: Vec<u16>, grown: bool) -> Self {
         let mut v = ManuallyDrop::new(v);
         Self {
             ptr: v.as_mut_ptr(),
             cap: v.capacity(),
             tail: AtomicUsize::new(v.len()),
+            grown,
         }
     }
 }
@@ -108,8 +114,8 @@ impl StrView {
     }
 }
 
-/// Appended strings shorter than this are copied exact-fit; longer ones get
-/// geometric slack so a following append can claim the tail.
+/// Strings shorter than this are always copied exact-fit; longer ones in a
+/// growth chain get geometric slack so a following append can claim the tail.
 const STR_SLACK_THRESHOLD: usize = 64;
 
 #[derive(Clone)]
@@ -124,9 +130,13 @@ impl JsString {
     }
 
     pub(crate) fn from_vec(v: Vec<u16>) -> Self {
+        Self::from_vec_grown(v, false)
+    }
+
+    fn from_vec_grown(v: Vec<u16>, grown: bool) -> Self {
         let len = v.len();
         Self {
-            view: Arc::new(StrView::from_buf(Arc::new(StrBuf::from_vec(v)), len)),
+            view: Arc::new(StrView::from_buf(Arc::new(StrBuf::from_vec(v, grown)), len)),
         }
     }
 
@@ -176,15 +186,15 @@ impl JsString {
                 view: Arc::new(StrView::from_buf(Arc::clone(buf), new_len)),
             };
         }
-        let cap = if new_len < STR_SLACK_THRESHOLD {
-            new_len
-        } else {
+        let cap = if buf.grown && new_len >= STR_SLACK_THRESHOLD {
             new_len.saturating_mul(2)
+        } else {
+            new_len
         };
         let mut v = Vec::with_capacity(cap);
         v.extend_from_slice(self.as_units());
         v.extend_from_slice(extra);
-        Self::from_vec(v)
+        Self::from_vec_grown(v, true)
     }
 }
 
@@ -196,7 +206,7 @@ impl Default for JsString {
 
 impl PartialEq for JsString {
     fn eq(&self, other: &Self) -> bool {
-        self.as_units() == other.as_units()
+        self.ptr_eq(other) || self.as_units() == other.as_units()
     }
 }
 
@@ -1847,33 +1857,31 @@ mod tests {
 mod js_string_buffer_tests {
     use super::JsString;
 
-    fn units(s: &JsString) -> Vec<u16> {
-        s.as_units().to_vec()
+    fn with_cap(units: &[u16], cap: usize) -> JsString {
+        let mut v = Vec::with_capacity(cap);
+        v.extend_from_slice(units);
+        JsString::from_vec(v)
     }
 
     #[test]
     fn tail_owner_appends_in_place_and_shares_buffer() {
-        let mut v = Vec::with_capacity(16);
-        v.extend_from_slice(&[1, 2, 3]);
-        let a = JsString::from_vec(v);
+        let a = with_cap(&[1, 2, 3], 16);
         let b = a.concat_units(&[4]);
         let c = b.concat_units(&[5, 6]);
-        assert_eq!(units(&a), [1, 2, 3]);
-        assert_eq!(units(&b), [1, 2, 3, 4]);
-        assert_eq!(units(&c), [1, 2, 3, 4, 5, 6]);
+        assert_eq!(a.as_units(), [1, 2, 3]);
+        assert_eq!(b.as_units(), [1, 2, 3, 4]);
+        assert_eq!(c.as_units(), [1, 2, 3, 4, 5, 6]);
         assert!(std::ptr::eq(a.as_units().as_ptr(), c.as_units().as_ptr()));
     }
 
     #[test]
     fn stale_view_copies_instead_of_clobbering() {
-        let mut v = Vec::with_capacity(16);
-        v.extend_from_slice(&[1, 2, 3]);
-        let a = JsString::from_vec(v);
+        let a = with_cap(&[1, 2, 3], 16);
         let b = a.concat_units(&[4]);
         let c = a.concat_units(&[9]);
-        assert_eq!(units(&b), [1, 2, 3, 4]);
-        assert_eq!(units(&c), [1, 2, 3, 9]);
-        assert_eq!(units(&a), [1, 2, 3]);
+        assert_eq!(b.as_units(), [1, 2, 3, 4]);
+        assert_eq!(c.as_units(), [1, 2, 3, 9]);
+        assert_eq!(a.as_units(), [1, 2, 3]);
         assert!(!std::ptr::eq(a.as_units().as_ptr(), c.as_units().as_ptr()));
     }
 
@@ -1892,9 +1900,7 @@ mod js_string_buffer_tests {
 
     #[test]
     fn borrow_survives_append_to_same_string() {
-        let mut v = Vec::with_capacity(256);
-        v.extend_from_slice(&[1, 2, 3]);
-        let a = JsString::from_vec(v);
+        let a = with_cap(&[1, 2, 3], 256);
         let slice = a.as_units();
         let b = a.concat_units(&[4, 5]);
         let c = b.concat_units(&[6; 100]);
@@ -1903,14 +1909,31 @@ mod js_string_buffer_tests {
     }
 
     #[test]
+    fn slack_only_after_a_growth_chain_starts() {
+        let one_shot = JsString::from_vec(vec![1; 100]).concat_units(&[2; 100]);
+        let sibling = JsString::from_vec(vec![1; 100]).concat_units(&[3; 100]);
+        assert_eq!(one_shot.len(), 200);
+        assert_eq!(sibling.len(), 200);
+        assert!(!one_shot.view.buf.ptr.is_null() && one_shot.view.buf.cap == 200);
+
+        let chained = one_shot.concat_units(&[4]);
+        assert_eq!(chained.len(), 201);
+        assert!(chained.view.buf.cap >= 402);
+        let appended = chained.concat_units(&[5]);
+        assert!(std::ptr::eq(
+            chained.as_units().as_ptr(),
+            appended.as_units().as_ptr()
+        ));
+    }
+
+    #[test]
     #[allow(clippy::mutable_key_type)]
     fn equality_and_hash_ignore_buffer_identity() {
         use std::collections::HashSet;
-        let mut v = Vec::with_capacity(8);
-        v.extend_from_slice(&[1, 2]);
-        let long = JsString::from_vec(v).concat_units(&[3]);
+        let long = with_cap(&[1, 2], 8).concat_units(&[3]);
         let exact = JsString::from_vec(vec![1, 2, 3]);
         assert_eq!(long, exact);
+        assert_eq!(exact, exact.clone());
         let mut set = HashSet::new();
         set.insert(long);
         assert!(set.contains(&exact));
@@ -1920,7 +1943,10 @@ mod js_string_buffer_tests {
     fn empty_and_default() {
         let e = JsString::default();
         assert!(e.is_empty());
-        assert_eq!(units(&e.concat_units(&[1])), [1]);
-        assert_eq!(units(&JsString::from_vec(vec![1]).concat_units(&[])), [1]);
+        assert_eq!(e.concat_units(&[1]).as_units(), [1]);
+        assert_eq!(
+            JsString::from_vec(vec![1]).concat_units(&[]).as_units(),
+            [1]
+        );
     }
 }

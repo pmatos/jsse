@@ -2176,7 +2176,7 @@ impl Interpreter {
                 && let Some(ref v) = prop.value
             {
                 if let Some(s) = (v).as_string() {
-                    if !s.as_units().is_empty() {
+                    if !s.is_empty() {
                         return;
                     }
                 } else {

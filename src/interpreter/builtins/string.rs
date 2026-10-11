@@ -95,7 +95,7 @@ fn map_well_formed(units: &[u16], mut transform: impl FnMut(&str) -> Cow<'_, str
 // BMP code unit. Returns `s` itself when there is nothing to trim.
 fn trim_string(s: JsString, trim_start: bool, trim_end: bool) -> JsString {
     let is_space = |unit: &&u16| char::from_u32(u32::from(**unit)).is_some_and(is_ecma_whitespace);
-    let units = &s.as_units();
+    let units = s.as_units();
     let start = if trim_start {
         units.iter().take_while(is_space).count()
     } else {
@@ -122,7 +122,7 @@ fn string_pad(
     let s = propagate!(this_js_string(interp, this_val));
     let max_length = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     let int_max = propagate!(interp.to_integer_or_infinity_value(&max_length)) as usize;
-    let len = s.as_units().len();
+    let len = s.len();
     // Step 4 returns before step 6 converts the fill string.
     if int_max <= len {
         return Completion::Normal(JsValue::string(s));
@@ -131,7 +131,7 @@ fn string_pad(
         Some(v) if !v.is_undefined() => propagate!(interp.to_js_string(v)),
         _ => JsString::from_str(" "),
     };
-    if fill.as_units().is_empty() {
+    if fill.is_empty() {
         return Completion::Normal(JsValue::string(s));
     }
     let pad = fill.as_units().iter().copied().cycle().take(int_max - len);
@@ -306,7 +306,7 @@ impl Interpreter {
                         },
                         None => 0.0,
                     };
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::string(JsString::from_str("")));
@@ -328,7 +328,7 @@ impl Interpreter {
                         },
                         None => 0.0,
                     };
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::number(f64::NAN));
@@ -348,7 +348,7 @@ impl Interpreter {
                         },
                         None => 0.0,
                     };
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::UNDEFINED);
@@ -375,7 +375,7 @@ impl Interpreter {
                     let search = propagate!(interp.to_js_string(&search_arg));
                     let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let pos = propagate!(interp.to_integer_or_infinity_value(&position));
-                    let units = &s.as_units();
+                    let units = s.as_units();
                     let start = clamp_index(pos, units.len());
                     let index = string_index_of(units, search.as_units(), start);
                     Completion::Normal(JsValue::number(index.map_or(-1.0, |i| i as f64)))
@@ -390,7 +390,7 @@ impl Interpreter {
                     let search = propagate!(interp.to_js_string(&search_arg));
                     let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let num_pos = propagate!(interp.to_number_value(&position));
-                    let units = &s.as_units();
+                    let units = s.as_units();
                     let start = if num_pos.is_nan() {
                         units.len()
                     } else {
@@ -410,7 +410,7 @@ impl Interpreter {
                     let search = propagate!(interp.to_js_string(&search_arg));
                     let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let pos = propagate!(interp.to_integer_or_infinity_value(&position));
-                    let units = &s.as_units();
+                    let units = s.as_units();
                     let start = clamp_index(pos, units.len());
                     let found = string_index_of(units, search.as_units(), start).is_some();
                     Completion::Normal(JsValue::boolean(found))
@@ -426,7 +426,7 @@ impl Interpreter {
                     let search = propagate!(interp.to_js_string(&search_arg));
                     let position = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let pos = propagate!(interp.to_integer_or_infinity_value(&position));
-                    let units = &s.as_units();
+                    let units = s.as_units();
                     let start = clamp_index(pos, units.len());
                     let result = units[start..].starts_with(search.as_units());
                     Completion::Normal(JsValue::boolean(result))
@@ -440,7 +440,7 @@ impl Interpreter {
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     propagate!(reject_regexp(interp, &search_arg, "endsWith"));
                     let search = propagate!(interp.to_js_string(&search_arg));
-                    let units = &s.as_units();
+                    let units = s.as_units();
                     let end = match args.get(1) {
                         Some(v) if !v.is_undefined() => clamp_index(
                             propagate!(interp.to_integer_or_infinity_value(v)),
@@ -457,7 +457,7 @@ impl Interpreter {
                 2,
                 Rc::new(|interp, this_val, args| {
                     let js_str = propagate!(this_js_string(interp, this_val));
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let from = match resolve_start_index(interp, args.first(), units.len()) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -479,7 +479,7 @@ impl Interpreter {
                 2,
                 Rc::new(|interp, this_val, args| {
                     let js_str = propagate!(this_js_string(interp, this_val));
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let len = units.len() as f64;
                     let int_start = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
@@ -588,12 +588,11 @@ impl Interpreter {
                 1,
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let mut result = s;
+                    let mut tail: Vec<u16> = Vec::new();
                     for arg in args {
-                        let piece = propagate!(interp.to_js_string(arg));
-                        result = result.concat_units(piece.as_units());
+                        propagate!(interp.append_js_string(&mut tail, arg));
                     }
-                    Completion::Normal(JsValue::string(result))
+                    Completion::Normal(JsValue::string(s.concat_units(&tail)))
                 }),
             ),
             (
@@ -646,8 +645,8 @@ impl Interpreter {
                         return Completion::Normal(interp.create_array(vec![JsValue::string(s)]));
                     };
                     let limit = limit as usize;
-                    let s_units = &s.as_units();
-                    let sep_units = &sep.as_units();
+                    let s_units = s.as_units();
+                    let sep_units = sep.as_units();
 
                     if sep_units.is_empty() {
                         // Split into individual UTF-16 code units
@@ -704,8 +703,8 @@ impl Interpreter {
                     let search = propagate!(interp.to_js_string(&search_value));
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let template = propagate!(replace_template(interp, &replace_arg));
-                    let s_units = &s.as_units();
-                    let search_units = &search.as_units();
+                    let s_units = s.as_units();
+                    let search_units = search.as_units();
                     let Some(pos) = string_index_of(s_units, search_units, 0) else {
                         return Completion::Normal(JsValue::string(s.clone()));
                     };
@@ -795,8 +794,8 @@ impl Interpreter {
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     // Per spec step 6a: if not functional, ToString(replaceValue) once upfront
                     let template = propagate!(replace_template(interp, &replace_arg));
-                    let s_units = &s.as_units();
-                    let search_units = &search.as_units();
+                    let s_units = s.as_units();
+                    let search_units = search.as_units();
                     let advance_by = search_units.len().max(1);
                     let mut positions = Vec::new();
                     let mut next = string_index_of(s_units, search_units, 0);
@@ -833,7 +832,7 @@ impl Interpreter {
                 1,
                 Rc::new(|interp, this_val, args| {
                     let js_str = propagate!(this_js_string(interp, this_val));
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let idx = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
                             Ok(n) => n,
@@ -1118,7 +1117,7 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let js_str = propagate!(this_js_string(interp, this_val));
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let mut i = 0;
                     while i < units.len() {
                         let cu = units[i];
@@ -1141,7 +1140,7 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let js_str = propagate!(this_js_string(interp, this_val));
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let mut result = Vec::with_capacity(units.len());
                     let mut i = 0;
                     while i < units.len() {
@@ -1290,7 +1289,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = &js_str.as_units();
+                    let units = js_str.as_units();
                     let len = units.len() as f64;
                     let int_start = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {

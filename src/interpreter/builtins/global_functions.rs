@@ -227,10 +227,10 @@ impl Interpreter {
             JsFunction::native("decodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code_units = match interp.to_js_string(&val) {
-                    Ok(s) => s.as_units().to_vec(),
+                    Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                match decode_uri_string(&code_units, true) {
+                match decode_uri_string(code_units.as_units(), true) {
                     Ok(decoded) => Completion::Normal(JsValue::string(JsString::from_vec(decoded))),
                     Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                 }
@@ -246,10 +246,10 @@ impl Interpreter {
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let code_units = match interp.to_js_string(&val) {
-                        Ok(s) => s.as_units().to_vec(),
+                        Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     };
-                    match decode_uri_string(&code_units, false) {
+                    match decode_uri_string(code_units.as_units(), false) {
                         Ok(decoded) => {
                             Completion::Normal(JsValue::string(JsString::from_vec(decoded)))
                         }
