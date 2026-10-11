@@ -227,6 +227,21 @@ fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
 }
 
 #[test]
+fn non_construct_call_leaves_last_call_this_value_unset() {
+    for run in [run_script, run_script_tree_walker] {
+        let interp = run(
+            r#"
+            function sloppy(a) { return a; }
+            function strict(a) { "use strict"; return this === undefined ? a : 0; }
+            var r = sloppy(1) + strict(2) + sloppy.call({}, 3);
+            if (r !== 6) throw new Error("unexpected result");
+            "#,
+        );
+        assert!(interp.last_call_this_value.is_none());
+    }
+}
+
+#[test]
 fn define_method_installs_a_correctly_shaped_builtin() {
     let mut interp = Interpreter::new();
     let target_id = interp.create_object_id();

@@ -286,6 +286,8 @@ pub(crate) struct Interpreter {
     current_module_path: Option<ModuleKey>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
+    /// Set only by a `[[Construct]]` call of a user function (`was_construct`
+    /// in `call_function_inner_impl`); plain calls leave it untouched.
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     calling_as_construct: bool,

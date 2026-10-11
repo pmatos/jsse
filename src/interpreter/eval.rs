@@ -5095,6 +5095,16 @@ impl Interpreter {
         }
     }
 
+    /// The realm's `[[GlobalThisValue]]` (§10.2.1.2 OrdinaryCallBindThis).
+    /// `fallback` is returned only if the realm has no global object yet.
+    #[inline]
+    fn global_this_value(&self, fallback: &JsValue) -> JsValue {
+        match self.realm().global_object {
+            Some(id) => JsValue::object(id),
+            None => fallback.clone(),
+        }
+    }
+
     /// Invoke a constructor body, then drive any proper-tail-call chain to
     /// completion — but capture the constructor frame's
     /// `last_call_had_explicit_return` / `last_call_this_value` side channels
@@ -5512,11 +5522,7 @@ impl Interpreter {
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
                             let effective_this = if !is_strict && !closure_strict {
                                 if (_this_val).is_nullish() {
-                                    self.realm()
-                                        .global_env
-                                        .borrow()
-                                        .get("this")
-                                        .unwrap_or(_this_val.clone())
+                                    self.global_this_value(_this_val)
                                 } else if !(_this_val).is_object() {
                                     match self.to_object(_this_val) {
                                         Completion::Normal(v) => v,
@@ -5715,11 +5721,7 @@ impl Interpreter {
                             } else {
                                 let effective_this = if !is_strict && !closure_strict {
                                     if (_this_val).is_nullish() {
-                                        self.realm()
-                                            .global_env
-                                            .borrow()
-                                            .get("this")
-                                            .unwrap_or(_this_val.clone())
+                                        self.global_this_value(_this_val)
                                     } else if !(_this_val).is_object() {
                                         match self.to_object(_this_val) {
                                             Completion::Normal(v) => v,
@@ -5844,7 +5846,9 @@ impl Interpreter {
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
-                        self.last_call_this_value = func_env.borrow().get("this");
+                        if was_construct {
+                            self.last_call_this_value = func_env.borrow().get("this");
+                        }
                         self.current_realm_id = caller_realm;
                         drop(exec_env);
                         self.recycle_function_environment(func_env);
@@ -7970,12 +7974,7 @@ impl Interpreter {
             if !is_arrow {
                 let effective_this = if !is_strict && !closure_strict {
                     if (this_val).is_nullish() {
-                        interp
-                            .realm()
-                            .global_env
-                            .borrow()
-                            .get("this")
-                            .unwrap_or(this_val.clone())
+                        interp.global_this_value(this_val)
                     } else if !(this_val).is_object() {
                         match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
