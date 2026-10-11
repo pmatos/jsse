@@ -1982,6 +1982,11 @@ impl Interpreter {
             "sort".to_string(),
             1,
             |interp, this_val, args| {
+                // Step 1: the comparefn check precedes ValidateTypedArray.
+                let comparefn = match super::array::sort_compare_fn_arg(interp, args) {
+                    Ok(cf) => cf,
+                    Err(c) => return c,
+                };
                 if let Some(o) = this_val.as_object_id()
                     && let Some(obj) = interp.get_object(o)
                 {
@@ -1999,37 +2004,10 @@ impl Interpreter {
                     if let Err(c) = check_ta_buffer_writable(interp, &ta) {
                         return c;
                     }
-                    let comparefn = args.first().cloned();
-                    if let Some(ref cmp) = comparefn
-                        && !cmp.is_undefined()
-                    {
-                        let is_callable = if let Some(co) = cmp.as_object_id() {
-                            interp
-                                .get_object_cell(co)
-                                .is_some_and(|obj| obj.borrow().callable.is_some())
-                        } else {
-                            false
-                        };
-                        if !is_callable {
-                            return Completion::Throw(
-                                interp.create_type_error("comparefn is not a function"),
-                            );
-                        }
-                    }
-                    let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
-                        .map(|i| typed_array_get_index(&ta, i))
-                        .collect();
-                    match comparefn.as_ref().filter(|cf| !cf.is_undefined()) {
-                        Some(cf) => {
-                            if let Err(e) =
-                                super::array::sort_with_comparefn(interp, &mut elems, cf)
-                            {
-                                return Completion::Throw(e);
-                            }
-                        }
-                        // The default numeric order is total, so `sort_by` cannot panic.
-                        None => elems.sort_by(typed_array_default_cmp),
-                    }
+                    let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
+                        Ok(elems) => elems,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     for (i, val) in elems.iter().enumerate() {
                         if !is_valid_integer_index(&ta, i as f64) {
                             break;
@@ -2222,6 +2200,11 @@ impl Interpreter {
             "toSorted".to_string(),
             1,
             |interp, this_val, args| {
+                // Step 1: the comparefn check precedes ValidateTypedArray.
+                let comparefn = match super::array::sort_compare_fn_arg(interp, args) {
+                    Ok(cf) => cf,
+                    Err(c) => return c,
+                };
                 if let Some(o) = this_val.as_object_id()
                     && let Some(obj) = interp.get_object(o)
                 {
@@ -2236,38 +2219,13 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let comparefn = args.first().cloned();
-                    if let Some(ref cmp) = comparefn
-                        && !cmp.is_undefined()
-                    {
-                        let is_callable = if let Some(co) = cmp.as_object_id() {
-                            interp
-                                .get_object_cell(co)
-                                .is_some_and(|obj| obj.borrow().callable.is_some())
-                        } else {
-                            false
-                        };
-                        if !is_callable {
-                            return Completion::Throw(
-                                interp.create_type_error("comparefn is not a function"),
-                            );
-                        }
-                    }
-                    let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
-                        .map(|i| typed_array_get_index(&ta, i))
-                        .collect();
-                    match comparefn.as_ref().filter(|cf| !cf.is_undefined()) {
-                        Some(cf) => {
-                            if let Err(e) =
-                                super::array::sort_with_comparefn(interp, &mut elems, cf)
-                            {
-                                return Completion::Throw(e);
-                            }
-                        }
-                        // The default numeric order is total, so `sort_by` cannot panic.
-                        None => elems.sort_by(typed_array_default_cmp),
-                    }
-                    let len = typed_array_length(&ta);
+                    let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
+                        Ok(elems) => elems,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    // A is created with the length read before the comparefn ran
+                    // (steps 4-5), even if it resized or detached the buffer.
+                    let len = elems.len();
                     let bpe = ta.kind.bytes_per_element();
                     let buf_byte_len = len * bpe;
                     let new_buf = vec![0u8; buf_byte_len];
@@ -6240,6 +6198,41 @@ fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usiz
     Completion::Normal(JsValue::object(id))
 }
 
+// Reads every element of `ta` and sorts them for %TypedArray%.prototype.sort
+// and toSorted: through the user comparefn when one is given (panic-free merge
+// sort, stopping at its first abrupt completion), else in the default order.
+fn sort_typed_array_elements(
+    interp: &mut Interpreter,
+    ta: &TypedArrayInfo,
+    comparefn: Option<&JsValue>,
+) -> Result<Vec<JsValue>, JsValue> {
+    let mut elems: Vec<JsValue> = (0..typed_array_length(ta))
+        .map(|i| typed_array_get_index(ta, i))
+        .collect();
+    match comparefn {
+        Some(cf) => super::array::sort_with_comparefn(interp, &mut elems, cf)?,
+        // The default numeric order is total, so `sort_by` cannot panic.
+        None => elems.sort_by(typed_array_default_cmp),
+    }
+    Ok(elems)
+}
+// §23.2.4.7 CompareTypedArrayElements without a comparefn: numeric (or BigInt)
+// order with NaN last and -0 before +0.
+fn typed_array_default_cmp(a: &JsValue, b: &JsValue) -> std::cmp::Ordering {
+    if let Some(ord) = a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
+        return ord;
+    }
+    let na = to_number(a);
+    let nb = to_number(b);
+    match (na.is_nan(), nb.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ if na == 0.0 && nb == 0.0 => na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse(),
+        _ => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
+    }
+}
+
 #[cfg(test)]
 mod validate_typed_array_tests {
     //! Pins the `validate_typed_array` seam — the receiver-validation prologue
@@ -6559,22 +6552,5 @@ mod require_array_buffer_tests {
         assert_eq!(num(&interp, "d_bl"), 0.0);
         assert_eq!(num(&interp, "d_mbl"), 0.0);
         assert!(interp.to_boolean_val(&global(&interp, "d_det")));
-    }
-}
-
-// §23.2.4.7 CompareTypedArrayElements without a comparefn: numeric (or BigInt)
-// order with NaN last and -0 before +0.
-fn typed_array_default_cmp(a: &JsValue, b: &JsValue) -> std::cmp::Ordering {
-    if let Some(ord) = a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
-        return ord;
-    }
-    let na = to_number(a);
-    let nb = to_number(b);
-    match (na.is_nan(), nb.is_nan()) {
-        (true, true) => std::cmp::Ordering::Equal,
-        (true, false) => std::cmp::Ordering::Greater,
-        (false, true) => std::cmp::Ordering::Less,
-        _ if na == 0.0 && nb == 0.0 => na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse(),
-        _ => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
     }
 }

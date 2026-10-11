@@ -291,7 +291,7 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
 
 // Validates the comparefn argument shared by `sort` and `toSorted`, returning
 // it only when one was given (undefined means the default order).
-fn sort_compare_fn_arg(
+pub(crate) fn sort_compare_fn_arg(
     interp: &mut Interpreter,
     args: &[JsValue],
 ) -> Result<Option<JsValue>, Completion> {
@@ -408,6 +408,22 @@ fn merge_sort_by<E>(
         while lo < n {
             let mid = (lo + width).min(n);
             let hi = (lo + 2 * width).min(n);
+            // Already in order: one comparison instead of a full merge, so
+            // sorted input costs about n comparefn calls, not (n/2)*log2(n).
+            if mid < hi {
+                match cmp(&src[mid - 1], &src[mid]) {
+                    Ok(std::cmp::Ordering::Greater) => {}
+                    Ok(_) => {
+                        dst.extend_from_slice(&src[lo..hi]);
+                        lo = hi;
+                        continue;
+                    }
+                    Err(e) => {
+                        *items = src;
+                        return Err(e);
+                    }
+                }
+            }
             let (mut i, mut j) = (lo, mid);
             while i < mid && j < hi {
                 match cmp(&src[i], &src[j]) {
