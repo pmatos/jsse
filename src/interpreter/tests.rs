@@ -5688,7 +5688,7 @@ fn construct_from_evaluated_unroots_on_field_initializer_throw() {
     let callee_val = env.borrow().get("C").expect("class C binding should exist");
 
     let baseline = interp.gc_root_frame();
-    let result = interp.construct_from_evaluated(&callee_val, &[], &env);
+    let result = interp.construct_from_evaluated(&callee_val, &[]);
     assert!(
         matches!(result, Completion::Throw(_)),
         "unexpected completion: {result:?}"
