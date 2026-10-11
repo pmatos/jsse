@@ -502,6 +502,9 @@ pub(crate) struct Realm {
     math_random_state: u64,
     pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
+    /// %Array.prototype.values%, captured when the realm's Array prototype is
+    /// built; the `@@iterator` value of every arguments object.
+    pub(crate) array_prototype_values: Option<JsValue>,
     pub(crate) template_cache: FxHashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
     pub(crate) object_prototype: Option<u64>,
@@ -607,6 +610,7 @@ impl Realm {
             math_random_state: new_math_random_state(),
             global_object: None,
             throw_type_error: None,
+            array_prototype_values: None,
             template_cache: FxHashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
@@ -811,6 +815,13 @@ impl Realm {
         }
         if let Some(id) = self
             .throw_type_error
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
+        }
+        if let Some(id) = self
+            .array_prototype_values
             .as_ref()
             .and_then(JsValue::as_object_id)
         {

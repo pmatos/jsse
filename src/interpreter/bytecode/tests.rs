@@ -2107,6 +2107,34 @@ fn pending_argument_survives_gc_during_later_call_argument() {
 }
 
 #[test]
+fn vm_operand_stacks_are_pooled_and_reentrant() {
+    use crate::parser::Parser;
+    let source = "\
+        function add(a, b) { return a + b; } \
+        function viaNative(x) { return [x, x + 1, x + 2].map(function (v) { return add(v, 1); }); } \
+        var total = 0; \
+        for (var i = 0; i < 20; i++) { total += viaNative(i).length + add(i, i); } \
+        var __r = total;";
+    let mut p = Parser::new(source).expect("parser init");
+    let program = p.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let _ = interp.run(&program);
+    let total = interp.get_global_var_ref("__r").and_then(|v| v.as_number());
+    assert_eq!(total, Some((0..20).map(|i| 3.0 + 2.0 * i as f64).sum()));
+    assert!(
+        !interp.vm_stack_pool.is_empty(),
+        "stacks must be returned to the pool"
+    );
+    assert!(interp.vm_stack_pool.len() <= 64);
+    assert!(
+        interp.vm_stack_pool.iter().all(|stack| stack.is_empty()),
+        "pooled stacks must not keep operands alive"
+    );
+    assert!(interp.vm_ref_pool.iter().all(|refs| refs.is_empty()));
+}
+
+#[test]
 fn pending_with_getter_callee_survives_gc_during_argument() {
     let source = "\
         var collect = $262.gc; \

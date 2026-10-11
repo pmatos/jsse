@@ -3227,6 +3227,8 @@ impl Interpreter {
             Completion::Throw(interp.create_type_error("values called on non-object"))
         });
 
+        self.realm_mut().array_prototype_values = Some(values_fn.clone());
+
         // Array.prototype[@@iterator] is the same function as Array.prototype.values (spec §23.1.3.35)
         if let Some(key) = self.get_symbol_iterator_key() {
             self.get_object_cell_expect(proto_id)

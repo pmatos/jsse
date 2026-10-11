@@ -34,6 +34,26 @@ pub(super) enum IdentifierRef {
     SpecificEnv(EnvRef),
 }
 
+/// The fields of a callable the `[[Call]]` path reads, copied out of the
+/// function object under one short borrow so the call neither clones the
+/// whole `JsFunction` nor allocates for its `name`/`source_text`.
+enum CallTarget {
+    Native(Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>),
+    User {
+        params: Rc<Vec<Pattern>>,
+        body: Body,
+        closure: EnvRef,
+        is_arrow: bool,
+        is_strict: bool,
+        is_generator: bool,
+        is_async: bool,
+        uses_arguments: bool,
+        has_simple_params: bool,
+        /// Only populated for arrow functions, which inherit it.
+        captured_new_target: Option<JsValue>,
+    },
+}
+
 /// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
 /// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
 /// discarded its reason by the time a message is needed, so the assignment
@@ -5153,6 +5173,29 @@ impl Interpreter {
         }
     }
 
+    /// §10.2.1.2 OrdinaryCallBindThis: sloppy callees see the realm's global
+    /// object for a nullish `this` and the wrapper object for a primitive one.
+    fn ordinary_call_bind_this(
+        &mut self,
+        this_val: &JsValue,
+        is_strict: bool,
+        closure_strict: bool,
+    ) -> JsValue {
+        if is_strict || closure_strict || this_val.is_object() {
+            return this_val.clone();
+        }
+        if this_val.is_nullish() {
+            return match self.realm().global_object {
+                Some(id) => JsValue::object(id),
+                None => this_val.clone(),
+            };
+        }
+        match self.to_object(this_val) {
+            Completion::Normal(v) => v,
+            _ => this_val.clone(),
+        }
+    }
+
     /// Invoke a constructor body, then drive any proper-tail-call chain to
     /// completion — but capture the constructor frame's
     /// `last_call_had_explicit_return` / `last_call_this_value` side channels
@@ -5292,13 +5335,40 @@ impl Interpreter {
                 self.current_realm_id = caller_realm;
                 return Completion::Throw(err);
             }
-            let callable = obj.borrow().callable.clone();
+            let callable = match &obj.borrow().callable {
+                Some(JsFunction::User {
+                    params,
+                    body,
+                    closure,
+                    is_arrow,
+                    is_strict,
+                    is_generator,
+                    is_async,
+                    uses_arguments,
+                    has_simple_params,
+                    captured_new_target,
+                    ..
+                }) => Some(CallTarget::User {
+                    params: params.clone(),
+                    body: body.clone(),
+                    closure: closure.clone(),
+                    is_arrow: *is_arrow,
+                    is_strict: *is_strict,
+                    is_generator: *is_generator,
+                    is_async: *is_async,
+                    uses_arguments: *uses_arguments,
+                    has_simple_params: *has_simple_params,
+                    captured_new_target: captured_new_target.clone(),
+                }),
+                Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
+                None => None,
+            };
             if let Some(func) = callable {
                 // [[Call]] vs [[Construct]] new.target semantics:
                 // - [[Call]]: new.target = undefined (clear for non-arrow functions)
                 // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
                 // - Arrow functions: inherit new.target from enclosing scope (don't clear)
-                let is_arrow_func = matches!(func, JsFunction::User { is_arrow, .. } if is_arrow);
+                let is_arrow_func = matches!(func, CallTarget::User { is_arrow, .. } if is_arrow);
                 let was_construct = std::mem::replace(&mut self.calling_as_construct, false);
                 let outer_new_target = if !is_arrow_func {
                     let nt = self.new_target.take();
@@ -5309,7 +5379,7 @@ impl Interpreter {
                 } else {
                     // Arrow functions inherit new.target from creation context
                     let saved = self.new_target.take();
-                    if let JsFunction::User {
+                    if let CallTarget::User {
                         captured_new_target: Some(ref cnt),
                         ..
                     } = func
@@ -5319,7 +5389,7 @@ impl Interpreter {
                     Some(saved)
                 };
                 let result = match func {
-                    JsFunction::Native(_, _, f, _) => {
+                    CallTarget::Native(f) => {
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.calls_to_native += 1;
@@ -5348,7 +5418,7 @@ impl Interpreter {
                         self.current_realm_id = caller_realm;
                         result
                     }
-                    JsFunction::User {
+                    CallTarget::User {
                         params,
                         body,
                         closure,
@@ -5399,20 +5469,6 @@ impl Interpreter {
                             if uses_arguments {
                                 let env_strict_ag = func_env.borrow().strict;
                                 let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
-                                let param_names_ag: Vec<String> = if use_mapped_ag {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env_ag =
                                     if use_mapped_ag { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
@@ -5420,7 +5476,7 @@ impl Interpreter {
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env_ag,
-                                    &param_names_ag,
+                                    &params,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
@@ -5475,15 +5531,12 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                                let mut param_names_set = HashSet::new();
-                                for p in params.iter() {
-                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
-                                }
-                                for name in &var_names {
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) || name == "arguments" {
+                                    if name == "arguments"
+                                        || params.iter().any(|p| p.binds_name(name))
+                                    {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -5558,43 +5611,13 @@ impl Interpreter {
                             let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
-                            let effective_this = if !is_strict && !closure_strict {
-                                if (_this_val).is_nullish() {
-                                    self.realm()
-                                        .global_env
-                                        .borrow()
-                                        .get_this()
-                                        .unwrap_or(_this_val.clone())
-                                } else if !(_this_val).is_object() {
-                                    match self.to_object(_this_val) {
-                                        Completion::Normal(v) => v,
-                                        _ => _this_val.clone(),
-                                    }
-                                } else {
-                                    _this_val.clone()
-                                }
-                            } else {
-                                _this_val.clone()
-                            };
+                            let effective_this =
+                                self.ordinary_call_bind_this(_this_val, is_strict, closure_strict);
                             func_env.borrow_mut().set_this(effective_this);
                             let is_simple_g = has_simple_params;
                             if uses_arguments {
                                 let env_strict_g = func_env.borrow().strict;
                                 let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
-                                let param_names_g: Vec<String> = if use_mapped_g {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env_g =
                                     if use_mapped_g { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
@@ -5602,7 +5625,7 @@ impl Interpreter {
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env_g,
-                                    &param_names_g,
+                                    &params,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
@@ -5654,15 +5677,12 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                                let mut param_names_set = HashSet::new();
-                                for p in params.iter() {
-                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
-                                }
-                                for name in &var_names {
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) || name == "arguments" {
+                                    if name == "arguments"
+                                        || params.iter().any(|p| p.binds_name(name))
+                                    {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -5743,50 +5763,23 @@ impl Interpreter {
                                 func_env.borrow_mut().is_derived_constructor_scope = true;
                                 self.constructing_derived = false;
                             } else {
-                                let effective_this = if !is_strict && !closure_strict {
-                                    if (_this_val).is_nullish() {
-                                        self.realm()
-                                            .global_env
-                                            .borrow()
-                                            .get_this()
-                                            .unwrap_or(_this_val.clone())
-                                    } else if !(_this_val).is_object() {
-                                        match self.to_object(_this_val) {
-                                            Completion::Normal(v) => v,
-                                            _ => _this_val.clone(),
-                                        }
-                                    } else {
-                                        _this_val.clone()
-                                    }
-                                } else {
-                                    _this_val.clone()
-                                };
+                                let effective_this = self.ordinary_call_bind_this(
+                                    _this_val,
+                                    is_strict,
+                                    closure_strict,
+                                );
                                 func_env.borrow_mut().set_this(effective_this);
                             }
                             let env_strict = func_env.borrow().strict;
                             if uses_arguments {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
-                                let param_names: Vec<String> = if use_mapped {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env = if use_mapped { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
                                     args,
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env,
-                                    &param_names,
+                                    &params,
                                 );
                                 call_frame_arguments =
                                     CallFrameArguments::Materialized(arguments_obj.clone());
@@ -5796,6 +5789,10 @@ impl Interpreter {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
                             } else if !is_strict && !env_strict {
+                                // `arguments` is unobservable by name here (no
+                                // reference, declaration or direct eval), so no
+                                // binding is created; sloppy frames keep the args
+                                // for the legacy `fn.arguments` accessor.
                                 call_frame_arguments = CallFrameArguments::Deferred {
                                     args: DeferredCallArguments::new(args),
                                     func_env: func_env.clone(),
@@ -5832,15 +5829,11 @@ impl Interpreter {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
                             body_env.borrow_mut().strict = func_env.borrow().strict;
                             body_env.borrow_mut().has_simple_params = false;
-                            let mut var_names = HashSet::new();
-                            Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                            let mut param_names = HashSet::new();
-                            for p in params.iter() {
-                                Self::collect_var_names_from_pattern(p, &mut param_names);
-                            }
-                            for name in &var_names {
+                            let analysis = self.hoist_cache.analysis_for(&body);
+                            for name in &analysis.var_names {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
-                                if param_names.contains(name) || name == "arguments" {
+                                if name == "arguments" || params.iter().any(|p| p.binds_name(name))
+                                {
                                     let val =
                                         self.env_get(&func_env, name).unwrap_or(JsValue::UNDEFINED);
                                     let _ = self.env_set(&body_env, name, val);
@@ -5867,7 +5860,9 @@ impl Interpreter {
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
-                        self.last_call_this_value = func_env.borrow().get_this();
+                        if was_construct {
+                            self.last_call_this_value = func_env.borrow().get_this();
+                        }
                         self.current_realm_id = caller_realm;
                         drop(exec_env);
                         self.recycle_function_environment(func_env);
@@ -7993,51 +7988,20 @@ impl Interpreter {
             // Set up `this` and `arguments` before binding parameters so that
             // default parameter expressions can reference `arguments`.
             if !is_arrow {
-                let effective_this = if !is_strict && !closure_strict {
-                    if (this_val).is_nullish() {
-                        interp
-                            .realm()
-                            .global_env
-                            .borrow()
-                            .get_this()
-                            .unwrap_or(this_val.clone())
-                    } else if !(this_val).is_object() {
-                        match interp.to_object(this_val) {
-                            Completion::Normal(v) => v,
-                            _ => this_val.clone(),
-                        }
-                    } else {
-                        this_val.clone()
-                    }
-                } else {
-                    this_val.clone()
-                };
+                let effective_this =
+                    interp.ordinary_call_bind_this(this_val, is_strict, closure_strict);
                 func_env.borrow_mut().set_this(effective_this);
                 if uses_arguments {
                     let is_simple = has_simple_params;
                     let env_strict = func_env.borrow().strict;
                     let use_mapped = is_simple && !is_strict && !env_strict;
-                    let param_names: Vec<String> = if use_mapped {
-                        params
-                            .iter()
-                            .filter_map(|p| {
-                                if let Pattern::Identifier(name) = p {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
                     let mapped_env = if use_mapped { Some(&func_env) } else { None };
                     let arguments_obj = interp.create_arguments_object(
                         args,
                         func_val.clone(),
                         is_strict,
                         mapped_env,
-                        &param_names,
+                        params,
                     );
                     func_env.borrow_mut().declare("arguments", BindingKind::Var);
                     let _ = interp.env_set(&func_env, "arguments", arguments_obj);

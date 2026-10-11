@@ -290,10 +290,16 @@ pub(crate) struct Interpreter {
     current_module_path: Option<ModuleKey>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
+    /// Set only by a `[[Construct]]` call of a user function (`was_construct`
+    /// in `call_function_inner_impl`); plain calls leave it untouched.
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     calling_as_construct: bool,
     function_env_pool: Vec<EnvRef>,
+    /// Recycled operand/reference stacks for bytecode chunk activations, so a
+    /// call does not allocate two `Vec`s (see `vm::run_chunk_with_var_prologue`).
+    vm_stack_pool: Vec<Vec<JsValue>>,
+    vm_ref_pool: Vec<Vec<crate::interpreter::eval::IdentifierRef>>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: root_stack::RootStack,
@@ -567,25 +573,31 @@ const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 /// registry key, so it never reaches a real file of the same name.
 pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 
+/// Arguments a sloppy frame keeps for the legacy `fn.arguments` accessor.
+/// Inline for the common arities so a call that never reads them does not
+/// allocate.
 pub(crate) struct DeferredCallArguments {
-    first: Option<JsValue>,
-    rest: Vec<JsValue>,
+    values: smallvec::SmallVec<[JsValue; 6]>,
 }
 
 impl DeferredCallArguments {
     pub(crate) fn new(args: &[JsValue]) -> Self {
         Self {
-            first: args.first().cloned(),
-            rest: args.get(1..).unwrap_or(&[]).to_vec(),
+            values: args.iter().cloned().collect(),
         }
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &JsValue> {
-        self.first.iter().chain(self.rest.iter())
+        self.values.iter()
     }
 
     fn to_vec(&self) -> Vec<JsValue> {
-        self.values().cloned().collect()
+        self.values.to_vec()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_spilled(&self) -> bool {
+        self.values.spilled()
     }
 }
 
@@ -731,6 +743,8 @@ impl Interpreter {
             constructing_derived: false,
             calling_as_construct: false,
             function_env_pool: Vec::new(),
+            vm_stack_pool: Vec::new(),
+            vm_ref_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: root_stack::RootStack::default(),
@@ -2254,26 +2268,14 @@ impl Interpreter {
             } => (args.to_vec(), func_env.clone(), *mapped, frame.func_obj_id),
         };
 
-        let param_names = if mapped {
+        let params = if mapped {
             self.get_object_cell(func_obj_id)
-                .and_then(|obj| {
-                    let obj = obj.borrow();
-                    match &obj.callable {
-                        Some(JsFunction::User { params, .. }) => Some(
-                            params
-                                .iter()
-                                .filter_map(|param| match param {
-                                    Pattern::Identifier(name) => Some(name.clone()),
-                                    _ => None,
-                                })
-                                .collect(),
-                        ),
-                        _ => None,
-                    }
+                .and_then(|obj| match &obj.borrow().callable {
+                    Some(JsFunction::User { params, .. }) => Some(params.clone()),
+                    _ => None,
                 })
-                .unwrap_or_default()
         } else {
-            Vec::new()
+            None
         };
         let callee = JsValue::object(func_obj_id);
         let arguments = self.create_arguments_object(
@@ -2281,136 +2283,98 @@ impl Interpreter {
             callee,
             false,
             mapped.then_some(&func_env),
-            &param_names,
+            params.as_deref().map_or(&[], |p| p.as_slice()),
         );
         self.call_stack_frames[frame_index].arguments =
             CallFrameArguments::Materialized(arguments.clone());
         arguments
     }
 
+    /// CreateMappedArgumentsObject (§10.4.4.7) when `func_env` is `Some`
+    /// (`params` are then all plain identifiers), CreateUnmappedArgumentsObject
+    /// (§10.4.4.6) otherwise. The object is fresh and extensible, so its
+    /// properties are installed directly, in the spec's creation order.
     fn create_arguments_object(
         &mut self,
         args: &[JsValue],
         callee: JsValue,
         _is_strict: bool,
         func_env: Option<&EnvRef>,
-        param_names: &[String],
+        params: &[Pattern],
     ) -> JsValue {
+        let thrower = if func_env.is_none() {
+            Some(
+                self.realm()
+                    .throw_type_error
+                    .clone()
+                    .unwrap_or_else(|| self.create_thrower_function()),
+            )
+        } else {
+            None
+        };
+        let array_values = self.realm().array_prototype_values.clone();
+        let iterator_key = self.get_symbol_iterator_key();
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "Arguments".to_string();
+            o.property_order.reserve(args.len() + 3);
 
-            // length property: writable, not enumerable, configurable
-            o.define_own_property(
-                "length".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::number(args.len() as f64)),
-                    writable: Some(true),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
+            o.insert_property(
+                "length",
+                PropertyDescriptor::data(JsValue::number(args.len() as f64), true, false, true),
             );
-
-            // Index properties: writable, enumerable, configurable
             for (i, val) in args.iter().enumerate() {
-                o.define_own_property(
-                    i.to_string(),
-                    PropertyDescriptor {
-                        value: Some(val.clone()),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    },
+                o.insert_property(
+                    JsPropertyKey::from_index(i),
+                    PropertyDescriptor::data_default(val.clone()),
                 );
             }
 
             if let Some(env) = func_env {
-                // Mapped (sloppy + simple params): callee is a data property
-                o.define_own_property(
-                    "callee".to_string(),
-                    PropertyDescriptor {
-                        value: Some(callee),
-                        writable: Some(true),
-                        enumerable: Some(false),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    },
+                o.insert_property(
+                    "callee",
+                    PropertyDescriptor::data(callee, true, false, true),
                 );
-
-                let mut map = HashMap::new();
-                let mut mapped_names: HashSet<&str> = HashSet::new();
-                for i in (0..param_names.len()).rev() {
-                    let name = &param_names[i];
-                    if mapped_names.contains(name.as_str()) {
+                // Only the last occurrence of a duplicated parameter name
+                // stays mapped, and only indices that received an argument.
+                let mut map = HashMap::with_capacity(params.len().min(args.len()));
+                for (i, param) in params.iter().enumerate().take(args.len()) {
+                    let Pattern::Identifier(name) = param else {
                         continue;
-                    }
-                    mapped_names.insert(name.as_str());
-                    if i < args.len() {
+                    };
+                    let shadowed = params[i + 1..]
+                        .iter()
+                        .any(|later| matches!(later, Pattern::Identifier(n) if n == name));
+                    if !shadowed {
                         map.insert(i.to_string(), (env.clone(), name.clone()));
                     }
                 }
                 if !map.is_empty() {
                     o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
                 }
-            }
-        }
-
-        let result_id = obj_id;
-        let result = JsValue::object(result_id);
-
-        // Unmapped (strict OR non-simple params): callee is a throw accessor
-        if func_env.is_none() {
-            let thrower = self
-                .realm()
-                .throw_type_error
-                .clone()
-                .unwrap_or_else(|| self.create_thrower_function());
-            if let Some(o) = (result)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(obj_rc) = self.get_object_cell(o.id)
-            {
-                obj_rc.borrow_mut().define_own_property(
-                    "callee".to_string(),
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        get: Some(thrower.clone()),
-                        set: Some(thrower),
-                        enumerable: Some(false),
-                        configurable: Some(false),
-                    },
+            } else if let Some(thrower) = thrower {
+                o.insert_property(
+                    "callee",
+                    PropertyDescriptor::accessor(
+                        Some(thrower.clone()),
+                        Some(thrower),
+                        false,
+                        false,
+                    ),
                 );
             }
-        }
 
-        // Add Symbol.iterator = %Array.prototype.values% (spec §10.4.4.6 step 20 / §10.4.4.7 step 22)
-        // Must be the exact same function object as Array.prototype[@@iterator]
-        if let Some(key) = self.get_symbol_iterator_key() {
-            let array_iter_fn = self
-                .realm()
-                .array_prototype
-                .map(|id| self.get_property_on_id(id, &key));
-            if let Some(iter_fn) = array_iter_fn
-                && !(iter_fn).is_undefined()
-                && let Some(o) = (result)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                && let Some(obj_rc) = self.get_object_cell(o.id)
+            // @@iterator is %Array.prototype.values% (§10.4.4.6 step 20 /
+            // §10.4.4.7 step 22), the intrinsic captured at realm creation —
+            // not whatever Array.prototype[@@iterator] currently holds.
+            if let Some(key) = iterator_key
+                && let Some(values) = array_values
             {
-                obj_rc
-                    .borrow_mut()
-                    .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
+                o.insert_property(key, PropertyDescriptor::data(values, true, false, true));
             }
         }
-
-        result
+        JsValue::object(obj_id)
     }
 
     /// Convert an internal property key back to its ECMAScript String or Symbol value.
