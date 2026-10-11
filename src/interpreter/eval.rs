@@ -1555,9 +1555,8 @@ impl Interpreter {
         if let Some(s) = val.as_string() {
             Ok(s)
         } else if val.is_object() {
-            // Recurse on the primitive rather than going through
-            // `to_string_value`, whose Rust `String` would replace lone
-            // surrogates in a String-valued ToPrimitive result with U+FFFD.
+            // Recurse on the primitive so a string from toString/valueOf keeps
+            // its exact code units (to_string_value would decode lossily).
             let prim = self.to_primitive(val, "string")?;
             self.to_js_string(&prim)
         } else {
