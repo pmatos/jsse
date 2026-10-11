@@ -215,19 +215,17 @@ impl Interpreter {
         }
     }
 
-    /// Initialize instance elements (private/public fields) after super() in derived constructor.
+    /// InitializeInstanceElements(O, constructor) (§7.3.34): install the private
+    /// methods and fields of `constructor`, the class whose constructor is
+    /// running. That is the active function, not new.target: constructing a
+    /// subclass runs every class's own initializers on the way up the chain.
     fn initialize_instance_elements(
         &mut self,
         this_val: JsValue,
+        constructor: &JsValue,
         env: &EnvRef,
     ) -> Result<(), JsValue> {
-        // Find the new.target constructor (which has the field defs for the current class)
-        let new_target_val = if let Some(ref nt) = self.new_target {
-            nt.clone()
-        } else {
-            return Ok(());
-        };
-        let instance_field_defs = if let Some(o) = (new_target_val)
+        let instance_field_defs = if let Some(o) = constructor
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(o.id)
@@ -247,7 +245,7 @@ impl Interpreter {
         // Create env for evaluating field initializers.
         // Use the class constructor's closure (class_env) so the class name binding
         // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-        let (ctor_closure, class_pn) = if let Some(o) = (new_target_val)
+        let (ctor_closure, class_pn) = if let Some(o) = constructor
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(o.id)
@@ -276,7 +274,7 @@ impl Interpreter {
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
         // Instance field HomeObject = class prototype.
-        if let Some(o) = (new_target_val)
+        if let Some(o) = constructor
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
         {
@@ -4608,8 +4606,10 @@ impl Interpreter {
 
         // Handle super() calls - call parent constructor with current this
         if matches!(callee, Expression::Super) {
+            // The active function: the constructor whose body contains this call.
+            let active_ctor = env.borrow().get("__constructor_func__");
             // §13.3.7.2 GetSuperConstructor: dynamically resolve via activeFunction.__proto__
-            let super_ctor = if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
+            let super_ctor = if let Some(ctor_func) = active_ctor.clone() {
                 if let Some(o) = ctor_func
                     .as_object_id()
                     .map(|id| crate::types::JsObject { id })
@@ -4651,7 +4651,11 @@ impl Interpreter {
                     interp.new_target = saved_new_target;
                     if let Completion::Normal(ref v) = result {
                         Self::initialize_this_binding(env, v.clone());
-                        if let Err(e) = interp.initialize_instance_elements(v.clone(), env) {
+                        // §13.3.7.1 SuperCall step 10: InitializeInstanceElements(result, F).
+                        let f = active_ctor.clone().or_else(|| interp.new_target.clone());
+                        if let Some(f) = f
+                            && let Err(e) = interp.initialize_instance_elements(v.clone(), &f, env)
+                        {
                             return Completion::Throw(e);
                         }
                     }
@@ -6616,51 +6620,13 @@ impl Interpreter {
                 false
             };
 
-            // Fast path for default derived constructor: bypass the synthetic body to avoid
-            // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
-            if is_derived {
-                let is_default_derived = if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = interp.get_object_cell(o.id)
-                {
-                    func_obj.borrow().is_default_derived_constructor()
-                } else {
-                    false
-                };
-                if is_default_derived {
-                    // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
-                    let super_ctor = if let Some(o) = callee_val
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                        && let Some(func_obj) = interp.get_object_cell(o.id)
-                    {
-                        if let Some(id) = func_obj.borrow().prototype_id {
-                            JsValue::object(id)
-                        } else {
-                            JsValue::UNDEFINED
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    };
-                    let prev_new_target = interp.new_target.take();
-                    interp.new_target = Some(callee_val.clone());
-                    let result = interp.construct_with_new_target(
-                        &super_ctor,
-                        &evaluated_args,
-                        callee_val.clone(),
-                    );
-                    if let Completion::Normal(ref new_obj) = result {
-                        // initialize_instance_elements reads interp.new_target to find class fields,
-                        // so keep new_target set to callee_val until after it returns.
-                        if let Err(e) = interp.initialize_instance_elements(new_obj.clone(), env) {
-                            interp.new_target = prev_new_target;
-                            return Completion::Throw(e);
-                        }
-                    }
-                    interp.new_target = prev_new_target;
-                    return result;
-                }
+            // The default derived constructor never runs its synthetic body.
+            if is_derived && interp.is_default_derived_constructor(&callee_val) {
+                return interp.construct_default_derived(
+                    &callee_val,
+                    &evaluated_args,
+                    callee_val.clone(),
+                );
             }
 
             if is_derived {
@@ -6909,6 +6875,52 @@ impl Interpreter {
         self.construct_with_new_target(constructor, args, constructor.clone())
     }
 
+    fn is_default_derived_constructor(&self, f: &JsValue) -> bool {
+        f.as_object_id()
+            .and_then(|id| self.get_object_cell(id))
+            .is_some_and(|func_obj| func_obj.borrow().is_default_derived_constructor())
+    }
+
+    /// [[Construct]] of the default derived constructor `constructor(...args) {
+    /// super(...args); }` (ClassDefinitionEvaluation step 14.a): construct F's
+    /// [[Prototype]] with the same arguments and newTarget, then
+    /// InitializeInstanceElements(result, F). The arguments are forwarded as
+    /// they are, so unlike the synthetic body this observes no
+    /// `Array.prototype[Symbol.iterator]`. Every construct path (`new`,
+    /// `Reflect.construct`, a subclass's `super()`, bound functions) goes here.
+    fn construct_default_derived(
+        &mut self,
+        f: &JsValue,
+        args: &[JsValue],
+        new_target: JsValue,
+    ) -> Completion {
+        let Some(func_obj) = f.as_object_id().and_then(|id| self.get_object_cell(id)) else {
+            return Completion::Throw(self.create_type_error("not a constructor"));
+        };
+        // F.[[GetPrototypeOf]]() is read now, so setPrototypeOf on the class
+        // takes effect; Construct throws if it is not a constructor.
+        let (parent, class_env) = {
+            let func = func_obj.borrow();
+            let parent = func.prototype_id.map_or(JsValue::NULL, JsValue::object);
+            let Some(JsFunction::User { closure, .. }) = &func.callable else {
+                unreachable!("a default derived constructor is a class constructor");
+            };
+            (parent, closure.clone())
+        };
+        let result = self.construct_with_new_target(&parent, args, new_target);
+        let Completion::Normal(obj) = result else {
+            return result;
+        };
+        // Field initializers run user code; keep the new object rooted.
+        self.with_gc_root_scope(|interp| {
+            interp.gc_root_value(&obj);
+            match interp.initialize_instance_elements(obj.clone(), f, &class_env) {
+                Ok(()) => Completion::Normal(obj),
+                Err(e) => Completion::Throw(e),
+            }
+        })
+    }
+
     /// Construct with a specific new.target (needed for super() calls where new.target
     /// must be the derived class, not the parent constructor).
     pub(crate) fn construct_with_new_target(
@@ -6994,6 +7006,10 @@ impl Interpreter {
         } else {
             false
         };
+
+        if is_derived && self.is_default_derived_constructor(constructor) {
+            return self.construct_default_derived(constructor, args, new_target);
+        }
 
         if is_derived {
             let prev_new_target = self.new_target.take();
