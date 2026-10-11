@@ -8008,7 +8008,7 @@ impl Interpreter {
                         func_val.clone(),
                         is_strict,
                         mapped_env,
-                        &params,
+                        params,
                     );
                     func_env.borrow_mut().declare("arguments", BindingKind::Var);
                     let _ = interp.env_set(&func_env, "arguments", arguments_obj);
