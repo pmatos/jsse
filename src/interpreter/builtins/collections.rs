@@ -211,8 +211,9 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let entries = obj.borrow().map_data().cloned().unwrap();
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let borrowed = obj.borrow();
+            let entries = borrowed.map_data().unwrap();
             for entry in entries.iter().flatten() {
                 if same_value_zero(&entry.0, &key) {
                     return Completion::Normal(entry.1.clone());
@@ -264,14 +265,15 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let entries = obj.borrow().map_data().cloned().unwrap();
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            for entry in entries.iter().flatten() {
-                if same_value_zero(&entry.0, &key) {
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            let found = obj
+                .borrow()
+                .map_data()
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|entry| same_value_zero(&entry.0, &key));
+            Completion::Normal(JsValue::boolean(found))
         });
 
         // Map.prototype.delete
@@ -953,14 +955,15 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let entries = obj.borrow().set_data().cloned().unwrap();
             let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            for entry in entries.iter().flatten() {
-                if same_value_zero(entry, &value) {
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            let found = obj
+                .borrow()
+                .set_data()
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|entry| same_value_zero(entry, &value));
+            Completion::Normal(JsValue::boolean(found))
         });
 
         // Set.prototype.delete
@@ -1165,6 +1168,14 @@ impl Interpreter {
             entries.iter().flatten().any(|e| same_value_zero(e, val))
         }
 
+        /// Whether the live O.[[SetData]] of `obj` contains `val`, checked under
+        /// a borrow rather than on a copy of the entries.
+        fn live_set_has(obj: &ObjectHandle, val: &JsValue) -> bool {
+            obj.borrow()
+                .set_data()
+                .is_some_and(|current| set_data_has(current, val))
+        }
+
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
             let new_obj_id = interp.create_object_id();
             interp
@@ -1270,8 +1281,7 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                    if set_data_has(&current, &value) {
+                    if live_set_has(&obj, &value) {
                         let val = canonicalize_key(value);
                         if !set_data_has(&new_entries, &val) {
                             new_entries.push(Some(val));
@@ -1368,9 +1378,7 @@ impl Interpreter {
                 };
                 let val = canonicalize_key(value);
                 // Check against live O.[[SetData]]
-                let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                let in_this = set_data_has(&current, &val);
-                if in_this {
+                if live_set_has(&obj, &val) {
                     for entry in new_entries.iter_mut() {
                         if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
                             *entry = None;
@@ -1447,8 +1455,7 @@ impl Interpreter {
                     Ok(None) => break,
                     Err(c) => return c,
                 };
-                let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                if !set_data_has(&current, &value) {
+                if !live_set_has(&obj, &value) {
                     interp.iterator_close(&keys_iter, JsValue::UNDEFINED);
                     return Completion::Normal(JsValue::boolean(false));
                 }
@@ -1500,8 +1507,7 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                    if set_data_has(&current, &value) {
+                    if live_set_has(&obj, &value) {
                         interp.iterator_close(&keys_iter, JsValue::UNDEFINED);
                         return Completion::Normal(JsValue::boolean(false));
                     }
@@ -1709,19 +1715,23 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakmap = obj.borrow().class_name == "WeakMap";
-                let map_data = obj.borrow().map_data().cloned();
-                if is_weakmap && let Some(entries) = map_data {
+                let is_weakmap = {
+                    let b = obj.borrow();
+                    b.class_name == "WeakMap" && b.map_data().is_some()
+                };
+                if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::UNDEFINED);
                     }
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(&entry.0, &key) {
-                            return Completion::Normal(entry.1.clone());
-                        }
-                    }
-                    return Completion::Normal(JsValue::UNDEFINED);
+                    let found = obj.borrow().map_data().and_then(|entries| {
+                        entries
+                            .iter()
+                            .flatten()
+                            .find(|entry| strict_equality(&entry.0, &key))
+                            .map(|entry| entry.1.clone())
+                    });
+                    return Completion::Normal(found.unwrap_or(JsValue::UNDEFINED));
                 }
             }
             let err = interp.create_type_error("WeakMap.prototype.get requires a WeakMap");
@@ -1764,19 +1774,22 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakmap = obj.borrow().class_name == "WeakMap";
-                let map_data = obj.borrow().map_data().cloned();
-                if is_weakmap && let Some(entries) = map_data {
+                let is_weakmap = {
+                    let b = obj.borrow();
+                    b.class_name == "WeakMap" && b.map_data().is_some()
+                };
+                if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(&entry.0, &key) {
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::boolean(false));
+                    let found = obj.borrow().map_data().is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .flatten()
+                            .any(|entry| strict_equality(&entry.0, &key))
+                    });
+                    return Completion::Normal(JsValue::boolean(found));
                 }
             }
             let err = interp.create_type_error("WeakMap.prototype.has requires a WeakMap");
@@ -2154,19 +2167,22 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakset = obj.borrow().class_name == "WeakSet";
-                let set_data = obj.borrow().set_data().cloned();
-                if is_weakset && let Some(entries) = set_data {
+                let is_weakset = {
+                    let b = obj.borrow();
+                    b.class_name == "WeakSet" && b.set_data().is_some()
+                };
+                if is_weakset {
                     let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(entry, &value) {
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::boolean(false));
+                    let found = obj.borrow().set_data().is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .flatten()
+                            .any(|entry| strict_equality(entry, &value))
+                    });
+                    return Completion::Normal(JsValue::boolean(found));
                 }
             }
             let err = interp.create_type_error("WeakSet.prototype.has requires a WeakSet");

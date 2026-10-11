@@ -135,7 +135,10 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - `compile_ok` and the `BAIL` table cover **script** compile attempts as well as
   function bodies, so a script-only workload no longer reports zero for both.
   A compiled script counts as a `body_non_function_execs` execution, never as a
-  `body_dispatch_compiled` invocation.
+  `body_dispatch_compiled` invocation. A function body's verdict is shared by
+  every closure of its literal (#900), so `compile_ok` and `BAIL` count each
+  literal once (again only after a memo eviction), while every closure's `BODY`
+  row still names the bail reason.
 - `body_dispatch_compiled` / `body_dispatch_ast` count **function invocations
   only** — that is the split #524 published, so keep it comparable. Executions
   of the non-`dispatch_body` paths are reported separately as

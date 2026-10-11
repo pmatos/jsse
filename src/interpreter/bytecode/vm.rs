@@ -1,7 +1,7 @@
 use super::chunk::Chunk;
 use super::op::Op;
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
-use crate::interpreter::eval::IdentifierRef;
+use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{BindingKind, Completion, Environment};
 use crate::interpreter::{EnvRef, Interpreter};
@@ -700,6 +700,15 @@ fn run_chunk_inner(
             | Op::UShr => {
                 let r = stack.pop().expect("stack underflow on binop rhs");
                 let l = stack.pop().expect("stack underflow on binop lhs");
+                if matches!(op, Op::Add) && is_primitive_string_concat(&l, &r) {
+                    // Primitives are never rooted, so there is nothing to unroot;
+                    // moving the operands lets an owned left string grow in place.
+                    match interp.concat_owned_primitives(l, r) {
+                        Completion::Normal(v) => push_value(interp, &mut stack, v),
+                        abrupt => return abrupt,
+                    }
+                    continue;
+                }
                 let bop = match op {
                     Op::Add => BinaryOp::Add,
                     Op::Sub => BinaryOp::Sub,
