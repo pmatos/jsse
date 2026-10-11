@@ -34,6 +34,26 @@ pub(super) enum IdentifierRef {
     SpecificEnv(EnvRef),
 }
 
+/// The fields of a callable the `[[Call]]` path reads, copied out of the
+/// function object under one short borrow so the call neither clones the
+/// whole `JsFunction` nor allocates for its `name`/`source_text`.
+enum CallTarget {
+    Native(Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>),
+    User {
+        params: Rc<Vec<Pattern>>,
+        body: Body,
+        closure: EnvRef,
+        is_arrow: bool,
+        is_strict: bool,
+        is_generator: bool,
+        is_async: bool,
+        uses_arguments: bool,
+        has_simple_params: bool,
+        /// Only populated for arrow functions, which inherit it.
+        captured_new_target: Option<JsValue>,
+    },
+}
+
 /// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
 /// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
 /// discarded its reason by the time a message is needed, so the assignment
@@ -5244,13 +5264,44 @@ impl Interpreter {
                 self.current_realm_id = caller_realm;
                 return Completion::Throw(err);
             }
-            let callable = obj.borrow().callable.clone();
+            let callable = match &obj.borrow().callable {
+                Some(JsFunction::User {
+                    params,
+                    body,
+                    closure,
+                    is_arrow,
+                    is_strict,
+                    is_generator,
+                    is_async,
+                    uses_arguments,
+                    has_simple_params,
+                    captured_new_target,
+                    ..
+                }) => Some(CallTarget::User {
+                    params: params.clone(),
+                    body: body.clone(),
+                    closure: closure.clone(),
+                    is_arrow: *is_arrow,
+                    is_strict: *is_strict,
+                    is_generator: *is_generator,
+                    is_async: *is_async,
+                    uses_arguments: *uses_arguments,
+                    has_simple_params: *has_simple_params,
+                    captured_new_target: if *is_arrow {
+                        captured_new_target.clone()
+                    } else {
+                        None
+                    },
+                }),
+                Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
+                None => None,
+            };
             if let Some(func) = callable {
                 // [[Call]] vs [[Construct]] new.target semantics:
                 // - [[Call]]: new.target = undefined (clear for non-arrow functions)
                 // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
                 // - Arrow functions: inherit new.target from enclosing scope (don't clear)
-                let is_arrow_func = matches!(func, JsFunction::User { is_arrow, .. } if is_arrow);
+                let is_arrow_func = matches!(func, CallTarget::User { is_arrow, .. } if is_arrow);
                 let was_construct = std::mem::replace(&mut self.calling_as_construct, false);
                 let outer_new_target = if !is_arrow_func {
                     let nt = self.new_target.take();
@@ -5261,7 +5312,7 @@ impl Interpreter {
                 } else {
                     // Arrow functions inherit new.target from creation context
                     let saved = self.new_target.take();
-                    if let JsFunction::User {
+                    if let CallTarget::User {
                         captured_new_target: Some(ref cnt),
                         ..
                     } = func
@@ -5271,7 +5322,7 @@ impl Interpreter {
                     Some(saved)
                 };
                 let result = match func {
-                    JsFunction::Native(_, _, f, _) => {
+                    CallTarget::Native(f) => {
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.calls_to_native += 1;
@@ -5300,7 +5351,7 @@ impl Interpreter {
                         self.current_realm_id = caller_realm;
                         result
                     }
-                    JsFunction::User {
+                    CallTarget::User {
                         params,
                         body,
                         closure,
