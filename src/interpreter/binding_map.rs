@@ -4,21 +4,34 @@
 //! `Vec<(Atom, Binding)>`. Small scopes (the overwhelmingly common case for
 //! function calls) are probed by a linear scan: pointer equality for an `Atom`
 //! key, length + `memcmp` for a `&str` key. Scopes that outgrow
-//! [`LINEAR_MAX`] additionally maintain an index keyed by `Atom` whose hash is
-//! the interner's precomputed, randomised value, so script-controlled names are
-//! never hashed by a predictable hasher (see `atom.rs`).
+//! [`LINEAR_MAX`] additionally maintain an index from the name's *randomised*
+//! 64-bit hash (`atom::hash_text`, the same keyed hash every atom stores) to
+//! its slot. An `Atom` probe reuses the stored hash, a `&str` probe hashes the
+//! text once with that keyed hash, so script-controlled names are never hashed
+//! by a predictable function and the index itself only ever sees uniformly
+//! random `u64`s (identity-hashed).
+//!
+//! Two different names can share a 64-bit hash (vanishingly unlikely, but it
+//! must stay correct): the loser of the `by_hash` slot is recorded in
+//! `overflow` and found by a short scan.
 
 use std::collections::HashMap;
 
-use super::atom::{Atom, IdentityBuild};
+use super::atom::{Atom, IdentityBuild, hash_text};
 use super::types::Binding;
 
 /// Entries up to this count are found by scanning; above it an index is kept.
 pub(crate) const LINEAR_MAX: usize = 16;
 
+struct HashIndex {
+    by_hash: HashMap<u64, u32, IdentityBuild>,
+    /// Slots whose hash is already claimed in `by_hash` by another name.
+    overflow: Vec<u32>,
+}
+
 pub(crate) struct BindingMap {
     entries: Vec<(Atom, Binding)>,
-    index: Option<HashMap<Atom, u32, IdentityBuild>>,
+    index: Option<HashIndex>,
 }
 
 /// A lookup key: either script text (`str`) or an already-interned `Atom`.
@@ -35,8 +48,9 @@ impl BindingKey for str {
                 .iter()
                 .position(|(a, _)| a.as_str().len() == self.len() && a.as_str() == self),
             Some(index) => {
-                let atom = Atom::lookup(self)?;
-                index.get(&atom).map(|&i| i as usize)
+                #[cfg(feature = "perf-counters")]
+                super::atom::count_text_probe();
+                map.find_hashed(index, hash_text(self), |a| a.as_str() == self)
             }
         }
     }
@@ -54,7 +68,7 @@ impl BindingKey for Atom {
     fn find_in(&self, map: &BindingMap) -> Option<usize> {
         match &map.index {
             None => map.entries.iter().position(|(a, _)| a.ptr_eq(self)),
-            Some(index) => index.get(self).map(|&i| i as usize),
+            Some(index) => map.find_hashed(index, self.precomputed_hash(), |a| a.ptr_eq(self)),
         }
     }
 }
@@ -120,6 +134,17 @@ impl<T: BindingName + ?Sized> BindingName for &T {
     }
 }
 
+impl HashIndex {
+    fn add(&mut self, hash: u64, slot: u32) {
+        match self.by_hash.entry(hash) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(slot);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => self.overflow.push(slot),
+        }
+    }
+}
+
 impl BindingMap {
     pub(crate) fn new() -> Self {
         BindingMap {
@@ -157,6 +182,25 @@ impl BindingMap {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.index = None;
+    }
+
+    #[inline]
+    fn find_hashed(
+        &self,
+        index: &HashIndex,
+        hash: u64,
+        matches: impl Fn(&Atom) -> bool,
+    ) -> Option<usize> {
+        if let Some(&slot) = index.by_hash.get(&hash)
+            && matches(&self.entries[slot as usize].0)
+        {
+            return Some(slot as usize);
+        }
+        index
+            .overflow
+            .iter()
+            .map(|&slot| slot as usize)
+            .find(|&slot| matches(&self.entries[slot].0))
     }
 
     #[cfg(test)]
@@ -210,25 +254,34 @@ impl BindingMap {
 
     /// Append an entry the caller knows is absent.
     pub(crate) fn push_unique(&mut self, name: Atom, binding: Binding) {
-        debug_assert!(!name.find_in(self).is_some(), "push_unique of a bound name");
-        let slot = self.entries.len();
-        if let Some(index) = &mut self.index {
-            index.insert(name.clone(), slot as u32);
-        }
+        debug_assert!(name.find_in(self).is_none(), "push_unique of a bound name");
+        let slot = self.entries.len() as u32;
+        let hash = name.precomputed_hash();
         self.entries.push((name, binding));
-        if self.index.is_none() && self.entries.len() > LINEAR_MAX {
+        if let Some(index) = &mut self.index {
+            index.add(hash, slot);
+        } else if self.entries.len() > LINEAR_MAX {
             self.build_index();
         }
     }
 
     pub(crate) fn remove<K: BindingKey + ?Sized>(&mut self, key: &K) -> Option<Binding> {
         let i = key.find_in(self)?;
-        let (removed_atom, removed) = self.entries.swap_remove(i);
-        if let Some(index) = &mut self.index {
-            index.remove(&removed_atom);
-            if let Some((moved, _)) = self.entries.get(i) {
-                index.insert(moved.clone(), i as u32);
-            }
+        let removed_hash = self.entries[i].0.precomputed_hash();
+        let (_, removed) = self.entries.swap_remove(i);
+        let Some(index) = &mut self.index else {
+            return Some(removed);
+        };
+        if !index.overflow.is_empty() {
+            // Hash collisions are rare enough that rebuilding beats keeping
+            // promotion bookkeeping for them.
+            self.build_index();
+            return Some(removed);
+        }
+        index.by_hash.remove(&removed_hash);
+        if let Some((moved, _)) = self.entries.get(i) {
+            // `swap_remove` moved the last entry into slot `i`.
+            index.by_hash.insert(moved.precomputed_hash(), i as u32);
         }
         Some(removed)
     }
@@ -238,10 +291,15 @@ impl BindingMap {
     }
 
     fn build_index(&mut self) {
-        let mut index =
-            HashMap::with_capacity_and_hasher(self.entries.len() * 2, IdentityBuild::default());
-        for (i, (atom, _)) in self.entries.iter().enumerate() {
-            index.insert(atom.clone(), i as u32);
+        let mut index = HashIndex {
+            by_hash: HashMap::with_capacity_and_hasher(
+                self.entries.len() * 2,
+                IdentityBuild::default(),
+            ),
+            overflow: Vec::new(),
+        };
+        for (slot, (atom, _)) in self.entries.iter().enumerate() {
+            index.add(atom.precomputed_hash(), slot as u32);
         }
         self.index = Some(index);
     }
@@ -378,5 +436,35 @@ mod tests {
         m.push_unique(Atom::intern("q"), b(2.0));
         assert_eq!(m.entry_at(1).map(|(a, _)| a.as_str()), Some("q"));
         assert_eq!(m.position("q"), Some(1));
+    }
+
+    #[test]
+    fn colliding_hashes_stay_distinct_through_insert_and_remove() {
+        let mut m = BindingMap::new();
+        let atoms: Vec<Atom> = (0..40)
+            .map(|i| Atom::with_hash_for_test(&format!("collide{i}"), 7))
+            .collect();
+        for (i, atom) in atoms.iter().enumerate() {
+            m.insert_atom(atom, b(i as f64));
+        }
+        for (i, atom) in atoms.iter().enumerate() {
+            assert_eq!(
+                m.get(atom).and_then(|b| b.value.as_number()),
+                Some(i as f64)
+            );
+        }
+        assert!(m.remove(&atoms[0]).is_some());
+        assert!(m.remove(&atoms[17]).is_some());
+        assert!(m.get(&atoms[0]).is_none());
+        for (i, atom) in atoms.iter().enumerate() {
+            if i != 0 && i != 17 {
+                assert_eq!(
+                    m.get(atom).and_then(|b| b.value.as_number()),
+                    Some(i as f64),
+                    "entry {i}"
+                );
+            }
+        }
+        assert_eq!(m.len(), 38);
     }
 }

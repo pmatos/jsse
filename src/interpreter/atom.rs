@@ -17,6 +17,17 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::rc::{Rc, Weak};
+use std::sync::OnceLock;
+
+/// The process-wide keyed hash for identifier text. Every atom stores
+/// `hash_text(its text)`, and `BindingMap` hashes a `&str` probe the same way,
+/// so an index probe needs no interner access at all.
+static TEXT_HASHER: OnceLock<RandomState> = OnceLock::new();
+
+#[inline]
+pub(crate) fn hash_text(text: &str) -> u64 {
+    TEXT_HASHER.get_or_init(RandomState::new).hash_one(text)
+}
 
 struct AtomData {
     hash: u64,
@@ -29,25 +40,27 @@ struct AtomData {
 pub(crate) struct Atom(Rc<AtomData>);
 
 impl Atom {
+    /// An uninterned atom carrying a chosen hash, to exercise hash-collision
+    /// handling in `BindingMap`. Compares by pointer like any other atom.
+    #[cfg(test)]
+    pub(crate) fn with_hash_for_test(text: &str, hash: u64) -> Atom {
+        Atom(Rc::new(AtomData {
+            hash,
+            text: Box::from(text),
+        }))
+    }
+
     pub(crate) fn intern(text: &str) -> Atom {
         #[cfg(feature = "perf-counters")]
         INTERN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         INTERNER.with(|i| i.borrow_mut().intern(text))
     }
 
-    /// The atom for `text` if one is currently alive. A `None` means no
-    /// environment/chunk anywhere holds that name, and inserts nothing.
-    pub(crate) fn lookup(text: &str) -> Option<Atom> {
-        #[cfg(feature = "perf-counters")]
-        LOOKUP_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        INTERNER.with(|i| i.borrow().lookup(text))
-    }
-
     pub(crate) fn as_str(&self) -> &str {
         &self.0.text
     }
 
-    #[cfg(test)]
+    #[inline]
     pub(crate) fn precomputed_hash(&self) -> u64 {
         self.0.hash
     }
@@ -113,51 +126,71 @@ pub(crate) type IdentityBuild = std::hash::BuildHasherDefault<IdentityHasher>;
 
 const MIN_PURGE_LEN: usize = 1024;
 
+/// Buckets are keyed by the atom's own randomised hash (already uniformly
+/// random, so the table hashes the key by identity). Almost every bucket holds
+/// a single weak reference.
 struct Interner {
-    map: HashMap<Box<str>, Weak<AtomData>>,
-    hasher: RandomState,
+    buckets: HashMap<u64, Vec<Weak<AtomData>>, IdentityBuild>,
+    /// Weak entries across all buckets, dead ones included.
+    entries: usize,
     purge_at: usize,
 }
 
 impl Interner {
     fn new() -> Self {
         Interner {
-            map: HashMap::new(),
-            hasher: RandomState::new(),
+            buckets: HashMap::default(),
+            entries: 0,
             purge_at: MIN_PURGE_LEN,
         }
     }
 
-    fn lookup(&self, text: &str) -> Option<Atom> {
-        self.map.get(text).and_then(Weak::upgrade).map(Atom)
-    }
-
     fn intern(&mut self, text: &str) -> Atom {
-        if let Some(weak) = self.map.get_mut(text) {
-            if let Some(live) = weak.upgrade() {
-                return Atom(live);
+        let hash = hash_text(text);
+        if let Some(bucket) = self.buckets.get_mut(&hash) {
+            let mut dead_slot = None;
+            for (i, weak) in bucket.iter().enumerate() {
+                match weak.upgrade() {
+                    Some(live) if &*live.text == text => return Atom(live),
+                    Some(_) => {}
+                    None => dead_slot = dead_slot.or(Some(i)),
+                }
             }
             let data = Rc::new(AtomData {
-                hash: self.hasher.hash_one(text),
+                hash,
                 text: Box::from(text),
             });
-            *weak = Rc::downgrade(&data);
+            let weak = Rc::downgrade(&data);
+            match dead_slot {
+                Some(i) => bucket[i] = weak,
+                None => {
+                    bucket.push(weak);
+                    self.entries += 1;
+                }
+            }
             return Atom(data);
         }
-        if self.map.len() >= self.purge_at {
-            self.map.retain(|_, w| w.strong_count() > 0);
-            self.purge_at = (self.map.len() * 2).max(MIN_PURGE_LEN);
+        if self.entries >= self.purge_at {
+            self.purge();
         }
-        let data = Rc::new(self.new_data(text));
-        self.map.insert(Box::from(text), Rc::downgrade(&data));
+        let data = Rc::new(AtomData {
+            hash,
+            text: Box::from(text),
+        });
+        self.buckets.insert(hash, vec![Rc::downgrade(&data)]);
+        self.entries += 1;
         Atom(data)
     }
 
-    fn new_data(&self, text: &str) -> AtomData {
-        AtomData {
-            hash: self.hasher.hash_one(text),
-            text: Box::from(text),
-        }
+    /// Drops every dead weak reference (and emptied bucket), then lets the
+    /// table grow to twice what survived before the next purge.
+    fn purge(&mut self) {
+        self.buckets.retain(|_, bucket| {
+            bucket.retain(|w| w.strong_count() > 0);
+            !bucket.is_empty()
+        });
+        self.entries = self.buckets.values().map(Vec::len).sum();
+        self.purge_at = (self.entries * 2).max(MIN_PURGE_LEN);
     }
 }
 
@@ -183,12 +216,18 @@ pub(crate) fn lookup_calls() -> u64 {
     LOOKUP_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// A `&str` probe of an indexed binding map (it hashes the text).
+#[cfg(feature = "perf-counters")]
+pub(crate) fn count_text_probe() {
+    LOOKUP_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn interner_len() -> usize {
-        INTERNER.with(|i| i.borrow().map.len())
+        INTERNER.with(|i| i.borrow().entries)
     }
 
     #[test]
@@ -202,12 +241,10 @@ mod tests {
     }
 
     #[test]
-    fn lookup_of_unknown_text_inserts_nothing() {
-        let before = interner_len();
-        assert!(Atom::lookup("never-interned-atom-test").is_none());
-        assert_eq!(interner_len(), before);
-        let keep = Atom::intern("interned-atom-test");
-        assert!(Atom::lookup("interned-atom-test").is_some_and(|a| a.ptr_eq(&keep)));
+    fn stored_hash_is_the_keyed_text_hash() {
+        let a = Atom::intern("keyed-hash-atom-test");
+        assert_eq!(a.precomputed_hash(), hash_text("keyed-hash-atom-test"));
+        assert_ne!(a.precomputed_hash(), hash_text("keyed-hash-atom-test2"));
     }
 
     #[test]
@@ -230,7 +267,7 @@ mod tests {
     fn non_ascii_round_trips() {
         let a = Atom::intern("π日本\u{1F600}");
         assert_eq!(a.as_str(), "π日本\u{1F600}");
-        assert!(Atom::lookup("π日本\u{1F600}").is_some());
+        assert!(a.ptr_eq(&Atom::intern("π日本\u{1F600}")));
     }
 
     #[test]
