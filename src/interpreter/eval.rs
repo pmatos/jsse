@@ -28,7 +28,7 @@ impl Drop for EvalDepthGuard {
     }
 }
 
-pub(super) enum IdentifierRef {
+pub(crate) enum IdentifierRef {
     WithObject(u64),
     Unresolvable,
     SpecificEnv(EnvRef),

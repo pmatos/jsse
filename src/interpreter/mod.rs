@@ -292,6 +292,10 @@ pub(crate) struct Interpreter {
     constructing_derived: bool,
     calling_as_construct: bool,
     function_env_pool: Vec<EnvRef>,
+    /// Recycled operand/reference stacks for bytecode chunk activations, so a
+    /// call does not allocate two `Vec`s (see `vm::run_chunk_with_var_prologue`).
+    pub(crate) vm_stack_pool: Vec<Vec<JsValue>>,
+    pub(crate) vm_ref_pool: Vec<Vec<crate::interpreter::eval::IdentifierRef>>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: root_stack::RootStack,
@@ -732,6 +736,8 @@ impl Interpreter {
             constructing_derived: false,
             calling_as_construct: false,
             function_env_pool: Vec::new(),
+            vm_stack_pool: Vec::new(),
+            vm_ref_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: root_stack::RootStack::default(),

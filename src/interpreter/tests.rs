@@ -229,14 +229,12 @@ fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
 #[test]
 fn non_construct_call_leaves_last_call_this_value_unset() {
     for run in [run_script, run_script_tree_walker] {
-        let interp = run(
-            r#"
+        let interp = run(r#"
             function sloppy(a) { return a; }
             function strict(a) { "use strict"; return this === undefined ? a : 0; }
             var r = sloppy(1) + strict(2) + sloppy.call({}, 3);
             if (r !== 6) throw new Error("unexpected result");
-            "#,
-        );
+            "#);
         assert!(interp.last_call_this_value.is_none());
     }
 }
@@ -273,7 +271,10 @@ fn functions_that_never_mention_arguments_get_no_binding_and_inline_frame_args()
         "#,
     );
     assert_eq!(global_string(&interp, "noMention"), "false:true:false");
-    assert_eq!(global_string(&interp, "withMention"), "true:false:falseobject");
+    assert_eq!(
+        global_string(&interp, "withMention"),
+        "true:false:falseobject"
+    );
     assert_eq!(global_string(&interp, "fewArgs"), "false:true:false");
     assert_eq!(global_string(&interp, "manyArgs"), "false:true:true");
 }
