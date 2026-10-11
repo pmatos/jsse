@@ -2105,7 +2105,9 @@ impl ArrayData {
 /// the storage drops them and records how many there were: the spec index of
 /// `self[i]` is `cleared + i`. Code that walks the live list across user calls
 /// holds a spec-index cursor and steps it with [`KeyedEntries::next_live`];
-/// everything else uses the `Vec` directly through `Deref`.
+/// everything else uses the slots directly through `Deref`. The slots deref to
+/// a slice, so only [`KeyedEntries::push`] and `clear` can change their count
+/// and the spec index of an entry never shifts.
 #[derive(Debug, Clone)]
 pub(crate) struct KeyedEntries<T> {
     cleared: usize,
@@ -2142,6 +2144,16 @@ impl<T> KeyedEntries<T> {
         Some(value)
     }
 
+    /// The number of live (non-deleted) entries.
+    pub(crate) fn live_len(&self) -> usize {
+        self.entries.iter().flatten().count()
+    }
+
+    /// Append an entry at the end of the list.
+    pub(crate) fn push(&mut self, entry: Option<T>) {
+        self.entries.push(entry);
+    }
+
     /// Empty every entry (Map.prototype.clear, Set.prototype.clear). The slot
     /// storage is released rather than kept at its old capacity.
     pub(crate) fn clear(&mut self) {
@@ -2151,16 +2163,12 @@ impl<T> KeyedEntries<T> {
 }
 
 impl<T> std::ops::Deref for KeyedEntries<T> {
-    type Target = Vec<Option<T>>;
+    type Target = [Option<T>];
     fn deref(&self) -> &Self::Target {
         &self.entries
     }
 }
 
-/// Mutable access must keep the list append-only: push new entries and set
-/// deleted ones to `None`. Removing, reordering or truncating slots (or calling
-/// `Vec::clear` through an explicit deref) would shift the spec index of every
-/// suspended iterator; use [`KeyedEntries::clear`] instead.
 impl<T> std::ops::DerefMut for KeyedEntries<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.entries
@@ -4352,7 +4360,7 @@ mod kind_accessor_tests {
         let mut before_clear = 1;
         entries.clear();
         assert!(entries.is_empty(), "cleared slots are dropped");
-        assert_eq!(entries.capacity(), 0, "cleared storage is released");
+        assert_eq!(entries.entries.capacity(), 0, "cleared storage is released");
         entries.push(Some(4));
         assert_eq!(
             entries.next_live(&mut before_clear),

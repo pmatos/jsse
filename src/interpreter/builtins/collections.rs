@@ -49,6 +49,18 @@ fn this_set(
     ))))
 }
 
+/// The next live entry of `obj`'s [[MapData]] or [[SetData]] (whichever `data`
+/// selects) at or after spec index `*cursor`, read under a borrow; see
+/// [`KeyedEntries::next_live`]. Walks that call user code between steps use
+/// this so they see entries added, deleted or cleared in the meantime.
+fn next_live_entry<T: Clone>(
+    obj: &ObjectHandle,
+    data: fn(&JsObjectData) -> Option<&KeyedEntries<T>>,
+    cursor: &mut usize,
+) -> Option<T> {
+    data(&obj.borrow())?.next_live(cursor).cloned()
+}
+
 impl Interpreter {
     pub(crate) fn setup_map_prototype(&mut self) {
         let proto_id = self.create_object_id();
@@ -74,7 +86,7 @@ impl Interpreter {
                 let state = obj.borrow().iterator_state().cloned();
                 if let Some(IteratorState::MapIterator {
                     map_id,
-                    index,
+                    mut index,
                     kind,
                     done,
                 }) = state
@@ -87,11 +99,7 @@ impl Interpreter {
                     if let Some(map_obj) = interp.get_object(map_id) {
                         // Find the next live entry under a borrow; cloning the
                         // whole entry Vec per step made iteration quadratic.
-                        let mut cursor = index;
-                        let next = map_obj
-                            .borrow()
-                            .map_data()
-                            .and_then(|entries| entries.next_live(&mut cursor).cloned());
+                        let next = next_live_entry(&map_obj, JsObjectData::map_data, &mut index);
                         if let Some((key, value)) = next {
                             let result = match kind {
                                 IteratorKind::Key => key,
@@ -102,7 +110,7 @@ impl Interpreter {
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::MapIterator {
                                         map_id,
-                                        index: cursor,
+                                        index,
                                         kind,
                                         done: false,
                                     },
@@ -325,14 +333,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             let mut cursor = 0;
-            loop {
-                let entry = obj
-                    .borrow()
-                    .map_data()
-                    .unwrap()
-                    .next_live(&mut cursor)
-                    .cloned();
-                let Some((k, v)) = entry else { break };
+            while let Some((k, v)) = next_live_entry(&obj, JsObjectData::map_data, &mut cursor) {
                 let result = interp.call_function(&callback, &this_arg, &[v, k, this.clone()]);
                 if result.is_abrupt() {
                     return result;
@@ -347,13 +348,7 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let count = obj
-                .borrow()
-                .map_data()
-                .unwrap()
-                .iter()
-                .filter(|e| e.is_some())
-                .count();
+            let count = obj.borrow().map_data().unwrap().live_len();
             Completion::Normal(JsValue::number(count as f64))
         });
 
@@ -797,7 +792,7 @@ impl Interpreter {
                 let state = obj.borrow().iterator_state().cloned();
                 if let Some(IteratorState::SetIterator {
                     set_id,
-                    index,
+                    mut index,
                     kind,
                     done,
                 }) = state
@@ -810,11 +805,7 @@ impl Interpreter {
                     if let Some(set_obj) = interp.get_object(set_id) {
                         // Find the next live entry under a borrow; cloning the
                         // whole entry Vec per step made iteration quadratic.
-                        let mut cursor = index;
-                        let next = set_obj
-                            .borrow()
-                            .set_data()
-                            .and_then(|entries| entries.next_live(&mut cursor).cloned());
+                        let next = next_live_entry(&set_obj, JsObjectData::set_data, &mut index);
                         if let Some(val) = next {
                             let result = match kind {
                                 IteratorKind::Value | IteratorKind::Key => val,
@@ -826,7 +817,7 @@ impl Interpreter {
                                 crate::interpreter::types::ObjectKind::Iterator(
                                     IteratorState::SetIterator {
                                         set_id,
-                                        index: cursor,
+                                        index,
                                         kind,
                                         done: false,
                                     },
@@ -1015,7 +1006,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             let mut cursor = 0;
-            while let Some(v) = next_live_set_value(&obj, &mut cursor) {
+            while let Some(v) = next_live_entry(&obj, JsObjectData::set_data, &mut cursor) {
                 let result =
                     interp.call_function(&callback, &this_arg, &[v.clone(), v, this.clone()]);
                 if result.is_abrupt() {
@@ -1031,13 +1022,7 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let count = obj
-                .borrow()
-                .set_data()
-                .unwrap()
-                .iter()
-                .filter(|e| e.is_some())
-                .count();
+            let count = live_set_size(&obj);
             Completion::Normal(JsValue::number(count as f64))
         });
 
@@ -1169,17 +1154,23 @@ impl Interpreter {
                 .is_some_and(|current| set_data_has(current, val))
         }
 
-        /// The next live value of `obj`'s O.[[SetData]] at or after spec index
-        /// `*cursor`, read under a borrow; see [`KeyedEntries::next_live`].
-        fn next_live_set_value(obj: &ObjectHandle, cursor: &mut usize) -> Option<JsValue> {
-            obj.borrow().set_data()?.next_live(cursor).cloned()
+        /// Append `val` to a result list unless it is already there. The list
+        /// is invisible to the GC while user code runs, so the value is rooted
+        /// in the caller's root scope.
+        fn push_rooted_unique(
+            interp: &mut Interpreter,
+            entries: &mut Vec<Option<JsValue>>,
+            val: JsValue,
+        ) {
+            if !set_data_has(entries, &val) {
+                interp.gc_root_value(&val);
+                entries.push(Some(val));
+            }
         }
 
         /// The number of live values in `obj`'s O.[[SetData]].
         fn live_set_size(obj: &ObjectHandle) -> usize {
-            obj.borrow()
-                .set_data()
-                .map_or(0, |entries| entries.iter().flatten().count())
+            obj.borrow().set_data().map_or(0, KeyedEntries::live_len)
         }
 
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
@@ -1245,17 +1236,19 @@ impl Interpreter {
                 Ok(r) => r,
                 Err(e) => return Completion::Throw(e),
             };
-            let mut new_entries: Vec<Option<JsValue>> = Vec::new();
             // Re-read the size after GetSetRecord (side-effects may mutate this)
             let this_size = live_set_size(&obj);
-
-            if this_size as f64 <= other_rec.size {
-                // `other.has` can clear O and run a collection while the walk
-                // goes on, leaving `new_entries` the only holder of what it
-                // has collected so far, so each kept value is rooted.
-                return interp.with_gc_root_scope(|interp| {
+            // User code (`other.has`, or the keys iterator's `next`) runs while
+            // the walk goes on and can delete or clear O's values and trigger a
+            // collection, leaving `new_entries` their only holder, so every kept
+            // value is rooted until the result Set owns it.
+            interp.with_gc_root_scope(|interp| {
+                let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                if this_size as f64 <= other_rec.size {
                     let mut cursor = 0;
-                    while let Some(entry) = next_live_set_value(&obj, &mut cursor) {
+                    while let Some(entry) =
+                        next_live_entry(&obj, JsObjectData::set_data, &mut cursor)
+                    {
                         let has_result = match interp.call_function(
                             &other_rec.has,
                             &other,
@@ -1265,36 +1258,28 @@ impl Interpreter {
                             other => return other,
                         };
                         if interp.to_boolean_val(&has_result) {
-                            let val = canonicalize_key(entry);
-                            if !set_data_has(&new_entries, &val) {
-                                interp.gc_root_value(&val);
-                                new_entries.push(Some(val));
-                            }
+                            push_rooted_unique(interp, &mut new_entries, canonicalize_key(entry));
                         }
                     }
-                    make_result_set(interp, new_entries)
-                });
-            } else {
-                let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
-                {
-                    Ok(r) => r,
-                    Err(c) => return c,
-                };
-                loop {
-                    let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                        Ok(Some(v)) => v,
-                        Ok(None) => break,
-                        Err(c) => return c,
-                    };
-                    if live_set_has(&obj, &value) {
-                        let val = canonicalize_key(value);
-                        if !set_data_has(&new_entries, &val) {
-                            new_entries.push(Some(val));
+                } else {
+                    let (keys_iter, next_fn) =
+                        match get_keys_iterator(interp, &other_rec.keys, &other) {
+                            Ok(r) => r,
+                            Err(c) => return c,
+                        };
+                    loop {
+                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(c) => return c,
+                        };
+                        if live_set_has(&obj, &value) {
+                            push_rooted_unique(interp, &mut new_entries, canonicalize_key(value));
                         }
                     }
                 }
-            }
-            make_result_set(interp, new_entries)
+                make_result_set(interp, new_entries)
+            })
         });
 
         // Set.prototype.difference
@@ -1310,7 +1295,7 @@ impl Interpreter {
             };
             // Re-read entries after GetSetRecord
             let entries = obj.borrow().set_data().cloned().unwrap();
-            let this_size = entries.iter().filter(|e| e.is_some()).count();
+            let this_size = entries.live_len();
             let mut new_entries: Vec<Option<JsValue>> = Vec::new();
 
             if this_size as f64 <= other_rec.size {
@@ -1413,7 +1398,7 @@ impl Interpreter {
             }
             // Iterate live set data (re-read each iteration for mutation support)
             let mut cursor = 0;
-            while let Some(e) = next_live_set_value(&obj, &mut cursor) {
+            while let Some(e) = next_live_entry(&obj, JsObjectData::set_data, &mut cursor) {
                 let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -1436,9 +1421,7 @@ impl Interpreter {
                 Ok(r) => r,
                 Err(e) => return Completion::Throw(e),
             };
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let this_size = entries.iter().filter(|e| e.is_some()).count();
-            if (this_size as f64) < other_rec.size {
+            if (live_set_size(&obj) as f64) < other_rec.size {
                 return Completion::Normal(JsValue::boolean(false));
             }
             let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other) {
@@ -1473,7 +1456,7 @@ impl Interpreter {
             if live_set_size(&obj) as f64 <= other_rec.size {
                 // Iterate live set data (re-read each iteration for mutation support)
                 let mut cursor = 0;
-                while let Some(e) = next_live_set_value(&obj, &mut cursor) {
+                while let Some(e) = next_live_entry(&obj, JsObjectData::set_data, &mut cursor) {
                     let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
                         Completion::Normal(v) => v,
                         other => return other,
