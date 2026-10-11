@@ -85,32 +85,36 @@ impl Interpreter {
                         );
                     }
                     if let Some(map_obj) = interp.get_object(map_id) {
-                        let map_data = map_obj.borrow().map_data().cloned();
-                        if let Some(entries) = map_data {
-                            let mut i = index;
-                            while i < entries.len() {
-                                if let Some(ref entry) = entries[i] {
-                                    let result = match kind {
-                                        IteratorKind::Key => entry.0.clone(),
-                                        IteratorKind::Value => entry.1.clone(),
-                                        IteratorKind::KeyValue => interp
-                                            .create_array(vec![entry.0.clone(), entry.1.clone()]),
-                                    };
-                                    obj.borrow_mut_untracked().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::MapIterator {
-                                                map_id,
-                                                index: i + 1,
-                                                kind,
-                                                done: false,
-                                            },
-                                        );
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(result, false),
-                                    );
-                                }
-                                i += 1;
-                            }
+                        // Find the next live entry under a borrow; cloning the
+                        // whole entry Vec per step made iteration quadratic.
+                        let next = map_obj.borrow().map_data().and_then(|entries| {
+                            entries
+                                .get(index..)?
+                                .iter()
+                                .enumerate()
+                                .find_map(|(offset, e)| {
+                                    e.as_ref()
+                                        .map(|(k, v)| (index + offset, k.clone(), v.clone()))
+                                })
+                        });
+                        if let Some((i, key, value)) = next {
+                            let result = match kind {
+                                IteratorKind::Key => key,
+                                IteratorKind::Value => value,
+                                IteratorKind::KeyValue => interp.create_array(vec![key, value]),
+                            };
+                            obj.borrow_mut_untracked().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::MapIterator {
+                                        map_id,
+                                        index: i + 1,
+                                        kind,
+                                        done: false,
+                                    },
+                                );
+                            return Completion::Normal(
+                                interp.create_iter_result_object(result, false),
+                            );
                         }
                     }
                     obj.borrow_mut_untracked().kind =
@@ -212,8 +216,9 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let entries = obj.borrow().map_data().cloned().unwrap();
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let borrowed = obj.borrow();
+            let entries = borrowed.map_data().unwrap();
             for entry in entries.iter().flatten() {
                 if same_value_zero(&entry.0, &key) {
                     return Completion::Normal(entry.1.clone());
@@ -265,14 +270,15 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let entries = obj.borrow().map_data().cloned().unwrap();
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            for entry in entries.iter().flatten() {
-                if same_value_zero(&entry.0, &key) {
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            let found = obj
+                .borrow()
+                .map_data()
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|entry| same_value_zero(&entry.0, &key));
+            Completion::Normal(JsValue::boolean(found))
         });
 
         // Map.prototype.delete
@@ -809,32 +815,36 @@ impl Interpreter {
                         );
                     }
                     if let Some(set_obj) = interp.get_object(set_id) {
-                        let set_data = set_obj.borrow().set_data().cloned();
-                        if let Some(entries) = set_data {
-                            let mut i = index;
-                            while i < entries.len() {
-                                if let Some(ref val) = entries[i] {
-                                    let result = match kind {
-                                        IteratorKind::Value | IteratorKind::Key => val.clone(),
-                                        IteratorKind::KeyValue => {
-                                            interp.create_array(vec![val.clone(), val.clone()])
-                                        }
-                                    };
-                                    obj.borrow_mut_untracked().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::SetIterator {
-                                                set_id,
-                                                index: i + 1,
-                                                kind,
-                                                done: false,
-                                            },
-                                        );
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(result, false),
-                                    );
+                        // Find the next live entry under a borrow; cloning the
+                        // whole entry Vec per step made iteration quadratic.
+                        let next = set_obj.borrow().set_data().and_then(|entries| {
+                            entries
+                                .get(index..)?
+                                .iter()
+                                .enumerate()
+                                .find_map(|(offset, e)| {
+                                    e.as_ref().map(|val| (index + offset, val.clone()))
+                                })
+                        });
+                        if let Some((i, val)) = next {
+                            let result = match kind {
+                                IteratorKind::Value | IteratorKind::Key => val,
+                                IteratorKind::KeyValue => {
+                                    interp.create_array(vec![val.clone(), val])
                                 }
-                                i += 1;
-                            }
+                            };
+                            obj.borrow_mut_untracked().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::SetIterator {
+                                        set_id,
+                                        index: i + 1,
+                                        kind,
+                                        done: false,
+                                    },
+                                );
+                            return Completion::Normal(
+                                interp.create_iter_result_object(result, false),
+                            );
                         }
                     }
                     obj.borrow_mut_untracked().kind =
@@ -956,14 +966,15 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let entries = obj.borrow().set_data().cloned().unwrap();
             let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            for entry in entries.iter().flatten() {
-                if same_value_zero(entry, &value) {
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            let found = obj
+                .borrow()
+                .set_data()
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|entry| same_value_zero(entry, &value));
+            Completion::Normal(JsValue::boolean(found))
         });
 
         // Set.prototype.delete
@@ -1727,19 +1738,23 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakmap = obj.borrow().class_name == "WeakMap";
-                let map_data = obj.borrow().map_data().cloned();
-                if is_weakmap && let Some(entries) = map_data {
+                let is_weakmap = {
+                    let b = obj.borrow();
+                    b.class_name == "WeakMap" && b.map_data().is_some()
+                };
+                if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::UNDEFINED);
                     }
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(&entry.0, &key) {
-                            return Completion::Normal(entry.1.clone());
-                        }
-                    }
-                    return Completion::Normal(JsValue::UNDEFINED);
+                    let found = obj.borrow().map_data().and_then(|entries| {
+                        entries
+                            .iter()
+                            .flatten()
+                            .find(|entry| strict_equality(&entry.0, &key))
+                            .map(|entry| entry.1.clone())
+                    });
+                    return Completion::Normal(found.unwrap_or(JsValue::UNDEFINED));
                 }
             }
             let err = interp.create_type_error("WeakMap.prototype.get requires a WeakMap");
@@ -1782,19 +1797,22 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakmap = obj.borrow().class_name == "WeakMap";
-                let map_data = obj.borrow().map_data().cloned();
-                if is_weakmap && let Some(entries) = map_data {
+                let is_weakmap = {
+                    let b = obj.borrow();
+                    b.class_name == "WeakMap" && b.map_data().is_some()
+                };
+                if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(&entry.0, &key) {
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::boolean(false));
+                    let found = obj.borrow().map_data().is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .flatten()
+                            .any(|entry| strict_equality(&entry.0, &key))
+                    });
+                    return Completion::Normal(JsValue::boolean(found));
                 }
             }
             let err = interp.create_type_error("WeakMap.prototype.has requires a WeakMap");
@@ -2172,19 +2190,22 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakset = obj.borrow().class_name == "WeakSet";
-                let set_data = obj.borrow().set_data().cloned();
-                if is_weakset && let Some(entries) = set_data {
+                let is_weakset = {
+                    let b = obj.borrow();
+                    b.class_name == "WeakSet" && b.set_data().is_some()
+                };
+                if is_weakset {
                     let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(entry, &value) {
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::boolean(false));
+                    let found = obj.borrow().set_data().is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .flatten()
+                            .any(|entry| strict_equality(entry, &value))
+                    });
+                    return Completion::Normal(JsValue::boolean(found));
                 }
             }
             let err = interp.create_type_error("WeakSet.prototype.has requires a WeakSet");
