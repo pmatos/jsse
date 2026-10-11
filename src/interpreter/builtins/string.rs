@@ -45,10 +45,7 @@ fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, 
             return Ok(string);
         }
     }
-    interp
-        .to_string_value(this)
-        .map(|string| JsString::from_str(&string))
-        .map_err(Completion::Throw)
+    interp.to_js_string(this).map_err(Completion::Throw)
 }
 
 fn to_str(interp: &mut Interpreter, val: &JsValue) -> Result<String, Completion> {
@@ -76,6 +73,32 @@ fn to_int_or_inf(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Complet
 
 fn utf16_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
+}
+
+// clamp(pos, 0, len) for an already-integral (or ±∞) position.
+fn clamp_index(pos: f64, len: usize) -> usize {
+    pos.max(0.0).min(len as f64) as usize
+}
+
+// §6.1.4.1 StringIndexOf over UTF-16 code units, so lone surrogates only match
+// themselves; `None` is ~not-found~.
+fn string_index_of(s: &[u16], search: &[u16], from: usize) -> Option<usize> {
+    if search.is_empty() {
+        return (from <= s.len()).then_some(from);
+    }
+    s.get(from..)?
+        .windows(search.len())
+        .position(|window| window == search)
+        .map(|i| i + from)
+}
+
+// §6.1.4.2 StringLastIndexOf over UTF-16 code units; `from` is clamped to
+// `s.len()` by the caller.
+fn string_last_index_of(s: &[u16], search: &[u16], from: usize) -> Option<usize> {
+    let max_start = from.min(s.len().checked_sub(search.len())?);
+    (0..=max_start)
+        .rev()
+        .find(|&i| &s[i..i + search.len()] == search)
 }
 
 // §7.2.8 IsRegExp(argument) — uses [[Get]] for Symbol.match (invokes getters)
@@ -197,94 +220,49 @@ impl Interpreter {
                 "indexOf",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let search = match args.first() {
-                        Some(v) => match to_str(interp, v) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        },
-                        None => "undefined".to_string(),
+                        Some(v) => propagate!(interp.to_js_string(v)),
+                        None => JsString::from_str("undefined"),
                     };
                     let pos = match args.get(1) {
-                        Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
+                        Some(v) => propagate!(to_int_or_inf(interp, v)),
                         None => 0.0,
                     };
-                    let s_units = utf16_units(&s);
-                    let search_units = utf16_units(&search);
-                    let s_len = s_units.len();
-                    let search_len = search_units.len();
-                    let start = pos.max(0.0).min(s_len as f64) as usize;
-                    if search_len == 0 {
-                        return Completion::Normal(JsValue::number(start.min(s_len) as f64));
-                    }
-                    if search_len <= s_len {
-                        for i in start..=s_len - search_len {
-                            if s_units[i..i + search_len] == search_units[..] {
-                                return Completion::Normal(JsValue::number(i as f64));
-                            }
-                        }
-                    }
-                    Completion::Normal(JsValue::number(-1.0))
+                    let units = &s.code_units;
+                    let start = clamp_index(pos, units.len());
+                    let index = string_index_of(units, &search.code_units, start);
+                    Completion::Normal(JsValue::number(index.map_or(-1.0, |i| i as f64)))
                 }),
             ),
             (
                 "lastIndexOf",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let search = match args.first() {
-                        Some(v) => match to_str(interp, v) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        },
-                        None => "undefined".to_string(),
+                        Some(v) => propagate!(interp.to_js_string(v)),
+                        None => JsString::from_str("undefined"),
                     };
                     let num_pos = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_num(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
+                        Some(v) if !(v).is_undefined() => propagate!(to_num(interp, v)),
                         _ => f64::NAN,
                     };
-                    let s_units = utf16_units(&s);
-                    let search_units = utf16_units(&search);
-                    let s_len = s_units.len();
-                    let search_len = search_units.len();
-                    let pos = if num_pos.is_nan() {
-                        s_len
+                    let units = &s.code_units;
+                    let start = if num_pos.is_nan() {
+                        units.len()
                     } else {
-                        to_integer_or_infinity(num_pos).max(0.0).min(s_len as f64) as usize
+                        clamp_index(to_integer_or_infinity(num_pos), units.len())
                     };
-                    if search_len == 0 {
-                        return Completion::Normal(JsValue::number(pos.min(s_len) as f64));
-                    }
-                    let max_start = pos.min(s_len.saturating_sub(search_len));
-                    for i in (0..=max_start).rev() {
-                        if i + search_len <= s_len && s_units[i..i + search_len] == search_units[..]
-                        {
-                            return Completion::Normal(JsValue::number(i as f64));
-                        }
-                    }
-                    Completion::Normal(JsValue::number(-1.0))
+                    let index = string_last_index_of(units, &search.code_units, start);
+                    Completion::Normal(JsValue::number(index.map_or(-1.0, |i| i as f64)))
                 }),
             ),
             (
                 "includes",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if let Some(object_id) = search_arg.as_object_id() {
                         match is_regexp(interp, object_id, &search_arg) {
@@ -297,42 +275,22 @@ impl Interpreter {
                             _ => {}
                         }
                     }
-                    let search = match to_str(interp, &search_arg) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let search = propagate!(interp.to_js_string(&search_arg));
                     let pos = match args.get(1) {
-                        Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n.max(0.0) as usize,
-                            Err(c) => return c,
-                        },
-                        None => 0,
+                        Some(v) => propagate!(to_int_or_inf(interp, v)),
+                        None => 0.0,
                     };
-                    let s_units = utf16_units(&s);
-                    let search_units = utf16_units(&search);
-                    let s_len = s_units.len();
-                    let search_len = search_units.len();
-                    if search_len == 0 {
-                        return Completion::Normal(JsValue::boolean(true));
-                    }
-                    if search_len <= s_len {
-                        for i in pos..=s_len - search_len {
-                            if s_units[i..i + search_len] == search_units[..] {
-                                return Completion::Normal(JsValue::boolean(true));
-                            }
-                        }
-                    }
-                    Completion::Normal(JsValue::boolean(false))
+                    let units = &s.code_units;
+                    let start = clamp_index(pos, units.len());
+                    let found = string_index_of(units, &search.code_units, start).is_some();
+                    Completion::Normal(JsValue::boolean(found))
                 }),
             ),
             (
                 "startsWith",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if let Some(object_id) = search_arg.as_object_id() {
                         match is_regexp(interp, object_id, &search_arg) {
@@ -345,25 +303,14 @@ impl Interpreter {
                             _ => {}
                         }
                     }
-                    let search = match to_str(interp, &search_arg) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let search = propagate!(interp.to_js_string(&search_arg));
                     let pos = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
-                            Ok(n) => n.max(0.0) as usize,
-                            Err(c) => return c,
-                        },
-                        _ => 0,
+                        Some(v) if !(v).is_undefined() => propagate!(to_int_or_inf(interp, v)),
+                        _ => 0.0,
                     };
-                    let s_units = utf16_units(&s);
-                    let search_units = utf16_units(&search);
-                    let s_len = s_units.len();
-                    let start = pos.min(s_len);
-                    if start + search_units.len() > s_len {
-                        return Completion::Normal(JsValue::boolean(false));
-                    }
-                    let result = s_units[start..start + search_units.len()] == search_units[..];
+                    let units = &s.code_units;
+                    let start = clamp_index(pos, units.len());
+                    let result = units[start..].starts_with(&search.code_units);
                     Completion::Normal(JsValue::boolean(result))
                 }),
             ),
@@ -371,10 +318,7 @@ impl Interpreter {
                 "endsWith",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if let Some(object_id) = search_arg.as_object_id() {
                         match is_regexp(interp, object_id, &search_arg) {
@@ -387,26 +331,15 @@ impl Interpreter {
                             _ => {}
                         }
                     }
-                    let search = match to_str(interp, &search_arg) {
-                        Ok(s) => s,
-                        Err(c) => return c,
+                    let search = propagate!(interp.to_js_string(&search_arg));
+                    let units = &s.code_units;
+                    let end = match args.get(1) {
+                        Some(v) if !(v).is_undefined() => {
+                            clamp_index(propagate!(to_int_or_inf(interp, v)), units.len())
+                        }
+                        _ => units.len(),
                     };
-                    let s_units = utf16_units(&s);
-                    let search_units = utf16_units(&search);
-                    let s_len = s_units.len();
-                    let end_pos = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
-                            Ok(n) => n.max(0.0).min(s_len as f64) as usize,
-                            Err(c) => return c,
-                        },
-                        _ => s_len,
-                    };
-                    let search_len = search_units.len();
-                    if search_len > end_pos {
-                        return Completion::Normal(JsValue::boolean(false));
-                    }
-                    let start = end_pos - search_len;
-                    let result = s_units[start..end_pos] == search_units[..];
+                    let result = units[..end].ends_with(&search.code_units);
                     Completion::Normal(JsValue::boolean(result))
                 }),
             ),
