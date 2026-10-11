@@ -1982,116 +1982,29 @@ impl Interpreter {
             "sort".to_string(),
             1,
             |interp, this_val, args| {
-                if let Some(o) = this_val.as_object_id()
-                    && let Some(obj) = interp.get_object(o)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
-                        return c;
-                    }
-                    let comparefn = args.first().cloned();
-                    if let Some(ref cmp) = comparefn
-                        && !cmp.is_undefined()
-                    {
-                        let is_callable = if let Some(co) = cmp.as_object_id() {
-                            interp
-                                .get_object_cell(co)
-                                .is_some_and(|obj| obj.borrow().callable.is_some())
-                        } else {
-                            false
-                        };
-                        if !is_callable {
-                            return Completion::Throw(
-                                interp.create_type_error("comparefn is not a function"),
-                            );
-                        }
-                    }
-                    let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
-                        .map(|i| typed_array_get_index(&ta, i))
-                        .collect();
-                    // Sort with comparison
-                    let mut error: Option<JsValue> = None;
-                    elems.sort_by(|a, b| {
-                        if error.is_some() {
-                            return std::cmp::Ordering::Equal;
-                        }
-                        if let Some(ref cmp) = comparefn
-                            && !cmp.is_undefined()
-                        {
-                            match interp.call_function(
-                                cmp,
-                                &JsValue::UNDEFINED,
-                                &[a.clone(), b.clone()],
-                            ) {
-                                Completion::Normal(v) => match interp.to_number_value(&v) {
-                                    Ok(n) => {
-                                        if n.is_nan() {
-                                            return std::cmp::Ordering::Equal;
-                                        }
-                                        if n < 0.0 {
-                                            return std::cmp::Ordering::Less;
-                                        }
-                                        if n > 0.0 {
-                                            return std::cmp::Ordering::Greater;
-                                        }
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                    Err(e) => {
-                                        error = Some(e);
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                },
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    return std::cmp::Ordering::Equal;
-                                }
-                                _ => return std::cmp::Ordering::Equal,
-                            }
-                        }
-                        // Default sort: numeric for Number types, BigInt comparison for BigInt types
-                        match a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
-                            Some(ord) => ord,
-                            None => {
-                                let na = to_number(a);
-                                let nb = to_number(b);
-                                // Per spec: -0 < +0 is false, +0 < -0 is false
-                                if na.is_nan() && nb.is_nan() {
-                                    std::cmp::Ordering::Equal
-                                } else if na.is_nan() {
-                                    std::cmp::Ordering::Greater
-                                } else if nb.is_nan() {
-                                    std::cmp::Ordering::Less
-                                } else if na == 0.0 && nb == 0.0 {
-                                    // -0 comes before +0
-                                    na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse()
-                                } else {
-                                    na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
-                                }
-                            }
-                        }
-                    });
-                    if let Some(e) = error {
-                        return Completion::Throw(e);
-                    }
-                    for (i, val) in elems.iter().enumerate() {
-                        if !is_valid_integer_index(&ta, i as f64) {
-                            break;
-                        }
-                        typed_array_set_index(&ta, i, val);
-                    }
-                    return Completion::Normal(this_val.clone());
+                // Step 1: the comparefn check precedes ValidateTypedArray.
+                let comparefn = match super::array::sort_compare_fn_arg(interp, args) {
+                    Ok(cf) => cf,
+                    Err(c) => return c,
+                };
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
+                    Ok(elems) => elems,
+                    Err(e) => return Completion::Throw(e),
+                };
+                for (i, val) in elems.iter().enumerate() {
+                    if !is_valid_integer_index(&ta, i as f64) {
+                        break;
+                    }
+                    typed_array_set_index(&ta, i, val);
+                }
+                Completion::Normal(this_val.clone())
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2275,144 +2188,42 @@ impl Interpreter {
             "toSorted".to_string(),
             1,
             |interp, this_val, args| {
-                if let Some(o) = this_val.as_object_id()
-                    && let Some(obj) = interp.get_object(o)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
+                // Step 1: the comparefn check precedes ValidateTypedArray.
+                let comparefn = match super::array::sort_compare_fn_arg(interp, args) {
+                    Ok(cf) => cf,
+                    Err(c) => return c,
+                };
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
+                    Ok(elems) => elems,
+                    Err(e) => return Completion::Throw(e),
+                };
+                // A is created with the length read before the comparefn ran
+                // (steps 4-5), even if it resized or detached the buffer.
+                let Some(proto) = interp.get_typed_array_prototype(ta.kind) else {
+                    return Completion::Throw(interp.create_type_error("not a TypedArray"));
+                };
+                let result =
+                    match interp.create_typed_array_from_length(ta.kind, elems.len(), proto) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
-                    let comparefn = args.first().cloned();
-                    if let Some(ref cmp) = comparefn
-                        && !cmp.is_undefined()
-                    {
-                        let is_callable = if let Some(co) = cmp.as_object_id() {
-                            interp
-                                .get_object_cell(co)
-                                .is_some_and(|obj| obj.borrow().callable.is_some())
-                        } else {
-                            false
-                        };
-                        if !is_callable {
-                            return Completion::Throw(
-                                interp.create_type_error("comparefn is not a function"),
-                            );
-                        }
-                    }
-                    let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
-                        .map(|i| typed_array_get_index(&ta, i))
-                        .collect();
-                    let mut error: Option<JsValue> = None;
-                    elems.sort_by(|a, b| {
-                        if error.is_some() {
-                            return std::cmp::Ordering::Equal;
-                        }
-                        if let Some(ref cmp) = comparefn
-                            && !cmp.is_undefined()
-                        {
-                            match interp.call_function(
-                                cmp,
-                                &JsValue::UNDEFINED,
-                                &[a.clone(), b.clone()],
-                            ) {
-                                Completion::Normal(v) => match interp.to_number_value(&v) {
-                                    Ok(n) => {
-                                        if n.is_nan() {
-                                            return std::cmp::Ordering::Equal;
-                                        }
-                                        if n < 0.0 {
-                                            return std::cmp::Ordering::Less;
-                                        }
-                                        if n > 0.0 {
-                                            return std::cmp::Ordering::Greater;
-                                        }
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                    Err(e) => {
-                                        error = Some(e);
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                },
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    return std::cmp::Ordering::Equal;
-                                }
-                                _ => return std::cmp::Ordering::Equal,
-                            }
-                        }
-                        // Default sort: numeric for Number types, BigInt comparison for BigInt types
-                        match a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
-                            Some(ord) => ord,
-                            None => {
-                                let na = to_number(a);
-                                let nb = to_number(b);
-                                if na.is_nan() && nb.is_nan() {
-                                    std::cmp::Ordering::Equal
-                                } else if na.is_nan() {
-                                    std::cmp::Ordering::Greater
-                                } else if nb.is_nan() {
-                                    std::cmp::Ordering::Less
-                                } else if na == 0.0 && nb == 0.0 {
-                                    na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse()
-                                } else {
-                                    na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
-                                }
-                            }
-                        }
-                    });
-                    if let Some(e) = error {
-                        return Completion::Throw(e);
-                    }
-                    let len = typed_array_length(&ta);
-                    let bpe = ta.kind.bytes_per_element();
-                    let buf_byte_len = len * bpe;
-                    let new_buf = vec![0u8; buf_byte_len];
-                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
-                    let new_detached = Rc::new(Cell::new(false));
-                    let new_ta = TypedArrayInfo {
-                        kind: ta.kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: buf_byte_len,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                        buffer_object_id: None,
-                    };
-                    for (i, val) in elems.iter().enumerate() {
-                        typed_array_set_index(&new_ta, i, val);
-                    }
-                    let ab_obj_id = interp.create_object_id();
-                    let ab_proto = interp.realm().arraybuffer_prototype;
-                    {
-                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                        ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype_id = ab_proto;
-                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
-                            crate::interpreter::types::ArrayBufferData {
-                                data: new_buf_rc,
-                                detached: Some(new_detached),
-                                max_byte_length: None,
-                                is_shared: false,
-                                is_immutable: false,
-                                sab_shared: None,
-                            },
-                        );
-                    }
-                    interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj_id;
-                    let buf_val = JsValue::object(ab_id);
-                    let id = interp.create_typed_array_object(new_ta, buf_val);
-                    return Completion::Normal(JsValue::object(id));
+                let new_ta = match with_typed_array_ref(
+                    interp,
+                    &result,
+                    "not a TypedArray",
+                    TypedArrayInfo::clone,
+                ) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                for (i, val) in elems.iter().enumerate() {
+                    typed_array_set_index(&new_ta, i, val);
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                Completion::Normal(result)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -6341,6 +6152,42 @@ fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usiz
         .set_property_value("written", JsValue::number(written as f64));
     let id = obj_id;
     Completion::Normal(JsValue::object(id))
+}
+
+// Reads every element of `ta` and sorts them for %TypedArray%.prototype.sort
+// and toSorted: with `sort_with_comparefn` when a comparefn is given, else by
+// `typed_array_default_cmp`.
+fn sort_typed_array_elements(
+    interp: &mut Interpreter,
+    ta: &TypedArrayInfo,
+    comparefn: Option<&JsValue>,
+) -> Result<Vec<JsValue>, JsValue> {
+    let mut elems: Vec<JsValue> = (0..typed_array_length(ta))
+        .map(|i| typed_array_get_index(ta, i))
+        .collect();
+    match comparefn {
+        Some(cf) => super::array::sort_with_comparefn(interp, &mut elems, cf)?,
+        // The default numeric order is total, so `sort_by` cannot panic.
+        None => elems.sort_by(typed_array_default_cmp),
+    }
+    Ok(elems)
+}
+
+// §23.2.4.7 CompareTypedArrayElements without a comparefn: numeric (or BigInt)
+// order with NaN last and -0 before +0.
+fn typed_array_default_cmp(a: &JsValue, b: &JsValue) -> std::cmp::Ordering {
+    if let Some(ord) = a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
+        return ord;
+    }
+    let na = to_number(a);
+    let nb = to_number(b);
+    match (na.is_nan(), nb.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ if na == 0.0 && nb == 0.0 => na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse(),
+        _ => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
+    }
 }
 
 #[cfg(test)]

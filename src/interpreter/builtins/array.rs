@@ -291,7 +291,7 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
 
 // Validates the comparefn argument shared by `sort` and `toSorted`, returning
 // it only when one was given (undefined means the default order).
-fn sort_compare_fn_arg(
+pub(crate) fn sort_compare_fn_arg(
     interp: &mut Interpreter,
     args: &[JsValue],
 ) -> Result<Option<JsValue>, Completion> {
@@ -349,16 +349,7 @@ fn sort_values(
     items.retain(|v| !v.is_undefined());
     let undefined_count = before - items.len();
     if let Some(cf) = compare_fn {
-        merge_sort_by(items, |x, y| {
-            let v = match interp.call_function(cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Ok(std::cmp::Ordering::Equal),
-            };
-            // NaN compares as +0 (step 4.c of CompareArrayElements).
-            let n = interp.to_number_value(&v)?;
-            Ok(n.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
-        })?;
+        sort_with_comparefn(interp, items, cf)?;
     } else if items.len() > 1 {
         let mut keyed: Vec<(JsString, JsValue)> = Vec::with_capacity(items.len());
         for v in items.drain(..) {
@@ -372,6 +363,27 @@ fn sort_values(
     }
     items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
     Ok(())
+}
+
+// Sorts `items` with a user comparefn (CompareArrayElements step 4, shared
+// with %TypedArray%.prototype.sort/toSorted): call it, ToNumber the result,
+// and treat NaN as +0. Uses `merge_sort_by`, so an inconsistent comparefn
+// cannot panic, and stops at the first abrupt completion.
+pub(crate) fn sort_with_comparefn(
+    interp: &mut Interpreter,
+    items: &mut Vec<JsValue>,
+    compare_fn: &JsValue,
+) -> Result<(), JsValue> {
+    merge_sort_by(items, |x, y| {
+        let v = match interp.call_function(compare_fn, &JsValue::UNDEFINED, &[x.clone(), y.clone()])
+        {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(std::cmp::Ordering::Equal),
+        };
+        let n = interp.to_number_value(&v)?;
+        Ok(n.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
+    })
 }
 
 // Stable bottom-up merge sort driven by a fallible comparator. A user
@@ -392,35 +404,63 @@ fn merge_sort_by<E>(
     let mut width = 1;
     while width < n {
         dst.clear();
-        let mut lo = 0;
-        while lo < n {
-            let mid = (lo + width).min(n);
-            let hi = (lo + 2 * width).min(n);
-            let (mut i, mut j) = (lo, mid);
-            while i < mid && j < hi {
-                match cmp(&src[i], &src[j]) {
-                    Ok(std::cmp::Ordering::Greater) => {
-                        dst.push(src[j].clone());
-                        j += 1;
-                    }
-                    Ok(_) => {
-                        dst.push(src[i].clone());
-                        i += 1;
-                    }
-                    Err(e) => {
-                        *items = src;
-                        return Err(e);
-                    }
-                }
-            }
-            dst.extend_from_slice(&src[i..mid]);
-            dst.extend_from_slice(&src[j..hi]);
-            lo = hi;
+        if let Err(e) = merge_pass(&src, &mut dst, width, &mut cmp) {
+            *items = src;
+            return Err(e);
         }
         std::mem::swap(&mut src, &mut dst);
         width = width.saturating_mul(2);
     }
     *items = src;
+    Ok(())
+}
+
+// One bottom-up pass of `merge_sort_by`: merges each pair of adjacent
+// `width`-long runs of `src` into `dst`.
+fn merge_pass<E>(
+    src: &[JsValue],
+    dst: &mut Vec<JsValue>,
+    width: usize,
+    cmp: &mut impl FnMut(&JsValue, &JsValue) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    let n = src.len();
+    let mut lo = 0;
+    while lo < n {
+        let mid = (lo + width).min(n);
+        let hi = (lo + 2 * width).min(n);
+        if mid == hi {
+            dst.extend_from_slice(&src[lo..hi]);
+            lo = hi;
+            continue;
+        }
+        // Already in order: one comparison instead of a full merge, so
+        // sorted input costs about n comparefn calls, not (n/2)*log2(n).
+        if cmp(&src[mid - 1], &src[mid])? != std::cmp::Ordering::Greater {
+            dst.extend_from_slice(&src[lo..hi]);
+            lo = hi;
+            continue;
+        }
+        // With a one-element left run that check was the merge's first
+        // comparison, so reuse its result instead of calling cmp again.
+        let mut known_first = (mid - lo == 1).then_some(std::cmp::Ordering::Greater);
+        let (mut i, mut j) = (lo, mid);
+        while i < mid && j < hi {
+            let ord = match known_first.take() {
+                Some(ord) => ord,
+                None => cmp(&src[i], &src[j])?,
+            };
+            if ord == std::cmp::Ordering::Greater {
+                dst.push(src[j].clone());
+                j += 1;
+            } else {
+                dst.push(src[i].clone());
+                i += 1;
+            }
+        }
+        dst.extend_from_slice(&src[i..mid]);
+        dst.extend_from_slice(&src[j..hi]);
+        lo = hi;
+    }
     Ok(())
 }
 
