@@ -1987,36 +1987,24 @@ impl Interpreter {
                     Ok(cf) => cf,
                     Err(c) => return c,
                 };
-                if let Some(o) = this_val.as_object_id()
-                    && let Some(obj) = interp.get_object(o)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
-                        return c;
-                    }
-                    let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
-                        Ok(elems) => elems,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    for (i, val) in elems.iter().enumerate() {
-                        if !is_valid_integer_index(&ta, i as f64) {
-                            break;
-                        }
-                        typed_array_set_index(&ta, i, val);
-                    }
-                    return Completion::Normal(this_val.clone());
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
+                    Ok(elems) => elems,
+                    Err(e) => return Completion::Throw(e),
+                };
+                for (i, val) in elems.iter().enumerate() {
+                    if !is_valid_integer_index(&ta, i as f64) {
+                        break;
+                    }
+                    typed_array_set_index(&ta, i, val);
+                }
+                Completion::Normal(this_val.clone())
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2205,69 +2193,37 @@ impl Interpreter {
                     Ok(cf) => cf,
                     Err(c) => return c,
                 };
-                if let Some(o) = this_val.as_object_id()
-                    && let Some(obj) = interp.get_object(o)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ta) = obj_ref.typed_array_info() {
-                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
-                                return c;
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
+                let ta = match validate_typed_array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
+                    Ok(elems) => elems,
+                    Err(e) => return Completion::Throw(e),
+                };
+                // A is created with the length read before the comparefn ran
+                // (steps 4-5), even if it resized or detached the buffer.
+                let Some(proto) = interp.get_typed_array_prototype(ta.kind) else {
+                    return Completion::Throw(interp.create_type_error("not a TypedArray"));
+                };
+                let result =
+                    match interp.create_typed_array_from_length(ta.kind, elems.len(), proto) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
-                    let elems = match sort_typed_array_elements(interp, &ta, comparefn.as_ref()) {
-                        Ok(elems) => elems,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    // A is created with the length read before the comparefn ran
-                    // (steps 4-5), even if it resized or detached the buffer.
-                    let len = elems.len();
-                    let bpe = ta.kind.bytes_per_element();
-                    let buf_byte_len = len * bpe;
-                    let new_buf = vec![0u8; buf_byte_len];
-                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
-                    let new_detached = Rc::new(Cell::new(false));
-                    let new_ta = TypedArrayInfo {
-                        kind: ta.kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: buf_byte_len,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                        buffer_object_id: None,
-                    };
-                    for (i, val) in elems.iter().enumerate() {
-                        typed_array_set_index(&new_ta, i, val);
-                    }
-                    let ab_obj_id = interp.create_object_id();
-                    let ab_proto = interp.realm().arraybuffer_prototype;
-                    {
-                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                        ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype_id = ab_proto;
-                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
-                            crate::interpreter::types::ArrayBufferData {
-                                data: new_buf_rc,
-                                detached: Some(new_detached),
-                                max_byte_length: None,
-                                is_shared: false,
-                                is_immutable: false,
-                                sab_shared: None,
-                            },
-                        );
-                    }
-                    interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj_id;
-                    let buf_val = JsValue::object(ab_id);
-                    let id = interp.create_typed_array_object(new_ta, buf_val);
-                    return Completion::Normal(JsValue::object(id));
+                let new_ta = match with_typed_array_ref(
+                    interp,
+                    &result,
+                    "not a TypedArray",
+                    TypedArrayInfo::clone,
+                ) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                for (i, val) in elems.iter().enumerate() {
+                    typed_array_set_index(&new_ta, i, val);
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
+                Completion::Normal(result)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -6199,8 +6155,8 @@ fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usiz
 }
 
 // Reads every element of `ta` and sorts them for %TypedArray%.prototype.sort
-// and toSorted: through the user comparefn when one is given (panic-free merge
-// sort, stopping at its first abrupt completion), else in the default order.
+// and toSorted: with `sort_with_comparefn` when a comparefn is given, else by
+// `typed_array_default_cmp`.
 fn sort_typed_array_elements(
     interp: &mut Interpreter,
     ta: &TypedArrayInfo,
@@ -6216,6 +6172,7 @@ fn sort_typed_array_elements(
     }
     Ok(elems)
 }
+
 // §23.2.4.7 CompareTypedArrayElements without a comparefn: numeric (or BigInt)
 // order with NaN last and -0 before +0.
 fn typed_array_default_cmp(a: &JsValue, b: &JsValue) -> std::cmp::Ordering {
