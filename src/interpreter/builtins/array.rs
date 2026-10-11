@@ -1261,17 +1261,12 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let sep = if let Some(s) = args.first() {
-                if (s).is_undefined() {
-                    ",".to_string()
-                } else {
-                    match interp.to_string_value(s) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
-            } else {
-                ",".to_string()
+            let sep = match args.first() {
+                Some(s) if !s.is_undefined() => match interp.to_js_string(s) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                },
+                _ => JsString::from_str(","),
             };
 
             let receiver_id = o.as_object_id().expect("ToObject must return an object");
@@ -1281,22 +1276,23 @@ impl Interpreter {
 
             interp.active_array_joins.push(receiver_id);
             let result = (|| {
-                let mut parts = Vec::with_capacity(len);
+                let mut result: Vec<u16> = Vec::new();
                 for i in 0..len {
+                    if i > 0 {
+                        result.extend_from_slice(&sep.code_units);
+                    }
                     let elem = match obj_get(interp, &o, &i.to_string()) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if elem.is_undefined() || elem.is_null() {
-                        parts.push(String::new());
-                    } else {
-                        match interp.to_string_value(&elem) {
-                            Ok(s) => parts.push(s),
+                    if !elem.is_nullish() {
+                        match interp.to_js_string(&elem) {
+                            Ok(s) => result.extend_from_slice(&s.code_units),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
                 }
-                Completion::Normal(JsValue::string(JsString::from_str(&parts.join(&sep))))
+                Completion::Normal(JsValue::string(JsString::from_vec(result)))
             })();
             let popped_receiver = interp.active_array_joins.pop();
             debug_assert_eq!(popped_receiver, Some(receiver_id));

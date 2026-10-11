@@ -1165,11 +1165,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let str_val = match self.to_string_value(&val) {
+                        let str_val = match self.to_js_string(&val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
-                        code_units.extend(str_val.encode_utf16());
+                        code_units.extend_from_slice(&str_val.code_units);
                     }
                 }
                 Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
