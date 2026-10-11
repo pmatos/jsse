@@ -2122,7 +2122,10 @@ fn vm_operand_stacks_are_pooled_and_reentrant() {
     let _ = interp.run(&program);
     let total = interp.get_global_var_ref("__r").and_then(|v| v.as_number());
     assert_eq!(total, Some((0..20).map(|i| 3.0 + 2.0 * i as f64).sum()));
-    assert!(!interp.vm_stack_pool.is_empty(), "stacks must be returned to the pool");
+    assert!(
+        !interp.vm_stack_pool.is_empty(),
+        "stacks must be returned to the pool"
+    );
     assert!(interp.vm_stack_pool.len() <= 64);
     assert!(
         interp.vm_stack_pool.iter().all(|stack| stack.is_empty()),
