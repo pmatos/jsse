@@ -428,7 +428,7 @@ impl Interpreter {
                     && obj_b.class_name == "String"
                 {
                     let is_exotic = key.eq_str("length")
-                        || crate::interpreter::types::string_exotic_index(&key, s.code_units.len())
+                        || crate::interpreter::types::string_exotic_index(&key, s.as_units().len())
                             .is_some();
                     if is_exotic {
                         drop(obj_b);
@@ -783,9 +783,9 @@ impl Interpreter {
             if key.eq_str("length") {
                 Completion::Normal(JsValue::number(s.len() as f64))
             } else if let Some(idx) =
-                crate::interpreter::types::string_exotic_index(&key, s.code_units.len())
+                crate::interpreter::types::string_exotic_index(&key, s.as_units().len())
             {
-                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else {
                 let wrapper = match self.to_object(&obj_val) {
                     Completion::Normal(v) => v,

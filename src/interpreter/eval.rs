@@ -555,18 +555,7 @@ impl Interpreter {
                             self.create_type_error("Cannot convert a Symbol value to a string"),
                         )
                     } else {
-                        let mut code_units = if lval.is_string() {
-                            lval.into_string().expect("kind checked").into_vec()
-                        } else {
-                            js_value_to_code_units(&lval)
-                        };
-                        if rval
-                            .with_string(|s| code_units.extend_from_slice(s))
-                            .is_none()
-                        {
-                            code_units.extend(js_value_to_code_units(&rval));
-                        }
-                        Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                        Completion::Normal(concat_string_values(&lval, &rval))
                     }
                 } else {
                     self.eval_binary(*op, &lval, &rval)
@@ -1278,9 +1267,9 @@ impl Interpreter {
             if name.eq_str("length") {
                 Completion::Normal(JsValue::number(s.len() as f64))
             } else if let Some(idx) =
-                crate::interpreter::types::string_exotic_index(&name, s.code_units.len())
+                crate::interpreter::types::string_exotic_index(&name, s.as_units().len())
             {
-                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else if let Some(sp_id) = self.realm().string_prototype {
                 self.get_object_property(sp_id, &name, base_val)
             } else {
@@ -1572,10 +1561,10 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<(), JsValue> {
         if let Some(s) = val.as_string() {
-            out.extend_from_slice(&s.code_units);
+            out.extend_from_slice(s.as_units());
         } else if val.is_object() {
             let s = self.to_js_string(val)?;
-            out.extend_from_slice(&s.code_units);
+            out.extend_from_slice(s.as_units());
         } else {
             out.extend(self.to_string_value(val)?.encode_utf16());
         }
@@ -1757,8 +1746,8 @@ impl Interpreter {
         if is_string(&lprim) && is_string(&rprim) {
             // §7.2.13 step 3: Compare by UTF-16 code units, not UTF-8 bytes
             return Ok(Some(
-                lprim.as_string().expect("kind checked").code_units
-                    < rprim.as_string().expect("kind checked").code_units,
+                lprim.as_string().expect("kind checked").as_units()
+                    < rprim.as_string().expect("kind checked").as_units(),
             ));
         }
         // BigInt comparisons
@@ -1993,18 +1982,7 @@ impl Interpreter {
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    let mut code_units = if lprim.is_string() {
-                        lprim.into_string().expect("kind checked").into_vec()
-                    } else {
-                        js_value_to_code_units(&lprim)
-                    };
-                    if rprim
-                        .with_string(|s| code_units.extend_from_slice(s))
-                        .is_none()
-                    {
-                        code_units.extend(js_value_to_code_units(&rprim));
-                    }
-                    Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                    Completion::Normal(concat_string_values(&lprim, &rprim))
                 } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
                     Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
                         &a.value, &b.value,
@@ -3553,18 +3531,7 @@ impl Interpreter {
                             self.create_type_error("Cannot convert a Symbol value to a string"),
                         );
                     }
-                    let mut code_units = if lval.is_string() {
-                        lval.into_string().expect("kind checked").into_vec()
-                    } else {
-                        js_value_to_code_units(&lval)
-                    };
-                    if rval
-                        .with_string(|s| code_units.extend_from_slice(s))
-                        .is_none()
-                    {
-                        code_units.extend(js_value_to_code_units(&rval));
-                    }
-                    return Completion::Normal(JsValue::string(JsString::from_vec(code_units)));
+                    return Completion::Normal(concat_string_values(&lval, &rval));
                 }
                 self.eval_binary(BinaryOp::Add, &lval, &rval)
             }
@@ -5856,7 +5823,7 @@ impl Interpreter {
     /// engine-internal object state.
     fn describe_non_callable(&self, val: &JsValue) -> String {
         if let Some(s) = val.as_string() {
-            let preview: String = char::decode_utf16(s.code_units.iter().copied())
+            let preview: String = char::decode_utf16(s.as_units().iter().copied())
                 .take(30)
                 .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
                 .collect();
@@ -5925,7 +5892,7 @@ impl Interpreter {
         }
         // Use PUA mapping to preserve lone surrogates through the UTF-8 parser
         let code = if let Some(s) = (arg).as_string() {
-            crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+            crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
         } else {
             to_js_string(&arg)
         };

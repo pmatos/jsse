@@ -1307,7 +1307,7 @@ impl Interpreter {
                         done,
                     }) = state
                     {
-                        if done || position >= string.code_units.len() {
+                        if done || position >= string.as_units().len() {
                             obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                                 IteratorState::StringIterator {
                                     string: string.clone(),
@@ -1319,11 +1319,11 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
-                        let cu = string.code_units[position];
+                        let cu = string.as_units()[position];
                         let (result_units, advance) = if (0xD800..=0xDBFF).contains(&cu)
-                            && position + 1 < string.code_units.len()
+                            && position + 1 < string.as_units().len()
                         {
-                            let next_cu = string.code_units[position + 1];
+                            let next_cu = string.as_units()[position + 1];
                             if (0xDC00..=0xDFFF).contains(&next_cu) {
                                 (vec![cu, next_cu], 2)
                             } else {
@@ -2027,13 +2027,13 @@ impl Interpreter {
                 if first {
                     first = false;
                 } else {
-                    result.extend(separator.code_units.iter().copied());
+                    result.extend(separator.as_units().iter().copied());
                 }
 
                 if !value.is_nullish() {
                     match interp.to_js_string(&value) {
                         Ok(value_string) => {
-                            result.extend(value_string.code_units.iter().copied());
+                            result.extend(value_string.as_units().iter().copied());
                         }
                         Err(error) => {
                             let _ = iterator_close_with_completion(

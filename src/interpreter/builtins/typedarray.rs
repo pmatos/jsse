@@ -2032,7 +2032,7 @@ impl Interpreter {
                 let mut units: Vec<u16> = Vec::new();
                 for i in 0..len {
                     if i > 0 {
-                        units.extend_from_slice(&sep.code_units);
+                        units.extend_from_slice(sep.as_units());
                     }
                     let elem = typed_array_get_index(&ta, i);
                     if !elem.is_nullish()

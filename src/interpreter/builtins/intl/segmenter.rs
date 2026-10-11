@@ -190,7 +190,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let input_u16 = input_js.code_units.clone();
+                let input_u16 = input_js.as_units().to_vec();
 
                 let breaks = compute_break_points_utf16(&input_u16, &granularity);
 
@@ -293,7 +293,7 @@ impl Interpreter {
                                     .properties
                                     .get("[[SegmenterInput]]")
                                     .and_then(|pd| pd.value.as_ref())
-                                    .and_then(|v| v.as_string().map(|s| s.code_units));
+                                    .and_then(|v| v.as_string().map(|s| s.as_units().to_vec()));
                                 let granularity = b
                                     .properties
                                     .get("[[SegmenterGranularity]]")
@@ -400,7 +400,7 @@ impl Interpreter {
                             crate::interpreter::types::ObjectKind::Iterator(
                                 IteratorState::SegmentIterator {
                                     segments: seg_data,
-                                    input: std::rc::Rc::new(input_clone.as_ref().clone()),
+                                    input: std::rc::Rc::new(input_clone.to_vec()),
                                     position: 0,
                                     done: false,
                                 },

@@ -1,7 +1,9 @@
 use std::borrow::Borrow;
 use std::fmt;
+use std::mem::ManuallyDrop;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// One-word ECMAScript value representation.
 ///
@@ -43,43 +45,193 @@ pub(crate) enum ValueKind {
     Object,
 }
 
-// UTF-16 code unit string per spec §6.1.4
-// Uses Arc<Vec<u16>> so cloning (e.g. env.get) is O(1).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+// UTF-16 code unit string per spec §6.1.4.
+//
+// A string is a view `[0, len)` over a shared, fixed-capacity buffer. Units
+// below the buffer's `tail` are immutable and the buffer never reallocates, so
+// any outstanding `&[u16]` borrow stays valid. `a + b` whose left operand is
+// the buffer's tail owner claims the spare capacity and appends in place
+// (amortised O(1) for `s += x`); every other view keeps its own prefix.
+struct StrBuf {
+    ptr: *mut u16,
+    cap: usize,
+    tail: AtomicUsize,
+}
+
+impl StrBuf {
+    fn from_vec(v: Vec<u16>) -> Self {
+        let mut v = ManuallyDrop::new(v);
+        Self {
+            ptr: v.as_mut_ptr(),
+            cap: v.capacity(),
+            tail: AtomicUsize::new(v.len()),
+        }
+    }
+}
+
+impl Drop for StrBuf {
+    fn drop(&mut self) {
+        // SAFETY: `ptr`/`cap` came from a `Vec<u16>` whose elements need no drop.
+        unsafe { drop(Vec::from_raw_parts(self.ptr, 0, self.cap)) };
+    }
+}
+
+// SAFETY: units below `tail` are never written again and the region above it
+// is claimed exclusively through a `compare_exchange` on `tail`.
+unsafe impl Send for StrBuf {}
+unsafe impl Sync for StrBuf {}
+
+pub(crate) struct StrView {
+    ptr: *const u16,
+    len: usize,
+    buf: Arc<StrBuf>,
+}
+
+// SAFETY: `ptr` points into `buf`, which is `Send + Sync` and kept alive by it.
+unsafe impl Send for StrView {}
+unsafe impl Sync for StrView {}
+
+impl StrView {
+    fn from_buf(buf: Arc<StrBuf>, len: usize) -> Self {
+        Self {
+            ptr: buf.ptr,
+            len,
+            buf,
+        }
+    }
+
+    fn units(&self) -> &[u16] {
+        // SAFETY: `[0, len)` lies below the buffer's tail, so it is initialised,
+        // immutable, and outlives `&self` through `buf`.
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+/// Appended strings shorter than this are copied exact-fit; longer ones get
+/// geometric slack so a following append can claim the tail.
+const STR_SLACK_THRESHOLD: usize = 64;
+
+#[derive(Clone)]
 pub(crate) struct JsString {
-    pub code_units: Arc<Vec<u16>>,
+    view: Arc<StrView>,
 }
 
 impl JsString {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
-        Self {
-            code_units: Arc::new(s.encode_utf16().collect()),
-        }
+        Self::from_vec(s.encode_utf16().collect())
     }
 
     pub(crate) fn from_vec(v: Vec<u16>) -> Self {
+        let len = v.len();
         Self {
-            code_units: Arc::new(v),
+            view: Arc::new(StrView::from_buf(Arc::new(StrBuf::from_vec(v)), len)),
         }
     }
 
+    pub(crate) fn as_units(&self) -> &[u16] {
+        self.view.units()
+    }
+
+    /// True when both strings view the same units of the same buffer.
+    pub(crate) fn ptr_eq(&self, other: &JsString) -> bool {
+        self.view.ptr == other.view.ptr && self.view.len == other.view.len
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
-        self.code_units.is_empty()
+        self.view.len == 0
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.code_units.len()
+        self.view.len
     }
 
     pub(crate) fn to_rust_string(&self) -> String {
-        String::from_utf16_lossy(&self.code_units)
+        String::from_utf16_lossy(self.as_units())
     }
 
-    /// Get mutable access to code_units, cloning only if shared.
+    /// `self` followed by `extra`, appending in place when `self` owns its
+    /// buffer's tail.
+    pub(crate) fn concat_units(&self, extra: &[u16]) -> JsString {
+        if extra.is_empty() {
+            return self.clone();
+        }
+        let len = self.view.len;
+        let new_len = len + extra.len();
+        let buf = &self.view.buf;
+        if new_len <= buf.cap
+            && buf
+                .tail
+                .compare_exchange(len, new_len, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            // SAFETY: the successful exchange gave this call exclusive
+            // ownership of `[len, new_len)`, which is within capacity and
+            // above every existing view's length.
+            unsafe {
+                std::ptr::copy_nonoverlapping(extra.as_ptr(), buf.ptr.add(len), extra.len());
+            }
+            return Self {
+                view: Arc::new(StrView::from_buf(Arc::clone(buf), new_len)),
+            };
+        }
+        let cap = if new_len < STR_SLACK_THRESHOLD {
+            new_len
+        } else {
+            new_len.saturating_mul(2)
+        };
+        let mut v = Vec::with_capacity(cap);
+        v.extend_from_slice(self.as_units());
+        v.extend_from_slice(extra);
+        Self::from_vec(v)
+    }
+
     /// Take ownership of the inner Vec (clones if shared).
     pub(crate) fn into_vec(self) -> Vec<u16> {
-        Arc::try_unwrap(self.code_units).unwrap_or_else(|arc| (*arc).clone())
+        let view = match Arc::try_unwrap(self.view) {
+            Ok(view) => view,
+            Err(shared) => return shared.units().to_vec(),
+        };
+        let StrView { ptr, len, buf } = view;
+        match Arc::try_unwrap(buf) {
+            Ok(buf) if buf.tail.load(Ordering::Acquire) == len && std::ptr::eq(buf.ptr, ptr) => {
+                let buf = ManuallyDrop::new(buf);
+                // SAFETY: the only view and buffer owner is consumed, and
+                // `[0, len)` is the whole initialised extent of the Vec.
+                unsafe { Vec::from_raw_parts(buf.ptr, len, buf.cap) }
+            }
+            // SAFETY: `[0, len)` is initialised and the scrutinee, which owns
+            // or shares the buffer, lives to the end of the match.
+            _ => unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec(),
+        }
+    }
+}
+
+impl Default for JsString {
+    fn default() -> Self {
+        Self::from_vec(Vec::new())
+    }
+}
+
+impl PartialEq for JsString {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_units() == other.as_units()
+    }
+}
+
+impl Eq for JsString {}
+
+impl std::hash::Hash for JsString {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_units().hash(state);
+    }
+}
+
+impl fmt::Debug for JsString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsString")
+            .field("code_units", &self.as_units())
+            .finish()
     }
 }
 
@@ -117,7 +269,7 @@ impl JsPropertyKey {
     }
 
     pub(crate) fn from_js_string(s: &JsString) -> Self {
-        let units = &s.code_units;
+        let units = s.as_units();
         let mut bytes = Vec::with_capacity(units.len() * 3);
         let mut i = 0;
         while i < units.len() {
@@ -498,7 +650,7 @@ impl NanBoxedValue {
     }
 
     pub(crate) fn string(s: JsString) -> Self {
-        Self::from_arc(NanTag::String, s.code_units)
+        Self::from_arc(NanTag::String, s.view)
     }
 
     /// Sugar for `JsValue::string(JsString::from_str(s))`.
@@ -550,12 +702,12 @@ impl NanBoxedValue {
         if self.tag() != Some(NanTag::String) {
             return None;
         }
-        let ptr = self.payload_ptr::<Vec<u16>>();
+        let ptr = self.payload_ptr::<StrView>();
         // SAFETY: a String-tagged value owns one strong count for this pointer.
         unsafe {
             Arc::increment_strong_count(ptr);
             Some(JsString {
-                code_units: Arc::from_raw(ptr),
+                view: Arc::from_raw(ptr),
             })
         }
     }
@@ -592,9 +744,9 @@ impl NanBoxedValue {
         if self.tag() != Some(NanTag::String) {
             return None;
         }
-        let ptr = self.payload_ptr::<Vec<u16>>();
+        let ptr = self.payload_ptr::<StrView>();
         // SAFETY: `self` keeps its strong count alive for the callback.
-        Some(f(unsafe { &*ptr }))
+        Some(f(unsafe { &*ptr }.units()))
     }
 
     pub(crate) fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
@@ -620,15 +772,16 @@ impl NanBoxedValue {
         Some(f(unsafe { &*ptr }))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn into_string(self) -> Option<JsString> {
         if self.tag() != Some(NanTag::String) {
             return None;
         }
-        let ptr = self.payload_ptr::<Vec<u16>>();
+        let ptr = self.payload_ptr::<StrView>();
         std::mem::forget(self);
         // SAFETY: forgetting `self` transfers its one strong count.
         Some(JsString {
-            code_units: unsafe { Arc::from_raw(ptr) },
+            view: unsafe { Arc::from_raw(ptr) },
         })
     }
 
@@ -711,7 +864,7 @@ impl Clone for NanBoxedValue {
     fn clone(&self) -> Self {
         match self.tag() {
             Some(NanTag::String) => {
-                let ptr = self.payload_ptr::<Vec<u16>>();
+                let ptr = self.payload_ptr::<StrView>();
                 // SAFETY: this value owns a live strong count for `ptr`.
                 unsafe { Arc::increment_strong_count(ptr) };
             }
@@ -735,7 +888,7 @@ impl Drop for NanBoxedValue {
     fn drop(&mut self) {
         match self.tag() {
             Some(NanTag::String) => {
-                let ptr = self.payload_ptr::<Vec<u16>>();
+                let ptr = self.payload_ptr::<StrView>();
                 // SAFETY: this value owns exactly one strong count for `ptr`.
                 unsafe { drop(Arc::from_raw(ptr)) };
             }
@@ -793,7 +946,7 @@ impl fmt::Debug for NanBoxedValue {
 // under the same contract so moving the owning word between threads stays sound.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<Vec<u16>>();
+    assert_send_sync::<StrView>();
     assert_send_sync::<JsSymbolData>();
     assert_send_sync::<num_bigint::BigInt>();
 };
@@ -1233,7 +1386,7 @@ mod tests {
     fn property_key_wtf8_round_trips_all_utf16_shapes() {
         let units = vec![0x0061, 0xD834, 0x0062, 0xDF06, 0xD834, 0xDF06];
         let key = JsPropertyKey::from_js_string(&JsString::from_vec(units.clone()));
-        assert_eq!(&*key.to_js_string().code_units, &units);
+        assert_eq!(key.to_js_string().as_units(), &units);
         assert!(key.as_str().is_none(), "lone surrogates are not UTF-8");
     }
 
@@ -1461,11 +1614,9 @@ mod tests {
             SIGNATURE | (4 << TAG_SHIFT) | 0x1234
         );
 
-        let string_storage = Arc::new(vec![0x61]);
-        let string_address = Arc::as_ptr(&string_storage).expose_provenance() as u64;
-        let string = JsValue::string(JsString {
-            code_units: string_storage,
-        });
+        let string_storage = JsString::from_vec(vec![0x61]);
+        let string_address = Arc::as_ptr(&string_storage.view).expose_provenance() as u64;
+        let string = JsValue::string(string_storage);
         assert_eq!(
             string.raw_bits(),
             SIGNATURE | (5 << TAG_SHIFT) | string_address
@@ -1503,9 +1654,9 @@ mod tests {
 
     #[test]
     fn nan_box_heap_payload_strong_counts() {
-        let string_storage = Arc::new(vec![0x61, 0x62]);
+        let string_storage = JsString::from_vec(vec![0x61, 0x62]).view;
         let string = JsValue::string(JsString {
-            code_units: string_storage.clone(),
+            view: string_storage.clone(),
         });
         assert_eq!(Arc::strong_count(&string_storage), 2);
         let string_clone = string.clone();
@@ -1522,11 +1673,11 @@ mod tests {
         drop(string);
         assert_eq!(Arc::strong_count(&string_storage), 1);
 
-        let description_storage = Arc::new(vec![0x73]);
+        let description_storage = JsString::from_vec(vec![0x73]).view;
         let symbol = JsSymbol::new(
             17,
             Some(JsString {
-                code_units: description_storage.clone(),
+                view: description_storage.clone(),
             }),
         );
         let symbol_storage = symbol.data.clone();
@@ -1567,9 +1718,9 @@ mod tests {
 
     #[test]
     fn nan_box_borrowing_callbacks_survive_unwind() {
-        let string_storage = Arc::new(vec![0x78]);
+        let string_storage = JsString::from_vec(vec![0x78]).view;
         let string = JsValue::string(JsString {
-            code_units: string_storage.clone(),
+            view: string_storage.clone(),
         });
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1708,5 +1859,99 @@ mod tests {
             elapsed.as_nanos()
         );
         black_box(checksum);
+    }
+}
+
+#[cfg(test)]
+mod js_string_buffer_tests {
+    use super::JsString;
+
+    fn units(s: &JsString) -> Vec<u16> {
+        s.as_units().to_vec()
+    }
+
+    #[test]
+    fn tail_owner_appends_in_place_and_shares_buffer() {
+        let mut v = Vec::with_capacity(16);
+        v.extend_from_slice(&[1, 2, 3]);
+        let a = JsString::from_vec(v);
+        let b = a.concat_units(&[4]);
+        let c = b.concat_units(&[5, 6]);
+        assert_eq!(units(&a), [1, 2, 3]);
+        assert_eq!(units(&b), [1, 2, 3, 4]);
+        assert_eq!(units(&c), [1, 2, 3, 4, 5, 6]);
+        assert!(std::ptr::eq(a.as_units().as_ptr(), c.as_units().as_ptr()));
+    }
+
+    #[test]
+    fn stale_view_copies_instead_of_clobbering() {
+        let mut v = Vec::with_capacity(16);
+        v.extend_from_slice(&[1, 2, 3]);
+        let a = JsString::from_vec(v);
+        let b = a.concat_units(&[4]);
+        let c = a.concat_units(&[9]);
+        assert_eq!(units(&b), [1, 2, 3, 4]);
+        assert_eq!(units(&c), [1, 2, 3, 9]);
+        assert_eq!(units(&a), [1, 2, 3]);
+        assert!(!std::ptr::eq(a.as_units().as_ptr(), c.as_units().as_ptr()));
+    }
+
+    #[test]
+    fn overflow_moves_to_new_buffer_and_keeps_old_views_valid() {
+        let a = JsString::from_vec(vec![7; 3]);
+        let borrowed = a.as_units();
+        let b = a.concat_units(&[8; 100]);
+        assert_eq!(borrowed, [7, 7, 7]);
+        assert_eq!(b.len(), 103);
+        let c = b.concat_units(&[9]);
+        assert_eq!(c.as_units()[102], 8);
+        assert_eq!(c.as_units()[103], 9);
+        assert_eq!(b.len(), 103);
+    }
+
+    #[test]
+    fn borrow_survives_append_to_same_string() {
+        let mut v = Vec::with_capacity(256);
+        v.extend_from_slice(&[1, 2, 3]);
+        let a = JsString::from_vec(v);
+        let slice = a.as_units();
+        let b = a.concat_units(&[4, 5]);
+        let c = b.concat_units(&vec![6; 100]);
+        assert_eq!(slice, [1, 2, 3]);
+        assert_eq!(c.len(), 105);
+    }
+
+    #[test]
+    fn equality_and_hash_ignore_buffer_identity() {
+        use std::collections::HashSet;
+        let mut v = Vec::with_capacity(8);
+        v.extend_from_slice(&[1, 2]);
+        let long = JsString::from_vec(v).concat_units(&[3]);
+        let exact = JsString::from_vec(vec![1, 2, 3]);
+        assert_eq!(long, exact);
+        let mut set = HashSet::new();
+        set.insert(long);
+        assert!(set.contains(&exact));
+    }
+
+    #[test]
+    fn into_vec_round_trips_unique_and_shared() {
+        let a = JsString::from_vec(vec![1, 2, 3]);
+        assert_eq!(a.clone().into_vec(), [1, 2, 3]);
+        assert_eq!(a.into_vec(), [1, 2, 3]);
+        let mut v = Vec::with_capacity(8);
+        v.push(1);
+        let b = JsString::from_vec(v);
+        let c = b.concat_units(&[2]);
+        assert_eq!(b.into_vec(), [1]);
+        assert_eq!(c.into_vec(), [1, 2]);
+    }
+
+    #[test]
+    fn empty_and_default() {
+        let e = JsString::default();
+        assert!(e.is_empty());
+        assert_eq!(units(&e.concat_units(&[1])), [1]);
+        assert_eq!(units(&JsString::from_vec(vec![1]).concat_units(&[])), [1]);
     }
 }

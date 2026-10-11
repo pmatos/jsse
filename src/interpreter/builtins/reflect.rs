@@ -245,7 +245,7 @@ impl Interpreter {
                             && (key.as_str() == Some("length")
                                 || crate::interpreter::types::string_exotic_index(
                                     &key,
-                                    s.code_units.len(),
+                                    s.as_units().len(),
                                 )
                                 .is_some())
                         {

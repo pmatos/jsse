@@ -297,6 +297,34 @@ pub(crate) fn to_js_string(val: &JsValue) -> String {
         .unwrap_or_else(|| format!("{val}"))
 }
 
+/// `lval + rval` for primitives where at least one side is a String.
+/// A left string that owns its buffer's tail is extended in place.
+pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> JsValue {
+    match lval.as_string() {
+        Some(left) => {
+            let joined = rval
+                .with_string(|r| {
+                    if left.is_empty() {
+                        None
+                    } else {
+                        Some(left.concat_units(r))
+                    }
+                })
+                .flatten();
+            match joined {
+                Some(s) => JsValue::string(s),
+                None if rval.is_string() => rval.clone(),
+                None => JsValue::string(left.concat_units(&js_value_to_code_units(rval))),
+            }
+        }
+        None => {
+            let mut units = js_value_to_code_units(lval);
+            rval.with_string(|r| units.extend_from_slice(r));
+            JsValue::string(JsString::from_vec(units))
+        }
+    }
+}
+
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
 pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
     val.with_string(|units| units.to_vec())
@@ -444,7 +472,7 @@ fn json_quote_units(units: &[u16]) -> String {
 }
 
 fn json_quote_js_string(s: &JsString) -> String {
-    json_quote_units(&s.code_units)
+    json_quote_units(s.as_units())
 }
 
 // Proxy-aware IsArray (§7.2.2)
@@ -1277,7 +1305,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                         }
                         // Source includes quotes, parse it to compare
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_js_string(inner).code_units.as_slice() == units
+                        json_unescape_js_string(inner).as_units() == units
                     })
                     .unwrap_or(false)
             };

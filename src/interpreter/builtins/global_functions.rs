@@ -187,10 +187,10 @@ impl Interpreter {
             JsFunction::native("encodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code_units = match interp.to_js_string(&val) {
-                    Ok(s) => s.code_units,
+                    Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                match encode_uri_string(&code_units, true) {
+                match encode_uri_string(code_units.as_units(), true) {
                     Ok(encoded) => {
                         Completion::Normal(JsValue::string(JsString::from_str(&encoded)))
                     }
@@ -208,10 +208,10 @@ impl Interpreter {
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let code_units = match interp.to_js_string(&val) {
-                        Ok(s) => s.code_units,
+                        Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     };
-                    match encode_uri_string(&code_units, false) {
+                    match encode_uri_string(code_units.as_units(), false) {
                         Ok(encoded) => {
                             Completion::Normal(JsValue::string(JsString::from_str(&encoded)))
                         }
@@ -227,7 +227,7 @@ impl Interpreter {
             JsFunction::native("decodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code_units = match interp.to_js_string(&val) {
-                    Ok(s) => s.code_units.to_vec(),
+                    Ok(s) => s.as_units().to_vec(),
                     Err(e) => return Completion::Throw(e),
                 };
                 match decode_uri_string(&code_units, true) {
@@ -246,7 +246,7 @@ impl Interpreter {
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let code_units = match interp.to_js_string(&val) {
-                        Ok(s) => s.code_units.to_vec(),
+                        Ok(s) => s.as_units().to_vec(),
                         Err(e) => return Completion::Throw(e),
                     };
                     match decode_uri_string(&code_units, false) {

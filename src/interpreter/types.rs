@@ -2521,7 +2521,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let units = &s.code_units;
+            let units = &s.as_units();
             if key == "length" {
                 return Some(JsValue::number(units.len() as f64));
             }
@@ -2589,7 +2589,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let units = &s.code_units;
+            let units = &s.as_units();
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
@@ -2704,15 +2704,15 @@ impl JsObjectData {
         {
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor::data(
-                    JsValue::number(s.code_units.len() as f64),
+                    JsValue::number(s.as_units().len() as f64),
                     false,
                     false,
                     false,
                 ));
             }
-            if let Some(idx) = string_exotic_index(key, s.code_units.len()) {
+            if let Some(idx) = string_exotic_index(key, s.as_units().len()) {
                 return Some(PropertyDescriptor::data(
-                    JsValue::string(JsString::from_vec(vec![s.code_units[idx]])),
+                    JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])),
                     false,
                     true,
                     false,
@@ -2751,7 +2751,7 @@ impl JsObjectData {
             if key.as_property_key_str() == Some("length") {
                 return true;
             }
-            return string_exotic_index(key, s.code_units.len()).is_some();
+            return string_exotic_index(key, s.as_units().len()).is_some();
         }
         false
     }
@@ -2770,7 +2770,7 @@ impl JsObjectData {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
-            && let Some(idx) = string_exotic_index(&key, s.code_units.len())
+            && let Some(idx) = string_exotic_index(&key, s.as_units().len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
             // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
@@ -2788,7 +2788,7 @@ impl JsObjectData {
             }
             if let Some(ref v) = desc.value {
                 let char_val =
-                    JsValue::string(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
+                    JsValue::string(crate::types::JsString::from_vec(vec![s.as_units()[idx]]));
                 if !same_value(v, &char_val) {
                     return false;
                 }
@@ -3317,7 +3317,7 @@ impl JsObjectData {
             if self.class_name == "String"
                 && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
                 && (key.as_property_key_str() == Some("length")
-                    || string_exotic_index(key, s.code_units.len()).is_some())
+                    || string_exotic_index(key, s.as_units().len()).is_some())
             {
                 return false;
             }
@@ -3510,7 +3510,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let units = &s.code_units;
+            let units = &s.as_units();
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
@@ -3569,7 +3569,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let utf16_len = s.code_units.len();
+            let utf16_len = s.as_units().len();
             for i in 0..utf16_len {
                 let k = JsPropertyKey::from(i.to_string());
                 if seen.insert(k.clone()) {
