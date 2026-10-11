@@ -1782,6 +1782,52 @@ impl Interpreter {
         Ok(None)
     }
 
+    /// The state machine for a generator, async generator or async function
+    /// body. It depends only on the Body and its parameters (one pair per
+    /// function literal), so it is built once and shared by every call (#914).
+    pub(super) fn state_machine_for(
+        &mut self,
+        kind: crate::interpreter::generator_transform::StateMachineKind,
+        body: &Body,
+        params: &[Pattern],
+        func_obj_id: u64,
+    ) -> Rc<crate::interpreter::generator_transform::GeneratorStateMachine> {
+        use crate::interpreter::generator_transform::{
+            StateMachineKind, transform_async_function, transform_async_generator,
+            transform_generator,
+        };
+        let machine = match self.state_machine_memo.get(body) {
+            Some((cached_kind, machine)) if cached_kind == kind => machine,
+            _ => {
+                let machine = Rc::new(match kind {
+                    StateMachineKind::Generator => transform_generator(body.as_slice(), params),
+                    StateMachineKind::AsyncGenerator => {
+                        transform_async_generator(body.as_slice(), params)
+                    }
+                    StateMachineKind::AsyncFunction => {
+                        transform_async_function(body.as_slice(), params)
+                    }
+                });
+                self.state_machine_memo
+                    .insert(body, (kind, machine.clone()));
+                machine
+            }
+        };
+        // BODY attribution is per function object, so a counters build gives
+        // each one its own copy carrying its key.
+        #[cfg(feature = "perf-counters")]
+        {
+            let mut owned = (*machine).clone();
+            owned.perf_key = Some(self.perf_body_name(func_obj_id));
+            Rc::new(owned)
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        {
+            let _ = func_obj_id;
+            machine
+        }
+    }
+
     pub(super) fn dispatch_body(
         &mut self,
         func_obj_id: u64,
@@ -1798,34 +1844,44 @@ impl Interpreter {
             let chunk = match cache_state {
                 BytecodeCacheState::Compiled(c) => Some(c),
                 BytecodeCacheState::Ineligible => None,
-                BytecodeCacheState::Untried => match compiler::compile_body(body.as_slice()) {
-                    Ok(c) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            self.perf.compile_ok += 1;
+                BytecodeCacheState::Untried => {
+                    // The verdict depends on the Body alone, so every closure of
+                    // one function literal shares it (#900).
+                    let shared = match self.bytecode_memo.get(body) {
+                        Some(state) => state,
+                        None => {
+                            let state = match compiler::compile_body(body.as_slice()) {
+                                Ok(c) => {
+                                    #[cfg(feature = "perf-counters")]
+                                    {
+                                        self.perf.compile_ok += 1;
+                                    }
+                                    BytecodeCacheState::Compiled(Rc::new(c))
+                                }
+                                Err(_e) => {
+                                    #[cfg(feature = "perf-counters")]
+                                    {
+                                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
+                                            reason,
+                                        ) = _e;
+                                        let (name, seq) = self.perf_body_name(func_obj_id);
+                                        self.perf.record_bail(reason, name, seq);
+                                    }
+                                    BytecodeCacheState::Ineligible
+                                }
+                            };
+                            self.bytecode_memo.insert(body, state.clone());
+                            state
                         }
-                        let rc = Rc::new(c);
-                        if let Some(o) = self.get_object(func_obj_id) {
-                            o.borrow_mut().bytecode_cache =
-                                BytecodeCacheState::Compiled(rc.clone());
-                        }
-                        Some(rc)
+                    };
+                    if let Some(o) = self.get_object(func_obj_id) {
+                        o.borrow_mut().bytecode_cache = shared.clone();
                     }
-                    Err(_e) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
-                                reason,
-                            ) = _e;
-                            let (name, seq) = self.perf_body_name(func_obj_id);
-                            self.perf.record_bail(reason, name, seq);
-                        }
-                        if let Some(o) = self.get_object(func_obj_id) {
-                            o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
-                        }
-                        None
+                    match shared {
+                        BytecodeCacheState::Compiled(c) => Some(c),
+                        _ => None,
                     }
-                },
+                }
             };
             if let Some(chunk) = chunk {
                 #[cfg(feature = "perf-counters")]
@@ -5402,15 +5458,12 @@ impl Interpreter {
                                 func_env.clone()
                             };
 
-                            use crate::interpreter::generator_transform::transform_async_generator;
-                            let state_machine = transform_async_generator(body.as_slice(), &params);
-                            #[cfg(feature = "perf-counters")]
-                            let state_machine = {
-                                let mut state_machine = state_machine;
-                                state_machine.perf_key = Some(self.perf_body_name(o.id));
-                                state_machine
-                            };
-                            let state_machine = Rc::new(state_machine);
+                            let state_machine = self.state_machine_for(
+                                crate::interpreter::generator_transform::StateMachineKind::AsyncGenerator,
+                                &body,
+                                &params,
+                                o.id,
+                            );
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -5594,15 +5647,12 @@ impl Interpreter {
                                 func_env.clone()
                             };
 
-                            use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine = transform_generator(body.as_slice(), &params);
-                            #[cfg(feature = "perf-counters")]
-                            let state_machine = {
-                                let mut state_machine = state_machine;
-                                state_machine.perf_key = Some(self.perf_body_name(o.id));
-                                state_machine
-                            };
-                            let state_machine = Rc::new(state_machine);
+                            let state_machine = self.state_machine_for(
+                                crate::interpreter::generator_transform::StateMachineKind::Generator,
+                                &body,
+                                &params,
+                                o.id,
+                            );
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -8012,17 +8062,12 @@ impl Interpreter {
             func_env.borrow_mut().strict = is_strict;
             interp.in_tail_position = false;
 
-            let sm = crate::interpreter::generator_transform::transform_async_function(
-                body.as_slice(),
+            let sm = interp.state_machine_for(
+                crate::interpreter::generator_transform::StateMachineKind::AsyncFunction,
+                body,
                 params,
+                _func_obj_id,
             );
-            #[cfg(feature = "perf-counters")]
-            let sm = {
-                let mut sm = sm;
-                sm.perf_key = Some(interp.perf_body_name(_func_obj_id));
-                sm
-            };
-            let sm = Rc::new(sm);
 
             for tv in &sm.temp_vars {
                 func_env.borrow_mut().declare(tv, BindingKind::Var);
