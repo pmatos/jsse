@@ -417,7 +417,7 @@ struct RegexInputBoundary {
 impl RegexInput {
     fn new(subject: JsString) -> Self {
         Self {
-            ascii: code_units_are_ascii(&subject.code_units),
+            ascii: code_units_are_ascii(subject.as_units()),
             subject,
             unicode: std::cell::OnceCell::new(),
             non_unicode: std::cell::OnceCell::new(),
@@ -435,17 +435,17 @@ impl RegexInput {
     fn as_str(&self, unicode: bool) -> &str {
         if unicode || self.ascii {
             self.unicode
-                .get_or_init(|| js_string_to_regex_input(&self.subject.code_units).into())
+                .get_or_init(|| js_string_to_regex_input(self.subject.as_units()).into())
         } else {
             self.non_unicode.get_or_init(|| {
-                js_string_to_regex_input_non_unicode(&self.subject.code_units).into()
+                js_string_to_regex_input_non_unicode(self.subject.as_units()).into()
             })
         }
     }
 
     fn wtf8(&self) -> &[u8] {
         self.wtf8
-            .get_or_init(|| js_code_units_to_wtf8(&self.subject.code_units))
+            .get_or_init(|| js_code_units_to_wtf8(self.subject.as_units()))
     }
 
     /// Sampled boundaries: one entry per [`BOUNDARY_SAMPLE_INTERVAL`]
@@ -457,7 +457,7 @@ impl RegexInput {
     fn unicode_boundaries(&self) -> &[RegexInputBoundary] {
         self.unicode_boundaries.get_or_init(|| {
             let view = self.as_str(true);
-            let code_units = &self.subject.code_units;
+            let code_units = self.subject.as_units();
             let mut boundaries =
                 Vec::with_capacity(code_units.len() / BOUNDARY_SAMPLE_INTERVAL + 2);
             let mut byte = 0;
@@ -501,7 +501,7 @@ impl RegexInput {
         // to the character that starts at the preceding code-unit boundary, so
         // stop at the last character beginning at or before `target`.
         let view = self.as_str(true);
-        let code_units = &self.subject.code_units;
+        let code_units = self.subject.as_units();
         let mut byte = start.byte;
         let mut utf16 = start.utf16;
         while utf16 < target {
@@ -528,7 +528,7 @@ impl RegexInput {
             Err(index) => boundaries[index.saturating_sub(1)],
         };
 
-        let code_units = &self.subject.code_units;
+        let code_units = self.subject.as_units();
         let mut byte = start.byte;
         let mut utf16 = start.utf16;
         while byte < target {
@@ -658,13 +658,13 @@ impl RegexInput {
     fn subject_slice(&self, view: RegexView, byte_start: usize, byte_end: usize) -> JsString {
         let start = self.byte_offset_to_utf16(view, byte_start);
         let end = self.byte_offset_to_utf16(view, byte_end);
-        JsString::from_vec(self.subject.code_units[start..end].to_vec())
+        JsString::from_vec(self.subject.as_units()[start..end].to_vec())
     }
 }
 
 fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
     if let Some(cached) = interp.regexp_legacy.input_cache.as_ref()
-        && Arc::ptr_eq(&cached.subject.code_units, &subject.code_units)
+        && cached.subject.ptr_eq(&subject)
     {
         return Rc::clone(cached);
     }
@@ -7678,7 +7678,7 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
         let b = obj.borrow();
         let r = b.regexp()?;
         let flags = r.flags.to_rust_string();
-        let source = js_string_to_regex_pattern(&r.source.code_units, &flags);
+        let source = js_string_to_regex_pattern(r.source.as_units(), &flags);
         drop(b);
         Some((source, flags, obj_id))
     } else {
@@ -7825,7 +7825,7 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
             let (src, fl) = if let Some(r) = b.regexp() {
                 let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    js_string_to_regex_pattern(r.source.as_units(), &flags),
                     flags,
                 )
             } else {
@@ -7850,7 +7850,7 @@ fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usiz
     if !unicode {
         return index + 1;
     }
-    let code_units = &input.subject.code_units;
+    let code_units = input.subject.as_units();
     if index + 1 >= code_units.len() {
         return index + 1;
     }
@@ -7933,7 +7933,7 @@ pub(super) fn get_substitution(
                             let cap = &captures[nn - 1];
                             if !cap.is_undefined() {
                                 let cap_js = interp.to_js_string(cap)?;
-                                result.extend_from_slice(&cap_js.code_units);
+                                result.extend_from_slice(cap_js.as_units());
                             }
                             i += 3;
                             continue;
@@ -7943,7 +7943,7 @@ pub(super) fn get_substitution(
                         let cap = &captures[d1 - 1];
                         if !cap.is_undefined() {
                             let cap_js = interp.to_js_string(cap)?;
-                            result.extend_from_slice(&cap_js.code_units);
+                            result.extend_from_slice(cap_js.as_units());
                         }
                     } else {
                         result.push(b'$' as u16);
@@ -7983,7 +7983,7 @@ pub(super) fn get_substitution(
                             };
                             if !capture.is_undefined() {
                                 let cap_js = interp.to_js_string(&capture)?;
-                                result.extend_from_slice(&cap_js.code_units);
+                                result.extend_from_slice(cap_js.as_units());
                             }
                             i = end + 1;
                         } else {
@@ -8075,7 +8075,7 @@ fn regexp_exec_raw(
             if let Some(r) = b.regexp() {
                 let flags = r.flags.to_rust_string();
                 (
-                    js_string_to_regex_pattern(&r.source.code_units, &flags),
+                    js_string_to_regex_pattern(r.source.as_units(), &flags),
                     flags,
                 )
             } else {
@@ -8545,7 +8545,7 @@ impl Interpreter {
 
                 let pattern_str = pattern_js
                     .as_ref()
-                    .map(|pattern| js_string_to_regex_pattern(&pattern.code_units, &flags_str))
+                    .map(|pattern| js_string_to_regex_pattern(pattern.as_units(), &flags_str))
                     .unwrap_or_else(|| "(?:)".to_string());
 
                 // Validate flags: no invalid chars and no duplicates
@@ -8578,7 +8578,7 @@ impl Interpreter {
                 }
 
                 let source_js = match pattern_js {
-                    Some(js) if !js.code_units.is_empty() => js,
+                    Some(js) if !js.is_empty() => js,
                     _ => JsString::from_str("(?:)"),
                 };
 
@@ -8666,7 +8666,7 @@ impl Interpreter {
                         let r = b.regexp().unwrap();
                         let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            js_string_to_regex_pattern(r.source.as_units(), &flags),
                             flags,
                         )
                     };
@@ -8765,7 +8765,7 @@ impl Interpreter {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let is_empty = match_js_str.code_units.is_empty();
+                            let is_empty = match_js_str.is_empty();
                             results.push(JsValue::string(match_js_str));
                             if is_empty {
                                 let rx_val2 = JsValue::object(rx_id);
@@ -8978,7 +8978,7 @@ impl Interpreter {
                         let r = b.regexp().unwrap();
                         let flags = r.flags.to_rust_string();
                         (
-                            js_string_to_regex_pattern(&r.source.code_units, &flags),
+                            js_string_to_regex_pattern(r.source.as_units(), &flags),
                             flags,
                         )
                     };
@@ -9130,13 +9130,13 @@ impl Interpreter {
                         let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         let replacement = match get_substitution(
                             interp,
-                            &matched.code_units,
-                            &regex_input.subject.code_units,
+                            matched.as_units(),
+                            regex_input.subject.as_units(),
                             position_utf16,
                             tail_pos,
                             &capture_vals,
                             &named_captures_for_sub,
-                            &template.code_units,
+                            template.as_units(),
                         ) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
@@ -9144,7 +9144,7 @@ impl Interpreter {
 
                         if position_utf16 >= next_source_position {
                             accumulated_result.extend_from_slice(
-                                &regex_input.subject.code_units
+                                &regex_input.subject.as_units()
                                     [next_source_position..position_utf16],
                             );
                             accumulated_result.extend_from_slice(&replacement);
@@ -9166,7 +9166,7 @@ impl Interpreter {
                     }
                     if next_source_position < s_utf16_len {
                         accumulated_result.extend_from_slice(
-                            &regex_input.subject.code_units[next_source_position..],
+                            &regex_input.subject.as_units()[next_source_position..],
                         );
                     }
                     return Completion::Normal(JsValue::string(JsString::from_vec(
@@ -9307,7 +9307,7 @@ impl Interpreter {
                             }
                         };
                         // Compute matchLength in UTF-16 code units for tail_pos calculation.
-                        let match_length_utf16 = matched_js.code_units.len();
+                        let match_length_utf16 = matched_js.len();
 
                         // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
                         let index_val =
@@ -9384,7 +9384,7 @@ impl Interpreter {
                             );
                             match repl_val {
                                 Completion::Normal(v) => match interp.to_js_string(&v) {
-                                    Ok(s) => s.code_units.to_vec(),
+                                    Ok(s) => s.as_units().to_vec(),
                                     Err(e) => {
                                         return Completion::Throw(e);
                                     }
@@ -9411,13 +9411,13 @@ impl Interpreter {
                             let tail_pos = (position_utf16 + match_length_utf16).min(s_utf16_len);
                             match get_substitution(
                                 interp,
-                                &matched_js.code_units,
-                                &regex_input.subject.code_units,
+                                matched_js.as_units(),
+                                regex_input.subject.as_units(),
                                 position_utf16,
                                 tail_pos,
                                 &captures,
                                 &named_captures_obj,
-                                &template.code_units,
+                                template.as_units(),
                             ) {
                                 Ok(s) => s,
                                 Err(e) => {
@@ -9430,7 +9430,7 @@ impl Interpreter {
                         let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         if position_utf16 >= next_source_position {
                             accumulated_result.extend_from_slice(
-                                &regex_input.subject.code_units
+                                &regex_input.subject.as_units()
                                     [next_source_position..position_utf16],
                             );
                             accumulated_result.extend_from_slice(&replacement);
@@ -9441,7 +9441,7 @@ impl Interpreter {
                     // 15. Return accumulatedResult + remainder of S.
                     if next_source_position < s_utf16_len {
                         accumulated_result.extend_from_slice(
-                            &regex_input.subject.code_units[next_source_position..],
+                            &regex_input.subject.as_units()[next_source_position..],
                         );
                     }
                     Completion::Normal(JsValue::string(JsString::from_vec(accumulated_result)))
@@ -9634,7 +9634,7 @@ impl Interpreter {
                         //   iii. Else,
                         // Push the substring of the original S from p to q.
                         a.push(JsValue::string(JsString::from_vec(
-                            regex_input.subject.code_units[p..q].to_vec(),
+                            regex_input.subject.as_units()[p..q].to_vec(),
                         )));
                         length_a += 1;
                         if length_a == lim {
@@ -9692,7 +9692,7 @@ impl Interpreter {
 
                     // 16. Push remaining substring
                     a.push(JsValue::string(JsString::from_vec(
-                        regex_input.subject.code_units[p..].to_vec(),
+                        regex_input.subject.as_units()[p..].to_vec(),
                     )));
                     Completion::Normal(interp.create_array(a))
                 })
@@ -10166,7 +10166,7 @@ impl Interpreter {
             }
             let source_opt = obj.borrow().regexp().map(|r| r.source.clone());
             if let Some(ref s) = source_opt {
-                let escaped = escape_regexp_pattern_code_units(&s.code_units);
+                let escaped = escape_regexp_pattern_code_units(s.as_units());
                 Completion::Normal(JsValue::string(escaped))
             } else {
                 Completion::Normal(JsValue::string(JsString::from_str("(?:)")))
@@ -10349,7 +10349,7 @@ impl Interpreter {
                     ));
                 }
 
-                let pattern_str = js_string_to_regex_pattern(&pattern_js.code_units, &flags_str);
+                let pattern_str = js_string_to_regex_pattern(pattern_js.as_units(), &flags_str);
 
                 // Validate the pattern
                 if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
@@ -10357,7 +10357,7 @@ impl Interpreter {
                 }
 
                 // Empty source → "(?:)" per spec
-                let source_js = if pattern_js.code_units.is_empty() {
+                let source_js = if pattern_js.is_empty() {
                     JsString::from_str("(?:)")
                 } else {
                     pattern_js
@@ -10388,13 +10388,14 @@ impl Interpreter {
             |interp, _this, args| {
                 let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code_units = match arg.as_string() {
-                    Some(s) => s.code_units,
+                    Some(s) => s,
                     None => {
                         let err =
                             interp.create_type_error("RegExp.escape requires a string argument");
                         return Completion::Throw(err);
                     }
                 };
+                let code_units = code_units.as_units();
                 let mut result_units: Vec<u16> = Vec::new();
                 let mut idx = 0;
                 let mut is_first = true;
@@ -10632,11 +10633,9 @@ impl Interpreter {
                                 )),
                             }
                             let legacy = &interp.regexp_legacy;
-                            let end = legacy
-                                .left_context_end
-                                .min(legacy.context_input.code_units.len());
+                            let end = legacy.left_context_end.min(legacy.context_input.len());
                             Completion::Normal(JsValue::string(JsString::from_vec(
-                                legacy.context_input.code_units[..end].to_vec(),
+                                legacy.context_input.as_units()[..end].to_vec(),
                             )))
                         },
                     ));
@@ -10668,11 +10667,9 @@ impl Interpreter {
                                 )),
                             }
                             let legacy = &interp.regexp_legacy;
-                            let start = legacy
-                                .right_context_start
-                                .min(legacy.context_input.code_units.len());
+                            let start = legacy.right_context_start.min(legacy.context_input.len());
                             Completion::Normal(JsValue::string(JsString::from_vec(
-                                legacy.context_input.code_units[start..].to_vec(),
+                                legacy.context_input.as_units()[start..].to_vec(),
                             )))
                         },
                     ));

@@ -701,9 +701,8 @@ fn run_chunk_inner(
                 let r = stack.pop().expect("stack underflow on binop rhs");
                 let l = stack.pop().expect("stack underflow on binop lhs");
                 if matches!(op, Op::Add) && is_primitive_string_concat(&l, &r) {
-                    // Primitives are never rooted, so there is nothing to unroot;
-                    // moving the operands lets an owned left string grow in place.
-                    match interp.concat_owned_primitives(l, r) {
+                    // Primitives are never rooted, so there is nothing to unroot.
+                    match interp.concat_primitives(&l, &r) {
                         Completion::Normal(v) => push_value(interp, &mut stack, v),
                         abrupt => return abrupt,
                     }

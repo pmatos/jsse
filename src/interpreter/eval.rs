@@ -536,28 +536,17 @@ impl Interpreter {
                     }
                 };
                 self.gc_root_value(&rval);
-                // The fast string-concat arm below moves lval/rval, so snapshot
-                // the object operands now for a targeted unroot afterwards. Only
-                // objects are ever rooted, and that arm runs only for primitives,
-                // so these are cheap handle copies or None.
-                let lroot = lval.is_object().then(|| lval.clone());
-                let rroot = rval.is_object().then(|| rval.clone());
                 let result = if *op == BinaryOp::Instanceof {
                     self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
                 // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
                 } else if *op == BinaryOp::Add && is_primitive_string_concat(&lval, &rval) {
-                    self.concat_owned_primitives(lval, rval)
+                    self.concat_primitives(&lval, &rval)
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
-                // Unroot only the operands rooted for this expression.
-                if let Some(ref r) = rroot {
-                    self.gc_unroot_value(r);
-                }
-                if let Some(ref l) = lroot {
-                    self.gc_unroot_value(l);
-                }
+                self.gc_unroot_value(&rval);
+                self.gc_unroot_value(&lval);
                 result
             }
             Expression::Logical(op, left, right) => {
@@ -1136,6 +1125,9 @@ impl Interpreter {
             }
             Expression::Template(tmpl) => {
                 let mut code_units: Vec<u16> = Vec::new();
+                // `${s}...` with an empty leading quasi extends `s` in place,
+                // keeping `s = `${s}${x}`` loops linear.
+                let mut base: Option<JsString> = None;
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
                     if let Some(q) = quasi {
                         code_units.extend_from_slice(q);
@@ -1145,12 +1137,21 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let Err(e) = self.append_js_string(&mut code_units, &val) {
+                        if base.is_none()
+                            && code_units.is_empty()
+                            && let Some(s) = val.as_string()
+                        {
+                            base = Some(s);
+                        } else if let Err(e) = self.append_js_string(&mut code_units, &val) {
                             return Completion::Throw(e);
                         }
                     }
                 }
-                Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                let joined = match base {
+                    Some(base) => base.concat_units(&code_units),
+                    None => JsString::from_vec(code_units),
+                };
+                Completion::Normal(JsValue::string(joined))
             }
             Expression::OptionalChain(base, prop) => {
                 let (base_val, base_this) = match self.eval_oc_base(base, env) {
@@ -1257,10 +1258,9 @@ impl Interpreter {
         } else if let Some(s) = base_val.as_string() {
             if name.eq_str("length") {
                 Completion::Normal(JsValue::number(s.len() as f64))
-            } else if let Some(idx) =
-                crate::interpreter::types::string_exotic_index(&name, s.code_units.len())
+            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(&name, s.len())
             {
-                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else if let Some(sp_id) = self.realm().string_prototype {
                 self.get_object_property(sp_id, &name, base_val)
             } else {
@@ -1552,10 +1552,10 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<(), JsValue> {
         if let Some(s) = val.as_string() {
-            out.extend_from_slice(&s.code_units);
+            out.extend_from_slice(s.as_units());
         } else if val.is_object() {
             let s = self.to_js_string(val)?;
-            out.extend_from_slice(&s.code_units);
+            out.extend_from_slice(s.as_units());
         } else {
             out.extend(self.to_string_value(val)?.encode_utf16());
         }
@@ -1737,8 +1737,8 @@ impl Interpreter {
         if is_string(&lprim) && is_string(&rprim) {
             // §7.2.13 step 3: Compare by UTF-16 code units, not UTF-8 bytes
             return Ok(Some(
-                lprim.as_string().expect("kind checked").code_units
-                    < rprim.as_string().expect("kind checked").code_units,
+                lprim.as_string().expect("kind checked").as_units()
+                    < rprim.as_string().expect("kind checked").as_units(),
             ));
         }
         // BigInt comparisons
@@ -1964,28 +1964,16 @@ impl Interpreter {
         (interned, seq)
     }
 
-    /// `+` on two primitives where at least one is a String, taking the
-    /// operands by value so a uniquely owned left string (an intermediate such
-    /// as `t + "ab"` in `t + "ab" + j`) is extended in place instead of copied.
+    /// `+` on two primitives where at least one is a String. A left string
+    /// that owns its buffer's tail is extended in place instead of copied.
     /// Callers check [`is_primitive_string_concat`] first.
-    pub(super) fn concat_owned_primitives(&mut self, lval: JsValue, rval: JsValue) -> Completion {
+    pub(super) fn concat_primitives(&mut self, lval: &JsValue, rval: &JsValue) -> Completion {
         if lval.is_symbol() || rval.is_symbol() {
             return Completion::Throw(
                 self.create_type_error("Cannot convert a Symbol value to a string"),
             );
         }
-        let mut code_units = if lval.is_string() {
-            lval.into_string().expect("kind checked").into_vec()
-        } else {
-            js_value_to_code_units(&lval)
-        };
-        if rval
-            .with_string(|s| code_units.extend_from_slice(s))
-            .is_none()
-        {
-            code_units.extend(js_value_to_code_units(&rval));
-        }
-        Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+        Completion::Normal(concat_string_values(lval, rval))
     }
 
     pub(super) fn eval_binary(
@@ -2065,7 +2053,7 @@ impl Interpreter {
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    self.concat_owned_primitives(lprim, rprim)
+                    self.concat_primitives(&lprim, &rprim)
                 } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
                     Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
                         &a.value, &b.value,
@@ -3608,7 +3596,7 @@ impl Interpreter {
                 // Fast path: both primitives and at least one is a string — avoid
                 // to_primitive/js_value_to_code_units clones in eval_binary.
                 if is_primitive_string_concat(&lval, &rval) {
-                    return self.concat_owned_primitives(lval, rval);
+                    return self.concat_primitives(&lval, &rval);
                 }
                 self.eval_binary(BinaryOp::Add, &lval, &rval)
             }
@@ -5894,7 +5882,7 @@ impl Interpreter {
     /// engine-internal object state.
     fn describe_non_callable(&self, val: &JsValue) -> String {
         if let Some(s) = val.as_string() {
-            let preview: String = char::decode_utf16(s.code_units.iter().copied())
+            let preview: String = char::decode_utf16(s.as_units().iter().copied())
                 .take(30)
                 .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
                 .collect();
@@ -5963,7 +5951,7 @@ impl Interpreter {
         }
         // Use PUA mapping to preserve lone surrogates through the UTF-8 parser
         let code = if let Some(s) = (arg).as_string() {
-            crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+            crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
         } else {
             to_js_string(&arg)
         };

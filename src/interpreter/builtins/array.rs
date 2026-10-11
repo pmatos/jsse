@@ -392,7 +392,7 @@ fn sort_values(
         }
         // Code-unit slice comparison is a total order, so `sort_by` cannot
         // hit its ordering-violation panic here.
-        keyed.sort_by(|(a, _), (b, _)| a.code_units.as_slice().cmp(b.code_units.as_slice()));
+        keyed.sort_by(|(a, _), (b, _)| a.as_units().cmp(b.as_units()));
         items.extend(keyed.into_iter().map(|(_, v)| v));
     }
     items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
@@ -1488,7 +1488,7 @@ impl Interpreter {
                 let mut units: Vec<u16> = Vec::new();
                 for i in 0..len {
                     if i > 0 {
-                        units.extend_from_slice(&sep.code_units);
+                        units.extend_from_slice(sep.as_units());
                     }
                     let elem = match obj_get(interp, &o, &i.to_string()) {
                         Ok(v) => v,

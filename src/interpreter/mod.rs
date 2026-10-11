@@ -890,7 +890,7 @@ impl Interpreter {
             move |interp, _this, args| {
                 let code_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code = if let Some(s) = (code_val).as_string() {
-                    crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+                    crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
                 } else {
                     match interp.to_string_value(&code_val) {
                         Ok(s) => s,
@@ -2188,7 +2188,7 @@ impl Interpreter {
                 && let Some(ref v) = prop.value
             {
                 if let Some(s) = (v).as_string() {
-                    if !s.code_units.is_empty() {
+                    if !s.is_empty() {
                         return;
                     }
                 } else {

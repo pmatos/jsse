@@ -30,7 +30,7 @@ fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
 
 fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
     let mut code_units: Vec<u16> = prefix.encode_utf16().collect();
-    code_units.extend_from_slice(&key.to_js_string().code_units);
+    code_units.extend_from_slice(key.to_js_string().as_units());
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units))
 }
 
