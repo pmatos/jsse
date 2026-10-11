@@ -1117,6 +1117,9 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             }
             // DO recurse into arrow functions (they inherit arguments)
             Expression::ArrowFunction(a) => {
+                if a.params.iter().any(pattern_uses_arguments) {
+                    return true;
+                }
                 let body = a.body.body();
                 match body.statements.as_slice() {
                     [Statement::Return(Some(e))] => stack.push(e),
