@@ -295,62 +295,96 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
 // ToString once (the spec leaves the number and order of SortCompare calls
 // implementation-defined) and the keys are compared by UTF-16 code units,
 // which is the order IsLessThan defines for Strings.
+//
+// The caller must keep every element of `items` and `compare_fn` GC-rooted:
+// the comparator and ToString can run arbitrary JS (and so reach safepoints)
+// while elements are only reachable from this Rust `Vec`.
 fn sort_values(
     interp: &mut Interpreter,
     items: &mut Vec<JsValue>,
     compare_fn: Option<&JsValue>,
 ) -> Result<(), JsValue> {
-    let compare_fn = compare_fn.filter(|cf| !cf.is_undefined()).cloned();
-    interp.with_gc_root_scope(|interp| {
-        for v in items.iter() {
-            interp.gc_root_value(v);
+    let undefined_count = items.iter().filter(|v| v.is_undefined()).count();
+    items.retain(|v| !v.is_undefined());
+    if let Some(cf) = compare_fn.filter(|cf| !cf.is_undefined()) {
+        merge_sort_by(items, |x, y| {
+            let v = match interp.call_function(cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Ok(std::cmp::Ordering::Equal),
+            };
+            let n = interp.to_number_value(&v)?;
+            Ok(if n < 0.0 {
+                std::cmp::Ordering::Less
+            } else if n > 0.0 {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            })
+        })?;
+    } else if items.len() > 1 {
+        let mut keyed: Vec<(JsString, JsValue)> = Vec::with_capacity(items.len());
+        for v in items.drain(..) {
+            let key = interp.to_js_string(&v)?;
+            keyed.push((key, v));
         }
-        if let Some(cf) = &compare_fn {
-            interp.gc_root_value(cf);
-        }
-        let undefined_count = items.iter().filter(|v| v.is_undefined()).count();
-        items.retain(|v| !v.is_undefined());
-        if let Some(cf) = compare_fn {
-            let mut sort_error: Option<JsValue> = None;
-            items.sort_by(|x, y| {
-                if sort_error.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
-                let result =
-                    interp.call_function(&cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]);
-                let v = match result {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        sort_error = Some(e);
-                        return std::cmp::Ordering::Equal;
+        // Code-unit slice comparison is a total order, so `sort_by` cannot
+        // hit its ordering-violation panic here.
+        keyed.sort_by(|(a, _), (b, _)| a.code_units.as_slice().cmp(b.code_units.as_slice()));
+        items.extend(keyed.into_iter().map(|(_, v)| v));
+    }
+    items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
+    Ok(())
+}
+
+// Stable bottom-up merge sort driven by a fallible comparator. A user
+// comparefn need not be a consistent comparator (the resulting order is then
+// implementation-defined), and `slice::sort_by` panics when it detects such a
+// total-order violation, so user-driven sorts must go through this instead.
+// Stops at the first `Err`, leaving `items` a permutation of its input.
+fn merge_sort_by<E>(
+    items: &mut Vec<JsValue>,
+    mut cmp: impl FnMut(&JsValue, &JsValue) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    let n = items.len();
+    if n < 2 {
+        return Ok(());
+    }
+    let mut src = std::mem::take(items);
+    let mut dst: Vec<JsValue> = Vec::with_capacity(n);
+    let mut width = 1;
+    while width < n {
+        dst.clear();
+        let mut lo = 0;
+        while lo < n {
+            let mid = (lo + width).min(n);
+            let hi = (lo + 2 * width).min(n);
+            let (mut i, mut j) = (lo, mid);
+            while i < mid && j < hi {
+                match cmp(&src[i], &src[j]) {
+                    Ok(std::cmp::Ordering::Greater) => {
+                        dst.push(src[j].clone());
+                        j += 1;
                     }
-                    _ => return std::cmp::Ordering::Equal,
-                };
-                match interp.to_number_value(&v) {
-                    Ok(n) if n < 0.0 => std::cmp::Ordering::Less,
-                    Ok(n) if n > 0.0 => std::cmp::Ordering::Greater,
-                    Ok(_) => std::cmp::Ordering::Equal,
+                    Ok(_) => {
+                        dst.push(src[i].clone());
+                        i += 1;
+                    }
                     Err(e) => {
-                        sort_error = Some(e);
-                        std::cmp::Ordering::Equal
+                        *items = src;
+                        return Err(e);
                     }
                 }
-            });
-            if let Some(e) = sort_error {
-                return Err(e);
             }
-        } else if items.len() > 1 {
-            let mut keyed: Vec<(JsString, JsValue)> = Vec::with_capacity(items.len());
-            for v in items.drain(..) {
-                let key = interp.to_js_string(&v)?;
-                keyed.push((key, v));
-            }
-            keyed.sort_by(|(a, _), (b, _)| a.code_units.as_slice().cmp(b.code_units.as_slice()));
-            items.extend(keyed.into_iter().map(|(_, v)| v));
+            dst.extend_from_slice(&src[i..mid]);
+            dst.extend_from_slice(&src[j..hi]);
+            lo = hi;
         }
-        items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
-        Ok(())
-    })
+        std::mem::swap(&mut src, &mut dst);
+        width = width.saturating_mul(2);
+    }
+    *items = src;
+    Ok(())
 }
 
 fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<bool, JsValue> {
@@ -2446,35 +2480,47 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let mut items: Vec<JsValue> = Vec::with_capacity(len);
-            for i in 0..len {
-                let pk = i.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        items.push(match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        });
+            // Gathered elements live only in `items` until written back, and
+            // getters, the comparator, ToString and setters can all reach GC
+            // safepoints, so keep them rooted from gather through write-back.
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&o);
+                if let Some(cf) = &compare_fn {
+                    interp.gc_root_value(cf);
+                }
+                // `len` can be up to 2^53-1 with few (or no) present elements.
+                let mut items: Vec<JsValue> = Vec::with_capacity(len.min(1 << 16));
+                for i in 0..len {
+                    let pk = i.to_string();
+                    match obj_has_throw(interp, &o, &pk) {
+                        Ok(true) => {
+                            let v = match obj_get(interp, &o, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                            interp.gc_root_value(&v);
+                            items.push(v);
+                        }
+                        Err(e) => return Completion::Throw(e),
+                        _ => {}
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
                 }
-            }
-            if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
-                return Completion::Throw(e);
-            }
-            // Write back
-            for (i, v) in items.iter().enumerate() {
-                if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v.clone()) {
+                if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
                     return Completion::Throw(e);
                 }
-            }
-            for i in items.len()..len {
-                if let Err(e) = obj_delete_throw(interp, &o, &i.to_string()) {
-                    return Completion::Throw(e);
+                // Write back
+                for (i, v) in items.iter().enumerate() {
+                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v.clone()) {
+                        return Completion::Throw(e);
+                    }
                 }
-            }
-            Completion::Normal(o)
+                for i in items.len()..len {
+                    if let Err(e) = obj_delete_throw(interp, &o, &i.to_string()) {
+                        return Completion::Throw(e);
+                    }
+                }
+                Completion::Normal(o)
+            })
         });
 
         // Array.prototype.toSorted
@@ -2498,17 +2544,27 @@ impl Interpreter {
             if len as u64 > 0xFFFF_FFFF {
                 return Completion::Throw(interp.create_range_error("Invalid array length"));
             }
-            let mut items: Vec<JsValue> = Vec::with_capacity(len);
-            for i in 0..len {
-                items.push(match obj_get(interp, &o, &i.to_string()) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                });
-            }
-            if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
-                return Completion::Throw(e);
-            }
-            Completion::Normal(interp.create_array(items))
+            // Gathered elements live only in `items` until the result array is
+            // created, so keep them rooted across later getters and the sort.
+            interp.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&o);
+                if let Some(cf) = &compare_fn {
+                    interp.gc_root_value(cf);
+                }
+                let mut items: Vec<JsValue> = Vec::with_capacity(len.min(1 << 16));
+                for i in 0..len {
+                    let v = match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    interp.gc_root_value(&v);
+                    items.push(v);
+                }
+                if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
+                    return Completion::Throw(e);
+                }
+                Completion::Normal(interp.create_array(items))
+            })
         });
 
         // Array.prototype.flat

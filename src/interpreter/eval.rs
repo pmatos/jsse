@@ -1554,6 +1554,12 @@ impl Interpreter {
     pub(crate) fn to_js_string(&mut self, val: &JsValue) -> Result<JsString, JsValue> {
         if let Some(s) = val.as_string() {
             Ok(s)
+        } else if val.is_object() {
+            // Recurse on the primitive rather than going through
+            // `to_string_value`, whose Rust `String` would replace lone
+            // surrogates in a String-valued ToPrimitive result with U+FFFD.
+            let prim = self.to_primitive(val, "string")?;
+            self.to_js_string(&prim)
         } else {
             let s = self.to_string_value(val)?;
             Ok(JsString::from_str(&s))
