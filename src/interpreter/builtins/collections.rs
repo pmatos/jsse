@@ -1028,7 +1028,23 @@ impl Interpreter {
 
         // ES2025 Set methods
 
-        // Spec-compliant GetSetRecord: uses get_object_property for getters/proxies
+        /// Install a Set method that runs in its own GC root scope. The methods
+        /// run user code (the Set record's getters, `has`, the keys iterator)
+        /// while Rust locals hold the only reference to values needed
+        /// afterwards, so the helpers below root what they produce in it.
+        fn define_set_method(
+            interp: &mut Interpreter,
+            proto_id: u64,
+            name: &str,
+            method: impl Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
+        ) {
+            interp.define_method(proto_id, name, 1, move |interp, this, args| {
+                interp.with_gc_root_scope(|interp| method(interp, this, args))
+            });
+        }
+
+        // Spec-compliant GetSetRecord: uses get_object_property for getters/proxies.
+        // `has` and `keys` are rooted: the getters that follow them run user code.
         fn spec_get_set_record(
             interp: &mut Interpreter,
             obj: &JsValue,
@@ -1063,6 +1079,7 @@ impl Interpreter {
                     interp.create_type_error("Set-like object must have a callable has method")
                 );
             }
+            interp.gc_root_value(&has);
 
             // Get keys via property access (invokes getters)
             let keys = match interp.get_object_property(o_id, "keys", obj) {
@@ -1075,11 +1092,13 @@ impl Interpreter {
                     interp.create_type_error("Set-like object must have a callable keys method")
                 );
             }
+            interp.gc_root_value(&keys);
 
             Ok(SetRecord { has, keys, size })
         }
 
-        // Get iterator record: call keys(), read next once
+        // Get iterator record: call keys(), read next once. Both are rooted for
+        // the rest of the walk.
         fn get_keys_iterator(
             interp: &mut Interpreter,
             keys_fn: &JsValue,
@@ -1097,11 +1116,13 @@ impl Interpreter {
             let iter_id = keys_iter
                 .as_object_id()
                 .expect("keys iterator must be an object");
+            interp.gc_root_value(&keys_iter);
             // Read next ONCE (per spec GetIterator)
             let next_fn = match interp.get_object_property(iter_id, "next", &keys_iter) {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
+            interp.gc_root_value(&next_fn);
             Ok((keys_iter, next_fn))
         }
 
@@ -1154,6 +1175,23 @@ impl Interpreter {
                 .is_some_and(|current| set_data_has(current, val))
         }
 
+        /// The live values of `obj`'s O.[[SetData]], as a result list. The list
+        /// is invisible to the GC while user code runs and that code can delete
+        /// the values from O, so each is rooted in the caller's root scope.
+        fn rooted_set_data_copy(
+            interp: &mut Interpreter,
+            obj: &ObjectHandle,
+        ) -> Vec<Option<JsValue>> {
+            let entries: Vec<Option<JsValue>> =
+                obj.borrow().set_data().map_or_else(Vec::new, |data| {
+                    data.iter().flatten().cloned().map(Some).collect()
+                });
+            for value in entries.iter().flatten() {
+                interp.gc_root_value(value);
+            }
+            entries
+        }
+
         /// Append `val` to a result list unless it is already there. The list
         /// is invisible to the GC while user code runs, so the value is rooted
         /// in the caller's root scope.
@@ -1190,7 +1228,7 @@ impl Interpreter {
         }
 
         // Set.prototype.union
-        self.define_method(proto_id, "union", 1, |interp, this, args| {
+        define_set_method(self, proto_id, "union", |interp, this, args| {
             let (_id, obj) = match this_set(interp, this, "union") {
                 Ok(t) => t,
                 Err(c) => return c,
@@ -1206,27 +1244,20 @@ impl Interpreter {
                 Err(c) => return c,
             };
             // Step 7: Copy O.[[SetData]] AFTER GetIteratorFromMethod
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-            for entry in entries.iter().flatten() {
-                new_entries.push(Some(entry.clone()));
-            }
+            let mut new_entries = rooted_set_data_copy(interp, &obj);
             loop {
                 let value = match iter_step_value(interp, &keys_iter, &next_fn) {
                     Ok(Some(v)) => v,
                     Ok(None) => break,
                     Err(c) => return c,
                 };
-                let val = canonicalize_key(value);
-                if !set_data_has(&new_entries, &val) {
-                    new_entries.push(Some(val));
-                }
+                push_rooted_unique(interp, &mut new_entries, canonicalize_key(value));
             }
             make_result_set(interp, new_entries)
         });
 
         // Set.prototype.intersection
-        self.define_method(proto_id, "intersection", 1, |interp, this, args| {
+        define_set_method(self, proto_id, "intersection", |interp, this, args| {
             let (_id, obj) = match this_set(interp, this, "intersection") {
                 Ok(t) => t,
                 Err(c) => return c,
@@ -1238,52 +1269,44 @@ impl Interpreter {
             };
             // Re-read the size after GetSetRecord (side-effects may mutate this)
             let this_size = live_set_size(&obj);
-            // User code (`other.has`, or the keys iterator's `next`) runs while
-            // the walk goes on and can delete or clear O's values and trigger a
-            // collection, leaving `new_entries` their only holder, so every kept
-            // value is rooted until the result Set owns it.
-            interp.with_gc_root_scope(|interp| {
-                let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                if this_size as f64 <= other_rec.size {
-                    let mut cursor = 0;
-                    while let Some(entry) =
-                        next_live_entry(&obj, JsObjectData::set_data, &mut cursor)
-                    {
-                        let has_result = match interp.call_function(
-                            &other_rec.has,
-                            &other,
-                            std::slice::from_ref(&entry),
-                        ) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        if interp.to_boolean_val(&has_result) {
-                            push_rooted_unique(interp, &mut new_entries, canonicalize_key(entry));
-                        }
-                    }
-                } else {
-                    let (keys_iter, next_fn) =
-                        match get_keys_iterator(interp, &other_rec.keys, &other) {
-                            Ok(r) => r,
-                            Err(c) => return c,
-                        };
-                    loop {
-                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                            Ok(Some(v)) => v,
-                            Ok(None) => break,
-                            Err(c) => return c,
-                        };
-                        if live_set_has(&obj, &value) {
-                            push_rooted_unique(interp, &mut new_entries, canonicalize_key(value));
-                        }
+            let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+            if this_size as f64 <= other_rec.size {
+                let mut cursor = 0;
+                while let Some(entry) = next_live_entry(&obj, JsObjectData::set_data, &mut cursor) {
+                    let has_result = match interp.call_function(
+                        &other_rec.has,
+                        &other,
+                        std::slice::from_ref(&entry),
+                    ) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if interp.to_boolean_val(&has_result) {
+                        push_rooted_unique(interp, &mut new_entries, canonicalize_key(entry));
                     }
                 }
-                make_result_set(interp, new_entries)
-            })
+            } else {
+                let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
+                {
+                    Ok(r) => r,
+                    Err(c) => return c,
+                };
+                loop {
+                    let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                        Ok(Some(v)) => v,
+                        Ok(None) => break,
+                        Err(c) => return c,
+                    };
+                    if live_set_has(&obj, &value) {
+                        push_rooted_unique(interp, &mut new_entries, canonicalize_key(value));
+                    }
+                }
+            }
+            make_result_set(interp, new_entries)
         });
 
         // Set.prototype.difference
-        self.define_method(proto_id, "difference", 1, |interp, this, args| {
+        define_set_method(self, proto_id, "difference", |interp, this, args| {
             let (_id, obj) = match this_set(interp, this, "difference") {
                 Ok(t) => t,
                 Err(c) => return c,
@@ -1293,29 +1316,26 @@ impl Interpreter {
                 Ok(r) => r,
                 Err(e) => return Completion::Throw(e),
             };
-            // Re-read entries after GetSetRecord
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let this_size = entries.live_len();
-            let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-
-            if this_size as f64 <= other_rec.size {
-                for entry in entries.iter().flatten() {
+            // Copy O.[[SetData]] after GetSetRecord
+            let mut new_entries = rooted_set_data_copy(interp, &obj);
+            if new_entries.len() as f64 <= other_rec.size {
+                for entry in &mut new_entries {
+                    let Some(value) = entry.as_ref() else {
+                        continue;
+                    };
                     let has_result = match interp.call_function(
                         &other_rec.has,
                         &other,
-                        std::slice::from_ref(entry),
+                        std::slice::from_ref(value),
                     ) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if !interp.to_boolean_val(&has_result) {
-                        new_entries.push(Some(entry.clone()));
+                    if interp.to_boolean_val(&has_result) {
+                        *entry = None;
                     }
                 }
             } else {
-                for entry in entries.iter().flatten() {
-                    new_entries.push(Some(entry.clone()));
-                }
                 let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
                 {
                     Ok(r) => r,
@@ -1339,51 +1359,53 @@ impl Interpreter {
         });
 
         // Set.prototype.symmetricDifference
-        self.define_method(proto_id, "symmetricDifference", 1, |interp, this, args| {
-            let (_id, obj) = match this_set(interp, this, "symmetricDifference") {
-                Ok(t) => t,
-                Err(c) => return c,
-            };
-            let other = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let other_rec = match spec_get_set_record(interp, &other) {
-                Ok(r) => r,
-                Err(e) => return Completion::Throw(e),
-            };
-            // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
-            let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other) {
-                Ok(r) => r,
-                Err(c) => return c,
-            };
-            // Step 6: Copy O.[[SetData]] AFTER GetIteratorFromMethod
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-            for entry in entries.iter().flatten() {
-                new_entries.push(Some(entry.clone()));
-            }
-            loop {
-                let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                    Ok(Some(v)) => v,
-                    Ok(None) => break,
+        define_set_method(
+            self,
+            proto_id,
+            "symmetricDifference",
+            |interp, this, args| {
+                let (_id, obj) = match this_set(interp, this, "symmetricDifference") {
+                    Ok(t) => t,
                     Err(c) => return c,
                 };
-                let val = canonicalize_key(value);
-                // Check against live O.[[SetData]]
-                if live_set_has(&obj, &val) {
-                    for entry in new_entries.iter_mut() {
-                        if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
-                            *entry = None;
-                            break;
+                let other = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
+                let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
+                {
+                    Ok(r) => r,
+                    Err(c) => return c,
+                };
+                // Step 6: Copy O.[[SetData]] AFTER GetIteratorFromMethod
+                let mut new_entries = rooted_set_data_copy(interp, &obj);
+                loop {
+                    let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                        Ok(Some(v)) => v,
+                        Ok(None) => break,
+                        Err(c) => return c,
+                    };
+                    let val = canonicalize_key(value);
+                    // Check against live O.[[SetData]]
+                    if live_set_has(&obj, &val) {
+                        for entry in new_entries.iter_mut() {
+                            if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
+                                *entry = None;
+                                break;
+                            }
                         }
+                    } else {
+                        push_rooted_unique(interp, &mut new_entries, val);
                     }
-                } else if !set_data_has(&new_entries, &val) {
-                    new_entries.push(Some(val));
                 }
-            }
-            make_result_set(interp, new_entries)
-        });
+                make_result_set(interp, new_entries)
+            },
+        );
 
         // Set.prototype.isSubsetOf
-        self.define_method(proto_id, "isSubsetOf", 1, |interp, this, args| {
+        define_set_method(self, proto_id, "isSubsetOf", |interp, this, args| {
             let (_id, obj) = match this_set(interp, this, "isSubsetOf") {
                 Ok(t) => t,
                 Err(c) => return c,
@@ -1411,7 +1433,7 @@ impl Interpreter {
         });
 
         // Set.prototype.isSupersetOf
-        self.define_method(proto_id, "isSupersetOf", 1, |interp, this, args| {
+        define_set_method(self, proto_id, "isSupersetOf", |interp, this, args| {
             let (_id, obj) = match this_set(interp, this, "isSupersetOf") {
                 Ok(t) => t,
                 Err(c) => return c,
@@ -1443,7 +1465,7 @@ impl Interpreter {
         });
 
         // Set.prototype.isDisjointFrom
-        self.define_method(proto_id, "isDisjointFrom", 1, |interp, this, args| {
+        define_set_method(self, proto_id, "isDisjointFrom", |interp, this, args| {
             let (_id, obj) = match this_set(interp, this, "isDisjointFrom") {
                 Ok(t) => t,
                 Err(c) => return c,
