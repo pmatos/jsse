@@ -2092,6 +2092,73 @@ impl ArrayData {
     }
 }
 
+/// [[MapData]] / [[SetData]]: the spec's append-only entry list. A deleted
+/// entry stays as an empty slot (`None`) so a suspended iterator's index keeps
+/// naming the same entry (24.1.3.3, 24.2.4.5).
+///
+/// `clear` empties every entry while the spec list keeps its length, so an
+/// iterator suspended before the clear goes on to visit entries added after
+/// it (24.1.3.1, 24.2.4.2). Rather than keep one empty slot per cleared entry,
+/// the storage drops them and records how many there were: the spec index of
+/// `self[i]` is `cleared + i`. Code that walks the live list across user calls
+/// holds a spec-index cursor and steps it with [`KeyedEntries::next_live`];
+/// everything else uses the `Vec` directly through `Deref`.
+#[derive(Debug, Clone)]
+pub(crate) struct KeyedEntries<T> {
+    cleared: usize,
+    entries: Vec<Option<T>>,
+}
+
+impl<T> Default for KeyedEntries<T> {
+    fn default() -> Self {
+        Self::from(Vec::new())
+    }
+}
+
+impl<T> From<Vec<Option<T>>> for KeyedEntries<T> {
+    fn from(entries: Vec<Option<T>>) -> Self {
+        Self {
+            cleared: 0,
+            entries,
+        }
+    }
+}
+
+impl<T> KeyedEntries<T> {
+    /// The first live entry at or after spec index `*cursor`, moving `*cursor`
+    /// just past it.
+    pub(crate) fn next_live(&self, cursor: &mut usize) -> Option<&T> {
+        let start = cursor.saturating_sub(self.cleared);
+        let (offset, value) = self
+            .entries
+            .get(start..)?
+            .iter()
+            .enumerate()
+            .find_map(|(offset, e)| e.as_ref().map(|v| (offset, v)))?;
+        *cursor = self.cleared + start + offset + 1;
+        Some(value)
+    }
+
+    /// Empty every entry (Map.prototype.clear, Set.prototype.clear).
+    pub(crate) fn clear(&mut self) {
+        self.cleared += self.entries.len();
+        self.entries.clear();
+    }
+}
+
+impl<T> std::ops::Deref for KeyedEntries<T> {
+    type Target = Vec<Option<T>>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl<T> std::ops::DerefMut for KeyedEntries<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
 /// Discriminator for the kind-specific data attached to a JsObjectData.
 ///
 /// Each variant either is the kind in isolation (Ordinary), or carries the
@@ -2119,12 +2186,10 @@ pub(crate) enum ObjectKind {
     TypedArray(TypedArrayInfo),
     DataView(DataViewInfo),
     Promise(PromiseData),
-    /// Slot list. `None` entries are tombstones from delete that we don't
-    /// rewrite because Map iteration must visit them with the original
-    /// insertion order intact.
-    Map(Vec<Option<(JsValue, JsValue)>>),
-    /// Slot list, tombstones as above.
-    Set(Vec<Option<JsValue>>),
+    /// [[MapData]]; see [`KeyedEntries`].
+    Map(KeyedEntries<(JsValue, JsValue)>),
+    /// [[SetData]]; see [`KeyedEntries`].
+    Set(KeyedEntries<JsValue>),
     /// FinalizationRegistry cells. Two parallel slot lists:
     ///   `cells[i]`  = Some((target, heldValue)) or None (tombstone)
     ///   `tokens[i]` = Some(unregisterToken) or None
@@ -2303,8 +2368,13 @@ impl JsObjectData {
     kind_accessor!(promise_data, promise_data_mut, Promise, PromiseData);
     kind_accessor!(parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
     kind_accessor!(array_data, array_data_mut, Array, ArrayData);
-    kind_accessor!(map_data, map_data_mut, Map, Vec<Option<(JsValue, JsValue)>>);
-    kind_accessor!(set_data, set_data_mut, Set, Vec<Option<JsValue>>);
+    kind_accessor!(
+        map_data,
+        map_data_mut,
+        Map,
+        KeyedEntries<(JsValue, JsValue)>
+    );
+    kind_accessor!(set_data, set_data_mut, Set, KeyedEntries<JsValue>);
     kind_accessor!(temporal_data, Temporal, TemporalData);
     kind_accessor!(regexp, RegExp, RegExpData);
     kind_accessor!(wrapped, WrappedFunction, WrappedFunctionData);
@@ -4211,7 +4281,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_some_for_set_kind() {
-        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::number(1.0))]));
+        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::number(1.0))].into()));
         assert!(obj.set_data().is_some());
         assert_eq!(obj.set_data().unwrap().len(), 1);
     }
@@ -4224,7 +4294,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Set(Vec::new()));
+        let mut obj = obj_with_kind(ObjectKind::Set(KeyedEntries::default()));
         obj.set_data_mut().unwrap().push(None);
         assert_eq!(obj.set_data().unwrap().len(), 1);
     }
@@ -4234,7 +4304,7 @@ mod kind_accessor_tests {
     #[test]
     fn map_data_some_for_map_kind() {
         let entry = Some((JsValue::number(1.0), JsValue::FALSE));
-        let obj = obj_with_kind(ObjectKind::Map(vec![entry]));
+        let obj = obj_with_kind(ObjectKind::Map(vec![entry].into()));
         assert!(obj.map_data().is_some());
         assert_eq!(obj.map_data().unwrap().len(), 1);
     }
@@ -4247,11 +4317,46 @@ mod kind_accessor_tests {
 
     #[test]
     fn map_data_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Map(Vec::new()));
+        let mut obj = obj_with_kind(ObjectKind::Map(KeyedEntries::default()));
         obj.map_data_mut()
             .unwrap()
             .push(Some((JsValue::number(0.0), JsValue::UNDEFINED)));
         assert_eq!(obj.map_data().unwrap().len(), 1);
+    }
+
+    // --- KeyedEntries ---
+
+    #[test]
+    fn keyed_entries_cursor_skips_empty_slots() {
+        let entries: KeyedEntries<u32> = vec![Some(1), None, Some(3)].into();
+        let mut cursor = 0;
+        assert_eq!(entries.next_live(&mut cursor), Some(&1));
+        assert_eq!(cursor, 1);
+        assert_eq!(entries.next_live(&mut cursor), Some(&3));
+        assert_eq!(cursor, 3);
+        assert_eq!(entries.next_live(&mut cursor), None);
+        assert_eq!(cursor, 3, "an exhausted cursor stays put");
+    }
+
+    #[test]
+    fn keyed_entries_clear_keeps_spec_indices_and_frees_slots() {
+        let mut entries: KeyedEntries<u32> = vec![Some(1), Some(2), Some(3)].into();
+        let mut before_clear = 1;
+        entries.clear();
+        assert!(entries.is_empty(), "cleared slots are dropped");
+        entries.push(Some(4));
+        assert_eq!(
+            entries.next_live(&mut before_clear),
+            Some(&4),
+            "a cursor from before the clear visits the entry added after it"
+        );
+        assert_eq!(before_clear, 4, "the new entry has spec index 3");
+        let mut fresh = 0;
+        assert_eq!(entries.next_live(&mut fresh), Some(&4));
+        entries.clear();
+        entries.push(Some(5));
+        assert_eq!(entries.next_live(&mut before_clear), Some(&5));
+        assert_eq!(before_clear, 5);
     }
 
     // --- bound ---
@@ -4295,14 +4400,14 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_none_when_map_kind_is_set() {
-        let obj = obj_with_kind(ObjectKind::Map(Vec::new()));
+        let obj = obj_with_kind(ObjectKind::Map(KeyedEntries::default()));
         assert!(obj.set_data().is_none());
         assert!(obj.map_data().is_some());
     }
 
     #[test]
     fn array_elements_none_when_set_kind_is_set() {
-        let obj = obj_with_kind(ObjectKind::Set(Vec::new()));
+        let obj = obj_with_kind(ObjectKind::Set(KeyedEntries::default()));
         assert!(obj.array_elements().is_none());
         assert!(obj.set_data().is_some());
     }

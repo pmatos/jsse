@@ -85,32 +85,31 @@ impl Interpreter {
                         );
                     }
                     if let Some(map_obj) = interp.get_object(map_id) {
-                        let map_data = map_obj.borrow().map_data().cloned();
-                        if let Some(entries) = map_data {
-                            let mut i = index;
-                            while i < entries.len() {
-                                if let Some(ref entry) = entries[i] {
-                                    let result = match kind {
-                                        IteratorKind::Key => entry.0.clone(),
-                                        IteratorKind::Value => entry.1.clone(),
-                                        IteratorKind::KeyValue => interp
-                                            .create_array(vec![entry.0.clone(), entry.1.clone()]),
-                                    };
-                                    obj.borrow_mut_untracked().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::MapIterator {
-                                                map_id,
-                                                index: i + 1,
-                                                kind,
-                                                done: false,
-                                            },
-                                        );
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(result, false),
-                                    );
-                                }
-                                i += 1;
-                            }
+                        // Find the next live entry under a borrow; cloning the
+                        // whole entry Vec per step made iteration quadratic.
+                        let mut cursor = index;
+                        let next = map_obj
+                            .borrow()
+                            .map_data()
+                            .and_then(|entries| entries.next_live(&mut cursor).cloned());
+                        if let Some((key, value)) = next {
+                            let result = match kind {
+                                IteratorKind::Key => key,
+                                IteratorKind::Value => value,
+                                IteratorKind::KeyValue => interp.create_array(vec![key, value]),
+                            };
+                            obj.borrow_mut_untracked().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::MapIterator {
+                                        map_id,
+                                        index: cursor,
+                                        kind,
+                                        done: false,
+                                    },
+                                );
+                            return Completion::Normal(
+                                interp.create_iter_result_object(result, false),
+                            );
                         }
                     }
                     obj.borrow_mut_untracked().kind =
@@ -300,8 +299,9 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            obj.borrow_mut_untracked().kind =
-                crate::interpreter::types::ObjectKind::Map(Vec::new());
+            if let Some(entries) = obj.borrow_mut_untracked().map_data_mut() {
+                entries.clear();
+            }
             Completion::Normal(JsValue::UNDEFINED)
         });
 
@@ -322,23 +322,19 @@ impl Interpreter {
                 return Completion::Throw(err);
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let mut i = 0;
+            let mut cursor = 0;
             loop {
-                let entry = {
-                    let borrowed = obj.borrow();
-                    let entries = borrowed.map_data().unwrap();
-                    if i >= entries.len() {
-                        break;
-                    }
-                    entries[i].clone()
-                };
-                if let Some((k, v)) = entry {
-                    let result = interp.call_function(&callback, &this_arg, &[v, k, this.clone()]);
-                    if result.is_abrupt() {
-                        return result;
-                    }
+                let entry = obj
+                    .borrow()
+                    .map_data()
+                    .unwrap()
+                    .next_live(&mut cursor)
+                    .cloned();
+                let Some((k, v)) = entry else { break };
+                let result = interp.call_function(&callback, &this_arg, &[v, k, this.clone()]);
+                if result.is_abrupt() {
+                    return result;
                 }
-                i += 1;
             }
             Completion::Normal(JsValue::UNDEFINED)
         });
@@ -484,7 +480,7 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Map".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Map(Vec::new());
+                    crate::interpreter::types::ObjectKind::Map(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -669,7 +665,8 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
-                            .kind = crate::interpreter::types::ObjectKind::Map(Vec::new());
+                            .kind =
+                            crate::interpreter::types::ObjectKind::Map(KeyedEntries::default());
                         let result_id = result_map_id;
                         let result_val = JsValue::object(result_id);
                         interp.gc_root_value(&result_val);
@@ -809,32 +806,32 @@ impl Interpreter {
                         );
                     }
                     if let Some(set_obj) = interp.get_object(set_id) {
-                        let set_data = set_obj.borrow().set_data().cloned();
-                        if let Some(entries) = set_data {
-                            let mut i = index;
-                            while i < entries.len() {
-                                if let Some(ref val) = entries[i] {
-                                    let result = match kind {
-                                        IteratorKind::Value | IteratorKind::Key => val.clone(),
-                                        IteratorKind::KeyValue => {
-                                            interp.create_array(vec![val.clone(), val.clone()])
-                                        }
-                                    };
-                                    obj.borrow_mut_untracked().kind =
-                                        crate::interpreter::types::ObjectKind::Iterator(
-                                            IteratorState::SetIterator {
-                                                set_id,
-                                                index: i + 1,
-                                                kind,
-                                                done: false,
-                                            },
-                                        );
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(result, false),
-                                    );
+                        // Find the next live entry under a borrow; cloning the
+                        // whole entry Vec per step made iteration quadratic.
+                        let mut cursor = index;
+                        let next = set_obj
+                            .borrow()
+                            .set_data()
+                            .and_then(|entries| entries.next_live(&mut cursor).cloned());
+                        if let Some(val) = next {
+                            let result = match kind {
+                                IteratorKind::Value | IteratorKind::Key => val,
+                                IteratorKind::KeyValue => {
+                                    interp.create_array(vec![val.clone(), val])
                                 }
-                                i += 1;
-                            }
+                            };
+                            obj.borrow_mut_untracked().kind =
+                                crate::interpreter::types::ObjectKind::Iterator(
+                                    IteratorState::SetIterator {
+                                        set_id,
+                                        index: cursor,
+                                        kind,
+                                        done: false,
+                                    },
+                                );
+                            return Completion::Normal(
+                                interp.create_iter_result_object(result, false),
+                            );
                         }
                     }
                     obj.borrow_mut_untracked().kind =
@@ -991,8 +988,9 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            obj.borrow_mut_untracked().kind =
-                crate::interpreter::types::ObjectKind::Set(Vec::new());
+            if let Some(entries) = obj.borrow_mut_untracked().set_data_mut() {
+                entries.clear();
+            }
             Completion::Normal(JsValue::UNDEFINED)
         });
 
@@ -1013,24 +1011,20 @@ impl Interpreter {
                 return Completion::Throw(err);
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let mut i = 0;
+            let mut cursor = 0;
             loop {
-                let entry = {
-                    let borrowed = obj.borrow();
-                    let entries = borrowed.set_data().unwrap();
-                    if i >= entries.len() {
-                        break;
-                    }
-                    entries[i].clone()
-                };
-                if let Some(v) = entry {
-                    let result =
-                        interp.call_function(&callback, &this_arg, &[v.clone(), v, this.clone()]);
-                    if result.is_abrupt() {
-                        return result;
-                    }
+                let entry = obj
+                    .borrow()
+                    .set_data()
+                    .unwrap()
+                    .next_live(&mut cursor)
+                    .cloned();
+                let Some(v) = entry else { break };
+                let result =
+                    interp.call_function(&callback, &this_arg, &[v.clone(), v, this.clone()]);
+                if result.is_abrupt() {
+                    return result;
                 }
-                i += 1;
             }
             Completion::Normal(JsValue::UNDEFINED)
         });
@@ -1182,7 +1176,7 @@ impl Interpreter {
                 .borrow_mut()
                 .class_name = "Set".to_string();
             interp.get_object_cell_expect(new_obj_id).borrow_mut().kind =
-                crate::interpreter::types::ObjectKind::Set(entries);
+                crate::interpreter::types::ObjectKind::Set(entries.into());
             let id = new_obj_id;
             Completion::Normal(JsValue::object(id))
         }
@@ -1240,31 +1234,27 @@ impl Interpreter {
             let this_size = entries.iter().filter(|e| e.is_some()).count();
 
             if this_size as f64 <= other_rec.size {
-                let mut index = 0;
+                let mut cursor = 0;
                 loop {
-                    let entry = {
-                        let borrowed = obj.borrow();
-                        let data = borrowed.set_data().unwrap();
-                        if index >= data.len() {
-                            break;
-                        }
-                        data[index].clone()
+                    let entry = obj
+                        .borrow()
+                        .set_data()
+                        .unwrap()
+                        .next_live(&mut cursor)
+                        .cloned();
+                    let Some(entry) = entry else { break };
+                    let has_result = match interp.call_function(
+                        &other_rec.has,
+                        &other,
+                        std::slice::from_ref(&entry),
+                    ) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
-                    index += 1;
-                    if let Some(entry) = entry {
-                        let has_result = match interp.call_function(
-                            &other_rec.has,
-                            &other,
-                            std::slice::from_ref(&entry),
-                        ) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        if interp.to_boolean_val(&has_result) {
-                            let val = canonicalize_key(entry);
-                            if !set_data_has(&new_entries, &val) {
-                                new_entries.push(Some(val));
-                            }
+                    if interp.to_boolean_val(&has_result) {
+                        let val = canonicalize_key(entry);
+                        if !set_data_has(&new_entries, &val) {
+                            new_entries.push(Some(val));
                         }
                     }
                 }
@@ -1411,25 +1401,21 @@ impl Interpreter {
                 return Completion::Normal(JsValue::boolean(false));
             }
             // Iterate live set data (re-read each iteration for mutation support)
-            let mut i = 0;
+            let mut cursor = 0;
             loop {
-                let entry = {
-                    let borrowed = obj.borrow();
-                    let data = borrowed.set_data().unwrap();
-                    if i >= data.len() {
-                        break;
-                    }
-                    data[i].clone()
+                let entry = obj
+                    .borrow()
+                    .set_data()
+                    .unwrap()
+                    .next_live(&mut cursor)
+                    .cloned();
+                let Some(e) = entry else { break };
+                let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
+                    Completion::Normal(v) => v,
+                    other => return other,
                 };
-                i += 1;
-                if let Some(e) = entry {
-                    let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    if !interp.to_boolean_val(&has_result) {
-                        return Completion::Normal(JsValue::boolean(false));
-                    }
+                if !interp.to_boolean_val(&has_result) {
+                    return Completion::Normal(JsValue::boolean(false));
                 }
             }
             Completion::Normal(JsValue::boolean(true))
@@ -1485,25 +1471,21 @@ impl Interpreter {
             let this_size = entries.iter().filter(|e| e.is_some()).count();
             if this_size as f64 <= other_rec.size {
                 // Iterate live set data (re-read each iteration for mutation support)
-                let mut i = 0;
+                let mut cursor = 0;
                 loop {
-                    let entry = {
-                        let borrowed = obj.borrow();
-                        let data = borrowed.set_data().unwrap();
-                        if i >= data.len() {
-                            break;
-                        }
-                        data[i].clone()
+                    let entry = obj
+                        .borrow()
+                        .set_data()
+                        .unwrap()
+                        .next_live(&mut cursor)
+                        .cloned();
+                    let Some(e) = entry else { break };
+                    let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
-                    i += 1;
-                    if let Some(e) = entry {
-                        let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        if interp.to_boolean_val(&has_result) {
-                            return Completion::Normal(JsValue::boolean(false));
-                        }
+                    if interp.to_boolean_val(&has_result) {
+                        return Completion::Normal(JsValue::boolean(false));
                     }
                 }
             } else {
@@ -1560,7 +1542,7 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Set".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Set(Vec::new());
+                    crate::interpreter::types::ObjectKind::Set(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1957,7 +1939,7 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "WeakMap".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Map(Vec::new());
+                    crate::interpreter::types::ObjectKind::Map(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -2252,7 +2234,7 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "WeakSet".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Set(Vec::new());
+                    crate::interpreter::types::ObjectKind::Set(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
