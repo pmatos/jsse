@@ -2,11 +2,12 @@ use super::*;
 
 thread_local! {
     /// The default `constructor(...args) { super(...args); }` that
-    /// ClassDefinitionEvaluation gives a derived class without one, with its
-    /// `uses_arguments` flag. Every such class shares this Body, so the
-    /// per-Body caches (hoist analysis, ICs, bytecode verdict) hold one entry
-    /// for all of them instead of a fresh one per class evaluation.
-    static DEFAULT_DERIVED_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body, bool) = {
+    /// ClassDefinitionEvaluation gives a derived class without one. Every such
+    /// class shares this Body, so the per-Body side tables (hoist analysis, IC
+    /// store) hold one entry for all of them instead of a fresh one per class
+    /// evaluation. The compiled bytecode is still cached per function object.
+    /// The body never mentions `arguments`, so its `uses_arguments` is `false`.
+    static DEFAULT_DERIVED_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body) = {
         let statements = vec![Statement::Expression(Expression::Call(
             ExprBox::new(Expression::Super),
             vec![Expression::Spread(ExprBox::new(Expression::Identifier(
@@ -14,9 +15,9 @@ thread_local! {
             )))],
             CallSiteId::UNASSIGNED,
         ))];
-        let uses_args = stmts_use_arguments(&statements);
+        debug_assert!(!stmts_use_arguments(&statements));
         let params = vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))];
-        (Rc::new(params), Body::new(statements), uses_args)
+        (Rc::new(params), Body::new(statements))
     };
     /// The synthesized `constructor() {}` of a base class without one, shared
     /// the same way.
@@ -390,7 +391,7 @@ impl Interpreter {
                 has_simple_params: crate::ast::params_are_simple(&cm.value.params),
             }
         } else if super_val.is_some() {
-            let (params, body, uses_args) = DEFAULT_DERIVED_CONSTRUCTOR.with(|c| c.clone());
+            let (params, body) = DEFAULT_DERIVED_CONSTRUCTOR.with(|c| c.clone());
             JsFunction::User {
                 name: Some(name.to_string()),
                 params,
@@ -403,7 +404,7 @@ impl Interpreter {
                 is_method: false,
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
-                uses_arguments: uses_args,
+                uses_arguments: false,
                 // default derived constructor takes `...args` (rest) — not simple
                 has_simple_params: false,
             }

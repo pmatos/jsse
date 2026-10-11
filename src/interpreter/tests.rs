@@ -6072,7 +6072,9 @@ mod root_stack_discipline {
 
 // Classes without an explicit constructor share one synthesized constructor
 // Body per shape (base or derived), so evaluating such classes in a loop must
-// not add a per-Body cache entry per evaluation.
+// not add a per-Body cache entry per evaluation. `new B()` takes the
+// default-derived fast path and never runs B's synthesized Body, so the derived
+// shape is exercised through `Reflect.construct`, which does.
 #[test]
 fn synthesized_default_constructors_share_one_body_per_shape() {
     let interp = run_script(
@@ -6084,7 +6086,9 @@ fn synthesized_default_constructors_share_one_body_per_shape() {
           class B extends Base {}
           var a = new A();
           var b = new B();
-          if (a instanceof A && b instanceof Base && b.tag === "base") made++;
+          var c = Reflect.construct(B, []);
+          if (a instanceof A && b instanceof Base && b.tag === "base" &&
+              c instanceof B && c.tag === "base") made++;
         }
         globalThis.__made = made;
         "#,
