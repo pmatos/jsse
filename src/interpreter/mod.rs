@@ -294,8 +294,8 @@ pub(crate) struct Interpreter {
     function_env_pool: Vec<EnvRef>,
     /// Recycled operand/reference stacks for bytecode chunk activations, so a
     /// call does not allocate two `Vec`s (see `vm::run_chunk_with_var_prologue`).
-    pub(crate) vm_stack_pool: Vec<Vec<JsValue>>,
-    pub(crate) vm_ref_pool: Vec<Vec<crate::interpreter::eval::IdentifierRef>>,
+    vm_stack_pool: Vec<Vec<JsValue>>,
+    vm_ref_pool: Vec<Vec<crate::interpreter::eval::IdentifierRef>>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: root_stack::RootStack,
@@ -585,7 +585,7 @@ impl DeferredCallArguments {
     }
 
     fn to_vec(&self) -> Vec<JsValue> {
-        self.values.iter().cloned().collect()
+        self.values.to_vec()
     }
 
     #[cfg(test)]
@@ -2319,7 +2319,7 @@ impl Interpreter {
             for (i, val) in args.iter().enumerate() {
                 o.insert_property(
                     JsPropertyKey::from_index(i),
-                    PropertyDescriptor::data(val.clone(), true, true, true),
+                    PropertyDescriptor::data_default(val.clone()),
                 );
             }
 
@@ -2330,7 +2330,7 @@ impl Interpreter {
                 );
                 // Only the last occurrence of a duplicated parameter name
                 // stays mapped, and only indices that received an argument.
-                let mut map = HashMap::new();
+                let mut map = HashMap::with_capacity(params.len().min(args.len()));
                 for (i, param) in params.iter().enumerate().take(args.len()) {
                     let Pattern::Identifier(name) = param else {
                         continue;
@@ -2348,14 +2348,12 @@ impl Interpreter {
             } else if let Some(thrower) = thrower {
                 o.insert_property(
                     "callee",
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        get: Some(thrower.clone()),
-                        set: Some(thrower),
-                        enumerable: Some(false),
-                        configurable: Some(false),
-                    },
+                    PropertyDescriptor::accessor(
+                        Some(thrower.clone()),
+                        Some(thrower),
+                        false,
+                        false,
+                    ),
                 );
             }
 
@@ -2367,7 +2365,6 @@ impl Interpreter {
             {
                 o.insert_property(key, PropertyDescriptor::data(values, true, false, true));
             }
-            o.shape_id = crate::interpreter::types::fresh_shape_id();
         }
         JsValue::object(obj_id)
     }

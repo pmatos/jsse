@@ -195,6 +195,19 @@ pub(crate) fn run_script_chunk(
 const MAX_POOLED_VM_STACKS: usize = 64;
 const MAX_POOLED_VM_STACK_CAPACITY: usize = 1024;
 
+/// Drops whatever an abrupt exit left in `buf` (it may hold environments) and
+/// keeps the allocation for the next activation; empty and oversized buffers
+/// are not worth pinning.
+fn recycle_vm_buffer<T>(pool: &mut Vec<Vec<T>>, mut buf: Vec<T>) {
+    buf.clear();
+    if buf.capacity() != 0
+        && pool.len() < MAX_POOLED_VM_STACKS
+        && buf.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
+    {
+        pool.push(buf);
+    }
+}
+
 fn run_chunk_with_var_prologue(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -204,7 +217,11 @@ fn run_chunk_with_var_prologue(
 ) -> Completion {
     let gc_frame = interp.gc_bytecode_roots.len();
     let mut stack = interp.vm_stack_pool.pop().unwrap_or_default();
-    let mut refs = interp.vm_ref_pool.pop().unwrap_or_default();
+    let mut refs = if chunk.max_refs == 0 {
+        Vec::new()
+    } else {
+        interp.vm_ref_pool.pop().unwrap_or_default()
+    };
     stack.reserve(chunk.max_stack as usize);
     refs.reserve(chunk.max_refs as usize);
     let result = run_chunk_inner(
@@ -216,21 +233,8 @@ fn run_chunk_with_var_prologue(
         &mut stack,
         &mut refs,
     );
-    // Drop whatever an abrupt exit left behind (it may hold environments) and
-    // keep the buffers for the next activation; oversized ones are not worth
-    // pinning.
-    stack.clear();
-    refs.clear();
-    if interp.vm_stack_pool.len() < MAX_POOLED_VM_STACKS
-        && stack.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
-    {
-        interp.vm_stack_pool.push(stack);
-    }
-    if interp.vm_ref_pool.len() < MAX_POOLED_VM_STACKS
-        && refs.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
-    {
-        interp.vm_ref_pool.push(refs);
-    }
+    recycle_vm_buffer(&mut interp.vm_stack_pool, stack);
+    recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
     // `Throw`/`Exit` are abrupt and can leave operands from an
     // outer-in-progress expression still on the stack (issue #331) — every
     // other completion is produced only after the chunk's own opcode
@@ -422,7 +426,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = chunk.names[idx as usize].clone();
-                let gc_frame = root_operand_stack(interp, &*stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let base = stack.pop().expect("stack underflow on GetProp");
                 let result = member_get(interp, &base, &name);
                 unroot_stack_value(interp, &base);
@@ -448,7 +452,7 @@ fn run_chunk_inner(
                     pop_value(interp, stack, "stack underflow on GetElement base");
                     push_value(interp, stack, value);
                 } else {
-                    let gc_frame = root_operand_stack(interp, &*stack);
+                    let gc_frame = root_operand_stack(interp, stack);
                     let key_val = stack.pop().expect("stack underflow on GetElement key");
                     let base = stack.pop().expect("stack underflow on GetElement base");
                     let result = member_get_computed(interp, &base, &key_val);
@@ -465,7 +469,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                let gc_frame = root_operand_stack(interp, &*stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let base = stack.pop().expect("stack underflow on LoadMethod");
                 let result = member_get(interp, &base, name);
                 unroot_stack_value(interp, &base);
@@ -479,7 +483,7 @@ fn run_chunk_inner(
                 }
             }
             Op::LoadMethodElement => {
-                let gc_frame = root_operand_stack(interp, &*stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let key_val = stack
                     .pop()
                     .expect("stack underflow on LoadMethodElement key");
@@ -502,7 +506,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = chunk.names[idx as usize].clone();
-                let gc_frame = root_operand_stack(interp, &*stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let rhs = stack.pop().expect("stack underflow on SetProp rhs");
                 let base = stack.pop().expect("stack underflow on SetProp base");
                 let base_root = base.clone();
@@ -528,7 +532,7 @@ fn run_chunk_inner(
                     push_value(interp, stack, rhs);
                     continue;
                 }
-                let gc_frame = root_operand_stack(interp, &*stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let rhs = stack.pop().expect("stack underflow on SetElement rhs");
                 let key_val = stack.pop().expect("stack underflow on SetElement key");
                 let base = stack.pop().expect("stack underflow on SetElement base");
@@ -798,7 +802,7 @@ fn run_chunk_inner(
             Op::Jump => {
                 let offset = decode_i16(chunk, pc) as i32;
                 if offset < 0 {
-                    safepoint_with_empty_stacks(interp, &*stack, &*refs, "loop backedge");
+                    safepoint_with_empty_stacks(interp, stack, refs, "loop backedge");
                 }
                 pc = (pc as i32 + 2 + offset) as usize;
             }
@@ -860,7 +864,7 @@ fn run_chunk_inner(
                         interp.create_type_error(&format!("Cannot read properties of {base}")),
                     );
                 }
-                let gc_frame = root_operand_stack(interp, &*stack);
+                let gc_frame = root_operand_stack(interp, stack);
                 let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
                 let result = interp.to_primitive(&key, "string");
                 unroot_stack_value(interp, &key);
@@ -881,7 +885,7 @@ fn run_chunk_inner(
                 }
             }
             Op::Safepoint => {
-                safepoint_with_empty_stacks(interp, &*stack, &*refs, "statement boundary");
+                safepoint_with_empty_stacks(interp, stack, refs, "statement boundary");
             }
         }
     }

@@ -28,7 +28,7 @@ impl Drop for EvalDepthGuard {
     }
 }
 
-pub(crate) enum IdentifierRef {
+pub(super) enum IdentifierRef {
     WithObject(u64),
     Unresolvable,
     SpecificEnv(EnvRef),
@@ -5115,13 +5115,26 @@ impl Interpreter {
         }
     }
 
-    /// The realm's `[[GlobalThisValue]]` (§10.2.1.2 OrdinaryCallBindThis).
-    /// `fallback` is returned only if the realm has no global object yet.
-    #[inline]
-    fn global_this_value(&self, fallback: &JsValue) -> JsValue {
-        match self.realm().global_object {
-            Some(id) => JsValue::object(id),
-            None => fallback.clone(),
+    /// §10.2.1.2 OrdinaryCallBindThis: sloppy callees see the realm's global
+    /// object for a nullish `this` and the wrapper object for a primitive one.
+    fn ordinary_call_bind_this(
+        &mut self,
+        this_val: &JsValue,
+        is_strict: bool,
+        closure_strict: bool,
+    ) -> JsValue {
+        if is_strict || closure_strict || this_val.is_object() {
+            return this_val.clone();
+        }
+        if this_val.is_nullish() {
+            return match self.realm().global_object {
+                Some(id) => JsValue::object(id),
+                None => this_val.clone(),
+            };
+        }
+        match self.to_object(this_val) {
+            Completion::Normal(v) => v,
+            _ => this_val.clone(),
         }
     }
 
@@ -5287,11 +5300,7 @@ impl Interpreter {
                     is_async: *is_async,
                     uses_arguments: *uses_arguments,
                     has_simple_params: *has_simple_params,
-                    captured_new_target: if *is_arrow {
-                        captured_new_target.clone()
-                    } else {
-                        None
-                    },
+                    captured_new_target: captured_new_target.clone(),
                 }),
                 Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
                 None => None,
@@ -5554,20 +5563,8 @@ impl Interpreter {
                             let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
-                            let effective_this = if !is_strict && !closure_strict {
-                                if (_this_val).is_nullish() {
-                                    self.global_this_value(_this_val)
-                                } else if !(_this_val).is_object() {
-                                    match self.to_object(_this_val) {
-                                        Completion::Normal(v) => v,
-                                        _ => _this_val.clone(),
-                                    }
-                                } else {
-                                    _this_val.clone()
-                                }
-                            } else {
-                                _this_val.clone()
-                            };
+                            let effective_this =
+                                self.ordinary_call_bind_this(_this_val, is_strict, closure_strict);
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
                                 Binding {
@@ -5736,20 +5733,11 @@ impl Interpreter {
                                 func_env.borrow_mut().is_derived_constructor_scope = true;
                                 self.constructing_derived = false;
                             } else {
-                                let effective_this = if !is_strict && !closure_strict {
-                                    if (_this_val).is_nullish() {
-                                        self.global_this_value(_this_val)
-                                    } else if !(_this_val).is_object() {
-                                        match self.to_object(_this_val) {
-                                            Completion::Normal(v) => v,
-                                            _ => _this_val.clone(),
-                                        }
-                                    } else {
-                                        _this_val.clone()
-                                    }
-                                } else {
-                                    _this_val.clone()
-                                };
+                                let effective_this = self.ordinary_call_bind_this(
+                                    _this_val,
+                                    is_strict,
+                                    closure_strict,
+                                );
                                 func_env.borrow_mut().bindings.insert(
                                     "this".to_string(),
                                     Binding {
@@ -7974,20 +7962,8 @@ impl Interpreter {
             // Set up `this` and `arguments` before binding parameters so that
             // default parameter expressions can reference `arguments`.
             if !is_arrow {
-                let effective_this = if !is_strict && !closure_strict {
-                    if (this_val).is_nullish() {
-                        interp.global_this_value(this_val)
-                    } else if !(this_val).is_object() {
-                        match interp.to_object(this_val) {
-                            Completion::Normal(v) => v,
-                            _ => this_val.clone(),
-                        }
-                    } else {
-                        this_val.clone()
-                    }
-                } else {
-                    this_val.clone()
-                };
+                let effective_this =
+                    interp.ordinary_call_bind_this(this_val, is_strict, closure_strict);
                 func_env.borrow_mut().bindings.insert(
                     "this".to_string(),
                     Binding {

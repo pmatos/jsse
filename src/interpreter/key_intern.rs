@@ -19,6 +19,8 @@
 //! appears on at most a handful of objects). They are NOT cached: `intern_key`
 //! returns a fresh `JsPropertyKey` for them. The gate mirrors `parse_array_index`
 //! in `types.rs` (all-ASCII-digits, no leading zero except "0", value < 2^32-1).
+//! The one exception is `JsPropertyKey::from_index`, which shares a fixed table
+//! of the first few index keys for arguments objects.
 //!
 //! ## Admission bounds
 //! The cache retains at most `MAX_CACHE_ENTRIES` keys, each no longer than
