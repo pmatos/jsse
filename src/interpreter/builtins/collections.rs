@@ -2,10 +2,9 @@ use super::super::*;
 
 /// §24.1.3 RequireInternalSlot(M, [[MapData]]): confirm `this` is a Map receiver
 /// — an object carrying Map data under the "Map" brand (a WeakMap shares the
-/// Map data kind but is branded "WeakMap", so it is rejected). This is the
-/// sibling of `string.rs`'s `this_string_value` / `this_js_string`: it
-/// concentrates the receiver brand-check that every `Map.prototype` method would
-/// otherwise open-code, returning the receiver's object id and cell, or a
+/// Map data kind but is branded "WeakMap", so it is rejected). It concentrates
+/// the receiver brand-check that every `Map.prototype` method would otherwise
+/// open-code, returning the receiver's object id and cell, or a
 /// TypeError completion naming the method. The cell is an owned handle (via
 /// `get_object`) so callers may re-enter the interpreter — e.g. `forEach`
 /// invoking a callback — while holding it.

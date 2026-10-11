@@ -617,15 +617,6 @@ fn iterator_step_value_getter(
     outcome
 }
 
-fn iterator_join_to_string(interp: &mut Interpreter, value: &JsValue) -> Result<JsString, JsValue> {
-    let primitive = if value.is_object() {
-        interp.to_primitive(value, "string")?
-    } else {
-        value.clone()
-    };
-    interp.to_js_string(&primitive)
-}
-
 // IteratorClose per spec, taking a completion and returning updated completion.
 // If completion is Err (throw), the original error is preserved even if .return() throws.
 fn iterator_close_with_completion(
@@ -2005,7 +1996,7 @@ impl Interpreter {
             let separator = if separator.is_undefined() {
                 JsString::from_str(",")
             } else {
-                match iterator_join_to_string(interp, &separator) {
+                match interp.to_js_string(&separator) {
                     Ok(value) => value,
                     Err(error) => {
                         let _ = iterator_close_with_completion(interp, this, Err(error.clone()));
@@ -2040,7 +2031,7 @@ impl Interpreter {
                 }
 
                 if !value.is_nullish() {
-                    match iterator_join_to_string(interp, &value) {
+                    match interp.to_js_string(&value) {
                         Ok(value_string) => {
                             result.extend(value_string.code_units.iter().copied());
                         }
