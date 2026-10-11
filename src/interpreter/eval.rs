@@ -1,6 +1,7 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
 use crate::interpreter::generator_analysis::block_has_await_using;
+use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
 use crate::interpreter::property::SetOutcome;
 
 mod access;
@@ -539,18 +540,8 @@ impl Interpreter {
                     self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
                 // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
-                } else if *op == BinaryOp::Add
-                    && !lval.is_object()
-                    && !rval.is_object()
-                    && (lval.is_string() || rval.is_string())
-                {
-                    if lval.is_symbol() || rval.is_symbol() {
-                        Completion::Throw(
-                            self.create_type_error("Cannot convert a Symbol value to a string"),
-                        )
-                    } else {
-                        Completion::Normal(concat_string_values(&lval, &rval))
-                    }
+                } else if *op == BinaryOp::Add && is_primitive_string_concat(&lval, &rval) {
+                    self.concat_primitives(&lval, &rval)
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
@@ -1809,6 +1800,101 @@ impl Interpreter {
         Ok(None)
     }
 
+    /// The state machine for a generator, async generator or async function
+    /// body. It depends only on the Body and its parameters (one pair per
+    /// function literal), so it is built once and shared by every call (#914).
+    pub(super) fn state_machine_for(
+        &mut self,
+        kind: StateMachineKind,
+        body: &Body,
+        params: &[Pattern],
+        func_obj_id: u64,
+    ) -> Rc<GeneratorStateMachine> {
+        use crate::interpreter::generator_transform::{
+            transform_async_function, transform_async_generator, transform_generator,
+        };
+        let machine = match self.state_machine_memo.get(body) {
+            Some((cached_kind, machine)) if cached_kind == kind => machine,
+            _ => {
+                let machine = Rc::new(match kind {
+                    StateMachineKind::Generator => transform_generator(body.as_slice(), params),
+                    StateMachineKind::AsyncGenerator => {
+                        transform_async_generator(body.as_slice(), params)
+                    }
+                    StateMachineKind::AsyncFunction => {
+                        transform_async_function(body.as_slice(), params)
+                    }
+                });
+                self.state_machine_memo
+                    .insert(body, (kind, machine.clone()));
+                machine
+            }
+        };
+        // BODY attribution is per function object, so a counters build gives
+        // each one its own copy carrying its key.
+        #[cfg(feature = "perf-counters")]
+        {
+            let mut owned = (*machine).clone();
+            owned.perf_key = Some(self.perf_body_name(func_obj_id));
+            Rc::new(owned)
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        {
+            let _ = func_obj_id;
+            machine
+        }
+    }
+
+    /// The bytecode compile verdict for `body`, recorded on the function
+    /// object. It depends on the Body alone, so every closure of one function
+    /// literal shares the memoised verdict (#900).
+    fn shared_bytecode_verdict(
+        &mut self,
+        func_obj_id: u64,
+        body: &Body,
+    ) -> crate::interpreter::bytecode::BytecodeCacheState {
+        use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
+        let state = match self.bytecode_memo.get(body) {
+            Some(state) => {
+                // BAIL counts each literal once; the BODY row of every closure
+                // still names the reason.
+                #[cfg(feature = "perf-counters")]
+                {
+                    if let BytecodeCacheState::Ineligible(reason) = &state {
+                        let key = self.perf_body_name(func_obj_id);
+                        self.perf.bail_by_name.insert(key, reason);
+                    }
+                }
+                state
+            }
+            None => {
+                let state = match compiler::compile_body(body.as_slice()) {
+                    Ok(c) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.compile_ok += 1;
+                        }
+                        BytecodeCacheState::Compiled(Rc::new(c))
+                    }
+                    Err(compiler::CompileError::Unsupported(reason)) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            let (name, seq) = self.perf_body_name(func_obj_id);
+                            self.perf.record_bail(reason, name, seq);
+                        }
+                        BytecodeCacheState::Ineligible(reason)
+                    }
+                };
+                self.bytecode_memo.insert(body, state.clone());
+                state
+            }
+        };
+        if let Some(o) = self.get_object(func_obj_id) {
+            o.borrow_mut().bytecode_cache = state.clone();
+        }
+        state
+    }
+
     pub(super) fn dispatch_body(
         &mut self,
         func_obj_id: u64,
@@ -1817,44 +1903,17 @@ impl Interpreter {
         this_val: &JsValue,
     ) -> Completion {
         if self.bytecode_enabled {
-            use crate::interpreter::bytecode::{BytecodeCacheState, compiler, vm};
-            let cache_state = self
+            use crate::interpreter::bytecode::{BytecodeCacheState, vm};
+            let cached = self
                 .get_object(func_obj_id)
-                .map(|o| o.borrow().bytecode_cache.clone())
-                .unwrap_or(BytecodeCacheState::Untried);
-            let chunk = match cache_state {
-                BytecodeCacheState::Compiled(c) => Some(c),
-                BytecodeCacheState::Ineligible => None,
-                BytecodeCacheState::Untried => match compiler::compile_body(body.as_slice()) {
-                    Ok(c) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            self.perf.compile_ok += 1;
-                        }
-                        let rc = Rc::new(c);
-                        if let Some(o) = self.get_object(func_obj_id) {
-                            o.borrow_mut().bytecode_cache =
-                                BytecodeCacheState::Compiled(rc.clone());
-                        }
-                        Some(rc)
-                    }
-                    Err(_e) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
-                                reason,
-                            ) = _e;
-                            let (name, seq) = self.perf_body_name(func_obj_id);
-                            self.perf.record_bail(reason, name, seq);
-                        }
-                        if let Some(o) = self.get_object(func_obj_id) {
-                            o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
-                        }
-                        None
-                    }
-                },
+                .map(|o| o.borrow().bytecode_cache.clone());
+            let cache_state = match cached {
+                Some(BytecodeCacheState::Untried) | None => {
+                    self.shared_bytecode_verdict(func_obj_id, body)
+                }
+                Some(known) => known,
             };
-            if let Some(chunk) = chunk {
+            if let BytecodeCacheState::Compiled(chunk) = cache_state {
                 #[cfg(feature = "perf-counters")]
                 {
                     self.perf.body_compiled += 1;
@@ -1903,6 +1962,18 @@ impl Interpreter {
         self.perf_name_cache
             .insert(func_obj_id, (interned.clone(), seq));
         (interned, seq)
+    }
+
+    /// `+` on two primitives where at least one is a String. A left string
+    /// that owns its buffer's tail is extended in place instead of copied.
+    /// Callers check [`is_primitive_string_concat`] first.
+    pub(super) fn concat_primitives(&mut self, lval: &JsValue, rval: &JsValue) -> Completion {
+        if lval.is_symbol() || rval.is_symbol() {
+            return Completion::Throw(
+                self.create_type_error("Cannot convert a Symbol value to a string"),
+            );
+        }
+        Completion::Normal(concat_string_values(lval, rval))
     }
 
     pub(super) fn eval_binary(
@@ -1982,7 +2053,7 @@ impl Interpreter {
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    Completion::Normal(concat_string_values(&lprim, &rprim))
+                    self.concat_primitives(&lprim, &rprim)
                 } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
                     Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
                         &a.value, &b.value,
@@ -3524,14 +3595,8 @@ impl Interpreter {
             AssignOp::AddAssign => {
                 // Fast path: both primitives and at least one is a string — avoid
                 // to_primitive/js_value_to_code_units clones in eval_binary.
-                if !lval.is_object() && !rval.is_object() && (lval.is_string() || rval.is_string())
-                {
-                    if lval.is_symbol() || rval.is_symbol() {
-                        return Completion::Throw(
-                            self.create_type_error("Cannot convert a Symbol value to a string"),
-                        );
-                    }
-                    return Completion::Normal(concat_string_values(&lval, &rval));
+                if is_primitive_string_concat(&lval, &rval) {
+                    return self.concat_primitives(&lval, &rval);
                 }
                 self.eval_binary(BinaryOp::Add, &lval, &rval)
             }
@@ -5383,15 +5448,12 @@ impl Interpreter {
                                 func_env.clone()
                             };
 
-                            use crate::interpreter::generator_transform::transform_async_generator;
-                            let state_machine = transform_async_generator(body.as_slice(), &params);
-                            #[cfg(feature = "perf-counters")]
-                            let state_machine = {
-                                let mut state_machine = state_machine;
-                                state_machine.perf_key = Some(self.perf_body_name(o.id));
-                                state_machine
-                            };
-                            let state_machine = Rc::new(state_machine);
+                            let state_machine = self.state_machine_for(
+                                StateMachineKind::AsyncGenerator,
+                                &body,
+                                &params,
+                                o.id,
+                            );
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -5575,15 +5637,12 @@ impl Interpreter {
                                 func_env.clone()
                             };
 
-                            use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine = transform_generator(body.as_slice(), &params);
-                            #[cfg(feature = "perf-counters")]
-                            let state_machine = {
-                                let mut state_machine = state_machine;
-                                state_machine.perf_key = Some(self.perf_body_name(o.id));
-                                state_machine
-                            };
-                            let state_machine = Rc::new(state_machine);
+                            let state_machine = self.state_machine_for(
+                                StateMachineKind::Generator,
+                                &body,
+                                &params,
+                                o.id,
+                            );
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -7993,17 +8052,12 @@ impl Interpreter {
             func_env.borrow_mut().strict = is_strict;
             interp.in_tail_position = false;
 
-            let sm = crate::interpreter::generator_transform::transform_async_function(
-                body.as_slice(),
+            let sm = interp.state_machine_for(
+                StateMachineKind::AsyncFunction,
+                body,
                 params,
+                _func_obj_id,
             );
-            #[cfg(feature = "perf-counters")]
-            let sm = {
-                let mut sm = sm;
-                sm.perf_key = Some(interp.perf_body_name(_func_obj_id));
-                sm
-            };
-            let sm = Rc::new(sm);
 
             for tv in &sm.temp_vars {
                 func_env.borrow_mut().declare(tv, BindingKind::Var);
@@ -10356,6 +10410,12 @@ impl Interpreter {
             None => Completion::Normal(JsValue::UNDEFINED),
         }
     }
+}
+
+/// True when `l + r` is a string concatenation that needs no ToPrimitive call:
+/// both operands are primitives and at least one is a String.
+pub(super) fn is_primitive_string_concat(l: &JsValue, r: &JsValue) -> bool {
+    !l.is_object() && !r.is_object() && (l.is_string() || r.is_string())
 }
 
 /// §7.2.13 IsLessThan — the numeric comparison of a BigInt against a Number.

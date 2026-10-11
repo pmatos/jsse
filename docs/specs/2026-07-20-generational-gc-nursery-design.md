@@ -71,12 +71,16 @@ ArrayBuffer pressure continues to count toward the major budget, and
 backing-store bytes are released whether their owner dies in a minor or full
 collection.
 
-Two consecutive minors with at least 90% survival suppress further scavenges;
-the next 4 MiB allocation budget requests a major collection instead. The same
-fallback applies when the remembered set covers at least 75% of a heap with
-8,192 or more live objects. These guards keep a mutation-heavy or
-survivor-heavy workload from turning minor collection into repeated near-major
-traces.
+When the remembered set covers at least 75% of a heap with 8,192 or more live
+objects, minor collection is suppressed and the next 4 MiB allocation budget
+requests a major collection instead. This guard keeps a mutation-heavy
+workload from turning minor collection into repeated near-major traces.
+
+An earlier rule applied the same fallback after two consecutive minors with at
+least 90% survival. It was removed (#908): a minor costs about the same per
+nursery whatever the live-set size, while the forced major traced the whole
+growing heap every nursery, which made survivor-heavy workloads such as splay
+and long promise chains spend most of their time in full collections.
 
 ## Specification Semantics
 

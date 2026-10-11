@@ -351,7 +351,8 @@ fn module_body_gets_its_own_attribution_row() {
 
 /// Two distinct functions sharing a name merged into one `BODY` row with
 /// combined work, so the ranking could identify neither (#537 review, third
-/// pass). The id disambiguates them; unique names must stay bare.
+/// pass). The id disambiguates them; unique names must stay bare. `BODY` rows
+/// count tree-walker work only, so this runs with `--no-bytecode`.
 #[test]
 fn same_named_functions_get_separate_body_rows() {
     let dir = scratch("same-name");
@@ -364,7 +365,7 @@ fn same_named_functions_get_separate_body_rows() {
     .expect("write main");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["main.js"])
+        .args(["--no-bytecode", "main.js"])
         .output()
         .expect("run jsse");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -378,6 +379,22 @@ fn same_named_functions_get_separate_body_rows() {
         2,
         "both `same` functions must appear separately; stderr:\n{stderr}"
     );
+    // Separate rows are not enough: each must carry only its own work (900 vs
+    // 30 iterations), not the merged total the original bug reported.
+    let mut work: Vec<u64> = same_rows
+        .iter()
+        .map(|l| {
+            l.split('\t')
+                .nth(2)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("unparsable BODY row {l:?}"))
+        })
+        .collect();
+    work.sort_unstable();
+    assert!(
+        work[1] > work[0] * 10,
+        "each `same` row must hold its own work, got {work:?}; stderr:\n{stderr}"
+    );
     assert!(
         !stderr.lines().any(|l| l.starts_with("BODY\tsame\t")),
         "the merged bare-name row must be gone; stderr:\n{stderr}"
@@ -387,4 +404,41 @@ fn same_named_functions_get_separate_body_rows() {
         stderr.lines().any(|l| l.starts_with("BODY\touter1\t")),
         "unique names must stay bare; stderr:\n{stderr}"
     );
+}
+
+/// Closures of one function literal share its compile verdict (#900), so the
+/// literal bails once, but each closure's `BODY` row must still name the bail
+/// reason rather than `-` (#943 review).
+#[test]
+fn every_closure_of_an_ineligible_literal_names_its_bail_reason() {
+    let dir = scratch("shared-bail");
+    fs::write(
+        dir.join("main.js"),
+        "function make(k) { return function inner(n) { var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
+         var fs = [make(1), make(2), make(3)];\n\
+         for (var j = 0; j < fs.length; j++) { fs[j](10); }\n",
+    )
+    .expect("write main");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["main.js"])
+        .output()
+        .expect("run jsse");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let inner_rows: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("BODY\tinner#"))
+        .collect();
+    assert_eq!(
+        inner_rows.len(),
+        3,
+        "each closure gets its own row; stderr:\n{stderr}"
+    );
+    for row in &inner_rows {
+        assert!(
+            !row.ends_with("\t-"),
+            "every closure's row must name the bail reason, got {row:?}; stderr:\n{stderr}"
+        );
+    }
 }

@@ -1,0 +1,4169 @@
+{
+  "engine": "/home/igalia/pmatos/dev/bench-workspace/run-2026-10-10/boa-v0.22-src/target/release/boa",
+  "jetstream_version": "3.0",
+  "timestamp": "2026-10-10T19:01:34",
+  "measurement_protocol": {
+    "repeats": 3,
+    "idle_gate_enabled": false,
+    "idle_threshold": 1.5,
+    "instability_threshold": 0.05,
+    "interrupted_by_busy_host": false
+  },
+  "host": {
+    "hostname": "buildbox3",
+    "cpu_model": "AMD EPYC 7501 32-Core Processor",
+    "nproc": 61,
+    "loadavg_start": {
+      "one_minute": 1.07,
+      "five_minutes": 1.54,
+      "fifteen_minutes": 1.77
+    },
+    "loadavg_error": null,
+    "available_cpus": [
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109,
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      120
+    ],
+    "cpu_topology": "uniform",
+    "cpu_max_freq_khz": {
+      "60": 2000000,
+      "61": 2000000,
+      "62": 2000000,
+      "63": 2000000,
+      "64": 2000000,
+      "65": 2000000,
+      "66": 2000000,
+      "67": 2000000,
+      "68": 2000000,
+      "69": 2000000,
+      "70": 2000000,
+      "71": 2000000,
+      "72": 2000000,
+      "73": 2000000,
+      "74": 2000000,
+      "75": 2000000,
+      "76": 2000000,
+      "77": 2000000,
+      "78": 2000000,
+      "79": 2000000,
+      "80": 2000000,
+      "81": 2000000,
+      "82": 2000000,
+      "83": 2000000,
+      "84": 2000000,
+      "85": 2000000,
+      "86": 2000000,
+      "87": 2000000,
+      "88": 2000000,
+      "89": 2000000,
+      "90": 2000000,
+      "91": 2000000,
+      "92": 2000000,
+      "93": 2000000,
+      "94": 2000000,
+      "95": 2000000,
+      "96": 2000000,
+      "97": 2000000,
+      "98": 2000000,
+      "99": 2000000,
+      "100": 2000000,
+      "101": 2000000,
+      "102": 2000000,
+      "103": 2000000,
+      "104": 2000000,
+      "105": 2000000,
+      "106": 2000000,
+      "107": 2000000,
+      "108": 2000000,
+      "109": 2000000,
+      "110": 2000000,
+      "111": 2000000,
+      "112": 2000000,
+      "113": 2000000,
+      "114": 2000000,
+      "115": 2000000,
+      "116": 2000000,
+      "117": 2000000,
+      "118": 2000000,
+      "119": 2000000,
+      "120": 2000000
+    },
+    "fast_cores": [],
+    "pinning": {
+      "applied": false,
+      "cpu_list": null,
+      "reason": "all available CPUs report 2000000 kHz maximum"
+    }
+  },
+  "overall_score": 2.50898360829811,
+  "passed": 44,
+  "total": 48,
+  "results": [
+    {
+      "name": "Air",
+      "status": "pass",
+      "elapsed": 1.063812255859375,
+      "iterations": 1,
+      "scores": {
+        "first_time": 693,
+        "first_score": 7.215007215007215,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 693,
+        "average_score": 7.215007215007215,
+        "overall_score": 7.215007215007214
+      },
+      "raw_times": [
+        693
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 7.215007215007214,
+        "min": 7.163323782234957,
+        "max": 7.256894049346879,
+        "relative_range": 0.013062409288824295,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "Air",
+          "status": "pass",
+          "elapsed": 1.0668690204620361,
+          "iterations": 1,
+          "scores": {
+            "first_time": 693,
+            "first_score": 7.215007215007215,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 693,
+            "average_score": 7.215007215007215,
+            "overall_score": 7.215007215007214
+          },
+          "raw_times": [
+            693
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "Air",
+          "status": "pass",
+          "elapsed": 1.063812255859375,
+          "iterations": 1,
+          "scores": {
+            "first_time": 689,
+            "first_score": 7.256894049346879,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 689,
+            "average_score": 7.256894049346879,
+            "overall_score": 7.256894049346879
+          },
+          "raw_times": [
+            689
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "Air",
+          "status": "pass",
+          "elapsed": 1.0635721683502197,
+          "iterations": 1,
+          "scores": {
+            "first_time": 698,
+            "first_score": 7.163323782234957,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 698,
+            "average_score": 7.163323782234957,
+            "overall_score": 7.163323782234957
+          },
+          "raw_times": [
+            698
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "Basic",
+      "status": "error",
+      "reason": "exit code 1",
+      "stdout": "Uncaught Error: TypeError: cannot convert 'null' or 'undefined' to object (/tmp/tmpt70g1bys.js:1449:3)\n    at lex (/tmp/tmpt70g1bys.js:486:21)\n    at next (native at core/engine/src/vm/opcode/call/mod.rs:196:16)\n    at nextToken (/tmp/tmpt70g1bys.js:694:36)\n    at parseStatement (/tmp/tmpt70g1bys.js:976:32)\n    at parseStatements (/tmp/tmpt70g1bys.js:1187:39)\n    at program (/tmp/tmpt70g1bys.js:1201:48)\n    at prepare (/tmp/tmpt70g1bys.js:339:45)\n    at expect (/tmp/tmpt70g1bys.js:1407:42)\n    at <main> (/tmp/tmpt70g1bys.js:1412:15)\n    at <main> (/tmp/tmpt70g1bys.js:1437:31)\n    at <main> (/tmp/tmpt70g1bys.js:1449:3)\n",
+      "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+      "elapsed": 0.060579538345336914,
+      "repeat": 1,
+      "loadavg_before": null,
+      "completed_repeats": 0,
+      "measurements": [
+        {
+          "name": "Basic",
+          "status": "error",
+          "reason": "exit code 1",
+          "stdout": "Uncaught Error: TypeError: cannot convert 'null' or 'undefined' to object (/tmp/tmpt70g1bys.js:1449:3)\n    at lex (/tmp/tmpt70g1bys.js:486:21)\n    at next (native at core/engine/src/vm/opcode/call/mod.rs:196:16)\n    at nextToken (/tmp/tmpt70g1bys.js:694:36)\n    at parseStatement (/tmp/tmpt70g1bys.js:976:32)\n    at parseStatements (/tmp/tmpt70g1bys.js:1187:39)\n    at program (/tmp/tmpt70g1bys.js:1201:48)\n    at prepare (/tmp/tmpt70g1bys.js:339:45)\n    at expect (/tmp/tmpt70g1bys.js:1407:42)\n    at <main> (/tmp/tmpt70g1bys.js:1412:15)\n    at <main> (/tmp/tmpt70g1bys.js:1437:31)\n    at <main> (/tmp/tmpt70g1bys.js:1449:3)\n",
+          "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+          "elapsed": 0.060579538345336914,
+          "repeat": 1,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "ML",
+      "status": "pass",
+      "elapsed": 20.4609112739563,
+      "iterations": 1,
+      "scores": {
+        "first_time": 20299,
+        "first_score": 0.24631755258879748,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 20299,
+        "average_score": 0.24631755258879748,
+        "overall_score": 0.2463175525887975
+      },
+      "raw_times": [
+        20299
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.2463175525887975,
+        "min": 0.24492995003429022,
+        "max": 0.24639038091952886,
+        "relative_range": 0.005962647218252348,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "ML",
+          "status": "pass",
+          "elapsed": 20.45735812187195,
+          "iterations": 1,
+          "scores": {
+            "first_time": 20293,
+            "first_score": 0.2463903809195289,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 20293,
+            "average_score": 0.2463903809195289,
+            "overall_score": 0.24639038091952886
+          },
+          "raw_times": [
+            20293
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "ML",
+          "status": "pass",
+          "elapsed": 20.576622009277344,
+          "iterations": 1,
+          "scores": {
+            "first_time": 20414,
+            "first_score": 0.2449299500342902,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 20414,
+            "average_score": 0.2449299500342902,
+            "overall_score": 0.24492995003429022
+          },
+          "raw_times": [
+            20414
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "ML",
+          "status": "pass",
+          "elapsed": 20.4609112739563,
+          "iterations": 1,
+          "scores": {
+            "first_time": 20299,
+            "first_score": 0.24631755258879748,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 20299,
+            "average_score": 0.24631755258879748,
+            "overall_score": 0.2463175525887975
+          },
+          "raw_times": [
+            20299
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "Babylon",
+      "status": "pass",
+      "elapsed": 1.0462698936462402,
+      "iterations": 1,
+      "scores": {
+        "first_time": 916,
+        "first_score": 5.458515283842795,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 916,
+        "average_score": 5.458515283842795,
+        "overall_score": 5.458515283842795
+      },
+      "raw_times": [
+        916
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 5.458515283842795,
+        "min": 5.458515283842795,
+        "max": 5.482456140350878,
+        "relative_range": 0.004385964912280826,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "Babylon",
+          "status": "pass",
+          "elapsed": 1.0522191524505615,
+          "iterations": 1,
+          "scores": {
+            "first_time": 916,
+            "first_score": 5.458515283842795,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 916,
+            "average_score": 5.458515283842795,
+            "overall_score": 5.458515283842795
+          },
+          "raw_times": [
+            916
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "Babylon",
+          "status": "pass",
+          "elapsed": 1.0462698936462402,
+          "iterations": 1,
+          "scores": {
+            "first_time": 912,
+            "first_score": 5.482456140350878,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 912,
+            "average_score": 5.482456140350878,
+            "overall_score": 5.482456140350878
+          },
+          "raw_times": [
+            912
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "Babylon",
+          "status": "pass",
+          "elapsed": 1.033597707748413,
+          "iterations": 1,
+          "scores": {
+            "first_time": 916,
+            "first_score": 5.458515283842795,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 916,
+            "average_score": 5.458515283842795,
+            "overall_score": 5.458515283842795
+          },
+          "raw_times": [
+            916
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "cdjs",
+      "status": "pass",
+      "elapsed": 8.541249990463257,
+      "iterations": 1,
+      "scores": {
+        "first_time": 8500,
+        "first_score": 0.5882352941176471,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 8500,
+        "average_score": 0.5882352941176471,
+        "overall_score": 0.5882352941176471
+      },
+      "raw_times": [
+        8500
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.5882352941176471,
+        "min": 0.5850690381465012,
+        "max": 0.5922767116796968,
+        "relative_range": 0.012319355602937732,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "cdjs",
+          "status": "pass",
+          "elapsed": 8.489897966384888,
+          "iterations": 1,
+          "scores": {
+            "first_time": 8442,
+            "first_score": 0.5922767116796968,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 8442,
+            "average_score": 0.5922767116796968,
+            "overall_score": 0.5922767116796968
+          },
+          "raw_times": [
+            8442
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "cdjs",
+          "status": "pass",
+          "elapsed": 8.541249990463257,
+          "iterations": 1,
+          "scores": {
+            "first_time": 8500,
+            "first_score": 0.5882352941176471,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 8500,
+            "average_score": 0.5882352941176471,
+            "overall_score": 0.5882352941176471
+          },
+          "raw_times": [
+            8500
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "cdjs",
+          "status": "pass",
+          "elapsed": 8.600690841674805,
+          "iterations": 1,
+          "scores": {
+            "first_time": 8546,
+            "first_score": 0.5850690381465012,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 8546,
+            "average_score": 0.5850690381465012,
+            "overall_score": 0.5850690381465012
+          },
+          "raw_times": [
+            8546
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "first-inspector-code-load",
+      "status": "pass",
+      "elapsed": 1.5416224002838135,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1368,
+        "first_score": 3.654970760233918,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1368,
+        "average_score": 3.654970760233918,
+        "overall_score": 3.6549707602339185
+      },
+      "raw_times": [
+        1368
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.6549707602339185,
+        "min": 3.5893754486719316,
+        "max": 3.90625,
+        "relative_range": 0.08828124999999987,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "first-inspector-code-load",
+          "status": "pass",
+          "elapsed": 1.4604780673980713,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1280,
+            "first_score": 3.90625,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1280,
+            "average_score": 3.90625,
+            "overall_score": 3.90625
+          },
+          "raw_times": [
+            1280
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "first-inspector-code-load",
+          "status": "pass",
+          "elapsed": 1.574641466140747,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1393,
+            "first_score": 3.589375448671931,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1393,
+            "average_score": 3.589375448671931,
+            "overall_score": 3.5893754486719316
+          },
+          "raw_times": [
+            1393
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "first-inspector-code-load",
+          "status": "pass",
+          "elapsed": 1.5416224002838135,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1368,
+            "first_score": 3.654970760233918,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1368,
+            "average_score": 3.654970760233918,
+            "overall_score": 3.6549707602339185
+          },
+          "raw_times": [
+            1368
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "multi-inspector-code-load",
+      "status": "pass",
+      "elapsed": 1.540785551071167,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1353,
+        "first_score": 3.695491500369549,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1353,
+        "average_score": 3.695491500369549,
+        "overall_score": 3.695491500369549
+      },
+      "raw_times": [
+        1353
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.695491500369549,
+        "min": 3.623188405797101,
+        "max": 3.949447077409163,
+        "relative_range": 0.09004739336492906,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "multi-inspector-code-load",
+          "status": "pass",
+          "elapsed": 1.4359791278839111,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1266,
+            "first_score": 3.949447077409163,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1266,
+            "average_score": 3.949447077409163,
+            "overall_score": 3.949447077409163
+          },
+          "raw_times": [
+            1266
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "multi-inspector-code-load",
+          "status": "pass",
+          "elapsed": 1.5700032711029053,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1380,
+            "first_score": 3.6231884057971016,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1380,
+            "average_score": 3.6231884057971016,
+            "overall_score": 3.623188405797101
+          },
+          "raw_times": [
+            1380
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "multi-inspector-code-load",
+          "status": "pass",
+          "elapsed": 1.540785551071167,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1353,
+            "first_score": 3.695491500369549,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1353,
+            "average_score": 3.695491500369549,
+            "overall_score": 3.695491500369549
+          },
+          "raw_times": [
+            1353
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "Box2D",
+      "status": "pass",
+      "elapsed": 1.7882921695709229,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1590,
+        "first_score": 3.1446540880503147,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1590,
+        "average_score": 3.1446540880503147,
+        "overall_score": 3.1446540880503147
+      },
+      "raw_times": [
+        1590
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.1446540880503147,
+        "min": 3.094059405940594,
+        "max": 3.1867431485022304,
+        "relative_range": 0.029955385595920925,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "Box2D",
+          "status": "pass",
+          "elapsed": 1.8150794506072998,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1616,
+            "first_score": 3.094059405940594,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1616,
+            "average_score": 3.094059405940594,
+            "overall_score": 3.094059405940594
+          },
+          "raw_times": [
+            1616
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "Box2D",
+          "status": "pass",
+          "elapsed": 1.7659337520599365,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1569,
+            "first_score": 3.186743148502231,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1569,
+            "average_score": 3.186743148502231,
+            "overall_score": 3.1867431485022304
+          },
+          "raw_times": [
+            1569
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "Box2D",
+          "status": "pass",
+          "elapsed": 1.7882921695709229,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1590,
+            "first_score": 3.1446540880503147,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1590,
+            "average_score": 3.1446540880503147,
+            "overall_score": 3.1446540880503147
+          },
+          "raw_times": [
+            1590
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "octane-code-load",
+      "status": "pass",
+      "elapsed": 0.15442156791687012,
+      "iterations": 1,
+      "scores": {
+        "first_time": 109,
+        "first_score": 45.87155963302752,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 109,
+        "average_score": 45.87155963302752,
+        "overall_score": 45.87155963302753
+      },
+      "raw_times": [
+        109
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 45.87155963302753,
+        "min": 45.87155963302753,
+        "max": 46.296296296296305,
+        "relative_range": 0.0092592592592593,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "octane-code-load",
+          "status": "pass",
+          "elapsed": 0.15606403350830078,
+          "iterations": 1,
+          "scores": {
+            "first_time": 109,
+            "first_score": 45.87155963302752,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 109,
+            "average_score": 45.87155963302752,
+            "overall_score": 45.87155963302753
+          },
+          "raw_times": [
+            109
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "octane-code-load",
+          "status": "pass",
+          "elapsed": 0.15442156791687012,
+          "iterations": 1,
+          "scores": {
+            "first_time": 108,
+            "first_score": 46.2962962962963,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 108,
+            "average_score": 46.2962962962963,
+            "overall_score": 46.296296296296305
+          },
+          "raw_times": [
+            108
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "octane-code-load",
+          "status": "pass",
+          "elapsed": 0.15400004386901855,
+          "iterations": 1,
+          "scores": {
+            "first_time": 109,
+            "first_score": 45.87155963302752,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 109,
+            "average_score": 45.87155963302752,
+            "overall_score": 45.87155963302753
+          },
+          "raw_times": [
+            109
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "crypto",
+      "status": "pass",
+      "elapsed": 1.6650307178497314,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1579,
+        "first_score": 3.1665611146295123,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1579,
+        "average_score": 3.1665611146295123,
+        "overall_score": 3.1665611146295123
+      },
+      "raw_times": [
+        1579
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.1665611146295123,
+        "min": 3.1289111389236544,
+        "max": 3.1766200762388817,
+        "relative_range": 0.015247776365946653,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "crypto",
+          "status": "pass",
+          "elapsed": 1.659759521484375,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1574,
+            "first_score": 3.1766200762388817,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1574,
+            "average_score": 3.1766200762388817,
+            "overall_score": 3.1766200762388817
+          },
+          "raw_times": [
+            1574
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "crypto",
+          "status": "pass",
+          "elapsed": 1.6650307178497314,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1579,
+            "first_score": 3.1665611146295123,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1579,
+            "average_score": 3.1665611146295123,
+            "overall_score": 3.1665611146295123
+          },
+          "raw_times": [
+            1579
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "crypto",
+          "status": "pass",
+          "elapsed": 1.6825587749481201,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1598,
+            "first_score": 3.1289111389236544,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1598,
+            "average_score": 3.1289111389236544,
+            "overall_score": 3.1289111389236544
+          },
+          "raw_times": [
+            1598
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "delta-blue",
+      "status": "pass",
+      "elapsed": 1.8746302127838135,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1832,
+        "first_score": 2.7292576419213974,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1832,
+        "average_score": 2.7292576419213974,
+        "overall_score": 2.7292576419213974
+      },
+      "raw_times": [
+        1832
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.7292576419213974,
+        "min": 2.7129679869777537,
+        "max": 2.7367268746579096,
+        "relative_range": 0.008757525998905447,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "delta-blue",
+          "status": "pass",
+          "elapsed": 1.869739055633545,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1832,
+            "first_score": 2.7292576419213974,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1832,
+            "average_score": 2.7292576419213974,
+            "overall_score": 2.7292576419213974
+          },
+          "raw_times": [
+            1832
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "delta-blue",
+          "status": "pass",
+          "elapsed": 1.8746302127838135,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1827,
+            "first_score": 2.736726874657909,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1827,
+            "average_score": 2.736726874657909,
+            "overall_score": 2.7367268746579096
+          },
+          "raw_times": [
+            1827
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "delta-blue",
+          "status": "pass",
+          "elapsed": 1.887744426727295,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1843,
+            "first_score": 2.7129679869777537,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1843,
+            "average_score": 2.7129679869777537,
+            "overall_score": 2.7129679869777537
+          },
+          "raw_times": [
+            1843
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "earley-boyer",
+      "status": "pass",
+      "elapsed": 2.0281052589416504,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1887,
+        "first_score": 2.649708532061473,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1887,
+        "average_score": 2.649708532061473,
+        "overall_score": 2.649708532061473
+      },
+      "raw_times": [
+        1887
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.649708532061473,
+        "min": 2.6055237102657633,
+        "max": 2.699784017278618,
+        "relative_range": 0.03617710583153366,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "earley-boyer",
+          "status": "pass",
+          "elapsed": 1.9913926124572754,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1852,
+            "first_score": 2.699784017278618,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1852,
+            "average_score": 2.699784017278618,
+            "overall_score": 2.699784017278618
+          },
+          "raw_times": [
+            1852
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "earley-boyer",
+          "status": "pass",
+          "elapsed": 2.061246633529663,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1919,
+            "first_score": 2.6055237102657633,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1919,
+            "average_score": 2.6055237102657633,
+            "overall_score": 2.6055237102657633
+          },
+          "raw_times": [
+            1919
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "earley-boyer",
+          "status": "pass",
+          "elapsed": 2.0281052589416504,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1887,
+            "first_score": 2.649708532061473,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1887,
+            "average_score": 2.649708532061473,
+            "overall_score": 2.649708532061473
+          },
+          "raw_times": [
+            1887
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "gbemu",
+      "status": "pass",
+      "elapsed": 7.252501487731934,
+      "iterations": 1,
+      "scores": {
+        "first_time": 6858,
+        "first_score": 0.7290755322251385,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 6858,
+        "average_score": 0.7290755322251385,
+        "overall_score": 0.7290755322251385
+      },
+      "raw_times": [
+        6858
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.7290755322251385,
+        "min": 0.7254788160185722,
+        "max": 0.7304601899196493,
+        "relative_range": 0.006866325785244598,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "gbemu",
+          "status": "pass",
+          "elapsed": 7.252501487731934,
+          "iterations": 1,
+          "scores": {
+            "first_time": 6845,
+            "first_score": 0.7304601899196493,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 6845,
+            "average_score": 0.7304601899196493,
+            "overall_score": 0.7304601899196493
+          },
+          "raw_times": [
+            6845
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "gbemu",
+          "status": "pass",
+          "elapsed": 7.247266530990601,
+          "iterations": 1,
+          "scores": {
+            "first_time": 6858,
+            "first_score": 0.7290755322251385,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 6858,
+            "average_score": 0.7290755322251385,
+            "overall_score": 0.7290755322251385
+          },
+          "raw_times": [
+            6858
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "gbemu",
+          "status": "pass",
+          "elapsed": 7.303388357162476,
+          "iterations": 1,
+          "scores": {
+            "first_time": 6892,
+            "first_score": 0.7254788160185722,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 6892,
+            "average_score": 0.7254788160185722,
+            "overall_score": 0.7254788160185722
+          },
+          "raw_times": [
+            6892
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "mandreel",
+      "status": "pass",
+      "elapsed": 51.72397208213806,
+      "iterations": 1,
+      "scores": {
+        "first_time": 27164,
+        "first_score": 0.1840671476954793,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 27164,
+        "average_score": 0.1840671476954793,
+        "overall_score": 0.1840671476954793
+      },
+      "raw_times": [
+        27164
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.1840671476954793,
+        "min": 0.18322400967422775,
+        "max": 0.18542555164101615,
+        "relative_range": 0.012015575746337825,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "mandreel",
+          "status": "pass",
+          "elapsed": 51.446457862854004,
+          "iterations": 1,
+          "scores": {
+            "first_time": 27289,
+            "first_score": 0.18322400967422772,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 27289,
+            "average_score": 0.18322400967422772,
+            "overall_score": 0.18322400967422775
+          },
+          "raw_times": [
+            27289
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "mandreel",
+          "status": "pass",
+          "elapsed": 52.30417490005493,
+          "iterations": 1,
+          "scores": {
+            "first_time": 27164,
+            "first_score": 0.1840671476954793,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 27164,
+            "average_score": 0.1840671476954793,
+            "overall_score": 0.1840671476954793
+          },
+          "raw_times": [
+            27164
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "mandreel",
+          "status": "pass",
+          "elapsed": 51.72397208213806,
+          "iterations": 1,
+          "scores": {
+            "first_time": 26965,
+            "first_score": 0.18542555164101612,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 26965,
+            "average_score": 0.18542555164101612,
+            "overall_score": 0.18542555164101615
+          },
+          "raw_times": [
+            26965
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "navier-stokes",
+      "status": "pass",
+      "elapsed": 1.1619396209716797,
+      "iterations": 1,
+      "scores": {
+        "first_time": 953,
+        "first_score": 5.246589716684155,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 953,
+        "average_score": 5.246589716684155,
+        "overall_score": 5.246589716684155
+      },
+      "raw_times": [
+        953
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 5.246589716684155,
+        "min": 5.246589716684155,
+        "max": 5.246589716684155,
+        "relative_range": 0.0,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "navier-stokes",
+          "status": "pass",
+          "elapsed": 1.1633434295654297,
+          "iterations": 1,
+          "scores": {
+            "first_time": 953,
+            "first_score": 5.246589716684155,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 953,
+            "average_score": 5.246589716684155,
+            "overall_score": 5.246589716684155
+          },
+          "raw_times": [
+            953
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "navier-stokes",
+          "status": "pass",
+          "elapsed": 1.156050682067871,
+          "iterations": 1,
+          "scores": {
+            "first_time": 953,
+            "first_score": 5.246589716684155,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 953,
+            "average_score": 5.246589716684155,
+            "overall_score": 5.246589716684155
+          },
+          "raw_times": [
+            953
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "navier-stokes",
+          "status": "pass",
+          "elapsed": 1.1619396209716797,
+          "iterations": 1,
+          "scores": {
+            "first_time": 953,
+            "first_score": 5.246589716684155,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 953,
+            "average_score": 5.246589716684155,
+            "overall_score": 5.246589716684155
+          },
+          "raw_times": [
+            953
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "pdfjs",
+      "status": "pass",
+      "elapsed": 4.32525634765625,
+      "iterations": 1,
+      "scores": {
+        "first_time": 2849,
+        "first_score": 1.755001755001755,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 2849,
+        "average_score": 1.755001755001755,
+        "overall_score": 1.755001755001755
+      },
+      "raw_times": [
+        2849
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 1.755001755001755,
+        "min": 1.7500875043752186,
+        "max": 1.7736786094359702,
+        "relative_range": 0.013479957431713485,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "pdfjs",
+          "status": "pass",
+          "elapsed": 4.27191424369812,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2819,
+            "first_score": 1.7736786094359702,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2819,
+            "average_score": 1.7736786094359702,
+            "overall_score": 1.7736786094359702
+          },
+          "raw_times": [
+            2819
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "pdfjs",
+          "status": "pass",
+          "elapsed": 4.335260629653931,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2857,
+            "first_score": 1.7500875043752186,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2857,
+            "average_score": 1.7500875043752186,
+            "overall_score": 1.7500875043752186
+          },
+          "raw_times": [
+            2857
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "pdfjs",
+          "status": "pass",
+          "elapsed": 4.32525634765625,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2849,
+            "first_score": 1.755001755001755,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2849,
+            "average_score": 1.755001755001755,
+            "overall_score": 1.755001755001755
+          },
+          "raw_times": [
+            2849
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "raytrace",
+      "status": "pass",
+      "elapsed": 4.935650587081909,
+      "iterations": 1,
+      "scores": {
+        "first_time": 4890,
+        "first_score": 1.0224948875255624,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 4890,
+        "average_score": 1.0224948875255624,
+        "overall_score": 1.0224948875255624
+      },
+      "raw_times": [
+        4890
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 1.0224948875255624,
+        "min": 1.0177081213108081,
+        "max": 1.0258514567090686,
+        "relative_range": 0.008001641362330725,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "raytrace",
+          "status": "pass",
+          "elapsed": 4.957191467285156,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4913,
+            "first_score": 1.0177081213108081,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4913,
+            "average_score": 1.0177081213108081,
+            "overall_score": 1.0177081213108081
+          },
+          "raw_times": [
+            4913
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "raytrace",
+          "status": "pass",
+          "elapsed": 4.91940712928772,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4874,
+            "first_score": 1.0258514567090686,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4874,
+            "average_score": 1.0258514567090686,
+            "overall_score": 1.0258514567090686
+          },
+          "raw_times": [
+            4874
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "raytrace",
+          "status": "pass",
+          "elapsed": 4.935650587081909,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4890,
+            "first_score": 1.0224948875255624,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4890,
+            "average_score": 1.0224948875255624,
+            "overall_score": 1.0224948875255624
+          },
+          "raw_times": [
+            4890
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "regexp-octane",
+      "status": "pass",
+      "elapsed": 8.26000690460205,
+      "iterations": 1,
+      "scores": {
+        "first_time": 3991,
+        "first_score": 1.2528188423953897,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 3991,
+        "average_score": 1.2528188423953897,
+        "overall_score": 1.2528188423953897
+      },
+      "raw_times": [
+        3991
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 1.2528188423953897,
+        "min": 1.2416190712689348,
+        "max": 1.3336889837289945,
+        "relative_range": 0.0741531074953321,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "regexp-octane",
+          "status": "pass",
+          "elapsed": 7.702974081039429,
+          "iterations": 1,
+          "scores": {
+            "first_time": 3749,
+            "first_score": 1.3336889837289945,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 3749,
+            "average_score": 1.3336889837289945,
+            "overall_score": 1.3336889837289945
+          },
+          "raw_times": [
+            3749
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "regexp-octane",
+          "status": "pass",
+          "elapsed": 8.333434581756592,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4027,
+            "first_score": 1.2416190712689348,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4027,
+            "average_score": 1.2416190712689348,
+            "overall_score": 1.2416190712689348
+          },
+          "raw_times": [
+            4027
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "regexp-octane",
+          "status": "pass",
+          "elapsed": 8.26000690460205,
+          "iterations": 1,
+          "scores": {
+            "first_time": 3991,
+            "first_score": 1.2528188423953897,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 3991,
+            "average_score": 1.2528188423953897,
+            "overall_score": 1.2528188423953897
+          },
+          "raw_times": [
+            3991
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "richards",
+      "status": "pass",
+      "elapsed": 2.457664966583252,
+      "iterations": 1,
+      "scores": {
+        "first_time": 2416,
+        "first_score": 2.0695364238410594,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 2416,
+        "average_score": 2.0695364238410594,
+        "overall_score": 2.0695364238410594
+      },
+      "raw_times": [
+        2416
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.0695364238410594,
+        "min": 2.032520325203252,
+        "max": 2.071251035625518,
+        "relative_range": 0.0190555095277547,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "richards",
+          "status": "pass",
+          "elapsed": 2.456260919570923,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2414,
+            "first_score": 2.071251035625518,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2414,
+            "average_score": 2.071251035625518,
+            "overall_score": 2.071251035625518
+          },
+          "raw_times": [
+            2414
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "richards",
+          "status": "pass",
+          "elapsed": 2.457664966583252,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2416,
+            "first_score": 2.0695364238410594,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2416,
+            "average_score": 2.0695364238410594,
+            "overall_score": 2.0695364238410594
+          },
+          "raw_times": [
+            2416
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "richards",
+          "status": "pass",
+          "elapsed": 2.503119945526123,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2460,
+            "first_score": 2.032520325203252,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2460,
+            "average_score": 2.032520325203252,
+            "overall_score": 2.032520325203252
+          },
+          "raw_times": [
+            2460
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "splay",
+      "status": "pass",
+      "elapsed": 2.9742166996002197,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1162,
+        "first_score": 4.3029259896729775,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1162,
+        "average_score": 4.3029259896729775,
+        "overall_score": 4.3029259896729775
+      },
+      "raw_times": [
+        1162
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.3029259896729775,
+        "min": 4.291845493562231,
+        "max": 4.306632213608958,
+        "relative_range": 0.003445305770887197,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "splay",
+          "status": "pass",
+          "elapsed": 2.9699137210845947,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1165,
+            "first_score": 4.291845493562231,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1165,
+            "average_score": 4.291845493562231,
+            "overall_score": 4.291845493562231
+          },
+          "raw_times": [
+            1165
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "splay",
+          "status": "pass",
+          "elapsed": 2.9744133949279785,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1162,
+            "first_score": 4.3029259896729775,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1162,
+            "average_score": 4.3029259896729775,
+            "overall_score": 4.3029259896729775
+          },
+          "raw_times": [
+            1162
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "splay",
+          "status": "pass",
+          "elapsed": 2.9742166996002197,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1161,
+            "first_score": 4.306632213608958,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1161,
+            "average_score": 4.306632213608958,
+            "overall_score": 4.306632213608958
+          },
+          "raw_times": [
+            1161
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "typescript-octane",
+      "status": "error",
+      "reason": "exit code 1",
+      "stdout": "Uncaught Error: RangeError: bad length for array (/tmp/tmpjvtl1gq2.js:25993:3)\n    at <main> (/tmp/tmpjvtl1gq2.js:5670:17)\n    at <main> (/tmp/tmpjvtl1gq2.js:2208:45)\n    at <main> (/tmp/tmpjvtl1gq2.js:6121:21)\n    at <main> (/tmp/tmpjvtl1gq2.js:6095:44)\n    at <main> (/tmp/tmpjvtl1gq2.js:5590:40)\n    at <main> (/tmp/tmpjvtl1gq2.js:2208:45)\n    at <main> (/tmp/tmpjvtl1gq2.js:6121:21)\n    at <main> (/tmp/tmpjvtl1gq2.js:6095:44)\n    at <main> (/tmp/tmpjvtl1gq2.js:2132:43)\n    at <main> (/tmp/tmpjvtl1gq2.js:6121:21)\n    at <main> (/tmp/tmpjvtl1gq2.js:24342:35)\n    at <main> (/tmp/tmpjvtl1gq2.js:24356:44)\n    at runTypescript (/tmp/tmpjvtl1gq2.js:25842:16)\n    at <main> (/tmp/tmpjvtl1gq2.js:25960:22)\n    at <main> (/tmp/tmpjvtl1gq2.js:25981:31)\n    at <main> (/tmp/tmpjvtl1gq2.js:25993:3)\n",
+      "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+      "elapsed": 20.388798475265503,
+      "repeat": 1,
+      "loadavg_before": null,
+      "completed_repeats": 0,
+      "measurements": [
+        {
+          "name": "typescript-octane",
+          "status": "error",
+          "reason": "exit code 1",
+          "stdout": "Uncaught Error: RangeError: bad length for array (/tmp/tmpjvtl1gq2.js:25993:3)\n    at <main> (/tmp/tmpjvtl1gq2.js:5670:17)\n    at <main> (/tmp/tmpjvtl1gq2.js:2208:45)\n    at <main> (/tmp/tmpjvtl1gq2.js:6121:21)\n    at <main> (/tmp/tmpjvtl1gq2.js:6095:44)\n    at <main> (/tmp/tmpjvtl1gq2.js:5590:40)\n    at <main> (/tmp/tmpjvtl1gq2.js:2208:45)\n    at <main> (/tmp/tmpjvtl1gq2.js:6121:21)\n    at <main> (/tmp/tmpjvtl1gq2.js:6095:44)\n    at <main> (/tmp/tmpjvtl1gq2.js:2132:43)\n    at <main> (/tmp/tmpjvtl1gq2.js:6121:21)\n    at <main> (/tmp/tmpjvtl1gq2.js:24342:35)\n    at <main> (/tmp/tmpjvtl1gq2.js:24356:44)\n    at runTypescript (/tmp/tmpjvtl1gq2.js:25842:16)\n    at <main> (/tmp/tmpjvtl1gq2.js:25960:22)\n    at <main> (/tmp/tmpjvtl1gq2.js:25981:31)\n    at <main> (/tmp/tmpjvtl1gq2.js:25993:3)\n",
+          "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+          "elapsed": 20.388798475265503,
+          "repeat": 1,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "FlightPlanner",
+      "status": "pass",
+      "elapsed": 3.7361209392547607,
+      "iterations": 1,
+      "scores": {
+        "first_time": 598,
+        "first_score": 8.361204013377927,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 598,
+        "average_score": 8.361204013377927,
+        "overall_score": 8.361204013377929
+      },
+      "raw_times": [
+        598
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 8.361204013377929,
+        "min": 8.333333333333332,
+        "max": 8.403361344537815,
+        "relative_range": 0.008403361344538007,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "FlightPlanner",
+          "status": "pass",
+          "elapsed": 3.5045175552368164,
+          "iterations": 1,
+          "scores": {
+            "first_time": 598,
+            "first_score": 8.361204013377927,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 598,
+            "average_score": 8.361204013377927,
+            "overall_score": 8.361204013377929
+          },
+          "raw_times": [
+            598
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "FlightPlanner",
+          "status": "pass",
+          "elapsed": 3.7361209392547607,
+          "iterations": 1,
+          "scores": {
+            "first_time": 600,
+            "first_score": 8.333333333333334,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 600,
+            "average_score": 8.333333333333334,
+            "overall_score": 8.333333333333332
+          },
+          "raw_times": [
+            600
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "FlightPlanner",
+          "status": "pass",
+          "elapsed": 3.7614400386810303,
+          "iterations": 1,
+          "scores": {
+            "first_time": 595,
+            "first_score": 8.403361344537815,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 595,
+            "average_score": 8.403361344537815,
+            "overall_score": 8.403361344537815
+          },
+          "raw_times": [
+            595
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "OfflineAssembler",
+      "status": "error",
+      "reason": "exit code 1",
+      "stdout": "Uncaught Error: \"Line #42 differs.  Expected: \\\"const TagTypeNumber = 18446462598732840000\\\", got \\\"const TagTypeNumber = 18446462598732839000\\\"\"\n    at <main> (/tmp/tmp_egev7rv.js:16160:5)\n    at <main> (/tmp/tmp_egev7rv.js:16197:47)\n    at <main> (/tmp/tmp_egev7rv.js:16205:3)\n",
+      "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+      "elapsed": 102.7914707660675,
+      "repeat": 1,
+      "loadavg_before": null,
+      "completed_repeats": 0,
+      "measurements": [
+        {
+          "name": "OfflineAssembler",
+          "status": "error",
+          "reason": "exit code 1",
+          "stdout": "Uncaught Error: \"Line #42 differs.  Expected: \\\"const TagTypeNumber = 18446462598732840000\\\", got \\\"const TagTypeNumber = 18446462598732839000\\\"\"\n    at <main> (/tmp/tmp_egev7rv.js:16160:5)\n    at <main> (/tmp/tmp_egev7rv.js:16197:47)\n    at <main> (/tmp/tmp_egev7rv.js:16205:3)\n",
+          "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+          "elapsed": 102.7914707660675,
+          "repeat": 1,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "UniPoker",
+      "status": "pass",
+      "elapsed": 1.3168797492980957,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1273,
+        "first_score": 3.927729772191673,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1273,
+        "average_score": 3.927729772191673,
+        "overall_score": 3.927729772191673
+      },
+      "raw_times": [
+        1273
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.927729772191673,
+        "min": 3.9093041438623928,
+        "max": 3.949447077409163,
+        "relative_range": 0.010268562401263726,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "UniPoker",
+          "status": "pass",
+          "elapsed": 1.3089144229888916,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1266,
+            "first_score": 3.949447077409163,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1266,
+            "average_score": 3.949447077409163,
+            "overall_score": 3.949447077409163
+          },
+          "raw_times": [
+            1266
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "UniPoker",
+          "status": "pass",
+          "elapsed": 1.32627272605896,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1279,
+            "first_score": 3.9093041438623923,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1279,
+            "average_score": 3.9093041438623923,
+            "overall_score": 3.9093041438623928
+          },
+          "raw_times": [
+            1279
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "UniPoker",
+          "status": "pass",
+          "elapsed": 1.3168797492980957,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1273,
+            "first_score": 3.927729772191673,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1273,
+            "average_score": 3.927729772191673,
+            "overall_score": 3.927729772191673
+          },
+          "raw_times": [
+            1273
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "validatorjs",
+      "status": "error",
+      "reason": "exit code 1",
+      "stdout": "Uncaught Error: Error: Assertion failure: 2010-07-02,[object Object] (/tmp/tmp6o9glk1g.js:21511:3)\n    at l (/tmp/tmp6o9glk1g.js:21439:130591)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:130751)\n    at forEach (native at core/engine/src/builtins/array/mod.rs:966:26)\n    at d (/tmp/tmp6o9glk1g.js:21439:130721)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:336456)\n    at r (/tmp/tmp6o9glk1g.js:21439:130645)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:336447)\n    at r (/tmp/tmp6o9glk1g.js:21439:130645)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:336438)\n    at r (/tmp/tmp6o9glk1g.js:21439:130645)\n    at n (/tmp/tmp6o9glk1g.js:21439:336429)\n    at <main> (/tmp/tmp6o9glk1g.js:21472:55)\n    at <main> (/tmp/tmp6o9glk1g.js:21499:31)\n    at <main> (/tmp/tmp6o9glk1g.js:21511:3)\n",
+      "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+      "elapsed": 1.1886577606201172,
+      "repeat": 1,
+      "loadavg_before": null,
+      "completed_repeats": 0,
+      "measurements": [
+        {
+          "name": "validatorjs",
+          "status": "error",
+          "reason": "exit code 1",
+          "stdout": "Uncaught Error: Error: Assertion failure: 2010-07-02,[object Object] (/tmp/tmp6o9glk1g.js:21511:3)\n    at l (/tmp/tmp6o9glk1g.js:21439:130591)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:130751)\n    at forEach (native at core/engine/src/builtins/array/mod.rs:966:26)\n    at d (/tmp/tmp6o9glk1g.js:21439:130721)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:336456)\n    at r (/tmp/tmp6o9glk1g.js:21439:130645)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:336447)\n    at r (/tmp/tmp6o9glk1g.js:21439:130645)\n    at <main> (/tmp/tmp6o9glk1g.js:21439:336438)\n    at r (/tmp/tmp6o9glk1g.js:21439:130645)\n    at n (/tmp/tmp6o9glk1g.js:21439:336429)\n    at <main> (/tmp/tmp6o9glk1g.js:21472:55)\n    at <main> (/tmp/tmp6o9glk1g.js:21499:31)\n    at <main> (/tmp/tmp6o9glk1g.js:21511:3)\n",
+          "stderr": "Error: \n   0: \u001b[91mexecution failed\u001b[0m\n",
+          "elapsed": 1.1886577606201172,
+          "repeat": 1,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "hash-map",
+      "status": "pass",
+      "elapsed": 4.273656845092773,
+      "iterations": 1,
+      "scores": {
+        "first_time": 4223,
+        "first_score": 1.1839924224484963,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 4223,
+        "average_score": 1.1839924224484963,
+        "overall_score": 1.1839924224484963
+      },
+      "raw_times": [
+        4223
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 1.1839924224484963,
+        "min": 1.1828720132481665,
+        "max": 1.1936022917164002,
+        "relative_range": 0.00907137741704478,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "hash-map",
+          "status": "pass",
+          "elapsed": 4.273656845092773,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4223,
+            "first_score": 1.1839924224484963,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4223,
+            "average_score": 1.1839924224484963,
+            "overall_score": 1.1839924224484963
+          },
+          "raw_times": [
+            4223
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "hash-map",
+          "status": "pass",
+          "elapsed": 4.277535915374756,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4227,
+            "first_score": 1.1828720132481665,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4227,
+            "average_score": 1.1828720132481665,
+            "overall_score": 1.1828720132481665
+          },
+          "raw_times": [
+            4227
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "hash-map",
+          "status": "pass",
+          "elapsed": 4.24148964881897,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4189,
+            "first_score": 1.1936022917164002,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4189,
+            "average_score": 1.1936022917164002,
+            "overall_score": 1.1936022917164002
+          },
+          "raw_times": [
+            4189
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "doxbee-promise",
+      "status": "pass",
+      "elapsed": 2.2143070697784424,
+      "iterations": 1,
+      "scores": {
+        "first_time": 2127,
+        "first_score": 2.3507287259050305,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 2127,
+        "average_score": 2.3507287259050305,
+        "overall_score": 2.3507287259050305
+      },
+      "raw_times": [
+        2127
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.3507287259050305,
+        "min": 2.286236854138089,
+        "max": 2.523977788995457,
+        "relative_range": 0.1039878849066127,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "doxbee-promise",
+          "status": "pass",
+          "elapsed": 2.283001661300659,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2187,
+            "first_score": 2.286236854138089,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2187,
+            "average_score": 2.286236854138089,
+            "overall_score": 2.286236854138089
+          },
+          "raw_times": [
+            2187
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "doxbee-promise",
+          "status": "pass",
+          "elapsed": 2.0670969486236572,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1981,
+            "first_score": 2.523977788995457,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1981,
+            "average_score": 2.523977788995457,
+            "overall_score": 2.523977788995457
+          },
+          "raw_times": [
+            1981
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "doxbee-promise",
+          "status": "pass",
+          "elapsed": 2.2143070697784424,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2127,
+            "first_score": 2.3507287259050305,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2127,
+            "average_score": 2.3507287259050305,
+            "overall_score": 2.3507287259050305
+          },
+          "raw_times": [
+            2127
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "doxbee-async",
+      "status": "pass",
+      "elapsed": 1.2344579696655273,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1173,
+        "first_score": 4.262574595055414,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1173,
+        "average_score": 4.262574595055414,
+        "overall_score": 4.262574595055414
+      },
+      "raw_times": [
+        1173
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.262574595055414,
+        "min": 4.108463434675431,
+        "max": 4.3591979075850045,
+        "relative_range": 0.06102877070619006,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "doxbee-async",
+          "status": "pass",
+          "elapsed": 1.2112596035003662,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1147,
+            "first_score": 4.3591979075850045,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1147,
+            "average_score": 4.3591979075850045,
+            "overall_score": 4.3591979075850045
+          },
+          "raw_times": [
+            1147
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "doxbee-async",
+          "status": "pass",
+          "elapsed": 1.2777671813964844,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1217,
+            "first_score": 4.108463434675431,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1217,
+            "average_score": 4.108463434675431,
+            "overall_score": 4.108463434675431
+          },
+          "raw_times": [
+            1217
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "doxbee-async",
+          "status": "pass",
+          "elapsed": 1.2344579696655273,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1173,
+            "first_score": 4.262574595055414,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1173,
+            "average_score": 4.262574595055414,
+            "overall_score": 4.262574595055414
+          },
+          "raw_times": [
+            1173
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "ai-astar",
+      "status": "pass",
+      "elapsed": 4.730128526687622,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1553,
+        "first_score": 3.219575016097875,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1553,
+        "average_score": 3.219575016097875,
+        "overall_score": 3.2195750160978744
+      },
+      "raw_times": [
+        1553
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.2195750160978744,
+        "min": 3.215434083601286,
+        "max": 3.2467532467532467,
+        "relative_range": 0.009740259740259827,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "ai-astar",
+          "status": "pass",
+          "elapsed": 4.721375942230225,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1553,
+            "first_score": 3.219575016097875,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1553,
+            "average_score": 3.219575016097875,
+            "overall_score": 3.2195750160978744
+          },
+          "raw_times": [
+            1553
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "ai-astar",
+          "status": "pass",
+          "elapsed": 4.742024660110474,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1540,
+            "first_score": 3.2467532467532467,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1540,
+            "average_score": 3.2467532467532467,
+            "overall_score": 3.2467532467532467
+          },
+          "raw_times": [
+            1540
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "ai-astar",
+          "status": "pass",
+          "elapsed": 4.730128526687622,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1555,
+            "first_score": 3.215434083601286,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1555,
+            "average_score": 3.215434083601286,
+            "overall_score": 3.215434083601286
+          },
+          "raw_times": [
+            1555
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "gaussian-blur",
+      "status": "pass",
+      "elapsed": 5.7668561935424805,
+      "iterations": 1,
+      "scores": {
+        "first_time": 4371,
+        "first_score": 1.1439029970258523,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 4371,
+        "average_score": 1.1439029970258523,
+        "overall_score": 1.1439029970258523
+      },
+      "raw_times": [
+        4371
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 1.1439029970258523,
+        "min": 1.1425959780621573,
+        "max": 1.148105625717566,
+        "relative_range": 0.004822043628013528,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "gaussian-blur",
+          "status": "pass",
+          "elapsed": 5.738430976867676,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4355,
+            "first_score": 1.148105625717566,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4355,
+            "average_score": 1.148105625717566,
+            "overall_score": 1.148105625717566
+          },
+          "raw_times": [
+            4355
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "gaussian-blur",
+          "status": "pass",
+          "elapsed": 5.7668561935424805,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4371,
+            "first_score": 1.1439029970258523,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4371,
+            "average_score": 1.1439029970258523,
+            "overall_score": 1.1439029970258523
+          },
+          "raw_times": [
+            4371
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "gaussian-blur",
+          "status": "pass",
+          "elapsed": 5.77479362487793,
+          "iterations": 1,
+          "scores": {
+            "first_time": 4376,
+            "first_score": 1.1425959780621573,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 4376,
+            "average_score": 1.1425959780621573,
+            "overall_score": 1.1425959780621573
+          },
+          "raw_times": [
+            4376
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "stanford-crypto-aes",
+      "status": "pass",
+      "elapsed": 2.1681032180786133,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1977,
+        "first_score": 2.5290844714213456,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1977,
+        "average_score": 2.5290844714213456,
+        "overall_score": 2.5290844714213456
+      },
+      "raw_times": [
+        1977
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.5290844714213456,
+        "min": 2.5214321734745337,
+        "max": 2.536783358701167,
+        "relative_range": 0.006088280060882578,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "stanford-crypto-aes",
+          "status": "pass",
+          "elapsed": 2.152665615081787,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1971,
+            "first_score": 2.536783358701167,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1971,
+            "average_score": 2.536783358701167,
+            "overall_score": 2.536783358701167
+          },
+          "raw_times": [
+            1971
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "stanford-crypto-aes",
+          "status": "pass",
+          "elapsed": 2.1755805015563965,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1983,
+            "first_score": 2.5214321734745337,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1983,
+            "average_score": 2.5214321734745337,
+            "overall_score": 2.5214321734745337
+          },
+          "raw_times": [
+            1983
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "stanford-crypto-aes",
+          "status": "pass",
+          "elapsed": 2.1681032180786133,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1977,
+            "first_score": 2.5290844714213456,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1977,
+            "average_score": 2.5290844714213456,
+            "overall_score": 2.5290844714213456
+          },
+          "raw_times": [
+            1977
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "stanford-crypto-pbkdf2",
+      "status": "pass",
+      "elapsed": 1.2240664958953857,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1149,
+        "first_score": 4.351610095735422,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1149,
+        "average_score": 4.351610095735422,
+        "overall_score": 4.351610095735422
+      },
+      "raw_times": [
+        1149
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.351610095735422,
+        "min": 4.329004329004329,
+        "max": 4.464285714285714,
+        "relative_range": 0.03125,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "stanford-crypto-pbkdf2",
+          "status": "pass",
+          "elapsed": 1.2276549339294434,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1155,
+            "first_score": 4.329004329004329,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1155,
+            "average_score": 4.329004329004329,
+            "overall_score": 4.329004329004329
+          },
+          "raw_times": [
+            1155
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "stanford-crypto-pbkdf2",
+          "status": "pass",
+          "elapsed": 1.1903715133666992,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1120,
+            "first_score": 4.464285714285714,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1120,
+            "average_score": 4.464285714285714,
+            "overall_score": 4.464285714285714
+          },
+          "raw_times": [
+            1120
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "stanford-crypto-pbkdf2",
+          "status": "pass",
+          "elapsed": 1.2240664958953857,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1149,
+            "first_score": 4.351610095735422,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1149,
+            "average_score": 4.351610095735422,
+            "overall_score": 4.351610095735422
+          },
+          "raw_times": [
+            1149
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "stanford-crypto-sha256",
+      "status": "pass",
+      "elapsed": 1.3107976913452148,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1236,
+        "first_score": 4.0453074433656955,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1236,
+        "average_score": 4.0453074433656955,
+        "overall_score": 4.0453074433656955
+      },
+      "raw_times": [
+        1236
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.0453074433656955,
+        "min": 4.025764895330113,
+        "max": 4.051863857374392,
+        "relative_range": 0.006482982171798879,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "stanford-crypto-sha256",
+          "status": "pass",
+          "elapsed": 1.3107976913452148,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1236,
+            "first_score": 4.0453074433656955,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1236,
+            "average_score": 4.0453074433656955,
+            "overall_score": 4.0453074433656955
+          },
+          "raw_times": [
+            1236
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "stanford-crypto-sha256",
+          "status": "pass",
+          "elapsed": 1.3077056407928467,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1234,
+            "first_score": 4.051863857374392,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1234,
+            "average_score": 4.051863857374392,
+            "overall_score": 4.051863857374392
+          },
+          "raw_times": [
+            1234
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "stanford-crypto-sha256",
+          "status": "pass",
+          "elapsed": 1.3144712448120117,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1242,
+            "first_score": 4.025764895330113,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1242,
+            "average_score": 4.025764895330113,
+            "overall_score": 4.025764895330113
+          },
+          "raw_times": [
+            1242
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "json-stringify-inspector",
+      "status": "pass",
+      "elapsed": 2.744410991668701,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1243,
+        "first_score": 4.022526146419952,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1243,
+        "average_score": 4.022526146419952,
+        "overall_score": 4.022526146419952
+      },
+      "raw_times": [
+        1243
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.022526146419952,
+        "min": 3.990422984836393,
+        "max": 4.1017227235438884,
+        "relative_range": 0.02789171452009831,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "json-stringify-inspector",
+          "status": "pass",
+          "elapsed": 2.7688851356506348,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1243,
+            "first_score": 4.022526146419952,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1243,
+            "average_score": 4.022526146419952,
+            "overall_score": 4.022526146419952
+          },
+          "raw_times": [
+            1243
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "json-stringify-inspector",
+          "status": "pass",
+          "elapsed": 2.625457763671875,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1219,
+            "first_score": 4.1017227235438884,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1219,
+            "average_score": 4.1017227235438884,
+            "overall_score": 4.1017227235438884
+          },
+          "raw_times": [
+            1219
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "json-stringify-inspector",
+          "status": "pass",
+          "elapsed": 2.744410991668701,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1253,
+            "first_score": 3.9904229848363926,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1253,
+            "average_score": 3.9904229848363926,
+            "overall_score": 3.990422984836393
+          },
+          "raw_times": [
+            1253
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "json-parse-inspector",
+      "status": "pass",
+      "elapsed": 4.413698673248291,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1646,
+        "first_score": 3.0376670716889427,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1646,
+        "average_score": 3.0376670716889427,
+        "overall_score": 3.0376670716889422
+      },
+      "raw_times": [
+        1646
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.0376670716889422,
+        "min": 3.012048192771085,
+        "max": 3.03951367781155,
+        "relative_range": 0.009118541033434457,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "json-parse-inspector",
+          "status": "pass",
+          "elapsed": 4.404326438903809,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1646,
+            "first_score": 3.0376670716889427,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1646,
+            "average_score": 3.0376670716889427,
+            "overall_score": 3.0376670716889422
+          },
+          "raw_times": [
+            1646
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "json-parse-inspector",
+          "status": "pass",
+          "elapsed": 4.421037912368774,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1645,
+            "first_score": 3.0395136778115504,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1645,
+            "average_score": 3.0395136778115504,
+            "overall_score": 3.03951367781155
+          },
+          "raw_times": [
+            1645
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "json-parse-inspector",
+          "status": "pass",
+          "elapsed": 4.413698673248291,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1660,
+            "first_score": 3.0120481927710845,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1660,
+            "average_score": 3.0120481927710845,
+            "overall_score": 3.012048192771085
+          },
+          "raw_times": [
+            1660
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "bigint-noble-bls12-381",
+      "status": "pass",
+      "elapsed": 20.07319211959839,
+      "iterations": 1,
+      "scores": {
+        "first_time": 19742,
+        "first_score": 0.25326714618579677,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 19742,
+        "average_score": 0.25326714618579677,
+        "overall_score": 0.25326714618579677
+      },
+      "raw_times": [
+        19742
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.25326714618579677,
+        "min": 0.2518891687657431,
+        "max": 0.25396180414465663,
+        "relative_range": 0.008228362454286708,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "bigint-noble-bls12-381",
+          "status": "pass",
+          "elapsed": 20.18778920173645,
+          "iterations": 1,
+          "scores": {
+            "first_time": 19850,
+            "first_score": 0.2518891687657431,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 19850,
+            "average_score": 0.2518891687657431,
+            "overall_score": 0.2518891687657431
+          },
+          "raw_times": [
+            19850
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-noble-bls12-381",
+          "status": "pass",
+          "elapsed": 20.04962468147278,
+          "iterations": 1,
+          "scores": {
+            "first_time": 19688,
+            "first_score": 0.25396180414465663,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 19688,
+            "average_score": 0.25396180414465663,
+            "overall_score": 0.25396180414465663
+          },
+          "raw_times": [
+            19688
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-noble-bls12-381",
+          "status": "pass",
+          "elapsed": 20.07319211959839,
+          "iterations": 1,
+          "scores": {
+            "first_time": 19742,
+            "first_score": 0.25326714618579677,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 19742,
+            "average_score": 0.25326714618579677,
+            "overall_score": 0.25326714618579677
+          },
+          "raw_times": [
+            19742
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "bigint-noble-secp256k1",
+      "status": "pass",
+      "elapsed": 1.330315113067627,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1125,
+        "first_score": 4.444444444444445,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1125,
+        "average_score": 4.444444444444445,
+        "overall_score": 4.444444444444445
+      },
+      "raw_times": [
+        1125
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.444444444444445,
+        "min": 4.409171075837743,
+        "max": 4.520795660036167,
+        "relative_range": 0.025316455696202445,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "bigint-noble-secp256k1",
+          "status": "pass",
+          "elapsed": 1.330315113067627,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1125,
+            "first_score": 4.444444444444445,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1125,
+            "average_score": 4.444444444444445,
+            "overall_score": 4.444444444444445
+          },
+          "raw_times": [
+            1125
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-noble-secp256k1",
+          "status": "pass",
+          "elapsed": 1.334885597229004,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1134,
+            "first_score": 4.409171075837743,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1134,
+            "average_score": 4.409171075837743,
+            "overall_score": 4.409171075837743
+          },
+          "raw_times": [
+            1134
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-noble-secp256k1",
+          "status": "pass",
+          "elapsed": 1.2889771461486816,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1106,
+            "first_score": 4.520795660036167,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1106,
+            "average_score": 4.520795660036167,
+            "overall_score": 4.520795660036167
+          },
+          "raw_times": [
+            1106
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "bigint-noble-ed25519",
+      "status": "pass",
+      "elapsed": 1.5743472576141357,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1408,
+        "first_score": 3.5511363636363638,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1408,
+        "average_score": 3.5511363636363638,
+        "overall_score": 3.5511363636363638
+      },
+      "raw_times": [
+        1408
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.5511363636363638,
+        "min": 3.5410764872521243,
+        "max": 3.668378576669112,
+        "relative_range": 0.03595011005135729,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "bigint-noble-ed25519",
+          "status": "pass",
+          "elapsed": 1.5743472576141357,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1412,
+            "first_score": 3.5410764872521248,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1412,
+            "average_score": 3.5410764872521248,
+            "overall_score": 3.5410764872521243
+          },
+          "raw_times": [
+            1412
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-noble-ed25519",
+          "status": "pass",
+          "elapsed": 1.538651704788208,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1363,
+            "first_score": 3.668378576669112,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1363,
+            "average_score": 3.668378576669112,
+            "overall_score": 3.668378576669112
+          },
+          "raw_times": [
+            1363
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-noble-ed25519",
+          "status": "pass",
+          "elapsed": 1.5845255851745605,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1408,
+            "first_score": 3.5511363636363638,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1408,
+            "average_score": 3.5511363636363638,
+            "overall_score": 3.5511363636363638
+          },
+          "raw_times": [
+            1408
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "bigint-paillier",
+      "status": "pass",
+      "elapsed": 3.048882484436035,
+      "iterations": 1,
+      "scores": {
+        "first_time": 2891,
+        "first_score": 1.7295053614666205,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 2891,
+        "average_score": 1.7295053614666205,
+        "overall_score": 1.7295053614666205
+      },
+      "raw_times": [
+        2891
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 1.7295053614666205,
+        "min": 1.7271157167530224,
+        "max": 1.734304543877905,
+        "relative_range": 0.004162330905306932,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "bigint-paillier",
+          "status": "pass",
+          "elapsed": 3.05295729637146,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2891,
+            "first_score": 1.7295053614666205,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2891,
+            "average_score": 1.7295053614666205,
+            "overall_score": 1.7295053614666205
+          },
+          "raw_times": [
+            2891
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-paillier",
+          "status": "pass",
+          "elapsed": 3.0377449989318848,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2883,
+            "first_score": 1.734304543877905,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2883,
+            "average_score": 1.734304543877905,
+            "overall_score": 1.734304543877905
+          },
+          "raw_times": [
+            2883
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-paillier",
+          "status": "pass",
+          "elapsed": 3.048882484436035,
+          "iterations": 1,
+          "scores": {
+            "first_time": 2895,
+            "first_score": 1.7271157167530224,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 2895,
+            "average_score": 1.7271157167530224,
+            "overall_score": 1.7271157167530224
+          },
+          "raw_times": [
+            2895
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "bigint-bigdenary",
+      "status": "pass",
+      "elapsed": 1.4945518970489502,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1454,
+        "first_score": 3.43878954607978,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1454,
+        "average_score": 3.43878954607978,
+        "overall_score": 3.4387895460797795
+      },
+      "raw_times": [
+        1454
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 3.4387895460797795,
+        "min": 3.367003367003367,
+        "max": 3.4602076124567476,
+        "relative_range": 0.02768166089965396,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "bigint-bigdenary",
+          "status": "pass",
+          "elapsed": 1.5268347263336182,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1485,
+            "first_score": 3.367003367003367,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1485,
+            "average_score": 3.367003367003367,
+            "overall_score": 3.367003367003367
+          },
+          "raw_times": [
+            1485
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-bigdenary",
+          "status": "pass",
+          "elapsed": 1.4945518970489502,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1454,
+            "first_score": 3.43878954607978,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1454,
+            "average_score": 3.43878954607978,
+            "overall_score": 3.4387895460797795
+          },
+          "raw_times": [
+            1454
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "bigint-bigdenary",
+          "status": "pass",
+          "elapsed": 1.4869556427001953,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1445,
+            "first_score": 3.4602076124567476,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1445,
+            "average_score": 3.4602076124567476,
+            "overall_score": 3.4602076124567476
+          },
+          "raw_times": [
+            1445
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "proxy-mobx",
+      "status": "pass",
+      "elapsed": 0.3129727840423584,
+      "iterations": 1,
+      "scores": {
+        "first_time": 195,
+        "first_score": 25.641025641025642,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 195,
+        "average_score": 25.641025641025642,
+        "overall_score": 25.64102564102564
+      },
+      "raw_times": [
+        195
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 25.64102564102564,
+        "min": 25.252525252525253,
+        "max": 25.64102564102564,
+        "relative_range": 0.01538461538461533,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "proxy-mobx",
+          "status": "pass",
+          "elapsed": 0.3476424217224121,
+          "iterations": 1,
+          "scores": {
+            "first_time": 195,
+            "first_score": 25.641025641025642,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 195,
+            "average_score": 25.641025641025642,
+            "overall_score": 25.64102564102564
+          },
+          "raw_times": [
+            195
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "proxy-mobx",
+          "status": "pass",
+          "elapsed": 0.3129727840423584,
+          "iterations": 1,
+          "scores": {
+            "first_time": 198,
+            "first_score": 25.252525252525253,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 198,
+            "average_score": 25.252525252525253,
+            "overall_score": 25.252525252525253
+          },
+          "raw_times": [
+            198
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "proxy-mobx",
+          "status": "pass",
+          "elapsed": 0.28382110595703125,
+          "iterations": 1,
+          "scores": {
+            "first_time": 195,
+            "first_score": 25.641025641025642,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 195,
+            "average_score": 25.641025641025642,
+            "overall_score": 25.64102564102564
+          },
+          "raw_times": [
+            195
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "proxy-vue",
+      "status": "pass",
+      "elapsed": 0.5605740547180176,
+      "iterations": 1,
+      "scores": {
+        "first_time": 337,
+        "first_score": 14.836795252225519,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 337,
+        "average_score": 14.836795252225519,
+        "overall_score": 14.836795252225519
+      },
+      "raw_times": [
+        337
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 14.836795252225519,
+        "min": 13.888888888888891,
+        "max": 14.88095238095238,
+        "relative_range": 0.07142857142857117,
+        "unstable": true,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "proxy-vue",
+          "status": "pass",
+          "elapsed": 0.5605740547180176,
+          "iterations": 1,
+          "scores": {
+            "first_time": 336,
+            "first_score": 14.880952380952381,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 336,
+            "average_score": 14.880952380952381,
+            "overall_score": 14.88095238095238
+          },
+          "raw_times": [
+            336
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "proxy-vue",
+          "status": "pass",
+          "elapsed": 0.5227682590484619,
+          "iterations": 1,
+          "scores": {
+            "first_time": 337,
+            "first_score": 14.836795252225519,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 337,
+            "average_score": 14.836795252225519,
+            "overall_score": 14.836795252225519
+          },
+          "raw_times": [
+            337
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "proxy-vue",
+          "status": "pass",
+          "elapsed": 0.580543041229248,
+          "iterations": 1,
+          "scores": {
+            "first_time": 360,
+            "first_score": 13.88888888888889,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 360,
+            "average_score": 13.88888888888889,
+            "overall_score": 13.888888888888891
+          },
+          "raw_times": [
+            360
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "raytrace-public-class-fields",
+      "status": "pass",
+      "elapsed": 5.435041427612305,
+      "iterations": 1,
+      "scores": {
+        "first_time": 5390,
+        "first_score": 0.9276437847866419,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 5390,
+        "average_score": 0.9276437847866419,
+        "overall_score": 0.9276437847866419
+      },
+      "raw_times": [
+        5390
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.9276437847866419,
+        "min": 0.9209799226376865,
+        "max": 0.9333582228859436,
+        "relative_range": 0.013440358409557707,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "raytrace-public-class-fields",
+          "status": "pass",
+          "elapsed": 5.4029388427734375,
+          "iterations": 1,
+          "scores": {
+            "first_time": 5357,
+            "first_score": 0.9333582228859436,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 5357,
+            "average_score": 0.9333582228859436,
+            "overall_score": 0.9333582228859436
+          },
+          "raw_times": [
+            5357
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "raytrace-public-class-fields",
+          "status": "pass",
+          "elapsed": 5.473060607910156,
+          "iterations": 1,
+          "scores": {
+            "first_time": 5429,
+            "first_score": 0.9209799226376865,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 5429,
+            "average_score": 0.9209799226376865,
+            "overall_score": 0.9209799226376865
+          },
+          "raw_times": [
+            5429
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "raytrace-public-class-fields",
+          "status": "pass",
+          "elapsed": 5.435041427612305,
+          "iterations": 1,
+          "scores": {
+            "first_time": 5390,
+            "first_score": 0.9276437847866419,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 5390,
+            "average_score": 0.9276437847866419,
+            "overall_score": 0.9276437847866419
+          },
+          "raw_times": [
+            5390
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "raytrace-private-class-fields",
+      "status": "pass",
+      "elapsed": 6.481929779052734,
+      "iterations": 1,
+      "scores": {
+        "first_time": 6435,
+        "first_score": 0.777000777000777,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 6435,
+        "average_score": 0.777000777000777,
+        "overall_score": 0.777000777000777
+      },
+      "raw_times": [
+        6435
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.777000777000777,
+        "min": 0.7665184730952016,
+        "max": 0.7835762419683435,
+        "relative_range": 0.02225356527190092,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "raytrace-private-class-fields",
+          "status": "pass",
+          "elapsed": 6.428098917007446,
+          "iterations": 1,
+          "scores": {
+            "first_time": 6381,
+            "first_score": 0.7835762419683435,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 6381,
+            "average_score": 0.7835762419683435,
+            "overall_score": 0.7835762419683435
+          },
+          "raw_times": [
+            6381
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "raytrace-private-class-fields",
+          "status": "pass",
+          "elapsed": 6.568891286849976,
+          "iterations": 1,
+          "scores": {
+            "first_time": 6523,
+            "first_score": 0.7665184730952016,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 6523,
+            "average_score": 0.7665184730952016,
+            "overall_score": 0.7665184730952016
+          },
+          "raw_times": [
+            6523
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "raytrace-private-class-fields",
+          "status": "pass",
+          "elapsed": 6.481929779052734,
+          "iterations": 1,
+          "scores": {
+            "first_time": 6435,
+            "first_score": 0.777000777000777,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 6435,
+            "average_score": 0.777000777000777,
+            "overall_score": 0.777000777000777
+          },
+          "raw_times": [
+            6435
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "async-fs",
+      "status": "pass",
+      "elapsed": 2.2876312732696533,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1920,
+        "first_score": 2.6041666666666665,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1920,
+        "average_score": 2.6041666666666665,
+        "overall_score": 2.6041666666666665
+      },
+      "raw_times": [
+        1920
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.6041666666666665,
+        "min": 2.579979360165119,
+        "max": 2.620545073375262,
+        "relative_range": 0.015723270440251458,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "async-fs",
+          "status": "pass",
+          "elapsed": 2.305302143096924,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1938,
+            "first_score": 2.579979360165119,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1938,
+            "average_score": 2.579979360165119,
+            "overall_score": 2.579979360165119
+          },
+          "raw_times": [
+            1938
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "async-fs",
+          "status": "pass",
+          "elapsed": 2.2876312732696533,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1920,
+            "first_score": 2.6041666666666665,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1920,
+            "average_score": 2.6041666666666665,
+            "overall_score": 2.6041666666666665
+          },
+          "raw_times": [
+            1920
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "async-fs",
+          "status": "pass",
+          "elapsed": 2.259429693222046,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1908,
+            "first_score": 2.620545073375262,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1908,
+            "average_score": 2.620545073375262,
+            "overall_score": 2.620545073375262
+          },
+          "raw_times": [
+            1908
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "sync-fs",
+      "status": "pass",
+      "elapsed": 1.9431078433990479,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1902,
+        "first_score": 2.6288117770767614,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1902,
+        "average_score": 2.6288117770767614,
+        "overall_score": 2.6288117770767614
+      },
+      "raw_times": [
+        1902
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 2.6288117770767614,
+        "min": 2.6178010471204187,
+        "max": 2.6525198938992043,
+        "relative_range": 0.01326259946949615,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "sync-fs",
+          "status": "pass",
+          "elapsed": 1.9247775077819824,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1885,
+            "first_score": 2.6525198938992043,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1885,
+            "average_score": 2.6525198938992043,
+            "overall_score": 2.6525198938992043
+          },
+          "raw_times": [
+            1885
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "sync-fs",
+          "status": "pass",
+          "elapsed": 1.9431078433990479,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1902,
+            "first_score": 2.6288117770767614,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1902,
+            "average_score": 2.6288117770767614,
+            "overall_score": 2.6288117770767614
+          },
+          "raw_times": [
+            1902
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "sync-fs",
+          "status": "pass",
+          "elapsed": 1.9508073329925537,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1910,
+            "first_score": 2.6178010471204187,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1910,
+            "average_score": 2.6178010471204187,
+            "overall_score": 2.6178010471204187
+          },
+          "raw_times": [
+            1910
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "lazy-collections",
+      "status": "pass",
+      "elapsed": 1.2014715671539307,
+      "iterations": 1,
+      "scores": {
+        "first_time": 1155,
+        "first_score": 4.329004329004329,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 1155,
+        "average_score": 4.329004329004329,
+        "overall_score": 4.329004329004329
+      },
+      "raw_times": [
+        1155
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 4.329004329004329,
+        "min": 4.317789291882556,
+        "max": 4.344048653344917,
+        "relative_range": 0.006081668114682692,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "lazy-collections",
+          "status": "pass",
+          "elapsed": 1.1965959072113037,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1151,
+            "first_score": 4.344048653344918,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1151,
+            "average_score": 4.344048653344918,
+            "overall_score": 4.344048653344917
+          },
+          "raw_times": [
+            1151
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "lazy-collections",
+          "status": "pass",
+          "elapsed": 1.2014715671539307,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1155,
+            "first_score": 4.329004329004329,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1155,
+            "average_score": 4.329004329004329,
+            "overall_score": 4.329004329004329
+          },
+          "raw_times": [
+            1155
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "lazy-collections",
+          "status": "pass",
+          "elapsed": 1.2035646438598633,
+          "iterations": 1,
+          "scores": {
+            "first_time": 1158,
+            "first_score": 4.317789291882556,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 1158,
+            "average_score": 4.317789291882556,
+            "overall_score": 4.317789291882556
+          },
+          "raw_times": [
+            1158
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    },
+    {
+      "name": "js-tokens",
+      "status": "pass",
+      "elapsed": 7.19862174987793,
+      "iterations": 1,
+      "scores": {
+        "first_time": 7152,
+        "first_score": 0.6991051454138703,
+        "worst_time": null,
+        "worst_score": null,
+        "average_time": 7152,
+        "average_score": 0.6991051454138703,
+        "overall_score": 0.6991051454138703
+      },
+      "raw_times": [
+        7152
+      ],
+      "repeat_summary": {
+        "n": 3,
+        "median": 0.6991051454138703,
+        "min": 0.6987143655673561,
+        "max": 0.702543206407194,
+        "relative_range": 0.005479837009976007,
+        "unstable": false,
+        "instability_threshold": 0.05
+      },
+      "measurements": [
+        {
+          "name": "js-tokens",
+          "status": "pass",
+          "elapsed": 7.20158839225769,
+          "iterations": 1,
+          "scores": {
+            "first_time": 7156,
+            "first_score": 0.6987143655673561,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 7156,
+            "average_score": 0.6987143655673561,
+            "overall_score": 0.6987143655673561
+          },
+          "raw_times": [
+            7156
+          ],
+          "repeat": 1,
+          "loadavg_before": null
+        },
+        {
+          "name": "js-tokens",
+          "status": "pass",
+          "elapsed": 7.19862174987793,
+          "iterations": 1,
+          "scores": {
+            "first_time": 7152,
+            "first_score": 0.6991051454138703,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 7152,
+            "average_score": 0.6991051454138703,
+            "overall_score": 0.6991051454138703
+          },
+          "raw_times": [
+            7152
+          ],
+          "repeat": 2,
+          "loadavg_before": null
+        },
+        {
+          "name": "js-tokens",
+          "status": "pass",
+          "elapsed": 7.163286209106445,
+          "iterations": 1,
+          "scores": {
+            "first_time": 7117,
+            "first_score": 0.702543206407194,
+            "worst_time": null,
+            "worst_score": null,
+            "average_time": 7117,
+            "average_score": 0.702543206407194,
+            "overall_score": 0.702543206407194
+          },
+          "raw_times": [
+            7117
+          ],
+          "repeat": 3,
+          "loadavg_before": null
+        }
+      ]
+    }
+  ]
+}

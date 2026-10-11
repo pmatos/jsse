@@ -27,6 +27,7 @@ pub(crate) use dispose::{
     AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
     GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
 };
+mod body_memo;
 mod env_helpers;
 mod eval;
 mod exec;
@@ -379,6 +380,15 @@ pub(crate) struct Interpreter {
     /// (#72), bounded so body-churning workloads cannot retain every body they
     /// ever ran (#165). See `hoist_cache`.
     pub(crate) hoist_cache: HoistCache,
+    /// Per-body bytecode compile verdict shared by every closure of a function
+    /// literal (#900). See `body_memo`.
+    pub(crate) bytecode_memo: body_memo::BodyMemo<bytecode::BytecodeCacheState>,
+    /// Per-body generator/async state machine, built once per function literal
+    /// instead of on every call (#914). See `body_memo`.
+    pub(crate) state_machine_memo: body_memo::BodyMemo<(
+        generator_transform::StateMachineKind,
+        Rc<generator_transform::GeneratorStateMachine>,
+    )>,
     /// Per-body inline-cache store. Bodies are keyed by the `Rc` pointer to
     /// their statement vector so closures of the same function body share the
     /// same cache. See `docs/adr/0001-inline-cache-ast-seam.md`.
@@ -766,6 +776,8 @@ impl Interpreter {
             dispatching_timers: false,
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
+            bytecode_memo: body_memo::BodyMemo::new(),
+            state_machine_memo: body_memo::BodyMemo::new(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: None,
             call_depth: 0,

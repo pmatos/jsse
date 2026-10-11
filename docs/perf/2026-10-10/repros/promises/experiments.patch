@@ -1,0 +1,172 @@
+--- a/src/interpreter/scheduler.rs	2026-10-09 15:04:18.000000000 +0000
++++ b/src/interpreter/scheduler.rs	2026-10-10 20:50:45.099619985 +0000
+@@ -188,7 +188,7 @@
+ 
+ #[derive(Default)]
+ pub(crate) struct JobScheduler {
+-    microtask_queue: Vec<(Vec<JsValue>, MicrotaskJob)>,
++    microtask_queue: VecDeque<(Vec<JsValue>, MicrotaskJob)>,
+     async_gen_queues: FxHashMap<u64, VecDeque<AsyncGenRequest>>,
+     async_gen_yield_pending: bool,
+     async_function_states: FxHashMap<u64, AsyncFunctionState>,
+@@ -207,15 +207,11 @@
+ 
+ impl JobScheduler {
+     pub(crate) fn enqueue_microtask(&mut self, item: (Vec<JsValue>, MicrotaskJob)) {
+-        self.microtask_queue.push(item);
++        self.microtask_queue.push_back(item);
+     }
+ 
+     pub(crate) fn pop_microtask(&mut self) -> Option<(Vec<JsValue>, MicrotaskJob)> {
+-        if self.microtask_queue.is_empty() {
+-            None
+-        } else {
+-            Some(self.microtask_queue.remove(0))
+-        }
++        self.microtask_queue.pop_front()
+     }
+ 
+     /// Every value the scheduler keeps alive: roots held by queued microtasks,
+--- a/src/interpreter/mod.rs	2026-10-09 15:04:18.000000000 +0000
++++ b/src/interpreter/mod.rs	2026-10-10 20:50:45.099619985 +0000
+@@ -299,6 +299,7 @@
+     next_auto_accessor_id: u64,
+     pub(crate) regexp_legacy: builtins::regexp::RegexpLegacyState,
+     pub(crate) function_realm_map: FxHashMap<u64, usize>,
++    pub(crate) async_sm_cache: FxHashMap<usize, (crate::ast::Body, Rc<crate::interpreter::generator_transform::GeneratorStateMachine>)>,
+     pub(crate) in_tail_position: bool,
+     pub(crate) in_state_machine: bool,
+     pub(crate) next_function_is_method: bool,
+@@ -723,6 +724,7 @@
+             next_auto_accessor_id: 0,
+             regexp_legacy: Default::default(),
+             function_realm_map: FxHashMap::default(),
++            async_sm_cache: FxHashMap::default(),
+             in_tail_position: false,
+             in_state_machine: false,
+             next_function_is_method: false,
+--- a/src/interpreter/eval.rs	2026-10-09 15:04:18.000000000 +0000
++++ b/src/interpreter/eval.rs	2026-10-10 20:50:45.103619323 +0000
+@@ -8004,17 +8004,18 @@
+             func_env.borrow_mut().strict = is_strict;
+             interp.in_tail_position = false;
+ 
+-            let sm = crate::interpreter::generator_transform::transform_async_function(
+-                body.as_slice(),
+-                params,
+-            );
+-            #[cfg(feature = "perf-counters")]
+-            let sm = {
+-                let mut sm = sm;
+-                sm.perf_key = Some(interp.perf_body_name(_func_obj_id));
++            let sm_key = body.key() as usize;
++            let sm = if let Some((_, sm)) = interp.async_sm_cache.get(&sm_key) {
++                sm.clone()
++            } else {
++                let sm = crate::interpreter::generator_transform::transform_async_function(
++                    body.as_slice(),
++                    params,
++                );
++                let sm = Rc::new(sm);
++                interp.async_sm_cache.insert(sm_key, (body.clone(), sm.clone()));
+                 sm
+             };
+-            let sm = Rc::new(sm);
+ 
+             for tv in &sm.temp_vars {
+                 func_env.borrow_mut().declare(tv, BindingKind::Var);
+--- a/src/interpreter/builtins/promise.rs	2026-10-09 15:04:18.000000000 +0000
++++ b/src/interpreter/builtins/promise.rs	2026-10-10 20:50:45.243596123 +0000
+@@ -176,6 +176,17 @@
+             }
+         }
+ 
++        if let Some(pc) = self.get_global_var("Promise")
++            && same_value(constructor, &pc)
++        {
++            let promise = self.create_promise_object();
++            let pid = promise.as_object_id().unwrap_or_default();
++            if let Some(e) = self.resolve_promise_internal(pid, value.clone()) {
++                return Err(e);
++            }
++            return Ok(promise);
++        }
++
+         let cap = self.new_promise_capability(constructor)?;
+         if let Completion::Throw(e) = self.call_function(
+             &cap.resolve,
+@@ -852,6 +863,31 @@
+         (resolve_fn, reject_fn)
+     }
+ 
++    /// Promise Resolve Function steps for an internal (unexposed) capability.
++    pub(crate) fn resolve_promise_internal(&mut self, promise_id: u64, value: JsValue) -> Option<JsValue> {
++        if let Some(o) = value.as_object_id() {
++            if o == promise_id {
++                let err = self.create_type_error("A promise cannot be resolved with itself.");
++                self.reject_promise(promise_id, err);
++                return None;
++            }
++            let then_val = match self.get_object_property(o, "then", &value) {
++                Completion::Normal(v) => v,
++                Completion::Throw(e) => {
++                    self.reject_promise(promise_id, e);
++                    return None;
++                }
++                _ => JsValue::UNDEFINED,
++            };
++            if self.is_callable(&then_val) {
++                self.promise_resolve_thenable(promise_id, value.clone(), then_val);
++                return None;
++            }
++        }
++        self.fulfill_promise(promise_id, value);
++        None
++    }
++
+     pub(crate) fn fulfill_promise(&mut self, promise_id: u64, value: JsValue) {
+         let reactions = if let Some(obj) = self.get_object_cell(promise_id) {
+             let mut o = obj.borrow_mut();
+@@ -947,7 +983,18 @@
+                         }
+                     };
+ 
+-                    if let Some(_pid) = reaction.promise_id {
++                    if let Some(pid) = reaction.promise_id
++                        && reaction.resolve.is_undefined()
++                    {
++                        match handler_result {
++                            Ok(value) => {
++                                if let Some(e) = interp.resolve_promise_internal(pid, value) {
++                                    return Completion::Throw(e);
++                                }
++                            }
++                            Err(reason) => interp.reject_promise(pid, reason),
++                        }
++                    } else if let Some(_pid) = reaction.promise_id {
+                         match handler_result {
+                             Ok(value) => {
+                                 if let Completion::Throw(e) = interp.call_function(
+@@ -1168,14 +1215,16 @@
+             Err(e) => return Completion::Throw(e),
+         };
+ 
+-        let cap = match self.new_promise_capability(&c) {
+-            Ok(cap) => cap,
+-            Err(e) => return Completion::Throw(e),
++        let (derived, resolve_fn, reject_fn) = if same_value(&c, &promise_ctor) {
++            (self.create_promise_object(), JsValue::UNDEFINED, JsValue::UNDEFINED)
++        } else {
++            let cap = match self.new_promise_capability(&c) {
++                Ok(cap) => cap,
++                Err(e) => return Completion::Throw(e),
++            };
++            (cap.promise, cap.resolve, cap.reject)
+         };
+-        let derived = cap.promise;
+         let derived_id = derived.as_object_id().unwrap_or_default();
+-        let resolve_fn = cap.resolve;
+-        let reject_fn = cap.reject;
+ 
+         let fulfill_handler = if self.is_callable(on_fulfilled) {
+             Some(on_fulfilled.clone())

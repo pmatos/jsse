@@ -3528,7 +3528,7 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
 // ever ran. This pins both independent bounds through the normal call path.
 #[test]
 fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
-    let bodies = super::hoist_cache::DEFAULT_CAPACITY + 2000;
+    let bodies = super::body_memo::DEFAULT_CAPACITY + 2000;
     let interp = run_script(&format!(
         r#"
         var sum = 0;
@@ -3543,14 +3543,14 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
     ));
     assert_eq!(global_number(&interp, "__sum"), bodies as f64);
     assert!(
-        interp.hoist_cache.len() <= super::hoist_cache::DEFAULT_CAPACITY,
+        interp.hoist_cache.len() <= super::body_memo::DEFAULT_CAPACITY,
         "hoist cache grew to {} entries for {bodies} dynamic bodies",
         interp.hoist_cache.len()
     );
     // Guards against the bound passing vacuously: these bodies must really be
     // reaching the cache, which means it fills and then evicts.
     assert!(
-        interp.hoist_cache.len() > super::hoist_cache::DEFAULT_CAPACITY / 2,
+        interp.hoist_cache.len() > super::body_memo::DEFAULT_CAPACITY / 2,
         "expected the dynamic bodies to fill the cache, got {} entries",
         interp.hoist_cache.len()
     );
@@ -6068,4 +6068,40 @@ mod root_stack_discipline {
         );
         assert!(interp.gc_temp_roots.is_empty());
     }
+}
+
+// Classes without an explicit constructor share one synthesized constructor
+// Body per shape (base or derived), so evaluating such classes in a loop must
+// not add a per-Body cache entry per evaluation. `new B()` takes the
+// default-derived fast path and never runs B's synthesized Body, so the derived
+// shape is exercised through `Reflect.construct`, which does.
+#[test]
+fn synthesized_default_constructors_share_one_body_per_shape() {
+    let interp = run_script(
+        r#"
+        class Base { constructor() { this.tag = "base"; } }
+        var made = 0;
+        for (var i = 0; i < 500; i++) {
+          class A {}
+          class B extends Base {}
+          var a = new A();
+          var b = new B();
+          var c = Reflect.construct(B, []);
+          if (a instanceof A && b instanceof Base && b.tag === "base" &&
+              c instanceof B && c.tag === "base") made++;
+        }
+        globalThis.__made = made;
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__made"), 500.0);
+    assert!(
+        interp.ic_store.len() < 20,
+        "expected one IC entry per constructor shape, got {}",
+        interp.ic_store.len()
+    );
+    assert!(
+        interp.bytecode_memo.len() < 20,
+        "expected one compile verdict per constructor shape, got {}",
+        interp.bytecode_memo.len()
+    );
 }
