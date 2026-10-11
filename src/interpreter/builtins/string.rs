@@ -90,6 +90,15 @@ fn map_well_formed(units: &[u16], mut transform: impl FnMut(&str) -> String) -> 
     out
 }
 
+// TrimString; returns `s` itself when there is nothing to trim.
+fn trim_string(s: JsString, trim_start: bool, trim_end: bool) -> JsString {
+    let trimmed = trim_units(&s.code_units, trim_start, trim_end);
+    if trimmed.len() == s.code_units.len() {
+        return s;
+    }
+    JsString::from_vec(trimmed.to_vec())
+}
+
 // TrimString over code units; every WhiteSpace and LineTerminator is a single
 // BMP code unit.
 fn trim_units(units: &[u16], trim_start: bool, trim_end: bool) -> &[u16] {
@@ -123,12 +132,16 @@ fn string_pad(
     let s = propagate!(this_js_string(interp, this_val));
     let max_length = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     let int_max = propagate!(interp.to_integer_or_infinity_value(&max_length)) as usize;
+    let len = s.code_units.len();
+    // Step 4 returns before step 6 converts the fill string.
+    if int_max <= len {
+        return Completion::Normal(JsValue::string(s));
+    }
     let fill = match args.get(1) {
         Some(v) if !v.is_undefined() => propagate!(interp.to_js_string(v)),
         _ => JsString::from_str(" "),
     };
-    let len = s.code_units.len();
-    if int_max <= len || fill.code_units.is_empty() {
+    if fill.code_units.is_empty() {
         return Completion::Normal(JsValue::string(s));
     }
     let pad = fill.code_units.iter().copied().cycle().take(int_max - len);
@@ -139,6 +152,21 @@ fn string_pad(
         units.chain(pad).collect()
     };
     Completion::Normal(JsValue::string(JsString::from_vec(result)))
+}
+
+// replace/replaceAll steps 5-6: `None` when the replace value is callable,
+// otherwise ? ToString(replaceValue) as the GetSubstitution template.
+fn replace_template(
+    interp: &mut Interpreter,
+    replace_value: &JsValue,
+) -> Result<Option<JsString>, Completion> {
+    if interp.is_callable(replace_value) {
+        return Ok(None);
+    }
+    interp
+        .to_js_string(replace_value)
+        .map(Some)
+        .map_err(Completion::Throw)
 }
 
 // The replacement for the match of the search string at `position..end` of
@@ -498,8 +526,7 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let trimmed = trim_units(&s.code_units, true, true);
-                    Completion::Normal(JsValue::string(JsString::from_vec(trimmed.to_vec())))
+                    Completion::Normal(JsValue::string(trim_string(s, true, true)))
                 }),
             ),
             (
@@ -507,8 +534,7 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let trimmed = trim_units(&s.code_units, true, false);
-                    Completion::Normal(JsValue::string(JsString::from_vec(trimmed.to_vec())))
+                    Completion::Normal(JsValue::string(trim_string(s, true, false)))
                 }),
             ),
             (
@@ -516,8 +542,7 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let trimmed = trim_units(&s.code_units, false, true);
-                    Completion::Normal(JsValue::string(JsString::from_vec(trimmed.to_vec())))
+                    Completion::Normal(JsValue::string(trim_string(s, false, true)))
                 }),
             ),
             (
@@ -664,19 +689,7 @@ impl Interpreter {
                     let s = propagate!(interp.to_js_string(this_val));
                     let search = propagate!(interp.to_js_string(&search_value));
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    let is_fn = if let Some(object_id) = replace_arg.as_object_id() {
-                        interp
-                            .get_object_cell(object_id)
-                            .map(|obj| obj.borrow().callable.is_some())
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-                    let template = if is_fn {
-                        None
-                    } else {
-                        Some(propagate!(interp.to_js_string(&replace_arg)))
-                    };
+                    let template = propagate!(replace_template(interp, &replace_arg));
                     let s_units = &s.code_units;
                     let search_units = &search.code_units;
                     let Some(pos) = string_index_of(s_units, search_units, 0) else {
@@ -765,20 +778,8 @@ impl Interpreter {
                     let s = propagate!(interp.to_js_string(this_val));
                     let search = propagate!(interp.to_js_string(&search_value));
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    let is_fn = if let Some(object_id) = replace_arg.as_object_id() {
-                        interp
-                            .get_object_cell(object_id)
-                            .map(|obj| obj.borrow().callable.is_some())
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
                     // Per spec step 6a: if not functional, ToString(replaceValue) once upfront
-                    let template = if is_fn {
-                        None
-                    } else {
-                        Some(propagate!(interp.to_js_string(&replace_arg)))
-                    };
+                    let template = propagate!(replace_template(interp, &replace_arg));
                     let s_units = &s.code_units;
                     let search_units = &search.code_units;
                     let advance_by = search_units.len().max(1);
@@ -1060,34 +1061,20 @@ impl Interpreter {
                         },
                         _ => "NFC".to_string(),
                     };
-                    let units = &s.code_units;
-                    let normalized = match form.as_str() {
-                        "NFC" => map_well_formed(units, |run| {
-                            ComposingNormalizerBorrowed::new_nfc()
-                                .normalize(run)
-                                .into_owned()
-                        }),
-                        "NFD" => map_well_formed(units, |run| {
-                            DecomposingNormalizerBorrowed::new_nfd()
-                                .normalize(run)
-                                .into_owned()
-                        }),
-                        "NFKC" => map_well_formed(units, |run| {
-                            ComposingNormalizerBorrowed::new_nfkc()
-                                .normalize(run)
-                                .into_owned()
-                        }),
-                        "NFKD" => map_well_formed(units, |run| {
-                            DecomposingNormalizerBorrowed::new_nfkd()
-                                .normalize(run)
-                                .into_owned()
-                        }),
-                        _ => {
-                            return Completion::Throw(interp.create_range_error(
-                                &format!("The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"),
-                            ));
+                    if !matches!(form.as_str(), "NFC" | "NFD" | "NFKC" | "NFKD") {
+                        return Completion::Throw(interp.create_range_error(&format!(
+                            "The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"
+                        )));
+                    }
+                    let normalized = map_well_formed(&s.code_units, |run| {
+                        match form.as_str() {
+                            "NFC" => ComposingNormalizerBorrowed::new_nfc().normalize(run),
+                            "NFD" => DecomposingNormalizerBorrowed::new_nfd().normalize(run),
+                            "NFKC" => ComposingNormalizerBorrowed::new_nfkc().normalize(run),
+                            _ => DecomposingNormalizerBorrowed::new_nfkd().normalize(run),
                         }
-                    };
+                        .into_owned()
+                    });
                     Completion::Normal(JsValue::string(JsString::from_vec(normalized)))
                 }),
             ),
@@ -1370,8 +1357,8 @@ impl Interpreter {
                 }
                 let s = match this_val.as_string() {
                     Some(string) => string,
-                    None => match interp.to_string_value(this_val) {
-                        Ok(converted) => JsString::from_str(&converted),
+                    None => match interp.to_js_string(this_val) {
+                        Ok(converted) => converted,
                         Err(e) => return Completion::Throw(e),
                     },
                 };

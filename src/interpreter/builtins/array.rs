@@ -1330,19 +1330,19 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let separator = ",";
             let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             let pass_args = vec![locales, options];
-            let mut parts: Vec<String> = Vec::with_capacity(len);
+            let mut result: Vec<u16> = Vec::new();
             for k in 0..len {
+                if k > 0 {
+                    result.push(u16::from(b','));
+                }
                 let next_element = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                if (next_element).is_nullish() {
-                    parts.push(String::new());
-                } else {
+                if !next_element.is_nullish() {
                     let element_obj = match interp.to_object(&next_element) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -1358,8 +1358,8 @@ impl Interpreter {
                     if interp.is_callable(&to_locale_str_method) {
                         match interp.call_function(&to_locale_str_method, &next_element, &pass_args)
                         {
-                            Completion::Normal(v) => match interp.to_string_value(&v) {
-                                Ok(s) => parts.push(s),
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
+                                Ok(s) => result.extend_from_slice(&s.code_units),
                                 Err(e) => return Completion::Throw(e),
                             },
                             other => return other,
@@ -1370,7 +1370,7 @@ impl Interpreter {
                     }
                 }
             }
-            Completion::Normal(JsValue::string(JsString::from_str(&parts.join(separator))))
+            Completion::Normal(JsValue::string(JsString::from_vec(result)))
         });
 
         // Array.prototype.concat
@@ -2440,21 +2440,22 @@ impl Interpreter {
                         _ => return std::cmp::Ordering::Equal,
                     }
                 }
-                let xs = match interp.to_string_value(x) {
+                // IsLessThan compares UTF-16 code units, lone surrogates included.
+                let xs = match interp.to_js_string(x) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                let ys = match interp.to_string_value(y) {
+                let ys = match interp.to_js_string(y) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                xs.cmp(&ys)
+                xs.code_units[..].cmp(&ys.code_units[..])
             });
             if let Some(e) = sort_error {
                 return Completion::Throw(e);
@@ -2549,21 +2550,22 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                let xs = match interp.to_string_value(x) {
+                // IsLessThan compares UTF-16 code units, lone surrogates included.
+                let xs = match interp.to_js_string(x) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                let ys = match interp.to_string_value(y) {
+                let ys = match interp.to_js_string(y) {
                     Ok(s) => s,
                     Err(e) => {
                         sort_error = Some(e);
                         return std::cmp::Ordering::Equal;
                     }
                 };
-                xs.cmp(&ys)
+                xs.code_units[..].cmp(&ys.code_units[..])
             });
             if let Some(e) = sort_error {
                 return Completion::Throw(e);
