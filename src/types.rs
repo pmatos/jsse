@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// One-word ECMAScript value representation.
 ///
@@ -104,6 +104,31 @@ pub(crate) struct JsPropertyKey {
 
 const SYMBOL_PROPERTY_KEY_SIGIL: u8 = 0xFF;
 
+/// Well-known symbol names in the index order of
+/// [`JsPropertyKey::cached_well_known_symbol`].
+const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [
+    "iterator",
+    "hasInstance",
+    "toPrimitive",
+    "toStringTag",
+    "isConcatSpreadable",
+    "species",
+    "match",
+    "replace",
+    "search",
+    "split",
+    "matchAll",
+    "unscopables",
+    "asyncIterator",
+    "dispose",
+    "asyncDispose",
+];
+
+static WELL_KNOWN_SYMBOL_KEYS: LazyLock<[JsPropertyKey; 15]> = LazyLock::new(|| {
+    WELL_KNOWN_SYMBOL_NAMES
+        .map(|name| JsPropertyKey::from_symbol_encoding(format!("Symbol(Symbol.{name})")))
+});
+
 pub(crate) enum JsPropertyKeyParseError<E> {
     IllFormedUtf16,
     Value(E),
@@ -164,7 +189,35 @@ impl JsPropertyKey {
     }
 
     pub(crate) fn well_known_symbol(name: &str) -> Self {
+        if let Some(key) = Self::cached_well_known_symbol(name) {
+            return key.clone();
+        }
         Self::from_symbol_encoding(format!("Symbol(Symbol.{name})"))
+    }
+
+    /// The precomputed key of a well-known symbol (§6.1.5.1), so hot lookups
+    /// (`@@iterator`, `@@species`, `@@toPrimitive`, ...) cost a refcount bump
+    /// instead of a `format!` and two allocations.
+    pub(crate) fn cached_well_known_symbol(name: &str) -> Option<&'static Self> {
+        let index = match name {
+            "iterator" => 0,
+            "hasInstance" => 1,
+            "toPrimitive" => 2,
+            "toStringTag" => 3,
+            "isConcatSpreadable" => 4,
+            "species" => 5,
+            "match" => 6,
+            "replace" => 7,
+            "search" => 8,
+            "split" => 9,
+            "matchAll" => 10,
+            "unscopables" => 11,
+            "asyncIterator" => 12,
+            "dispose" => 13,
+            "asyncDispose" => 14,
+            _ => return None,
+        };
+        Some(&WELL_KNOWN_SYMBOL_KEYS[index])
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -830,6 +883,14 @@ pub(crate) mod number_ops {
     }
 
     pub(crate) fn remainder(x: f64, y: f64) -> f64 {
+        // Fast path for int32 operands: f64 `%` lowers to a software fmod.
+        // A zero dividend falls through so -0 keeps its sign, and a zero result
+        // takes the dividend's sign (§6.1.6.1.6 step 6, e.g. -4 % 2 is -0).
+        let (xi, yi) = (x as i32, y as i32);
+        if xi as f64 == x && yi as f64 == y && xi != 0 && yi != 0 {
+            let r = xi.wrapping_rem(yi);
+            return if r == 0 && xi < 0 { -0.0 } else { r as f64 };
+        }
         // IEEE 754 remainder
         x % y
     }
@@ -919,6 +980,11 @@ pub(crate) mod number_ops {
     // step is done in f64 (exact for integer-valued doubles) so it stays correct
     // for magnitudes beyond the i64 range, where an `as i64` cast would saturate.
     pub(crate) fn to_uint32(x: f64) -> u32 {
+        // Fast path: below 2^63 the saturating `as i64` cast truncates exactly
+        // and wrapping to u32 is the modulo-2^32 step. NaN fails the compare.
+        if x.abs() < 9.0e18 {
+            return (x as i64) as u32;
+        }
         if !x.is_finite() || x == 0.0 {
             return 0;
         }
@@ -1123,6 +1189,25 @@ mod tests {
         assert_eq!(number_ops::to_int32(1e21), -559939584);
     }
 
+    // §6.1.6.1.6 Number::remainder — the int32 fast path must keep the sign
+    // rules of the general path.
+    #[test]
+    fn remainder_int32_fast_path() {
+        let neg_zero = |v: f64| v == 0.0 && v.is_sign_negative();
+        assert_eq!(number_ops::remainder(7.0, 3.0), 1.0);
+        assert_eq!(number_ops::remainder(-7.0, 3.0), -1.0);
+        assert_eq!(number_ops::remainder(7.0, -3.0), 1.0);
+        assert!(neg_zero(number_ops::remainder(-6.0, 3.0)));
+        assert!(neg_zero(number_ops::remainder(-0.0, 5.0)));
+        assert!(neg_zero(number_ops::remainder(-2147483648.0, -1.0)));
+        assert!(!neg_zero(number_ops::remainder(6.0, 3.0)));
+        assert!(number_ops::remainder(5.0, 0.0).is_nan());
+        assert!(number_ops::remainder(5.0, -0.0).is_nan());
+        assert_eq!(number_ops::remainder(5.5, 2.0), 1.5);
+        assert_eq!(number_ops::remainder(2147483648.0, 3.0), 2.0);
+        assert_eq!(number_ops::remainder(3.0, f64::INFINITY), 3.0);
+    }
+
     #[test]
     fn bitwise_and_shift_large_values() {
         // The bitwise/shift operators feed operands through ToInt32/ToUint32, so
@@ -1266,6 +1351,17 @@ mod tests {
         assert_ne!(symbol, text);
         assert_eq!(symbol.symbol_encoding(), Some("Symbol(x)#7"));
         assert_eq!(symbol.to_string(), "Symbol(x)#7");
+    }
+
+    #[test]
+    fn cached_well_known_symbol_keys_match_symbol_encoding() {
+        for (index, name) in WELL_KNOWN_SYMBOL_NAMES.iter().enumerate() {
+            let cached = JsPropertyKey::cached_well_known_symbol(name).expect("known name");
+            assert!(std::ptr::eq(cached, &WELL_KNOWN_SYMBOL_KEYS[index]));
+            let symbol = JsSymbol::new(99, Some(JsString::from_str(&format!("Symbol.{name}"))));
+            assert_eq!(*cached, symbol.to_property_key());
+        }
+        assert!(JsPropertyKey::cached_well_known_symbol("notWellKnown").is_none());
     }
 
     #[test]

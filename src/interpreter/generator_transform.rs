@@ -4,6 +4,15 @@ use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
 use std::collections::{HashMap, HashSet};
 
+/// Which transform built a [`GeneratorStateMachine`], so a memoised machine is
+/// only reused for the same kind of function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StateMachineKind {
+    Generator,
+    AsyncGenerator,
+    AsyncFunction,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct GeneratorStateMachine {

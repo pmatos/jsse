@@ -3528,7 +3528,7 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
 // ever ran. This pins both independent bounds through the normal call path.
 #[test]
 fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
-    let bodies = super::hoist_cache::DEFAULT_CAPACITY + 2000;
+    let bodies = super::body_memo::DEFAULT_CAPACITY + 2000;
     let interp = run_script(&format!(
         r#"
         var sum = 0;
@@ -3543,14 +3543,14 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
     ));
     assert_eq!(global_number(&interp, "__sum"), bodies as f64);
     assert!(
-        interp.hoist_cache.len() <= super::hoist_cache::DEFAULT_CAPACITY,
+        interp.hoist_cache.len() <= super::body_memo::DEFAULT_CAPACITY,
         "hoist cache grew to {} entries for {bodies} dynamic bodies",
         interp.hoist_cache.len()
     );
     // Guards against the bound passing vacuously: these bodies must really be
     // reaching the cache, which means it fills and then evicts.
     assert!(
-        interp.hoist_cache.len() > super::hoist_cache::DEFAULT_CAPACITY / 2,
+        interp.hoist_cache.len() > super::body_memo::DEFAULT_CAPACITY / 2,
         "expected the dynamic bodies to fill the cache, got {} entries",
         interp.hoist_cache.len()
     );
