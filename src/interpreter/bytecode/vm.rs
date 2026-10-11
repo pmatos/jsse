@@ -4,13 +4,46 @@ use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{BindingKind, Completion, Environment};
-use crate::interpreter::{EnvRef, Interpreter};
+use crate::interpreter::{Atom, EnvRef, Interpreter};
 use crate::types::JsValue;
 
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     let lo = chunk.code[pc] as u16;
     let hi = chunk.code[pc + 1] as u16;
     ((hi << 8) | lo) as i16
+}
+
+/// Decodes the mode byte shared by `UpdateName` and `UpdateLocal`.
+fn update_mode(mode: u8) -> (UpdateOp, bool) {
+    match mode {
+        0 => (UpdateOp::Increment, false),
+        1 => (UpdateOp::Increment, true),
+        2 => (UpdateOp::Decrement, false),
+        3 => (UpdateOp::Decrement, true),
+        _ => panic!("invalid update mode"),
+    }
+}
+
+/// `LoadName` and the miss path of `LoadLocal`: the frame's own binding when
+/// the current scope is a plain declarative one, else full identifier
+/// resolution.
+fn load_name_value(interp: &mut Interpreter, name: &Atom, env: &EnvRef) -> Completion {
+    let (local_value, strict) = {
+        let scope = env.borrow();
+        let value = if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
+            scope
+                .bindings
+                .get(name)
+                .and_then(|binding| binding.initialized.then(|| binding.value.clone()))
+        } else {
+            None
+        };
+        (value, scope.strict)
+    };
+    match local_value {
+        Some(value) => Completion::Normal(value),
+        None => interp.resolve_identifier(name, env, strict),
+    }
 }
 
 fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
@@ -243,12 +276,13 @@ fn run_chunk_inner(
     declare_chunk_vars: bool,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
-    if declare_chunk_vars {
+    if declare_chunk_vars && !chunk.var_names.is_empty() {
         let var_scope = Environment::find_var_scope(env);
+        let mut scope = var_scope.borrow_mut();
         for &name_idx in &chunk.var_names {
             let name = &chunk.names[name_idx as usize];
-            if !var_scope.borrow().bindings.contains_key(name.as_ref()) {
-                var_scope.borrow_mut().declare(name, BindingKind::Var);
+            if !scope.bindings.contains_key(name) {
+                scope.declare_atom(name, BindingKind::Var);
             }
         }
     }
@@ -273,24 +307,143 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                let (local_value, strict) = {
+                match load_name_value(interp, name, env) {
+                    Completion::Normal(v) => push_value(interp, &mut stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::LoadLocal => {
+                let idx = decode_u16(chunk, pc);
+                let slot = decode_u16(chunk, pc + 2);
+                pc += 4;
+                let name = &chunk.names[idx as usize];
+                let hit = {
                     let scope = env.borrow();
-                    let value =
-                        if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
-                            scope.bindings.get(name.as_ref()).and_then(|binding| {
-                                binding.initialized.then(|| binding.value.clone())
-                            })
-                        } else {
-                            None
-                        };
-                    (value, scope.strict)
+                    match scope.bindings.entry_at(slot as usize) {
+                        Some((atom, binding))
+                            if atom.ptr_eq(name)
+                                && binding.initialized
+                                && scope.with_object.is_none()
+                                && scope.indirect_bindings.is_none() =>
+                        {
+                            Some(binding.value.clone())
+                        }
+                        _ => None,
+                    }
                 };
-                if let Some(value) = local_value {
-                    push_value(interp, &mut stack, value);
+                match hit {
+                    Some(value) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 1;
+                        }
+                        push_value(interp, &mut stack, value);
+                    }
+                    None => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_misses += 1;
+                        }
+                        match load_name_value(interp, name, env) {
+                            Completion::Normal(v) => push_value(interp, &mut stack, v),
+                            abrupt => return abrupt,
+                        }
+                    }
+                }
+            }
+            Op::StoreLocal => {
+                let idx = decode_u16(chunk, pc);
+                let slot = decode_u16(chunk, pc + 2);
+                pc += 4;
+                let name = &chunk.names[idx as usize];
+                let value = stack.last().expect("stack underflow on StoreLocal");
+                let stored = {
+                    let mut scope = env.borrow_mut();
+                    let plain = scope.with_object.is_none()
+                        && scope.indirect_bindings.is_none()
+                        && scope.global_object_id.is_none();
+                    match scope.bindings.entry_at_mut(slot as usize) {
+                        Some((atom, binding))
+                            if plain
+                                && atom.ptr_eq(name)
+                                && binding.initialized
+                                && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
+                        {
+                            binding.value = value.clone();
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if stored {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        interp.perf.local_slot_hits += 1;
+                    }
                 } else {
-                    match interp.resolve_identifier(name, env, strict) {
-                        Completion::Normal(v) => push_value(interp, &mut stack, v),
-                        abrupt => return abrupt,
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        interp.perf.local_slot_misses += 1;
+                    }
+                    let id_ref = match interp.resolve_identifier_ref(name, env) {
+                        Ok(id_ref) => id_ref,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let Completion::Throw(e) =
+                        interp.put_value_by_ref(name, value.clone(), &id_ref, env)
+                    {
+                        return Completion::Throw(e);
+                    }
+                }
+            }
+            Op::UpdateLocal => {
+                let idx = decode_u16(chunk, pc);
+                let slot = decode_u16(chunk, pc + 2);
+                let mode = chunk.code[pc + 4];
+                pc += 5;
+                let (op, prefix) = update_mode(mode);
+                let name = &chunk.names[idx as usize];
+                let fast = {
+                    let mut scope = env.borrow_mut();
+                    let plain = scope.with_object.is_none()
+                        && scope.indirect_bindings.is_none()
+                        && scope.global_object_id.is_none();
+                    match scope.bindings.entry_at_mut(slot as usize) {
+                        Some((atom, binding))
+                            if plain
+                                && atom.ptr_eq(name)
+                                && binding.initialized
+                                && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
+                        {
+                            binding.value.as_number().map(|old| {
+                                let new = match op {
+                                    UpdateOp::Increment => old + 1.0,
+                                    UpdateOp::Decrement => old - 1.0,
+                                };
+                                binding.value = JsValue::number(new);
+                                JsValue::number(if prefix { new } else { old })
+                            })
+                        }
+                        _ => None,
+                    }
+                };
+                match fast {
+                    Some(result) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 1;
+                        }
+                        push_value(interp, &mut stack, result);
+                    }
+                    None => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_misses += 1;
+                        }
+                        match interp.eval_identifier_update(op, prefix, name, env) {
+                            Completion::Normal(value) => push_value(interp, &mut stack, value),
+                            abrupt => return abrupt,
+                        }
                     }
                 }
             }
@@ -324,7 +477,7 @@ fn run_chunk_inner(
                     let scope = env.borrow();
                     scope.with_object.is_none()
                         && scope.indirect_bindings.is_none()
-                        && scope.bindings.contains_key(name.as_ref())
+                        && scope.bindings.contains_key(name)
                 };
                 if local_ref {
                     refs.push(IdentifierRef::SpecificEnv(env.clone()));
@@ -359,7 +512,7 @@ fn run_chunk_inner(
                     let mut scope = local_env.borrow_mut();
                     if scope.global_object_id.is_none()
                         && scope.indirect_bindings.is_none()
-                        && let Some(binding) = scope.bindings.get_mut(name.as_ref())
+                        && let Some(binding) = scope.bindings.get_mut(name)
                         && binding.initialized
                         && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
                     {
@@ -382,13 +535,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 let mode = chunk.code[pc + 2];
                 pc += 3;
-                let (op, prefix) = match mode {
-                    0 => (UpdateOp::Increment, false),
-                    1 => (UpdateOp::Increment, true),
-                    2 => (UpdateOp::Decrement, false),
-                    3 => (UpdateOp::Decrement, true),
-                    _ => panic!("invalid UpdateName mode"),
-                };
+                let (op, prefix) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
                 match interp.eval_identifier_update(op, prefix, name, env) {
                     Completion::Normal(value) => push_value(interp, &mut stack, value),

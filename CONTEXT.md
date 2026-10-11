@@ -48,6 +48,14 @@ _Avoid_: boundary, layer.
 How the `differential` fuzz target (`fuzz/fuzz_targets/differential.rs`) classifies a jsse-vs-node run. Tier 1: jsse crashed (signal or the interpreter-panic exit code) while node didn't — an engine bug by definition. Tier 2: exactly one side rejects the source as a syntax error — a real coverage gap. Tier 3: both sides threw (possibly a different error class) or both timed out — expected noise (usually an unimplemented feature), recorded but not a fuzzer finding. See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`.
 _Avoid_: divergence class, mismatch level.
 
+**Atom**:
+A canonical interned identifier (`src/interpreter/atom.rs`): two atoms with the same text are pointer-equal, and each carries a hash computed once by the interner's randomised hasher. `Environment.bindings` (`BindingMap`) and bytecode `Chunk.names` hold atoms, so the call path compares identifiers by pointer and never rehashes script text. See ADR-2026-10-12-0900.
+_Avoid_: symbol, interned string, name key.
+
+**Local Slot Hint**:
+The slot operand of the `LoadLocal`/`StoreLocal`/`UpdateLocal` bytecode ops: the expected position of a frame-local name in the call's `BindingMap`. It is verified by atom identity on every execution and falls back to by-name resolution on a miss, so it can be wrong without being unsound. See ADR-2026-10-12-0900.
+_Avoid_: register, frame offset, resolved slot.
+
 ## Parsing
 
 **Lookahead Cursor**:

@@ -1,5 +1,7 @@
 use crate::ast::*;
+use crate::interpreter::Atom;
 use crate::interpreter::PropertyMap;
+use crate::interpreter::binding_map::{BindingMap, BindingName};
 use crate::interpreter::generator_transform::{
     GeneratorStateMachine, LoopControlTarget, SentValueBinding,
 };
@@ -844,7 +846,11 @@ impl Realm {
 pub(crate) struct Environment {
     // Binding names come from script source. Keep randomized hashing here so
     // deterministic collision sets cannot flood declaration and lookup paths.
-    pub(crate) bindings: HashMap<String, Binding>,
+    pub(crate) bindings: BindingMap,
+    /// §9.1.1.3 [[ThisValue]]/[[ThisBindingStatus]] of a function (or the
+    /// global/module) scope. Kept out of `bindings` so a call binds `this`
+    /// without hashing or allocating a name.
+    pub(crate) this_binding: Option<ThisBinding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
@@ -905,6 +911,11 @@ impl std::fmt::Debug for Environment {
     }
 }
 
+pub(crate) struct ThisBinding {
+    pub(crate) value: JsValue,
+    pub(crate) initialized: bool,
+}
+
 pub(crate) struct WithObject {
     pub(crate) obj_id: u64,
 }
@@ -952,7 +963,8 @@ impl Environment {
     pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: BindingMap::new(),
+            this_binding: None,
             parent,
             strict,
             is_function_scope: false,
@@ -978,7 +990,8 @@ impl Environment {
     pub(crate) fn new_with_object(parent: EnvRef, obj_id: u64) -> EnvRef {
         let strict = parent.borrow().strict;
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: BindingMap::new(),
+            this_binding: None,
             parent: Some(parent),
             strict,
             is_function_scope: false,
@@ -1009,7 +1022,8 @@ impl Environment {
     ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::with_capacity(binding_capacity),
+            bindings: BindingMap::with_capacity(binding_capacity),
+            this_binding: None,
             parent,
             strict,
             is_function_scope: true,
@@ -1034,6 +1048,7 @@ impl Environment {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         self.bindings.clear();
         self.bindings.reserve(binding_capacity);
+        self.this_binding = None;
         self.parent = parent;
         self.strict = strict;
         self.is_function_scope = true;
@@ -1075,9 +1090,48 @@ impl Environment {
         env.clone()
     }
 
+    /// Binds `this` to an initialized value (§9.1.1.3.1 BindThisValue).
+    pub(crate) fn set_this(&mut self, value: JsValue) {
+        self.this_binding = Some(ThisBinding {
+            value,
+            initialized: true,
+        });
+    }
+
+    /// Creates the `this` binding uninitialized: a derived constructor's TDZ
+    /// until `super()` returns.
+    pub(crate) fn declare_this_uninit(&mut self) {
+        self.this_binding = Some(ThisBinding {
+            value: JsValue::UNDEFINED,
+            initialized: false,
+        });
+    }
+
+    /// The value of the nearest `this` binding up the chain, or `None` when
+    /// that binding is uninitialized (or absent).
+    pub(crate) fn get_this(&self) -> Option<JsValue> {
+        if let Some(this) = &self.this_binding {
+            return this.initialized.then(|| this.value.clone());
+        }
+        self.parent.as_ref().and_then(|p| p.borrow().get_this())
+    }
+
+    /// `declare` for an already-interned name: no hashing, no allocation.
+    pub(crate) fn declare_atom(&mut self, name: &Atom, kind: BindingKind) {
+        self.bindings.insert_atom(
+            name,
+            Binding {
+                value: JsValue::UNDEFINED,
+                kind,
+                initialized: kind == BindingKind::Var,
+                deletable: false,
+            },
+        );
+    }
+
     pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
-            name.to_string(),
+            name,
             Binding {
                 value: JsValue::UNDEFINED,
                 kind,
@@ -1145,7 +1199,7 @@ impl Environment {
 
     pub(crate) fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
-            name.to_string(),
+            name,
             Binding {
                 value: JsValue::UNDEFINED,
                 kind,
@@ -1221,10 +1275,8 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow_mut().set(name, value)
         } else {
-            self.bindings.insert(
-                name.to_string(),
-                Binding::new(value, BindingKind::Var, true),
-            );
+            self.bindings
+                .insert(name, Binding::new(value, BindingKind::Var, true));
             Ok(())
         }
     }
@@ -1275,9 +1327,12 @@ impl Environment {
         }
     }
 
-    pub(crate) fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
+    pub(crate) fn find_binding_env<N: BindingName + ?Sized>(
+        env: &EnvRef,
+        name: &N,
+    ) -> Option<EnvRef> {
         let e = env.borrow();
-        if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
+        if e.is_indirect_binding(name.as_name()) || e.bindings.contains_key(name) {
             return Some(env.clone());
         }
         if e.global_object_id.is_some() {

@@ -161,8 +161,8 @@ impl Interpreter {
     /// Walks up the environment chain to find the `this` binding.
     fn this_is_in_tdz(env: &EnvRef) -> bool {
         let e = env.borrow();
-        if e.bindings.contains_key("this") {
-            return e.is_in_tdz("this");
+        if let Some(this) = &e.this_binding {
+            return !this.initialized;
         }
         if let Some(ref parent) = e.parent {
             return Self::this_is_in_tdz(parent);
@@ -178,7 +178,7 @@ impl Interpreter {
     /// the bytecode `Op::LoadThis` handler so both observe identical
     /// semantics, including the derived-constructor TDZ throw.
     pub(super) fn resolve_this_binding(&mut self, env: &EnvRef) -> Completion {
-        match env.borrow().get("this") {
+        match env.borrow().get_this() {
             Some(v) => Completion::Normal(v),
             None => {
                 if Self::this_is_in_tdz(env) {
@@ -196,16 +196,8 @@ impl Interpreter {
     /// Walks up to find the function scope's `this` binding and marks it initialized.
     fn initialize_this_binding(env: &EnvRef, value: JsValue) {
         let mut e = env.borrow_mut();
-        if e.bindings.contains_key("this") {
-            e.bindings.insert(
-                "this".to_string(),
-                crate::interpreter::types::Binding {
-                    value,
-                    kind: crate::interpreter::types::BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
+        if e.this_binding.is_some() {
+            e.set_this(value);
             return;
         }
         if let Some(ref parent) = e.parent {
@@ -263,15 +255,7 @@ impl Interpreter {
         };
         let init_parent = ctor_closure.unwrap_or_else(|| env.clone());
         let init_env = Environment::new(Some(init_parent));
-        init_env.borrow_mut().bindings.insert(
-            "this".to_string(),
-            crate::interpreter::types::Binding {
-                value: this_val.clone(),
-                kind: crate::interpreter::types::BindingKind::Const,
-                initialized: true,
-                deletable: false,
-            },
-        );
+        init_env.borrow_mut().set_this(this_val.clone());
         init_env.borrow_mut().class_private_names = class_pn;
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
@@ -283,7 +267,7 @@ impl Interpreter {
             let proto_val = self.get_property_on_id(o.id, "prototype");
             if proto_val.is_object() {
                 init_env.borrow_mut().bindings.insert(
-                    "__home_object__".to_string(),
+                    "__home_object__",
                     crate::interpreter::types::Binding {
                         value: proto_val,
                         kind: crate::interpreter::types::BindingKind::Const,
@@ -579,6 +563,7 @@ impl Interpreter {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
                         bindings: Default::default(),
+                        this_binding: None,
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -1868,7 +1853,33 @@ impl Interpreter {
                 state
             }
             None => {
-                let state = match compiler::compile_body(body.as_slice()) {
+                let shape = self
+                    .get_object(func_obj_id)
+                    .and_then(|o| match &o.borrow().callable {
+                        Some(JsFunction::User {
+                            params,
+                            is_arrow,
+                            uses_arguments,
+                            has_simple_params,
+                            ..
+                        }) if *has_simple_params => Some((
+                            !*is_arrow && *uses_arguments,
+                            params
+                                .iter()
+                                .filter_map(|p| match p {
+                                    Pattern::Identifier(name) => Some(name.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<String>>(),
+                        )),
+                        _ => None,
+                    });
+                let (arguments_slot, simple_params) = shape.unwrap_or((false, Vec::new()));
+                let frame_shape = compiler::FrameShape {
+                    arguments_slot,
+                    simple_params: &simple_params,
+                };
+                let state = match compiler::compile_function_body(body.as_slice(), &frame_shape) {
                     Ok(c) => {
                         #[cfg(feature = "perf-counters")]
                         {
@@ -2343,12 +2354,13 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn get_identifier_value_by_ref(
+    pub(super) fn get_identifier_value_by_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         id_ref: &IdentifierRef,
         env: &EnvRef,
     ) -> Completion {
+        let name = key.as_name();
         let strict = env.borrow().strict;
         match id_ref {
             IdentifierRef::WithObject(obj_id) => self.with_get_binding_value(*obj_id, name, strict),
@@ -2356,28 +2368,24 @@ impl Interpreter {
                 Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                let (indirect, has_binding) = {
+                let local = {
                     let specific = specific_env.borrow();
-                    (
-                        specific.resolve_indirect_binding(name),
-                        specific.bindings.contains_key(name),
-                    )
+                    match specific.resolve_indirect_binding(name) {
+                        Some(resolved) => Some(resolved),
+                        None => specific
+                            .bindings
+                            .get(key)
+                            .map(|b| b.initialized.then(|| b.value.clone())),
+                    }
                 };
-                if let Some(resolved) = indirect {
+                if let Some(resolved) = local {
                     match resolved {
                         Some(value) => Completion::Normal(value),
                         None => Completion::Throw(self.create_reference_error(&format!(
                             "Cannot access '{name}' before initialization"
                         ))),
                     }
-                } else if has_binding {
-                    match self.env_get(specific_env, name) {
-                        Some(value) => Completion::Normal(value),
-                        None => Completion::Throw(self.create_reference_error(&format!(
-                            "Cannot access '{name}' before initialization"
-                        ))),
-                    }
-                } else if let Some(result) = self.resolve_global_getter(name, specific_env) {
+                } else if let Some(result) = self.resolve_global_getter(key, specific_env) {
                     result
                 } else {
                     Completion::Throw(
@@ -2388,18 +2396,18 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn eval_identifier_update(
+    pub(super) fn eval_identifier_update<N: BindingName + ?Sized>(
         &mut self,
         op: UpdateOp,
         prefix: bool,
-        name: &str,
+        key: &N,
         env: &EnvRef,
     ) -> Completion {
         // Fast path: identifier is a Number in the local scope chain (no with/module)
         {
             let env_borrow = env.borrow();
             if env_borrow.with_object.is_none()
-                && let Some(binding) = env_borrow.bindings.get(name)
+                && let Some(binding) = env_borrow.bindings.get(key)
                 && binding.initialized
                 && binding.kind != BindingKind::Const
                 && binding.kind != BindingKind::FunctionName
@@ -2413,18 +2421,18 @@ impl Interpreter {
                 };
                 let new_val = JsValue::number(new_num);
                 drop(env_borrow);
-                if let Err(e) = self.env_set(env, name, new_val) {
+                if let Err(e) = self.env_set(env, key, new_val) {
                     return Completion::Throw(e);
                 }
                 return Completion::Normal(JsValue::number(if prefix { new_num } else { old_num }));
             }
         }
 
-        let id_ref = match self.resolve_identifier_ref(name, env) {
+        let id_ref = match self.resolve_identifier_ref(key, env) {
             Ok(r) => r,
             Err(e) => return Completion::Throw(e),
         };
-        let raw_val = match self.get_identifier_value_by_ref(name, &id_ref, env) {
+        let raw_val = match self.get_identifier_value_by_ref(key, &id_ref, env) {
             Completion::Normal(v) => v,
             other => return other,
         };
@@ -2432,7 +2440,7 @@ impl Interpreter {
             Ok(pair) => pair,
             Err(e) => return Completion::Throw(e),
         };
-        match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+        match self.put_value_by_ref(key, new_val.clone(), &id_ref, env) {
             Completion::Normal(_) => {}
             other => return other,
         }
@@ -2459,7 +2467,7 @@ impl Interpreter {
                         "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                     ));
                 }
-                let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
                 // Evaluate key expression (raw)
                 let raw_key = match prop {
@@ -2630,7 +2638,7 @@ impl Interpreter {
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let strict = env.borrow().strict;
                     return match super_base_id {
                         Some(base_id) => {
@@ -2851,7 +2859,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
                     // Evaluate key expression (raw, no ToPropertyKey yet)
                     let raw_key = match prop {
@@ -3366,7 +3374,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let raw_key = match prop {
                         MemberProperty::Dot(name) => {
                             JsValue::string(crate::types::JsString::from_str(name))
@@ -3810,7 +3818,7 @@ impl Interpreter {
                 }
             };
             let super_base_id = self.get_super_base_id(env);
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return match super_base_id {
                 Some(base_id) => {
@@ -4177,7 +4185,7 @@ impl Interpreter {
             let super_base_id = self
                 .get_super_base_id(env)
                 .ok_or_else(|| self.create_type_error("No super class"))?;
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return Ok(MemberLhsRef::Ref(Some(DestructLRef::Super(
                 super_base_id,
@@ -4709,7 +4717,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let home = env.borrow().get("__home_object__");
                     if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id) {
                         let proto_id = self
@@ -4991,6 +4999,56 @@ impl Interpreter {
         })
     }
 
+    /// Simple-parameter binding for the hot call path: the parameter atoms
+    /// are interned once per Body, so a call hashes no names (#898).
+    fn bind_simple_parameters(
+        &mut self,
+        body: &Body,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+    ) {
+        let atoms = match self.frame_layout_memo.get(body) {
+            Some(atoms)
+                if atoms.len() == params.len()
+                    && atoms.iter().zip(params).all(|(atom, param)| {
+                        matches!(param, Pattern::Identifier(name) if name == atom.as_str())
+                    }) =>
+            {
+                atoms
+            }
+            _ => {
+                let atoms = Rc::new(
+                    params
+                        .iter()
+                        .map(|param| {
+                            let Pattern::Identifier(name) = param else {
+                                unreachable!(
+                                    "simple parameter metadata must match the parameter list"
+                                );
+                            };
+                            Atom::intern(name)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                self.frame_layout_memo.insert(body, atoms.clone());
+                atoms
+            }
+        };
+        let mut env = func_env.borrow_mut();
+        for (index, atom) in atoms.iter().enumerate() {
+            env.bindings.insert_atom(
+                atom,
+                Binding {
+                    value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+                    kind: BindingKind::Var,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
+        }
+    }
+
     fn bind_function_parameters(
         &mut self,
         params: &[Pattern],
@@ -5005,7 +5063,7 @@ impl Interpreter {
                     unreachable!("simple parameter metadata must match the parameter list");
                 };
                 env.bindings.insert(
-                    name.clone(),
+                    name,
                     Binding {
                         value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
                         kind: BindingKind::Var,
@@ -5336,15 +5394,7 @@ impl Interpreter {
                                 params.len().saturating_add(2),
                             );
                             func_env.borrow_mut().strict = is_strict;
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: _this_val.clone(),
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
+                            func_env.borrow_mut().set_this(_this_val.clone());
                             let is_simple_ag = has_simple_params;
                             if uses_arguments {
                                 let env_strict_ag = func_env.borrow().strict;
@@ -5377,8 +5427,6 @@ impl Interpreter {
                                 if is_strict || !is_simple_ag {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_ag {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -5515,7 +5563,7 @@ impl Interpreter {
                                     self.realm()
                                         .global_env
                                         .borrow()
-                                        .get("this")
+                                        .get_this()
                                         .unwrap_or(_this_val.clone())
                                 } else if !(_this_val).is_object() {
                                     match self.to_object(_this_val) {
@@ -5528,15 +5576,7 @@ impl Interpreter {
                             } else {
                                 _this_val.clone()
                             };
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: effective_this,
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
+                            func_env.borrow_mut().set_this(effective_this);
                             let is_simple_g = has_simple_params;
                             if uses_arguments {
                                 let env_strict_g = func_env.borrow().strict;
@@ -5569,8 +5609,6 @@ impl Interpreter {
                                 if is_strict || !is_simple_g {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_g {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -5701,15 +5739,7 @@ impl Interpreter {
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
-                                func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
-                                    Binding {
-                                        value: JsValue::UNDEFINED,
-                                        kind: BindingKind::Const,
-                                        initialized: false,
-                                        deletable: false,
-                                    },
-                                );
+                                func_env.borrow_mut().declare_this_uninit();
                                 func_env.borrow_mut().is_derived_constructor_scope = true;
                                 self.constructing_derived = false;
                             } else {
@@ -5718,7 +5748,7 @@ impl Interpreter {
                                         self.realm()
                                             .global_env
                                             .borrow()
-                                            .get("this")
+                                            .get_this()
                                             .unwrap_or(_this_val.clone())
                                     } else if !(_this_val).is_object() {
                                         match self.to_object(_this_val) {
@@ -5731,15 +5761,7 @@ impl Interpreter {
                                 } else {
                                     _this_val.clone()
                                 };
-                                func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
-                                    Binding {
-                                        value: effective_this,
-                                        kind: BindingKind::Const,
-                                        initialized: true,
-                                        deletable: false,
-                                    },
-                                );
+                                func_env.borrow_mut().set_this(effective_this);
                             }
                             let env_strict = func_env.borrow().strict;
                             if uses_arguments {
@@ -5773,15 +5795,12 @@ impl Interpreter {
                                 if is_strict || !is_simple {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                if !is_strict && !env_strict {
-                                    call_frame_arguments = CallFrameArguments::Deferred {
-                                        args: DeferredCallArguments::new(args),
-                                        func_env: func_env.clone(),
-                                        mapped: is_simple,
-                                    };
-                                }
+                            } else if !is_strict && !env_strict {
+                                call_frame_arguments = CallFrameArguments::Deferred {
+                                    args: DeferredCallArguments::new(args),
+                                    func_env: func_env.clone(),
+                                    mapped: is_simple,
+                                };
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -5798,9 +5817,13 @@ impl Interpreter {
                             func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
-                        if let Err(error) =
+                        let bound = if is_simple {
+                            self.bind_simple_parameters(&body, &params, args, &func_env);
+                            Ok(())
+                        } else {
                             self.bind_function_parameters(&params, args, &func_env, is_simple)
-                        {
+                        };
+                        if let Err(error) = bound {
                             self.current_realm_id = caller_realm;
                             self.recycle_function_environment(func_env);
                             return Completion::Throw(error);
@@ -5844,7 +5867,7 @@ impl Interpreter {
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
-                        self.last_call_this_value = func_env.borrow().get("this");
+                        self.last_call_this_value = func_env.borrow().get_this();
                         self.current_realm_id = caller_realm;
                         drop(exec_env);
                         self.recycle_function_environment(func_env);
@@ -6328,7 +6351,7 @@ impl Interpreter {
                         d.pattern.bound_names(&mut names);
                         for name in names {
                             lex_env.borrow_mut().bindings.insert(
-                                name,
+                                &name,
                                 Binding {
                                     value: JsValue::UNDEFINED,
                                     kind,
@@ -6341,7 +6364,7 @@ impl Interpreter {
                 }
                 Statement::ClassDeclaration(cls) => {
                     lex_env.borrow_mut().bindings.insert(
-                        cls.name.clone(),
+                        &cls.name,
                         Binding {
                             value: JsValue::UNDEFINED,
                             kind: BindingKind::Let,
@@ -6724,10 +6747,7 @@ impl Interpreter {
                     env.clone()
                 };
                 let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().declare("this", BindingKind::Const);
-                init_env
-                    .borrow_mut()
-                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().set_this(this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 if let Some(o) = callee_val
                     .as_object_id()
@@ -6745,7 +6765,7 @@ impl Interpreter {
                     let proto_val = interp.get_property_on_id(func_obj_id, "prototype");
                     if proto_val.is_object() {
                         init_env.borrow_mut().bindings.insert(
-                            "__home_object__".to_string(),
+                            "__home_object__",
                             Binding {
                                 value: proto_val,
                                 kind: BindingKind::Const,
@@ -7101,15 +7121,12 @@ impl Interpreter {
                 let init_parent =
                     outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
                 let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().declare("this", BindingKind::Const);
-                init_env
-                    .borrow_mut()
-                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().set_this(this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 init_env.borrow_mut().class_private_names = class_pn;
                 if proto_val.is_object() {
                     init_env.borrow_mut().bindings.insert(
-                        "__home_object__".to_string(),
+                        "__home_object__",
                         Binding {
                             value: proto_val,
                             kind: BindingKind::Const,
@@ -7546,20 +7563,21 @@ impl Interpreter {
     }
 
     /// Resolve an identifier to a reference (for capturing before RHS evaluation).
-    pub(super) fn resolve_identifier_ref(
+    pub(super) fn resolve_identifier_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         env: &EnvRef,
     ) -> Result<IdentifierRef, JsValue> {
+        let name = key.as_name();
         if (self.with_scope_depth > 0 || self.has_ever_entered_with)
             && let Some(obj_id) = self.resolve_with_has_binding(name, env)?
         {
             return Ok(IdentifierRef::WithObject(obj_id));
         }
-        if let Some(specific_env) = Environment::find_binding_env(env, name) {
+        if let Some(specific_env) = Environment::find_binding_env(env, key) {
             let (has_binding, global_obj_id) = {
                 let e = specific_env.borrow();
-                let in_bindings = e.bindings.contains_key(name) || e.is_indirect_binding(name);
+                let in_bindings = e.bindings.contains_key(key) || e.is_indirect_binding(name);
                 if in_bindings {
                     (true, None)
                 } else if let Some(gid) = e.global_object_id {
@@ -7625,13 +7643,14 @@ impl Interpreter {
     }
 
     /// Write a value through a captured identifier reference.
-    pub(super) fn put_value_by_ref(
+    pub(super) fn put_value_by_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         value: JsValue,
         id_ref: &IdentifierRef,
         env: &EnvRef,
     ) -> Completion {
+        let name = key.as_name();
         match id_ref {
             IdentifierRef::WithObject(obj_id) => {
                 let strict = env.borrow().strict;
@@ -7641,7 +7660,7 @@ impl Interpreter {
                 }
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                match self.env_check_set_binding(specific_env, name) {
+                match self.env_check_set_binding(specific_env, key) {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
                     )),
@@ -7688,7 +7707,7 @@ impl Interpreter {
                     SetBindingCheck::Ok => {
                         // If binding is not in env.bindings but found via global object's
                         // has_property (prototype chain), use [[Set]] to respect setters/proxies
-                        let in_bindings = specific_env.borrow().bindings.contains_key(name);
+                        let in_bindings = specific_env.borrow().bindings.contains_key(key);
                         if !in_bindings {
                             let global_obj_id = specific_env.borrow().global_object_id;
                             if let Some(gid) = global_obj_id {
@@ -7717,7 +7736,7 @@ impl Interpreter {
                                 }
                             }
                         }
-                        match self.env_set(specific_env, name, value.clone()) {
+                        match self.env_set(specific_env, key, value.clone()) {
                             Ok(()) => Completion::Normal(value),
                             Err(_) => Completion::Throw(
                                 self.create_type_error("Assignment to constant variable."),
@@ -7741,12 +7760,13 @@ impl Interpreter {
 
     /// Single-pass identifier resolution: combines with-scope check, binding lookup,
     /// and global getter resolution into one scope chain walk.
-    pub(super) fn resolve_identifier(
+    pub(super) fn resolve_identifier<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         env: &EnvRef,
         strict: bool,
     ) -> Completion {
+        let name = key.as_name();
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
@@ -7790,7 +7810,7 @@ impl Interpreter {
             }
 
             // 3. Check local bindings
-            if let Some(binding) = env_borrow.bindings.get(name) {
+            if let Some(binding) = env_borrow.bindings.get(key) {
                 if !binding.initialized {
                     drop(env_borrow);
                     return Completion::Throw(self.create_reference_error(&format!(
@@ -7842,7 +7862,12 @@ impl Interpreter {
     /// Returns Some(Completion) if the name resolves to a property on the global object
     /// or its prototype chain (including through Proxy has/get traps).
     /// Returns None if no property found — caller should use env.get().
-    fn resolve_global_getter(&mut self, name: &str, env: &EnvRef) -> Option<Completion> {
+    fn resolve_global_getter<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+    ) -> Option<Completion> {
+        let name = key.as_name();
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
@@ -7851,7 +7876,7 @@ impl Interpreter {
                 current = env_ref.borrow().parent.clone();
                 continue;
             }
-            if env_borrow.bindings.contains_key(name) {
+            if env_borrow.bindings.contains_key(key) {
                 return None;
             }
             if let Some(gid) = env_borrow.global_object_id {
@@ -7974,7 +7999,7 @@ impl Interpreter {
                             .realm()
                             .global_env
                             .borrow()
-                            .get("this")
+                            .get_this()
                             .unwrap_or(this_val.clone())
                     } else if !(this_val).is_object() {
                         match interp.to_object(this_val) {
@@ -7987,15 +8012,7 @@ impl Interpreter {
                 } else {
                     this_val.clone()
                 };
-                func_env.borrow_mut().bindings.insert(
-                    "this".to_string(),
-                    Binding {
-                        value: effective_this,
-                        kind: BindingKind::Const,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
+                func_env.borrow_mut().set_this(effective_this);
                 if uses_arguments {
                     let is_simple = has_simple_params;
                     let env_strict = func_env.borrow().strict;
@@ -8027,8 +8044,6 @@ impl Interpreter {
                     if is_strict || !is_simple {
                         func_env.borrow_mut().arguments_immutable = true;
                     }
-                } else {
-                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
                 }
             }
             {

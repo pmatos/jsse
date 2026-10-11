@@ -26,7 +26,7 @@ impl Interpreter {
             Expression::Member(obj_expr, member_prop, _) => {
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     // §13.3.7.1: super property in optional chain — use HomeObject.__proto__
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let key = match member_prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
@@ -647,7 +647,7 @@ impl Interpreter {
                     "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                 ));
             }
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
             // Steps 3-4: Evaluate key expression (without ToPropertyKey yet)
             let raw_key = match prop {

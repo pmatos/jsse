@@ -66,6 +66,17 @@ pub(crate) enum Op {
     LoadMethod = 57,
     /// `[..., base, key]` → `[..., method, base]` for `base[key](...)`.
     LoadMethodElement = 58,
+    /// `[...]` → `[..., value]` for a function-local name. Operands: name
+    /// (u16), slot hint (u16). The slot is only a hint into the frame's
+    /// binding vector, verified by atom identity at run time; a miss falls
+    /// back to the by-name `LoadName` path (#898).
+    LoadLocal = 59,
+    /// `[..., value]` → `[..., value]`, storing into a function-local name
+    /// (same operands and fallback as `LoadLocal`).
+    StoreLocal = 60,
+    /// `++`/`--` on a function-local name. Operands: name (u16), slot hint
+    /// (u16), mode (u8, as `UpdateName`).
+    UpdateLocal = 61,
 }
 
 impl Op {
@@ -130,6 +141,9 @@ impl Op {
             56 => Some(Op::Safepoint),
             57 => Some(Op::LoadMethod),
             58 => Some(Op::LoadMethodElement),
+            59 => Some(Op::LoadLocal),
+            60 => Some(Op::StoreLocal),
+            61 => Some(Op::UpdateLocal),
             _ => None,
         }
     }
