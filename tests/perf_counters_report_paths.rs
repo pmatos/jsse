@@ -351,7 +351,10 @@ fn module_body_gets_its_own_attribution_row() {
 
 /// Two distinct functions sharing a name merged into one `BODY` row with
 /// combined work, so the ranking could identify neither (#537 review, third
-/// pass). The id disambiguates them; unique names must stay bare.
+/// pass). The id disambiguates them; unique names must stay bare. `BODY` rows
+/// cover tree-walker work only, so the run disables the bytecode VM: once the
+/// compiler accepted these bodies, a default run had no `same` rows left to
+/// check.
 #[test]
 fn same_named_functions_get_separate_body_rows() {
     let dir = scratch("same-name");
@@ -364,7 +367,7 @@ fn same_named_functions_get_separate_body_rows() {
     .expect("write main");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["main.js"])
+        .args(["--no-bytecode", "main.js"])
         .output()
         .expect("run jsse");
     let stderr = String::from_utf8_lossy(&out.stderr);
