@@ -93,6 +93,44 @@ var other = {
 };
 assert.compareArray(Array.from(receiver.intersection(other)), [1, 9], "intersection walks values added after clear");
 
+var subsetReceiver = new Set([1, 2]);
+var subsetSeen = [];
+var subsetResult = subsetReceiver.isSubsetOf({
+  size: 10,
+  has: function (value) {
+    subsetSeen.push(value);
+    if (value === 1) {
+      subsetReceiver.clear();
+      subsetReceiver.add(7);
+    }
+    return value !== 7;
+  },
+  keys: function () {
+    throw new Test262Error("keys should not be called");
+  }
+});
+assert.compareArray(subsetSeen, [1, 7], "isSubsetOf walks values added after clear");
+assert.sameValue(subsetResult, false, "isSubsetOf sees the value added after clear");
+
+var disjointReceiver = new Set([1, 2]);
+var disjointSeen = [];
+var disjointResult = disjointReceiver.isDisjointFrom({
+  size: 10,
+  has: function (value) {
+    disjointSeen.push(value);
+    if (value === 1) {
+      disjointReceiver.clear();
+      disjointReceiver.add(7);
+    }
+    return value === 7;
+  },
+  keys: function () {
+    throw new Test262Error("keys should not be called");
+  }
+});
+assert.compareArray(disjointSeen, [1, 7], "isDisjointFrom walks values added after clear");
+assert.sameValue(disjointResult, false, "isDisjointFrom sees the value added after clear");
+
 var refill = new Map();
 for (var round = 0; round < 3; round++) {
   for (var i = 0; i < 4; i++) {

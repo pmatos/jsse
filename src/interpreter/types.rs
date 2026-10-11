@@ -1501,12 +1501,15 @@ pub(crate) enum IteratorState {
     },
     MapIterator {
         map_id: u64,
+        /// Spec index into [[MapData]], stepped by `KeyedEntries::next_live`;
+        /// not a `Vec` index once the map has been cleared.
         index: usize,
         kind: IteratorKind,
         done: bool,
     },
     SetIterator {
         set_id: u64,
+        /// Spec index into [[SetData]]; see `MapIterator::index`.
         index: usize,
         kind: IteratorKind,
         done: bool,
@@ -2139,10 +2142,11 @@ impl<T> KeyedEntries<T> {
         Some(value)
     }
 
-    /// Empty every entry (Map.prototype.clear, Set.prototype.clear).
+    /// Empty every entry (Map.prototype.clear, Set.prototype.clear). The slot
+    /// storage is released rather than kept at its old capacity.
     pub(crate) fn clear(&mut self) {
         self.cleared += self.entries.len();
-        self.entries.clear();
+        self.entries = Vec::new();
     }
 }
 
@@ -2153,6 +2157,10 @@ impl<T> std::ops::Deref for KeyedEntries<T> {
     }
 }
 
+/// Mutable access must keep the list append-only: push new entries and set
+/// deleted ones to `None`. Removing, reordering or truncating slots (or calling
+/// `Vec::clear` through an explicit deref) would shift the spec index of every
+/// suspended iterator; use [`KeyedEntries::clear`] instead.
 impl<T> std::ops::DerefMut for KeyedEntries<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.entries
@@ -4344,6 +4352,7 @@ mod kind_accessor_tests {
         let mut before_clear = 1;
         entries.clear();
         assert!(entries.is_empty(), "cleared slots are dropped");
+        assert_eq!(entries.capacity(), 0, "cleared storage is released");
         entries.push(Some(4));
         assert_eq!(
             entries.next_live(&mut before_clear),

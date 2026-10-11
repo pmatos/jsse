@@ -1015,14 +1015,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             let mut cursor = 0;
-            loop {
-                let entry = obj
-                    .borrow()
-                    .set_data()
-                    .unwrap()
-                    .next_live(&mut cursor)
-                    .cloned();
-                let Some(v) = entry else { break };
+            while let Some(v) = next_live_set_value(&obj, &mut cursor) {
                 let result =
                     interp.call_function(&callback, &this_arg, &[v.clone(), v, this.clone()]);
                 if result.is_abrupt() {
@@ -1176,6 +1169,19 @@ impl Interpreter {
                 .is_some_and(|current| set_data_has(current, val))
         }
 
+        /// The next live value of `obj`'s O.[[SetData]] at or after spec index
+        /// `*cursor`, read under a borrow; see [`KeyedEntries::next_live`].
+        fn next_live_set_value(obj: &ObjectHandle, cursor: &mut usize) -> Option<JsValue> {
+            obj.borrow().set_data()?.next_live(cursor).cloned()
+        }
+
+        /// The number of live values in `obj`'s O.[[SetData]].
+        fn live_set_size(obj: &ObjectHandle) -> usize {
+            obj.borrow()
+                .set_data()
+                .map_or(0, |entries| entries.iter().flatten().count())
+        }
+
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
             let new_obj_id = interp.create_object_id();
             interp
@@ -1240,35 +1246,34 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             };
             let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-            // Re-read entries after GetSetRecord (side-effects may mutate this)
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let this_size = entries.iter().filter(|e| e.is_some()).count();
+            // Re-read the size after GetSetRecord (side-effects may mutate this)
+            let this_size = live_set_size(&obj);
 
             if this_size as f64 <= other_rec.size {
-                let mut cursor = 0;
-                loop {
-                    let entry = obj
-                        .borrow()
-                        .set_data()
-                        .unwrap()
-                        .next_live(&mut cursor)
-                        .cloned();
-                    let Some(entry) = entry else { break };
-                    let has_result = match interp.call_function(
-                        &other_rec.has,
-                        &other,
-                        std::slice::from_ref(&entry),
-                    ) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    if interp.to_boolean_val(&has_result) {
-                        let val = canonicalize_key(entry);
-                        if !set_data_has(&new_entries, &val) {
-                            new_entries.push(Some(val));
+                // `other.has` can clear O and run a collection while the walk
+                // goes on, leaving `new_entries` the only holder of what it
+                // has collected so far, so each kept value is rooted.
+                return interp.with_gc_root_scope(|interp| {
+                    let mut cursor = 0;
+                    while let Some(entry) = next_live_set_value(&obj, &mut cursor) {
+                        let has_result = match interp.call_function(
+                            &other_rec.has,
+                            &other,
+                            std::slice::from_ref(&entry),
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if interp.to_boolean_val(&has_result) {
+                            let val = canonicalize_key(entry);
+                            if !set_data_has(&new_entries, &val) {
+                                interp.gc_root_value(&val);
+                                new_entries.push(Some(val));
+                            }
                         }
                     }
-                }
+                    make_result_set(interp, new_entries)
+                });
             } else {
                 let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
                 {
@@ -1403,21 +1408,12 @@ impl Interpreter {
                 Ok(r) => r,
                 Err(e) => return Completion::Throw(e),
             };
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let this_size = entries.iter().filter(|e| e.is_some()).count();
-            if this_size as f64 > other_rec.size {
+            if live_set_size(&obj) as f64 > other_rec.size {
                 return Completion::Normal(JsValue::boolean(false));
             }
             // Iterate live set data (re-read each iteration for mutation support)
             let mut cursor = 0;
-            loop {
-                let entry = obj
-                    .borrow()
-                    .set_data()
-                    .unwrap()
-                    .next_live(&mut cursor)
-                    .cloned();
-                let Some(e) = entry else { break };
+            while let Some(e) = next_live_set_value(&obj, &mut cursor) {
                 let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -1474,19 +1470,10 @@ impl Interpreter {
                 Ok(r) => r,
                 Err(e) => return Completion::Throw(e),
             };
-            let entries = obj.borrow().set_data().cloned().unwrap();
-            let this_size = entries.iter().filter(|e| e.is_some()).count();
-            if this_size as f64 <= other_rec.size {
+            if live_set_size(&obj) as f64 <= other_rec.size {
                 // Iterate live set data (re-read each iteration for mutation support)
                 let mut cursor = 0;
-                loop {
-                    let entry = obj
-                        .borrow()
-                        .set_data()
-                        .unwrap()
-                        .next_live(&mut cursor)
-                        .cloned();
-                    let Some(e) = entry else { break };
+                while let Some(e) = next_live_set_value(&obj, &mut cursor) {
                     let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
                         Completion::Normal(v) => v,
                         other => return other,
