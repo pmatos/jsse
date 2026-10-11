@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// One-word ECMAScript value representation.
 ///
@@ -104,6 +104,31 @@ pub(crate) struct JsPropertyKey {
 
 const SYMBOL_PROPERTY_KEY_SIGIL: u8 = 0xFF;
 
+/// Well-known symbol names in the index order of
+/// [`JsPropertyKey::cached_well_known_symbol`].
+const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [
+    "iterator",
+    "hasInstance",
+    "toPrimitive",
+    "toStringTag",
+    "isConcatSpreadable",
+    "species",
+    "match",
+    "replace",
+    "search",
+    "split",
+    "matchAll",
+    "unscopables",
+    "asyncIterator",
+    "dispose",
+    "asyncDispose",
+];
+
+static WELL_KNOWN_SYMBOL_KEYS: LazyLock<[JsPropertyKey; 15]> = LazyLock::new(|| {
+    WELL_KNOWN_SYMBOL_NAMES
+        .map(|name| JsPropertyKey::from_symbol_encoding(format!("Symbol(Symbol.{name})")))
+});
+
 pub(crate) enum JsPropertyKeyParseError<E> {
     IllFormedUtf16,
     Value(E),
@@ -164,7 +189,35 @@ impl JsPropertyKey {
     }
 
     pub(crate) fn well_known_symbol(name: &str) -> Self {
+        if let Some(key) = Self::cached_well_known_symbol(name) {
+            return key.clone();
+        }
         Self::from_symbol_encoding(format!("Symbol(Symbol.{name})"))
+    }
+
+    /// The precomputed key of a well-known symbol (§6.1.5.1), so hot lookups
+    /// (`@@iterator`, `@@species`, `@@toPrimitive`, ...) cost a refcount bump
+    /// instead of a `format!` and two allocations.
+    pub(crate) fn cached_well_known_symbol(name: &str) -> Option<&'static Self> {
+        let index = match name {
+            "iterator" => 0,
+            "hasInstance" => 1,
+            "toPrimitive" => 2,
+            "toStringTag" => 3,
+            "isConcatSpreadable" => 4,
+            "species" => 5,
+            "match" => 6,
+            "replace" => 7,
+            "search" => 8,
+            "split" => 9,
+            "matchAll" => 10,
+            "unscopables" => 11,
+            "asyncIterator" => 12,
+            "dispose" => 13,
+            "asyncDispose" => 14,
+            _ => return None,
+        };
+        Some(&WELL_KNOWN_SYMBOL_KEYS[index])
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -1298,6 +1351,17 @@ mod tests {
         assert_ne!(symbol, text);
         assert_eq!(symbol.symbol_encoding(), Some("Symbol(x)#7"));
         assert_eq!(symbol.to_string(), "Symbol(x)#7");
+    }
+
+    #[test]
+    fn cached_well_known_symbol_keys_match_symbol_encoding() {
+        for (index, name) in WELL_KNOWN_SYMBOL_NAMES.iter().enumerate() {
+            let cached = JsPropertyKey::cached_well_known_symbol(name).expect("known name");
+            assert!(std::ptr::eq(cached, &WELL_KNOWN_SYMBOL_KEYS[index]));
+            let symbol = JsSymbol::new(99, Some(JsString::from_str(&format!("Symbol.{name}"))));
+            assert_eq!(*cached, symbol.to_property_key());
+        }
+        assert!(JsPropertyKey::cached_well_known_symbol("notWellKnown").is_none());
     }
 
     #[test]
