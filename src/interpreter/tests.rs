@@ -6099,4 +6099,9 @@ fn synthesized_default_constructors_share_one_body_per_shape() {
         "expected one IC entry per constructor shape, got {}",
         interp.ic_store.len()
     );
+    assert!(
+        interp.bytecode_memo.len() < 20,
+        "expected one compile verdict per constructor shape, got {}",
+        interp.bytecode_memo.len()
+    );
 }

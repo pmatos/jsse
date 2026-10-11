@@ -3,10 +3,9 @@ use super::*;
 thread_local! {
     /// The default `constructor(...args) { super(...args); }` that
     /// ClassDefinitionEvaluation gives a derived class without one. Every such
-    /// class shares this Body, so the per-Body side tables (hoist analysis, IC
-    /// store) hold one entry for all of them instead of a fresh one per class
-    /// evaluation. The compiled bytecode is still cached per function object.
-    /// The body never mentions `arguments`, so its `uses_arguments` is `false`.
+    /// class shares this Body, so the per-Body side tables (hoist analysis,
+    /// bytecode compile verdict, IC store) hold one entry for all of them and
+    /// the body is compiled once instead of once per class evaluation.
     static DEFAULT_DERIVED_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body) = {
         let statements = vec![Statement::Expression(Expression::Call(
             ExprBox::new(Expression::Super),
@@ -374,58 +373,37 @@ impl Interpreter {
         }
 
         // Create constructor function (classes are always strict mode)
-        let ctor_func = if let Some(cm) = ctor_method {
-            JsFunction::User {
-                name: Some(name.to_string()),
-                params: Rc::new(cm.value.params.clone()),
-                body: cm.value.body.clone(),
-                closure: class_env.clone(),
-                is_arrow: false,
-                is_strict: true,
-                is_generator: false,
-                is_async: false,
-                is_method: false,
-                source_text: class_source_text.clone(),
-                captured_new_target: None,
-                uses_arguments: func_uses_arguments(&cm.value.params, &cm.value.body),
-                has_simple_params: crate::ast::params_are_simple(&cm.value.params),
-            }
-        } else if super_val.is_some() {
-            let (params, body) = DEFAULT_DERIVED_CONSTRUCTOR.with(|c| c.clone());
-            JsFunction::User {
-                name: Some(name.to_string()),
-                params,
-                body,
-                closure: class_env.clone(),
-                is_arrow: false,
-                is_strict: true,
-                is_generator: false,
-                is_async: false,
-                is_method: false,
-                source_text: class_source_text.clone(),
-                captured_new_target: None,
-                uses_arguments: false,
+        let (ctor_params, ctor_body, uses_arguments, has_simple_params) =
+            if let Some(cm) = ctor_method {
+                (
+                    Rc::new(cm.value.params.clone()),
+                    cm.value.body.clone(),
+                    func_uses_arguments(&cm.value.params, &cm.value.body),
+                    crate::ast::params_are_simple(&cm.value.params),
+                )
+            } else if super_val.is_some() {
                 // default derived constructor takes `...args` (rest) — not simple
-                has_simple_params: false,
-            }
-        } else {
-            let (params, body) = DEFAULT_BASE_CONSTRUCTOR.with(|c| c.clone());
-            JsFunction::User {
-                name: Some(name.to_string()),
-                params,
-                body,
-                closure: class_env.clone(),
-                is_arrow: false,
-                is_strict: true,
-                is_generator: false,
-                is_async: false,
-                is_method: false,
-                source_text: class_source_text.clone(),
-                captured_new_target: None,
-                uses_arguments: false,
+                let (params, body) = DEFAULT_DERIVED_CONSTRUCTOR.with(Clone::clone);
+                (params, body, false, false)
+            } else {
                 // default base constructor has an empty (simple) parameter list
-                has_simple_params: true,
-            }
+                let (params, body) = DEFAULT_BASE_CONSTRUCTOR.with(Clone::clone);
+                (params, body, false, true)
+            };
+        let ctor_func = JsFunction::User {
+            name: Some(name.to_string()),
+            params: ctor_params,
+            body: ctor_body,
+            closure: class_env.clone(),
+            is_arrow: false,
+            is_strict: true,
+            is_generator: false,
+            is_async: false,
+            is_method: false,
+            source_text: class_source_text.clone(),
+            captured_new_target: None,
+            uses_arguments,
+            has_simple_params,
         };
 
         let ctor_val = self.create_function(ctor_func);
