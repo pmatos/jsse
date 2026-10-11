@@ -188,7 +188,7 @@ impl TimerQueue {
 
 #[derive(Default)]
 pub(crate) struct JobScheduler {
-    microtask_queue: Vec<(Vec<JsValue>, MicrotaskJob)>,
+    microtask_queue: VecDeque<(Vec<JsValue>, MicrotaskJob)>,
     async_gen_queues: FxHashMap<u64, VecDeque<AsyncGenRequest>>,
     async_gen_yield_pending: bool,
     async_function_states: FxHashMap<u64, AsyncFunctionState>,
@@ -207,15 +207,11 @@ pub(crate) struct JobScheduler {
 
 impl JobScheduler {
     pub(crate) fn enqueue_microtask(&mut self, item: (Vec<JsValue>, MicrotaskJob)) {
-        self.microtask_queue.push(item);
+        self.microtask_queue.push_back(item);
     }
 
     pub(crate) fn pop_microtask(&mut self) -> Option<(Vec<JsValue>, MicrotaskJob)> {
-        if self.microtask_queue.is_empty() {
-            None
-        } else {
-            Some(self.microtask_queue.remove(0))
-        }
+        self.microtask_queue.pop_front()
     }
 
     /// Every value the scheduler keeps alive: roots held by queued microtasks,
