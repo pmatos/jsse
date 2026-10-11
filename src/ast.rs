@@ -341,6 +341,27 @@ impl Pattern {
             Pattern::MemberExpression(_) => {}
         }
     }
+
+    /// Whether `name` is among [`bound_names`](Self::bound_names), without
+    /// allocating the list.
+    pub(crate) fn binds_name(&self, name: &str) -> bool {
+        match self {
+            Pattern::Identifier(n) => n == name,
+            Pattern::Array(elems) => elems.iter().flatten().any(|elem| match elem {
+                ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                    p.binds_name(name)
+                }
+            }),
+            Pattern::Object(props) => props.iter().any(|prop| match prop {
+                ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                    p.binds_name(name)
+                }
+                ObjectPatternProperty::Shorthand(n) => n == name,
+            }),
+            Pattern::Assign(inner, _) | Pattern::Rest(inner) => inner.binds_name(name),
+            Pattern::MemberExpression(_) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

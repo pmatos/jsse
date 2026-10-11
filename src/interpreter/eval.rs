@@ -5478,7 +5478,7 @@ impl Interpreter {
                                 for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
                                     if name == "arguments"
-                                        || params.iter().any(|p| Self::pattern_binds_name(p, name))
+                                        || params.iter().any(|p| p.binds_name(name))
                                     {
                                         let val = func_env
                                             .borrow()
@@ -5646,7 +5646,7 @@ impl Interpreter {
                                 for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
                                     if name == "arguments"
-                                        || params.iter().any(|p| Self::pattern_binds_name(p, name))
+                                        || params.iter().any(|p| p.binds_name(name))
                                     {
                                         let val = func_env
                                             .borrow()
@@ -5820,8 +5820,7 @@ impl Interpreter {
                             let analysis = self.hoist_cache.analysis_for(&body);
                             for name in &analysis.var_names {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
-                                if name == "arguments"
-                                    || params.iter().any(|p| Self::pattern_binds_name(p, name))
+                                if name == "arguments" || params.iter().any(|p| p.binds_name(name))
                                 {
                                     let val =
                                         self.env_get(&func_env, name).unwrap_or(JsValue::UNDEFINED);

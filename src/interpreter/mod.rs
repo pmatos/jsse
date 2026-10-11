@@ -2323,44 +2323,40 @@ impl Interpreter {
                 );
             }
 
-            match (func_env, thrower) {
-                (Some(env), _) => {
-                    o.insert_property(
-                        "callee",
-                        PropertyDescriptor::data(callee, true, false, true),
-                    );
-                    // Only the last occurrence of a duplicated parameter name
-                    // stays mapped, and only indices that received an argument.
-                    let mut map = HashMap::new();
-                    for (i, param) in params.iter().enumerate().take(args.len()) {
-                        let Pattern::Identifier(name) = param else {
-                            continue;
-                        };
-                        let shadowed = params[i + 1..]
-                            .iter()
-                            .any(|later| matches!(later, Pattern::Identifier(n) if n == name));
-                        if !shadowed {
-                            map.insert(i.to_string(), (env.clone(), name.clone()));
-                        }
-                    }
-                    if !map.is_empty() {
-                        o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
+            if let Some(env) = func_env {
+                o.insert_property(
+                    "callee",
+                    PropertyDescriptor::data(callee, true, false, true),
+                );
+                // Only the last occurrence of a duplicated parameter name
+                // stays mapped, and only indices that received an argument.
+                let mut map = HashMap::new();
+                for (i, param) in params.iter().enumerate().take(args.len()) {
+                    let Pattern::Identifier(name) = param else {
+                        continue;
+                    };
+                    let shadowed = params[i + 1..]
+                        .iter()
+                        .any(|later| matches!(later, Pattern::Identifier(n) if n == name));
+                    if !shadowed {
+                        map.insert(i.to_string(), (env.clone(), name.clone()));
                     }
                 }
-                (None, Some(thrower)) => {
-                    o.insert_property(
-                        "callee",
-                        PropertyDescriptor {
-                            value: None,
-                            writable: None,
-                            get: Some(thrower.clone()),
-                            set: Some(thrower),
-                            enumerable: Some(false),
-                            configurable: Some(false),
-                        },
-                    );
+                if !map.is_empty() {
+                    o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
                 }
-                (None, None) => unreachable!("unmapped arguments always get a thrower"),
+            } else if let Some(thrower) = thrower {
+                o.insert_property(
+                    "callee",
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(thrower.clone()),
+                        set: Some(thrower),
+                        enumerable: Some(false),
+                        configurable: Some(false),
+                    },
+                );
             }
 
             // @@iterator is %Array.prototype.values% (§10.4.4.6 step 20 /
