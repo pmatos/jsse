@@ -1165,11 +1165,9 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let str_val = match self.to_string_value(&val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        code_units.extend(str_val.encode_utf16());
+                        if let Err(e) = self.append_js_string(&mut code_units, &val) {
+                            return Completion::Throw(e);
+                        }
                     }
                 }
                 Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
@@ -1563,6 +1561,25 @@ impl Interpreter {
             let s = self.to_string_value(val)?;
             Ok(JsString::from_str(&s))
         }
+    }
+
+    // Appends ToString(val) to `out`. Unlike `to_js_string`, a number or other
+    // non-string primitive is encoded straight into `out`, with no
+    // intermediate JsString.
+    pub(crate) fn append_js_string(
+        &mut self,
+        out: &mut Vec<u16>,
+        val: &JsValue,
+    ) -> Result<(), JsValue> {
+        if let Some(s) = val.as_string() {
+            out.extend_from_slice(&s.code_units);
+        } else if val.is_object() {
+            let s = self.to_js_string(val)?;
+            out.extend_from_slice(&s.code_units);
+        } else {
+            out.extend(self.to_string_value(val)?.encode_utf16());
+        }
+        Ok(())
     }
 
     // §7.1.4 ToNumber — calls ToPrimitive for objects

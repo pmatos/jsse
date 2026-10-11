@@ -7889,7 +7889,7 @@ fn set_rsi_state(
     }
 }
 
-fn get_substitution(
+pub(super) fn get_substitution(
     interp: &mut Interpreter,
     matched: &[u16],
     s: &[u16],

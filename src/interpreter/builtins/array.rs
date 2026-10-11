@@ -78,6 +78,40 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, 
     }
 }
 
+// Steps 6.c.i-ii of Array.prototype.toLocaleString, shared with
+// %TypedArray%.prototype.toLocaleString: appends
+// ? ToString(? Invoke(element, "toLocaleString", args)) to `out`.
+pub(super) fn append_locale_string(
+    interp: &mut Interpreter,
+    out: &mut Vec<u16>,
+    element: &JsValue,
+    args: &[JsValue],
+) -> Result<(), Completion> {
+    let element_obj = match interp.to_object(element) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let obj_id = element_obj
+        .as_object_id()
+        .expect("ToObject must return an object");
+    let method = match interp.get_object_property(obj_id, "toLocaleString", element) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if !interp.is_callable(&method) {
+        return Err(Completion::Throw(
+            interp.create_type_error("toLocaleString is not a function"),
+        ));
+    }
+    let value = match interp.call_function(&method, element, args) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    interp
+        .append_js_string(out, &value)
+        .map_err(Completion::Throw)
+}
+
 // Set(O, P, V, true) — invoke setters on prototype, check writable, throw on failure
 fn obj_set_throw(
     interp: &mut Interpreter,
@@ -1436,17 +1470,12 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let sep = if let Some(s) = args.first() {
-                if (s).is_undefined() {
-                    ",".to_string()
-                } else {
-                    match interp.to_string_value(s) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
-            } else {
-                ",".to_string()
+            let sep = match args.first() {
+                Some(s) if !s.is_undefined() => match interp.to_js_string(s) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                },
+                _ => JsString::from_str(","),
             };
 
             let receiver_id = o.as_object_id().expect("ToObject must return an object");
@@ -1456,22 +1485,22 @@ impl Interpreter {
 
             interp.active_array_joins.push(receiver_id);
             let result = (|| {
-                let mut parts = Vec::with_capacity(len);
+                let mut units: Vec<u16> = Vec::new();
                 for i in 0..len {
+                    if i > 0 {
+                        units.extend_from_slice(&sep.code_units);
+                    }
                     let elem = match obj_get(interp, &o, &i.to_string()) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if elem.is_undefined() || elem.is_null() {
-                        parts.push(String::new());
-                    } else {
-                        match interp.to_string_value(&elem) {
-                            Ok(s) => parts.push(s),
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    if !elem.is_nullish()
+                        && let Err(e) = interp.append_js_string(&mut units, &elem)
+                    {
+                        return Completion::Throw(e);
                     }
                 }
-                Completion::Normal(JsValue::string(JsString::from_str(&parts.join(&sep))))
+                Completion::Normal(JsValue::string(JsString::from_vec(units)))
             })();
             let popped_receiver = interp.active_array_joins.pop();
             debug_assert_eq!(popped_receiver, Some(receiver_id));
@@ -1509,47 +1538,26 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let separator = ",";
             let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let pass_args = vec![locales, options];
-            let mut parts: Vec<String> = Vec::with_capacity(len);
+            let pass_args = [locales, options];
+            let mut result: Vec<u16> = Vec::new();
             for k in 0..len {
+                if k > 0 {
+                    result.push(u16::from(b','));
+                }
                 let next_element = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                if (next_element).is_nullish() {
-                    parts.push(String::new());
-                } else {
-                    let element_obj = match interp.to_object(&next_element) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let obj_id = element_obj
-                        .as_object_id()
-                        .expect("ToObject must return an object");
-                    let to_locale_str_method =
-                        match interp.get_object_property(obj_id, "toLocaleString", &next_element) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                    if interp.is_callable(&to_locale_str_method) {
-                        match interp.call_function(&to_locale_str_method, &next_element, &pass_args)
-                        {
-                            Completion::Normal(v) => match interp.to_string_value(&v) {
-                                Ok(s) => parts.push(s),
-                                Err(e) => return Completion::Throw(e),
-                            },
-                            other => return other,
-                        }
-                    } else {
-                        let err = interp.create_type_error("toLocaleString is not a function");
-                        return Completion::Throw(err);
-                    }
+                if !next_element.is_nullish()
+                    && let Err(c) =
+                        append_locale_string(interp, &mut result, &next_element, &pass_args)
+                {
+                    return c;
                 }
             }
-            Completion::Normal(JsValue::string(JsString::from_str(&parts.join(separator))))
+            Completion::Normal(JsValue::string(JsString::from_vec(result)))
         });
 
         // Array.prototype.concat

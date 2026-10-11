@@ -145,12 +145,10 @@ impl Interpreter {
                             "Symbol()".to_string()
                         };
                         JsString::from_str(&desc)
-                    } else if let Some(s) = val.as_string() {
-                        s
                     } else {
                         // §22.1.1.1 step 2b: ToString(value) — throws TypeError for Symbol
-                        match interp.to_string_value(val) {
-                            Ok(s) => JsString::from_str(&s),
+                        match interp.to_js_string(val) {
+                            Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -225,7 +223,7 @@ impl Interpreter {
                         return Completion::Normal(JsValue::string(JsString::from_str("")));
                     }
                     let subs = &args[1..];
-                    let mut result = String::new();
+                    let mut result: Vec<u16> = Vec::new();
                     for i in 0..len {
                         let next_seg = if let Some(raw_id) = raw_obj.as_object_id() {
                             match interp.get_object_property(raw_id, &i.to_string(), &raw_obj) {
@@ -236,20 +234,17 @@ impl Interpreter {
                         } else {
                             JsValue::UNDEFINED
                         };
-                        let seg_str = match interp.to_string_value(&next_seg) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        result.push_str(&seg_str);
-                        if i + 1 < len && i < subs.len() {
-                            let sub_str = match interp.to_string_value(&subs[i]) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            result.push_str(&sub_str);
+                        if let Err(e) = interp.append_js_string(&mut result, &next_seg) {
+                            return Completion::Throw(e);
+                        }
+                        if i + 1 < len
+                            && i < subs.len()
+                            && let Err(e) = interp.append_js_string(&mut result, &subs[i])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 },
             ));
             if let Some(string_ctor) = self.get_global_var("String")

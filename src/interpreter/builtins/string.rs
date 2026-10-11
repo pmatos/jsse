@@ -1,6 +1,8 @@
 use super::super::*;
+use super::regexp::get_substitution;
 use crate::interpreter::helpers::is_ecma_whitespace;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
+use std::borrow::Cow;
 
 // `? RequireObjectCoercible(this value)` then `? ToString(O)`, keeping the
 // exact code units (lone surrogates included). A String wrapper goes through
@@ -13,11 +15,6 @@ fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, 
         )));
     }
     interp.to_js_string(this).map_err(Completion::Throw)
-}
-
-// `this_js_string` decoded to a Rust `String` (lone surrogates become U+FFFD).
-fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String, Completion> {
-    this_js_string(interp, this).map(|string| string.to_rust_string())
 }
 
 fn to_str(interp: &mut Interpreter, val: &JsValue) -> Result<String, Completion> {
@@ -41,10 +38,6 @@ fn to_int_or_inf(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Complet
         Ok(n) => Ok(n),
         Err(e) => Err(Completion::Throw(e)),
     }
-}
-
-fn utf16_units(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
 }
 
 // clamp(pos, 0, len) for an already-integral (or ±∞) position.
@@ -71,6 +64,187 @@ fn string_last_index_of(s: &[u16], search: &[u16], from: usize) -> Option<usize>
     (0..=max_start)
         .rev()
         .find(|&i| &s[i..i + search.len()] == search)
+}
+
+// Apply a `&str` transform (case mapping, normalization) to each well-formed
+// run of `units`. Lone surrogates pass through unchanged: they are their own
+// case mapping and normal form, and neither cased nor case-ignorable, so
+// splitting a run at one leaves the transform's context the same.
+fn map_well_formed(units: &[u16], mut transform: impl FnMut(&str) -> Cow<'_, str>) -> Vec<u16> {
+    let mut out = Vec::with_capacity(units.len());
+    let mut run = String::with_capacity(units.len());
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        match decoded {
+            Ok(ch) => run.push(ch),
+            Err(lone) => {
+                if !run.is_empty() {
+                    out.extend(transform(&run).encode_utf16());
+                    run.clear();
+                }
+                out.push(lone.unpaired_surrogate());
+            }
+        }
+    }
+    if !run.is_empty() {
+        out.extend(transform(&run).encode_utf16());
+    }
+    out
+}
+
+// TrimString over code units; every WhiteSpace and LineTerminator is a single
+// BMP code unit. Returns `s` itself when there is nothing to trim.
+fn trim_string(s: JsString, trim_start: bool, trim_end: bool) -> JsString {
+    let is_space = |unit: &&u16| char::from_u32(u32::from(**unit)).is_some_and(is_ecma_whitespace);
+    let units = &s.code_units;
+    let start = if trim_start {
+        units.iter().take_while(is_space).count()
+    } else {
+        0
+    };
+    let end = if trim_end {
+        units.len() - units[start..].iter().rev().take_while(is_space).count()
+    } else {
+        units.len()
+    };
+    if start == 0 && end == units.len() {
+        return s;
+    }
+    JsString::from_vec(units[start..end].to_vec())
+}
+
+// §22.1.3.17.1 StringPaddingBuiltinsImpl over code units.
+fn string_pad(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+    args: &[JsValue],
+    at_start: bool,
+) -> Completion {
+    let s = propagate!(this_js_string(interp, this_val));
+    let max_length = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    let int_max = propagate!(interp.to_integer_or_infinity_value(&max_length)) as usize;
+    let len = s.code_units.len();
+    // Step 4 returns before step 6 converts the fill string.
+    if int_max <= len {
+        return Completion::Normal(JsValue::string(s));
+    }
+    let fill = match args.get(1) {
+        Some(v) if !v.is_undefined() => propagate!(interp.to_js_string(v)),
+        _ => JsString::from_str(" "),
+    };
+    if fill.code_units.is_empty() {
+        return Completion::Normal(JsValue::string(s));
+    }
+    let pad = fill.code_units.iter().copied().cycle().take(int_max - len);
+    let units = s.code_units.iter().copied();
+    let result: Vec<u16> = if at_start {
+        pad.chain(units).collect()
+    } else {
+        units.chain(pad).collect()
+    };
+    Completion::Normal(JsValue::string(JsString::from_vec(result)))
+}
+
+// replace/replaceAll steps 5-6: `None` when the replace value is callable,
+// otherwise ? ToString(replaceValue) as the GetSubstitution template.
+fn replace_template(
+    interp: &mut Interpreter,
+    replace_value: &JsValue,
+) -> Result<Option<JsString>, Completion> {
+    if interp.is_callable(replace_value) {
+        return Ok(None);
+    }
+    interp
+        .to_js_string(replace_value)
+        .map(Some)
+        .map_err(Completion::Throw)
+}
+
+// Appends the replacement for the match of the search string at
+// `position..end` of `string` in replace/replaceAll to `out`: the replacer's
+// result through ToString, or GetSubstitution of `template` when the replace
+// value is not callable.
+fn append_replacement(
+    interp: &mut Interpreter,
+    out: &mut Vec<u16>,
+    replacer: &JsValue,
+    template: Option<&JsString>,
+    string: &JsString,
+    position: usize,
+    end: usize,
+) -> Result<(), Completion> {
+    let matched = &string.code_units[position..end];
+    if let Some(template) = template {
+        let substitution = get_substitution(
+            interp,
+            matched,
+            &string.code_units,
+            position,
+            end,
+            &[],
+            &JsValue::UNDEFINED,
+            &template.code_units,
+        )
+        .map_err(Completion::Throw)?;
+        out.extend_from_slice(&substitution);
+        return Ok(());
+    }
+    let call_args = [
+        JsValue::string(JsString::from_vec(matched.to_vec())),
+        JsValue::number(position as f64),
+        JsValue::string(string.clone()),
+    ];
+    let value = match interp.call_function(replacer, &JsValue::UNDEFINED, &call_args) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    interp
+        .append_js_string(out, &value)
+        .map_err(Completion::Throw)
+}
+
+// toLocaleLowerCase/toLocaleUpperCase: case mapping for the requested locale.
+fn locale_case_map(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+    args: &[JsValue],
+    upper: bool,
+) -> Completion {
+    let s = propagate!(this_js_string(interp, this_val));
+    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    let locale_list = propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
+    let resolved = interp.intl_resolve_locale(&locale_list);
+    let langid: icu::locale::LanguageIdentifier =
+        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
+    let cm = icu::casemap::CaseMapper::new();
+    let mapped = map_well_formed(&s.code_units, |run| {
+        if upper {
+            cm.uppercase_to_string(run, &langid)
+        } else {
+            cm.lowercase_to_string(run, &langid)
+        }
+    });
+    Completion::Normal(JsValue::string(JsString::from_vec(mapped)))
+}
+
+// Annex B CreateHTML: `<tag attribute="value">s</tag>`, with `"` in the value
+// escaped as `&quot;`.
+fn create_html(s: &JsString, tag: &str, attribute: Option<(&str, &JsString)>) -> JsString {
+    let mut html: Vec<u16> = format!("<{tag}").encode_utf16().collect();
+    if let Some((name, value)) = attribute {
+        html.extend(format!(" {name}=\"").encode_utf16());
+        for &unit in value.code_units.iter() {
+            if unit == u16::from(b'"') {
+                html.extend("&quot;".encode_utf16());
+            } else {
+                html.push(unit);
+            }
+        }
+        html.push(u16::from(b'"'));
+    }
+    html.push(u16::from(b'>'));
+    html.extend_from_slice(&s.code_units);
+    html.extend(format!("</{tag}>").encode_utf16());
+    JsString::from_vec(html)
 }
 
 // §7.2.8 IsRegExp(argument) — uses [[Get]] for Symbol.match (invokes getters)
@@ -102,15 +276,6 @@ fn reject_regexp(interp: &mut Interpreter, arg: &JsValue, method: &str) -> Resul
         ))));
     }
     Ok(())
-}
-
-fn utf16_substring(units: &[u16], from: usize, to: usize) -> String {
-    let from = from.min(units.len());
-    let to = to.min(units.len());
-    if from >= to {
-        return String::new();
-    }
-    String::from_utf16_lossy(&units[from..to])
 }
 
 impl Interpreter {
@@ -346,210 +511,90 @@ impl Interpreter {
                 "toLowerCase",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    Completion::Normal(JsValue::string(JsString::from_str(&s.to_lowercase())))
+                    let s = propagate!(this_js_string(interp, this_val));
+                    let lower =
+                        map_well_formed(&s.code_units, |run| Cow::Owned(run.to_lowercase()));
+                    Completion::Normal(JsValue::string(JsString::from_vec(lower)))
                 }),
             ),
             (
                 "toUpperCase",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    Completion::Normal(JsValue::string(JsString::from_str(&s.to_uppercase())))
+                    let s = propagate!(this_js_string(interp, this_val));
+                    let upper =
+                        map_well_formed(&s.code_units, |run| Cow::Owned(run.to_uppercase()));
+                    Completion::Normal(JsValue::string(JsString::from_vec(upper)))
                 }),
             ),
             (
                 "toLocaleLowerCase",
                 0,
-                Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let locale_list =
-                        propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
-                    let resolved = interp.intl_resolve_locale(&locale_list);
-                    let langid: icu::locale::LanguageIdentifier =
-                        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
-                    let cm = icu::casemap::CaseMapper::new();
-                    let result = cm.lowercase_to_string(&s, &langid);
-                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
-                }),
+                Rc::new(|interp, this_val, args| locale_case_map(interp, this_val, args, false)),
             ),
             (
                 "toLocaleUpperCase",
                 0,
-                Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let locale_list =
-                        propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
-                    let resolved = interp.intl_resolve_locale(&locale_list);
-                    let langid: icu::locale::LanguageIdentifier =
-                        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
-                    let cm = icu::casemap::CaseMapper::new();
-                    let result = cm.uppercase_to_string(&s, &langid);
-                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
-                }),
+                Rc::new(|interp, this_val, args| locale_case_map(interp, this_val, args, true)),
             ),
             (
                 "trim",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    Completion::Normal(JsValue::string(JsString::from_str(
-                        s.trim_matches(is_ecma_whitespace),
-                    )))
+                    let s = propagate!(this_js_string(interp, this_val));
+                    Completion::Normal(JsValue::string(trim_string(s, true, true)))
                 }),
             ),
             (
                 "trimStart",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    Completion::Normal(JsValue::string(JsString::from_str(
-                        s.trim_start_matches(is_ecma_whitespace),
-                    )))
+                    let s = propagate!(this_js_string(interp, this_val));
+                    Completion::Normal(JsValue::string(trim_string(s, true, false)))
                 }),
             ),
             (
                 "trimEnd",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    Completion::Normal(JsValue::string(JsString::from_str(
-                        s.trim_end_matches(is_ecma_whitespace),
-                    )))
+                    let s = propagate!(this_js_string(interp, this_val));
+                    Completion::Normal(JsValue::string(trim_string(s, false, true)))
                 }),
             ),
             (
                 "repeat",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let n = match args.first() {
-                        Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
-                        None => 0.0,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
+                    let count = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let n = propagate!(interp.to_integer_or_infinity_value(&count));
                     if n < 0.0 || n == f64::INFINITY {
                         return Completion::Throw(interp.create_range_error("Invalid count value"));
                     }
-                    let count = n as usize;
-                    Completion::Normal(JsValue::string(JsString::from_str(&s.repeat(count))))
+                    let repeated = s.code_units.repeat(n as usize);
+                    Completion::Normal(JsValue::string(JsString::from_vec(repeated)))
                 }),
             ),
             (
                 "padStart",
                 1,
-                Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let max_length = match args.first() {
-                        Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
-                        None => 0.0,
-                    };
-                    let fill = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_str(interp, v) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        },
-                        _ => " ".to_string(),
-                    };
-                    let s_units = utf16_units(&s);
-                    let s_len = s_units.len();
-                    let int_max = max_length as usize;
-                    if int_max <= s_len || fill.is_empty() {
-                        return Completion::Normal(JsValue::string(JsString::from_str(&s)));
-                    }
-                    let fill_units = utf16_units(&fill);
-                    let fill_len = int_max - s_len;
-                    let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
-                    let mut result = pad;
-                    result.extend_from_slice(&s_units);
-                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
-                }),
+                Rc::new(|interp, this_val, args| string_pad(interp, this_val, args, true)),
             ),
             (
                 "padEnd",
                 1,
-                Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let max_length = match args.first() {
-                        Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
-                        None => 0.0,
-                    };
-                    let fill = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_str(interp, v) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        },
-                        _ => " ".to_string(),
-                    };
-                    let s_units = utf16_units(&s);
-                    let s_len = s_units.len();
-                    let int_max = max_length as usize;
-                    if int_max <= s_len || fill.is_empty() {
-                        return Completion::Normal(JsValue::string(JsString::from_str(&s)));
-                    }
-                    let fill_units = utf16_units(&fill);
-                    let fill_len = int_max - s_len;
-                    let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
-                    let mut result = s_units;
-                    result.extend_from_slice(&pad);
-                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
-                }),
+                Rc::new(|interp, this_val, args| string_pad(interp, this_val, args, false)),
             ),
             (
                 "concat",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let mut s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
+                    let mut units = s.into_vec();
                     for arg in args {
-                        match to_str(interp, arg) {
-                            Ok(a) => s.push_str(&a),
-                            Err(c) => return c,
-                        }
+                        propagate!(interp.append_js_string(&mut units, arg));
                     }
-                    Completion::Normal(JsValue::string(JsString::from_str(&s)))
+                    Completion::Normal(JsValue::string(JsString::from_vec(units)))
                 }),
             ),
             (
@@ -578,10 +623,7 @@ impl Interpreter {
                             return interp.call_function(&method, &separator, &[this_str, limit]);
                         }
                     }
-                    let s = match to_str(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(interp.to_js_string(this_val));
                     let limit_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     // Per spec: ToUint32(limit) — NaN/Infinity/2^32/etc map to 0
                     let limit: u32 = if (limit_arg).is_undefined() {
@@ -593,63 +635,41 @@ impl Interpreter {
                         }
                     };
                     // Per spec step 7: ToString(separator) BEFORE limit check
-                    let sep_is_undef = (separator).is_undefined();
-                    let sep_str = if !sep_is_undef {
-                        match to_str(interp, &separator) {
-                            Ok(s) => Some(s),
-                            Err(c) => return c,
-                        }
-                    } else {
+                    let sep = if separator.is_undefined() {
                         None
+                    } else {
+                        Some(propagate!(interp.to_js_string(&separator)))
                     };
                     if limit == 0 {
                         return Completion::Normal(interp.create_array(vec![]));
                     }
-                    if sep_is_undef {
-                        return Completion::Normal(
-                            interp.create_array(vec![JsValue::string(JsString::from_str(&s))]),
-                        );
-                    }
-                    let sep_str = sep_str.unwrap();
-                    let s_units = utf16_units(&s);
-                    let sep_units = utf16_units(&sep_str);
-                    let s_len = s_units.len();
-                    let sep_len = sep_units.len();
+                    let Some(sep) = sep else {
+                        return Completion::Normal(interp.create_array(vec![JsValue::string(s)]));
+                    };
+                    let limit = limit as usize;
+                    let s_units = &s.code_units;
+                    let sep_units = &sep.code_units;
 
-                    if sep_len == 0 {
+                    if sep_units.is_empty() {
                         // Split into individual UTF-16 code units
-                        let mut parts = Vec::new();
-                        for i in 0..s_len {
-                            if parts.len() >= limit as usize {
-                                break;
-                            }
-                            let ch = String::from_utf16_lossy(&s_units[i..i + 1]);
-                            parts.push(JsValue::string(JsString::from_str(&ch)));
-                        }
+                        let parts = s_units
+                            .iter()
+                            .take(limit)
+                            .map(|&unit| JsValue::string(JsString::from_vec(vec![unit])))
+                            .collect();
                         return Completion::Normal(interp.create_array(parts));
                     }
 
-                    // SplitMatch algorithm
                     let mut parts = Vec::new();
                     let mut p = 0usize; // start of unmatched portion
-                    let mut q = p;
-                    while q + sep_len <= s_len {
-                        if s_units[q..q + sep_len] == sep_units[..] {
-                            let seg = utf16_substring(&s_units, p, q);
-                            parts.push(JsValue::string(JsString::from_str(&seg)));
-                            if parts.len() >= limit as usize {
-                                return Completion::Normal(interp.create_array(parts));
-                            }
-                            p = q + sep_len;
-                            q = p;
-                        } else {
-                            q += 1;
+                    while let Some(q) = string_index_of(s_units, sep_units, p) {
+                        parts.push(JsValue::string(JsString::from_vec(s_units[p..q].to_vec())));
+                        if parts.len() >= limit {
+                            return Completion::Normal(interp.create_array(parts));
                         }
+                        p = q + sep_units.len();
                     }
-                    // Add remaining
-                    let seg = utf16_substring(&s_units, p, s_len);
-                    parts.push(JsValue::string(JsString::from_str(&seg)));
-                    parts.truncate(limit as usize);
+                    parts.push(JsValue::string(JsString::from_vec(s_units[p..].to_vec())));
                     Completion::Normal(interp.create_array(parts))
                 }),
             ),
@@ -681,97 +701,29 @@ impl Interpreter {
                             );
                         }
                     }
-                    let s = match to_str(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let search = match to_str(interp, &search_value) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(interp.to_js_string(this_val));
+                    let search = propagate!(interp.to_js_string(&search_value));
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    let is_fn = if let Some(object_id) = replace_arg.as_object_id() {
-                        interp
-                            .get_object_cell(object_id)
-                            .map(|obj| obj.borrow().callable.is_some())
-                            .unwrap_or(false)
-                    } else {
-                        false
+                    let template = propagate!(replace_template(interp, &replace_arg));
+                    let s_units = &s.code_units;
+                    let search_units = &search.code_units;
+                    let Some(pos) = string_index_of(s_units, search_units, 0) else {
+                        return Completion::Normal(JsValue::string(s.clone()));
                     };
-                    if is_fn {
-                        // Find first occurrence using UTF-16
-                        let s_units = utf16_units(&s);
-                        let search_units = utf16_units(&search);
-                        let s_len = s_units.len();
-                        let search_len = search_units.len();
-                        let mut pos = None;
-                        if search_len == 0 {
-                            pos = Some(0);
-                        } else if search_len <= s_len {
-                            for i in 0..=s_len - search_len {
-                                if s_units[i..i + search_len] == search_units[..] {
-                                    pos = Some(i);
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some(p) = pos {
-                            let matched = utf16_substring(&s_units, p, p + search_len);
-                            let r = interp.call_function(
-                                &replace_arg,
-                                &JsValue::UNDEFINED,
-                                &[
-                                    JsValue::string(JsString::from_str(&matched)),
-                                    JsValue::number(p as f64),
-                                    JsValue::string(JsString::from_str(&s)),
-                                ],
-                            );
-                            let replacement = match r {
-                                Completion::Normal(v) => match to_str(interp, &v) {
-                                    Ok(s) => s,
-                                    Err(c) => return c,
-                                },
-                                other => return other,
-                            };
-                            let before = utf16_substring(&s_units, 0, p);
-                            let after = utf16_substring(&s_units, p + search_len, s_len);
-                            let result = format!("{before}{replacement}{after}");
-                            Completion::Normal(JsValue::string(JsString::from_str(&result)))
-                        } else {
-                            Completion::Normal(JsValue::string(JsString::from_str(&s)))
-                        }
-                    } else {
-                        let replacement = match to_str(interp, &replace_arg) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        };
-                        // Handle replacement patterns ($&, $$, $`, $', $<n>)
-                        let s_units = utf16_units(&s);
-                        let search_units = utf16_units(&search);
-                        let s_len = s_units.len();
-                        let search_len = search_units.len();
-                        let mut match_pos = None;
-                        if search_len == 0 {
-                            match_pos = Some(0);
-                        } else if search_len <= s_len {
-                            for i in 0..=s_len - search_len {
-                                if s_units[i..i + search_len] == search_units[..] {
-                                    match_pos = Some(i);
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some(pos) = match_pos {
-                            let before = utf16_substring(&s_units, 0, pos);
-                            let after = utf16_substring(&s_units, pos + search_len, s_len);
-                            let matched = utf16_substring(&s_units, pos, pos + search_len);
-                            let rep = apply_replacement_pattern(&replacement, &matched, &s, pos);
-                            let result = format!("{before}{rep}{after}");
-                            Completion::Normal(JsValue::string(JsString::from_str(&result)))
-                        } else {
-                            Completion::Normal(JsValue::string(JsString::from_str(&s)))
-                        }
-                    }
+                    let end = pos + search_units.len();
+                    let mut result = Vec::with_capacity(s_units.len());
+                    result.extend_from_slice(&s_units[..pos]);
+                    propagate!(append_replacement(
+                        interp,
+                        &mut result,
+                        &replace_arg,
+                        template.as_ref(),
+                        &s,
+                        pos,
+                        end
+                    ));
+                    result.extend_from_slice(&s_units[end..]);
+                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
             (
@@ -839,93 +791,42 @@ impl Interpreter {
                             }
                         }
                     }
-                    let s = match to_str(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    let search = match to_str(interp, &search_value) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(interp.to_js_string(this_val));
+                    let search = propagate!(interp.to_js_string(&search_value));
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    let is_fn = if let Some(object_id) = replace_arg.as_object_id() {
-                        interp
-                            .get_object_cell(object_id)
-                            .map(|obj| obj.borrow().callable.is_some())
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
                     // Per spec step 6a: if not functional, ToString(replaceValue) once upfront
-                    let replace_str = if !is_fn {
-                        match to_str(interp, &replace_arg) {
-                            Ok(s) => Some(s),
-                            Err(c) => return c,
-                        }
-                    } else {
-                        None
-                    };
-                    let s_units = utf16_units(&s);
-                    let search_units = utf16_units(&search);
-                    let s_len = s_units.len();
-                    let search_len = search_units.len();
-
-                    // Find all match positions
+                    let template = propagate!(replace_template(interp, &replace_arg));
+                    let s_units = &s.code_units;
+                    let search_units = &search.code_units;
+                    let advance_by = search_units.len().max(1);
                     let mut positions = Vec::new();
-                    if search_len == 0 {
-                        for i in 0..=s_len {
-                            positions.push(i);
-                        }
-                    } else {
-                        let mut i = 0;
-                        while i + search_len <= s_len {
-                            if s_units[i..i + search_len] == search_units[..] {
-                                positions.push(i);
-                                i += search_len;
-                            } else {
-                                i += 1;
-                            }
-                        }
+                    let mut next = string_index_of(s_units, search_units, 0);
+                    while let Some(pos) = next {
+                        positions.push(pos);
+                        next = string_index_of(s_units, search_units, pos + advance_by);
                     }
-
                     if positions.is_empty() {
-                        return Completion::Normal(JsValue::string(JsString::from_str(&s)));
+                        return Completion::Normal(JsValue::string(s.clone()));
                     }
 
-                    let mut result = Vec::new();
-                    let mut last_end = 0;
-                    for &pos in &positions {
-                        result.extend_from_slice(&s_units[last_end..pos]);
-                        let matched = utf16_substring(&s_units, pos, pos + search_len);
-                        if is_fn {
-                            let r = interp.call_function(
-                                &replace_arg,
-                                &JsValue::UNDEFINED,
-                                &[
-                                    JsValue::string(JsString::from_str(&matched)),
-                                    JsValue::number(pos as f64),
-                                    JsValue::string(JsString::from_str(&s)),
-                                ],
-                            );
-                            let rep = match r {
-                                Completion::Normal(v) => match to_str(interp, &v) {
-                                    Ok(s) => s,
-                                    Err(c) => return c,
-                                },
-                                other => return other,
-                            };
-                            result.extend(rep.encode_utf16());
-                        } else {
-                            let rep_str = replace_str.as_ref().unwrap();
-                            let rep = apply_replacement_pattern(rep_str, &matched, &s, pos);
-                            result.extend(rep.encode_utf16());
-                        }
-                        last_end = pos + search_len;
+                    let mut result = Vec::with_capacity(s_units.len());
+                    let mut end_of_last_match = 0;
+                    for pos in positions {
+                        result.extend_from_slice(&s_units[end_of_last_match..pos]);
+                        let end = pos + search_units.len();
+                        propagate!(append_replacement(
+                            interp,
+                            &mut result,
+                            &replace_arg,
+                            template.as_ref(),
+                            &s,
+                            pos,
+                            end
+                        ));
+                        end_of_last_match = end;
                     }
-                    result.extend_from_slice(&s_units[last_end..]);
-                    Completion::Normal(JsValue::string(JsString::from_str(
-                        &String::from_utf16_lossy(&result),
-                    )))
+                    result.extend_from_slice(&s_units[end_of_last_match..]);
+                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
             (
@@ -1168,10 +1069,7 @@ impl Interpreter {
                 "normalize",
                 0,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let form = match args.first() {
                         Some(v) if !(v).is_undefined() => match to_str(interp, v) {
                             Ok(s) => s,
@@ -1179,28 +1077,28 @@ impl Interpreter {
                         },
                         _ => "NFC".to_string(),
                     };
-                    let normalized = match form.as_str() {
-                        "NFC" => ComposingNormalizerBorrowed::new_nfc().normalize(&s),
-                        "NFD" => DecomposingNormalizerBorrowed::new_nfd().normalize(&s),
-                        "NFKC" => ComposingNormalizerBorrowed::new_nfkc().normalize(&s),
-                        "NFKD" => DecomposingNormalizerBorrowed::new_nfkd().normalize(&s),
+                    let normalize: fn(&str) -> Cow<'_, str> = match form.as_str() {
+                        "NFC" => |run| ComposingNormalizerBorrowed::new_nfc().normalize(run),
+                        "NFD" => |run| DecomposingNormalizerBorrowed::new_nfd().normalize(run),
+                        "NFKC" => |run| ComposingNormalizerBorrowed::new_nfkc().normalize(run),
+                        "NFKD" => |run| DecomposingNormalizerBorrowed::new_nfkd().normalize(run),
                         _ => {
-                            return Completion::Throw(interp.create_range_error(
-                                &format!("The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"),
-                            ));
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"
+                            )));
                         }
                     };
-                    Completion::Normal(JsValue::string(JsString::from_str(&normalized)))
+                    let normalized = map_well_formed(&s.code_units, normalize);
+                    Completion::Normal(JsValue::string(JsString::from_vec(normalized)))
                 }),
             ),
             (
                 "localeCompare",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    // The collator compares decoded text, so lone surrogates
+                    // still reach it as U+FFFD.
+                    let s = propagate!(this_js_string(interp, this_val)).to_rust_string();
                     let that = match args.first() {
                         Some(v) => match to_str(interp, v) {
                             Ok(s) => s,
@@ -1334,31 +1232,24 @@ impl Interpreter {
         }
 
         // Annex B: HTML methods
-        let html_no_arg: Vec<(&str, &str, &str)> = vec![
-            ("big", "big", "big"),
-            ("blink", "blink", "blink"),
-            ("bold", "b", "b"),
-            ("fixed", "tt", "tt"),
-            ("italics", "i", "i"),
-            ("small", "small", "small"),
-            ("strike", "strike", "strike"),
-            ("sub", "sub", "sub"),
-            ("sup", "sup", "sup"),
+        let html_no_arg = [
+            ("big", "big"),
+            ("blink", "blink"),
+            ("bold", "b"),
+            ("fixed", "tt"),
+            ("italics", "i"),
+            ("small", "small"),
+            ("strike", "strike"),
+            ("sub", "sub"),
+            ("sup", "sup"),
         ];
-        for (name, tag_open, tag_close) in html_no_arg {
-            let tag_o = tag_open.to_string();
-            let tag_c = tag_close.to_string();
+        for (name, tag) in html_no_arg {
             let fn_val = self.create_function(JsFunction::Native(
                 name.to_string(),
                 0,
                 Rc::new(move |interp, this, _args| {
-                    let s = match this_string_value(interp, this) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
-                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
-                        "<{tag_o}>{s}</{tag_c}>"
-                    ))))
+                    let s = propagate!(this_js_string(interp, this));
+                    Completion::Normal(JsValue::string(create_html(&s, tag, None)))
                 }),
                 false,
             ));
@@ -1367,30 +1258,21 @@ impl Interpreter {
                 .insert_builtin(name.to_string(), fn_val);
         }
 
-        let html_one_arg: Vec<(&str, &str, &str, &str)> = vec![
-            ("anchor", "a", "name", "a"),
-            ("fontcolor", "font", "color", "font"),
-            ("fontsize", "font", "size", "font"),
-            ("link", "a", "href", "a"),
+        let html_one_arg = [
+            ("anchor", "a", "name"),
+            ("fontcolor", "font", "color"),
+            ("fontsize", "font", "size"),
+            ("link", "a", "href"),
         ];
-        for (name, tag_open, attr, tag_close) in html_one_arg {
-            let tag_o = tag_open.to_string();
-            let attr_name = attr.to_string();
-            let tag_c = tag_close.to_string();
+        for (name, tag, attr) in html_one_arg {
             let fn_val = self.create_function(JsFunction::Native(
                 name.to_string(),
                 1,
                 Rc::new(move |interp, this, args| {
-                    let s = match this_string_value(interp, this) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this));
                     let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let attr_val = propagate!(interp.to_string_value(&arg));
-                    let escaped = attr_val.replace('"', "&quot;");
-                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
-                        "<{tag_o} {attr_name}=\"{escaped}\">{s}</{tag_c}>"
-                    ))))
+                    let value = propagate!(interp.to_js_string(&arg));
+                    Completion::Normal(JsValue::string(create_html(&s, tag, Some((attr, &value)))))
                 }),
                 false,
             ));
@@ -1462,18 +1344,7 @@ impl Interpreter {
             "[Symbol.iterator]".to_string(),
             0,
             |interp, this_val, _args| {
-                if (this_val).is_nullish() {
-                    return Completion::Throw(interp.create_type_error(
-                        "String.prototype[Symbol.iterator] called on null or undefined",
-                    ));
-                }
-                let s = match this_val.as_string() {
-                    Some(string) => string,
-                    None => match interp.to_string_value(this_val) {
-                        Ok(converted) => JsString::from_str(&converted),
-                        Err(e) => return Completion::Throw(e),
-                    },
-                };
+                let s = propagate!(this_js_string(interp, this_val));
                 Completion::Normal(interp.create_string_iterator(s))
             },
         ));
@@ -1503,52 +1374,4 @@ impl Interpreter {
 
         self.realm_mut().string_prototype = Some(proto_id);
     }
-}
-
-// Apply replacement patterns like $&, $$, $`, $'
-// position is in UTF-16 code units
-fn apply_replacement_pattern(
-    replacement: &str,
-    matched: &str,
-    original: &str,
-    position: usize,
-) -> String {
-    let orig_units = utf16_units(original);
-    let matched_units = utf16_units(matched);
-    let chars: Vec<char> = replacement.chars().collect();
-    let mut result = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() {
-            match chars[i + 1] {
-                '$' => {
-                    result.push('$');
-                    i += 2;
-                }
-                '&' => {
-                    result.push_str(matched);
-                    i += 2;
-                }
-                '`' => {
-                    let before = utf16_substring(&orig_units, 0, position);
-                    result.push_str(&before);
-                    i += 2;
-                }
-                '\'' => {
-                    let end = position + matched_units.len();
-                    let after = utf16_substring(&orig_units, end, orig_units.len());
-                    result.push_str(&after);
-                    i += 2;
-                }
-                _ => {
-                    result.push('$');
-                    i += 1;
-                }
-            }
-        } else {
-            result.push(chars[i]);
-            i += 1;
-        }
-    }
-    result
 }
