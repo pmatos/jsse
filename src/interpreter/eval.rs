@@ -5474,15 +5474,12 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                                let mut param_names_set = HashSet::new();
-                                for p in params.iter() {
-                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
-                                }
-                                for name in &var_names {
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) || name == "arguments" {
+                                    if name == "arguments"
+                                        || params.iter().any(|p| Self::pattern_binds_name(p, name))
+                                    {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -5645,15 +5642,12 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                                let mut param_names_set = HashSet::new();
-                                for p in params.iter() {
-                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
-                                }
-                                for name in &var_names {
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) || name == "arguments" {
+                                    if name == "arguments"
+                                        || params.iter().any(|p| Self::pattern_binds_name(p, name))
+                                    {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -5823,15 +5817,12 @@ impl Interpreter {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
                             body_env.borrow_mut().strict = func_env.borrow().strict;
                             body_env.borrow_mut().has_simple_params = false;
-                            let mut var_names = HashSet::new();
-                            Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                            let mut param_names = HashSet::new();
-                            for p in params.iter() {
-                                Self::collect_var_names_from_pattern(p, &mut param_names);
-                            }
-                            for name in &var_names {
+                            let analysis = self.hoist_cache.analysis_for(&body);
+                            for name in &analysis.var_names {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
-                                if param_names.contains(name) || name == "arguments" {
+                                if name == "arguments"
+                                    || params.iter().any(|p| Self::pattern_binds_name(p, name))
+                                {
                                     let val =
                                         self.env_get(&func_env, name).unwrap_or(JsValue::UNDEFINED);
                                     let _ = self.env_set(&body_env, name, val);

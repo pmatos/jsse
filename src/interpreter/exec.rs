@@ -809,6 +809,29 @@ impl Interpreter {
         }
     }
 
+    /// Whether `pat` binds `name` — the allocation-free membership test over
+    /// the set [`collect_var_names_from_pattern`] would build.
+    pub(crate) fn pattern_binds_name(pat: &Pattern, name: &str) -> bool {
+        match pat {
+            Pattern::Identifier(n) => n == name,
+            Pattern::Array(elems) => elems.iter().flatten().any(|elem| match elem {
+                ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                    Self::pattern_binds_name(p, name)
+                }
+            }),
+            Pattern::Object(props) => props.iter().any(|prop| match prop {
+                ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                    Self::pattern_binds_name(p, name)
+                }
+                ObjectPatternProperty::Shorthand(n) => n == name,
+            }),
+            Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
+                Self::pattern_binds_name(inner, name)
+            }
+            Pattern::MemberExpression(_) => false,
+        }
+    }
+
     pub(crate) fn collect_var_names_from_stmts(stmts: &[Statement], out: &mut HashSet<String>) {
         for stmt in stmts {
             Self::collect_var_names_from_stmt(stmt, out);
