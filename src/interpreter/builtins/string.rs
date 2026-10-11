@@ -2,6 +2,7 @@ use super::super::*;
 use super::regexp::get_substitution;
 use crate::interpreter::helpers::is_ecma_whitespace;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
+use std::borrow::Cow;
 
 // `? RequireObjectCoercible(this value)` then `? ToString(O)`, keeping the
 // exact code units (lone surrogates included). A String wrapper goes through
@@ -69,9 +70,9 @@ fn string_last_index_of(s: &[u16], search: &[u16], from: usize) -> Option<usize>
 // run of `units`. Lone surrogates pass through unchanged: they are their own
 // case mapping and normal form, and neither cased nor case-ignorable, so
 // splitting a run at one leaves the transform's context the same.
-fn map_well_formed(units: &[u16], mut transform: impl FnMut(&str) -> String) -> Vec<u16> {
+fn map_well_formed(units: &[u16], mut transform: impl FnMut(&str) -> Cow<'_, str>) -> Vec<u16> {
     let mut out = Vec::with_capacity(units.len());
-    let mut run = String::new();
+    let mut run = String::with_capacity(units.len());
     for decoded in char::decode_utf16(units.iter().copied()) {
         match decoded {
             Ok(ch) => run.push(ch),
@@ -90,36 +91,25 @@ fn map_well_formed(units: &[u16], mut transform: impl FnMut(&str) -> String) -> 
     out
 }
 
-// TrimString; returns `s` itself when there is nothing to trim.
-fn trim_string(s: JsString, trim_start: bool, trim_end: bool) -> JsString {
-    let trimmed = trim_units(&s.code_units, trim_start, trim_end);
-    if trimmed.len() == s.code_units.len() {
-        return s;
-    }
-    JsString::from_vec(trimmed.to_vec())
-}
-
 // TrimString over code units; every WhiteSpace and LineTerminator is a single
-// BMP code unit.
-fn trim_units(units: &[u16], trim_start: bool, trim_end: bool) -> &[u16] {
-    let is_space = |unit: &u16| char::from_u32(u32::from(*unit)).is_some_and(is_ecma_whitespace);
+// BMP code unit. Returns `s` itself when there is nothing to trim.
+fn trim_string(s: JsString, trim_start: bool, trim_end: bool) -> JsString {
+    let is_space = |unit: &&u16| char::from_u32(u32::from(**unit)).is_some_and(is_ecma_whitespace);
+    let units = &s.code_units;
     let start = if trim_start {
-        units
-            .iter()
-            .position(|u| !is_space(u))
-            .unwrap_or(units.len())
+        units.iter().take_while(is_space).count()
     } else {
         0
     };
     let end = if trim_end {
-        units
-            .iter()
-            .rposition(|u| !is_space(u))
-            .map_or(start, |i| i + 1)
+        units.len() - units[start..].iter().rev().take_while(is_space).count()
     } else {
         units.len()
     };
-    &units[start..end.max(start)]
+    if start == 0 && end == units.len() {
+        return s;
+    }
+    JsString::from_vec(units[start..end].to_vec())
 }
 
 // §22.1.3.17.1 StringPaddingBuiltinsImpl over code units.
@@ -169,20 +159,22 @@ fn replace_template(
         .map_err(Completion::Throw)
 }
 
-// The replacement for the match of the search string at `position..end` of
-// `string` in replace/replaceAll: the replacer's result through ToString, or
-// GetSubstitution of `template` when the replace value is not callable.
-fn string_replacement(
+// Appends the replacement for the match of the search string at
+// `position..end` of `string` in replace/replaceAll to `out`: the replacer's
+// result through ToString, or GetSubstitution of `template` when the replace
+// value is not callable.
+fn append_replacement(
     interp: &mut Interpreter,
+    out: &mut Vec<u16>,
     replacer: &JsValue,
     template: Option<&JsString>,
     string: &JsString,
     position: usize,
     end: usize,
-) -> Result<Vec<u16>, Completion> {
+) -> Result<(), Completion> {
     let matched = &string.code_units[position..end];
     if let Some(template) = template {
-        return get_substitution(
+        let substitution = get_substitution(
             interp,
             matched,
             &string.code_units,
@@ -192,7 +184,9 @@ fn string_replacement(
             &JsValue::UNDEFINED,
             &template.code_units,
         )
-        .map_err(Completion::Throw);
+        .map_err(Completion::Throw)?;
+        out.extend_from_slice(&substitution);
+        return Ok(());
     }
     let call_args = [
         JsValue::string(JsString::from_vec(matched.to_vec())),
@@ -203,8 +197,54 @@ fn string_replacement(
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let replacement = interp.to_js_string(&value).map_err(Completion::Throw)?;
-    Ok(replacement.into_vec())
+    interp
+        .append_js_string(out, &value)
+        .map_err(Completion::Throw)
+}
+
+// toLocaleLowerCase/toLocaleUpperCase: case mapping for the requested locale.
+fn locale_case_map(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+    args: &[JsValue],
+    upper: bool,
+) -> Completion {
+    let s = propagate!(this_js_string(interp, this_val));
+    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    let locale_list = propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
+    let resolved = interp.intl_resolve_locale(&locale_list);
+    let langid: icu::locale::LanguageIdentifier =
+        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
+    let cm = icu::casemap::CaseMapper::new();
+    let mapped = map_well_formed(&s.code_units, |run| {
+        if upper {
+            cm.uppercase_to_string(run, &langid)
+        } else {
+            cm.lowercase_to_string(run, &langid)
+        }
+    });
+    Completion::Normal(JsValue::string(JsString::from_vec(mapped)))
+}
+
+// Annex B CreateHTML: `<tag attribute="value">s</tag>`, with `"` in the value
+// escaped as `&quot;`.
+fn create_html(s: &JsString, tag: &str, attribute: Option<(&str, &JsString)>) -> JsString {
+    let mut html: Vec<u16> = format!("<{tag}").encode_utf16().collect();
+    if let Some((name, value)) = attribute {
+        html.extend(format!(" {name}=\"").encode_utf16());
+        for &unit in value.code_units.iter() {
+            if unit == u16::from(b'"') {
+                html.extend("&quot;".encode_utf16());
+            } else {
+                html.push(unit);
+            }
+        }
+        html.push(u16::from(b'"'));
+    }
+    html.push(u16::from(b'>'));
+    html.extend_from_slice(&s.code_units);
+    html.extend(format!("</{tag}>").encode_utf16());
+    JsString::from_vec(html)
 }
 
 // §7.2.8 IsRegExp(argument) — uses [[Get]] for Symbol.match (invokes getters)
@@ -472,7 +512,8 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let lower = map_well_formed(&s.code_units, |run| run.to_lowercase());
+                    let lower =
+                        map_well_formed(&s.code_units, |run| Cow::Owned(run.to_lowercase()));
                     Completion::Normal(JsValue::string(JsString::from_vec(lower)))
                 }),
             ),
@@ -481,45 +522,20 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let upper = map_well_formed(&s.code_units, |run| run.to_uppercase());
+                    let upper =
+                        map_well_formed(&s.code_units, |run| Cow::Owned(run.to_uppercase()));
                     Completion::Normal(JsValue::string(JsString::from_vec(upper)))
                 }),
             ),
             (
                 "toLocaleLowerCase",
                 0,
-                Rc::new(|interp, this_val, args| {
-                    let s = propagate!(this_js_string(interp, this_val));
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let locale_list =
-                        propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
-                    let resolved = interp.intl_resolve_locale(&locale_list);
-                    let langid: icu::locale::LanguageIdentifier =
-                        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
-                    let cm = icu::casemap::CaseMapper::new();
-                    let result = map_well_formed(&s.code_units, |run| {
-                        cm.lowercase_to_string(run, &langid).into_owned()
-                    });
-                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
-                }),
+                Rc::new(|interp, this_val, args| locale_case_map(interp, this_val, args, false)),
             ),
             (
                 "toLocaleUpperCase",
                 0,
-                Rc::new(|interp, this_val, args| {
-                    let s = propagate!(this_js_string(interp, this_val));
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let locale_list =
-                        propagate!(interp.intl_canonicalize_locale_list(&locales_arg));
-                    let resolved = interp.intl_resolve_locale(&locale_list);
-                    let langid: icu::locale::LanguageIdentifier =
-                        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
-                    let cm = icu::casemap::CaseMapper::new();
-                    let result = map_well_formed(&s.code_units, |run| {
-                        cm.uppercase_to_string(run, &langid).into_owned()
-                    });
-                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
-                }),
+                Rc::new(|interp, this_val, args| locale_case_map(interp, this_val, args, true)),
             ),
             (
                 "trim",
@@ -576,8 +592,7 @@ impl Interpreter {
                     let s = propagate!(this_js_string(interp, this_val));
                     let mut units = s.into_vec();
                     for arg in args {
-                        let next = propagate!(interp.to_js_string(arg));
-                        units.extend_from_slice(&next.code_units);
+                        propagate!(interp.append_js_string(&mut units, arg));
                     }
                     Completion::Normal(JsValue::string(JsString::from_vec(units)))
                 }),
@@ -696,16 +711,17 @@ impl Interpreter {
                         return Completion::Normal(JsValue::string(s.clone()));
                     };
                     let end = pos + search_units.len();
-                    let replacement = propagate!(string_replacement(
+                    let mut result = Vec::with_capacity(s_units.len());
+                    result.extend_from_slice(&s_units[..pos]);
+                    propagate!(append_replacement(
                         interp,
+                        &mut result,
                         &replace_arg,
                         template.as_ref(),
                         &s,
                         pos,
                         end
                     ));
-                    let mut result = s_units[..pos].to_vec();
-                    result.extend_from_slice(&replacement);
                     result.extend_from_slice(&s_units[end..]);
                     Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
@@ -793,20 +809,20 @@ impl Interpreter {
                         return Completion::Normal(JsValue::string(s.clone()));
                     }
 
-                    let mut result = Vec::new();
+                    let mut result = Vec::with_capacity(s_units.len());
                     let mut end_of_last_match = 0;
                     for pos in positions {
                         result.extend_from_slice(&s_units[end_of_last_match..pos]);
                         let end = pos + search_units.len();
-                        let replacement = propagate!(string_replacement(
+                        propagate!(append_replacement(
                             interp,
+                            &mut result,
                             &replace_arg,
                             template.as_ref(),
                             &s,
                             pos,
                             end
                         ));
-                        result.extend_from_slice(&replacement);
                         end_of_last_match = end;
                     }
                     result.extend_from_slice(&s_units[end_of_last_match..]);
@@ -1061,20 +1077,18 @@ impl Interpreter {
                         },
                         _ => "NFC".to_string(),
                     };
-                    if !matches!(form.as_str(), "NFC" | "NFD" | "NFKC" | "NFKD") {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"
-                        )));
-                    }
-                    let normalized = map_well_formed(&s.code_units, |run| {
-                        match form.as_str() {
-                            "NFC" => ComposingNormalizerBorrowed::new_nfc().normalize(run),
-                            "NFD" => DecomposingNormalizerBorrowed::new_nfd().normalize(run),
-                            "NFKC" => ComposingNormalizerBorrowed::new_nfkc().normalize(run),
-                            _ => DecomposingNormalizerBorrowed::new_nfkd().normalize(run),
+                    let normalize: fn(&str) -> Cow<'_, str> = match form.as_str() {
+                        "NFC" => |run| ComposingNormalizerBorrowed::new_nfc().normalize(run),
+                        "NFD" => |run| DecomposingNormalizerBorrowed::new_nfd().normalize(run),
+                        "NFKC" => |run| ComposingNormalizerBorrowed::new_nfkc().normalize(run),
+                        "NFKD" => |run| DecomposingNormalizerBorrowed::new_nfkd().normalize(run),
+                        _ => {
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"
+                            )));
                         }
-                        .into_owned()
-                    });
+                    };
+                    let normalized = map_well_formed(&s.code_units, normalize);
                     Completion::Normal(JsValue::string(JsString::from_vec(normalized)))
                 }),
             ),
@@ -1218,29 +1232,24 @@ impl Interpreter {
         }
 
         // Annex B: HTML methods
-        let html_no_arg: Vec<(&str, &str, &str)> = vec![
-            ("big", "big", "big"),
-            ("blink", "blink", "blink"),
-            ("bold", "b", "b"),
-            ("fixed", "tt", "tt"),
-            ("italics", "i", "i"),
-            ("small", "small", "small"),
-            ("strike", "strike", "strike"),
-            ("sub", "sub", "sub"),
-            ("sup", "sup", "sup"),
+        let html_no_arg = [
+            ("big", "big"),
+            ("blink", "blink"),
+            ("bold", "b"),
+            ("fixed", "tt"),
+            ("italics", "i"),
+            ("small", "small"),
+            ("strike", "strike"),
+            ("sub", "sub"),
+            ("sup", "sup"),
         ];
-        for (name, tag_open, tag_close) in html_no_arg {
-            let tag_o = tag_open.to_string();
-            let tag_c = tag_close.to_string();
+        for (name, tag) in html_no_arg {
             let fn_val = self.create_function(JsFunction::Native(
                 name.to_string(),
                 0,
                 Rc::new(move |interp, this, _args| {
                     let s = propagate!(this_js_string(interp, this));
-                    let mut html: Vec<u16> = format!("<{tag_o}>").encode_utf16().collect();
-                    html.extend_from_slice(&s.code_units);
-                    html.extend(format!("</{tag_c}>").encode_utf16());
-                    Completion::Normal(JsValue::string(JsString::from_vec(html)))
+                    Completion::Normal(JsValue::string(create_html(&s, tag, None)))
                 }),
                 false,
             ));
@@ -1249,36 +1258,21 @@ impl Interpreter {
                 .insert_builtin(name.to_string(), fn_val);
         }
 
-        let html_one_arg: Vec<(&str, &str, &str, &str)> = vec![
-            ("anchor", "a", "name", "a"),
-            ("fontcolor", "font", "color", "font"),
-            ("fontsize", "font", "size", "font"),
-            ("link", "a", "href", "a"),
+        let html_one_arg = [
+            ("anchor", "a", "name"),
+            ("fontcolor", "font", "color"),
+            ("fontsize", "font", "size"),
+            ("link", "a", "href"),
         ];
-        for (name, tag_open, attr, tag_close) in html_one_arg {
-            let tag_o = tag_open.to_string();
-            let attr_name = attr.to_string();
-            let tag_c = tag_close.to_string();
+        for (name, tag, attr) in html_one_arg {
             let fn_val = self.create_function(JsFunction::Native(
                 name.to_string(),
                 1,
                 Rc::new(move |interp, this, args| {
                     let s = propagate!(this_js_string(interp, this));
                     let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                    let attr_val = propagate!(interp.to_js_string(&arg));
-                    let mut html: Vec<u16> =
-                        format!("<{tag_o} {attr_name}=\"").encode_utf16().collect();
-                    for &unit in attr_val.code_units.iter() {
-                        if unit == u16::from(b'"') {
-                            html.extend("&quot;".encode_utf16());
-                        } else {
-                            html.push(unit);
-                        }
-                    }
-                    html.extend("\">".encode_utf16());
-                    html.extend_from_slice(&s.code_units);
-                    html.extend(format!("</{tag_c}>").encode_utf16());
-                    Completion::Normal(JsValue::string(JsString::from_vec(html)))
+                    let value = propagate!(interp.to_js_string(&arg));
+                    Completion::Normal(JsValue::string(create_html(&s, tag, Some((attr, &value)))))
                 }),
                 false,
             ));
@@ -1350,18 +1344,7 @@ impl Interpreter {
             "[Symbol.iterator]".to_string(),
             0,
             |interp, this_val, _args| {
-                if (this_val).is_nullish() {
-                    return Completion::Throw(interp.create_type_error(
-                        "String.prototype[Symbol.iterator] called on null or undefined",
-                    ));
-                }
-                let s = match this_val.as_string() {
-                    Some(string) => string,
-                    None => match interp.to_js_string(this_val) {
-                        Ok(converted) => converted,
-                        Err(e) => return Completion::Throw(e),
-                    },
-                };
+                let s = propagate!(this_js_string(interp, this_val));
                 Completion::Normal(interp.create_string_iterator(s))
             },
         ));

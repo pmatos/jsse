@@ -145,8 +145,6 @@ impl Interpreter {
                             "Symbol()".to_string()
                         };
                         JsString::from_str(&desc)
-                    } else if let Some(s) = val.as_string() {
-                        s
                     } else {
                         // §22.1.1.1 step 2b: ToString(value) — throws TypeError for Symbol
                         match interp.to_js_string(val) {
@@ -236,17 +234,14 @@ impl Interpreter {
                         } else {
                             JsValue::UNDEFINED
                         };
-                        let seg_str = match interp.to_js_string(&next_seg) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        result.extend_from_slice(&seg_str.code_units);
-                        if i + 1 < len && i < subs.len() {
-                            let sub_str = match interp.to_js_string(&subs[i]) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            result.extend_from_slice(&sub_str.code_units);
+                        if let Err(e) = interp.append_js_string(&mut result, &next_seg) {
+                            return Completion::Throw(e);
+                        }
+                        if i + 1 < len
+                            && i < subs.len()
+                            && let Err(e) = interp.append_js_string(&mut result, &subs[i])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     Completion::Normal(JsValue::string(JsString::from_vec(result)))
