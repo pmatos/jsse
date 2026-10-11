@@ -6069,3 +6069,30 @@ mod root_stack_discipline {
         assert!(interp.gc_temp_roots.is_empty());
     }
 }
+
+// Classes without an explicit constructor share one synthesized constructor
+// Body per shape (base or derived), so evaluating such classes in a loop must
+// not add a per-Body cache entry per evaluation.
+#[test]
+fn synthesized_default_constructors_share_one_body_per_shape() {
+    let interp = run_script(
+        r#"
+        class Base { constructor() { this.tag = "base"; } }
+        var made = 0;
+        for (var i = 0; i < 500; i++) {
+          class A {}
+          class B extends Base {}
+          var a = new A();
+          var b = new B();
+          if (a instanceof A && b instanceof Base && b.tag === "base") made++;
+        }
+        globalThis.__made = made;
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__made"), 500.0);
+    assert!(
+        interp.ic_store.len() < 20,
+        "expected one IC entry per constructor shape, got {}",
+        interp.ic_store.len()
+    );
+}

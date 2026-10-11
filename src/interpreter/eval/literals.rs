@@ -1,5 +1,29 @@
 use super::*;
 
+thread_local! {
+    /// The default `constructor(...args) { super(...args); }` that
+    /// ClassDefinitionEvaluation gives a derived class without one, with its
+    /// `uses_arguments` flag. Every such class shares this Body, so the
+    /// per-Body caches (hoist analysis, ICs, bytecode verdict) hold one entry
+    /// for all of them instead of a fresh one per class evaluation.
+    static DEFAULT_DERIVED_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body, bool) = {
+        let statements = vec![Statement::Expression(Expression::Call(
+            ExprBox::new(Expression::Super),
+            vec![Expression::Spread(ExprBox::new(Expression::Identifier(
+                "args".into(),
+            )))],
+            CallSiteId::UNASSIGNED,
+        ))];
+        let uses_args = stmts_use_arguments(&statements);
+        let params = vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))];
+        (Rc::new(params), Body::new(statements), uses_args)
+    };
+    /// The synthesized `constructor() {}` of a base class without one, shared
+    /// the same way.
+    static DEFAULT_BASE_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body) =
+        (Rc::new(Vec::new()), Body::new(Vec::new()));
+}
+
 fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units.to_vec()))
 }
@@ -366,20 +390,11 @@ impl Interpreter {
                 has_simple_params: crate::ast::params_are_simple(&cm.value.params),
             }
         } else if super_val.is_some() {
-            let default_body = vec![Statement::Expression(Expression::Call(
-                ExprBox::new(Expression::Super),
-                vec![Expression::Spread(ExprBox::new(Expression::Identifier(
-                    "args".into(),
-                )))],
-                CallSiteId::UNASSIGNED,
-            ))];
-            let uses_args = stmts_use_arguments(&default_body);
+            let (params, body, uses_args) = DEFAULT_DERIVED_CONSTRUCTOR.with(|c| c.clone());
             JsFunction::User {
                 name: Some(name.to_string()),
-                params: Rc::new(vec![Pattern::Rest(Box::new(Pattern::Identifier(
-                    "args".into(),
-                )))]),
-                body: Body::new(default_body),
+                params,
+                body,
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -393,10 +408,11 @@ impl Interpreter {
                 has_simple_params: false,
             }
         } else {
+            let (params, body) = DEFAULT_BASE_CONSTRUCTOR.with(|c| c.clone());
             JsFunction::User {
                 name: Some(name.to_string()),
-                params: Rc::new(vec![]),
-                body: Body::new(vec![]),
+                params,
+                body,
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
