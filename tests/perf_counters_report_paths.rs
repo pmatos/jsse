@@ -9,13 +9,38 @@
 
 use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("jsse-perf-report-{name}"));
+/// A per-test scratch directory, removed when the test ends. The process id
+/// keeps two concurrent runs of this suite (two profiles, two worktrees) from
+/// deleting each other's files mid-run.
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
+    let dir = std::env::temp_dir().join(format!("jsse-perf-report-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
+    Scratch(dir)
 }
 
 /// Counts complete counter reports by their first line, so a path emitting the
@@ -119,6 +144,8 @@ fn failing_prelude_paths_still_emit_exactly_one_report() {
 /// their own their work units are credited to the calling function — the
 /// `BODY` ranking's whole purpose is defeated (#537 review). Measured before
 /// the fix, `caller` reported 16,020 exclusive units; its real total is 13.
+/// `BODY` rows count tree-walker work only, so this runs with `--no-bytecode`
+/// and stays about attribution whatever the compiler learns to accept.
 #[test]
 fn generator_and_eval_work_is_not_credited_to_the_caller() {
     let dir = scratch("attribution");
@@ -132,7 +159,7 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
     .expect("write main");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["main.js"])
+        .args(["--no-bytecode", "main.js"])
         .output()
         .expect("run jsse");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -178,6 +205,7 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
     );
 }
 
+/// Runs with `--no-bytecode` for the same reason as the generator/eval test.
 #[test]
 fn named_async_function_gets_its_own_body_row() {
     let dir = scratch("async-attribution");
@@ -190,7 +218,7 @@ fn named_async_function_gets_its_own_body_row() {
     .expect("write main");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["main.js"])
+        .args(["--no-bytecode", "main.js"])
         .output()
         .expect("run jsse");
     let stderr = String::from_utf8_lossy(&out.stderr);
