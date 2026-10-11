@@ -289,6 +289,47 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
     Ok(())
 }
 
+// Validates the comparefn argument shared by `sort` and `toSorted`, returning
+// it only when one was given (undefined means the default order).
+fn sort_compare_fn_arg(
+    interp: &mut Interpreter,
+    args: &[JsValue],
+) -> Result<Option<JsValue>, Completion> {
+    match args.first() {
+        None => Ok(None),
+        Some(cf) if cf.is_undefined() => Ok(None),
+        Some(cf) if interp.is_callable(cf) => Ok(Some(cf.clone())),
+        Some(_) => Err(Completion::Throw(
+            interp.create_type_error("compareFn is not a function"),
+        )),
+    }
+}
+
+// Reads elements 0..len of `o` for sorting, rooting each one as it is read:
+// later getters can reach GC safepoints while earlier elements are only
+// reachable from the returned `Vec`. Must run inside a GC root scope. With
+// `skip_holes`, absent indices are left out (SortIndexedProperties with
+// SKIP-HOLES); otherwise they read as undefined.
+fn gather_rooted_elements(
+    interp: &mut Interpreter,
+    o: &JsValue,
+    len: usize,
+    skip_holes: bool,
+) -> Result<Vec<JsValue>, Completion> {
+    // `len` can be up to 2^53-1 with few (or no) present elements.
+    let mut items: Vec<JsValue> = Vec::with_capacity(len.min(1 << 16));
+    for i in 0..len {
+        let pk = i.to_string();
+        if skip_holes && !obj_has_throw(interp, o, &pk).map_err(Completion::Throw)? {
+            continue;
+        }
+        let v = obj_get(interp, o, &pk)?;
+        interp.gc_root_value(&v);
+        items.push(v);
+    }
+    Ok(items)
+}
+
 // §23.1.3.30.1 SortIndexedProperties + §23.1.3.30.2 CompareArrayElements,
 // shared by `sort` and `toSorted`. Undefineds sort last without reaching the
 // comparator. Without a comparator, each remaining element is converted with
@@ -304,23 +345,19 @@ fn sort_values(
     items: &mut Vec<JsValue>,
     compare_fn: Option<&JsValue>,
 ) -> Result<(), JsValue> {
-    let undefined_count = items.iter().filter(|v| v.is_undefined()).count();
+    let before = items.len();
     items.retain(|v| !v.is_undefined());
-    if let Some(cf) = compare_fn.filter(|cf| !cf.is_undefined()) {
+    let undefined_count = before - items.len();
+    if let Some(cf) = compare_fn {
         merge_sort_by(items, |x, y| {
             let v = match interp.call_function(cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
                 _ => return Ok(std::cmp::Ordering::Equal),
             };
+            // NaN compares as +0 (step 4.c of CompareArrayElements).
             let n = interp.to_number_value(&v)?;
-            Ok(if n < 0.0 {
-                std::cmp::Ordering::Less
-            } else if n > 0.0 {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Equal
-            })
+            Ok(n.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
         })?;
     } else if items.len() > 1 {
         let mut keyed: Vec<(JsString, JsValue)> = Vec::with_capacity(items.len());
@@ -2469,13 +2506,10 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let compare_fn = args.first().cloned();
-            if let Some(ref cf) = compare_fn
-                && !(cf).is_undefined()
-                && !interp.is_callable(cf)
-            {
-                return Completion::Throw(interp.create_type_error("compareFn is not a function"));
-            }
+            let compare_fn = match sort_compare_fn_arg(interp, args) {
+                Ok(cf) => cf,
+                Err(c) => return c,
+            };
             let len = match length_of_array_like(interp, &o) {
                 Ok(v) => v,
                 Err(c) => return c,
@@ -2488,33 +2522,21 @@ impl Interpreter {
                 if let Some(cf) = &compare_fn {
                     interp.gc_root_value(cf);
                 }
-                // `len` can be up to 2^53-1 with few (or no) present elements.
-                let mut items: Vec<JsValue> = Vec::with_capacity(len.min(1 << 16));
-                for i in 0..len {
-                    let pk = i.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let v = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            interp.gc_root_value(&v);
-                            items.push(v);
-                        }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
-                    }
-                }
+                let mut items = match gather_rooted_elements(interp, &o, len, true) {
+                    Ok(items) => items,
+                    Err(c) => return c,
+                };
                 if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
                     return Completion::Throw(e);
                 }
                 // Write back
-                for (i, v) in items.iter().enumerate() {
-                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v.clone()) {
+                let item_count = items.len();
+                for (i, v) in items.into_iter().enumerate() {
+                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v) {
                         return Completion::Throw(e);
                     }
                 }
-                for i in items.len()..len {
+                for i in item_count..len {
                     if let Err(e) = obj_delete_throw(interp, &o, &i.to_string()) {
                         return Completion::Throw(e);
                     }
@@ -2529,13 +2551,10 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let compare_fn = args.first().cloned();
-            if let Some(ref cf) = compare_fn
-                && !(cf).is_undefined()
-                && !interp.is_callable(cf)
-            {
-                return Completion::Throw(interp.create_type_error("compareFn is not a function"));
-            }
+            let compare_fn = match sort_compare_fn_arg(interp, args) {
+                Ok(cf) => cf,
+                Err(c) => return c,
+            };
             let len = match length_of_array_like(interp, &o) {
                 Ok(v) => v,
                 Err(c) => return c,
@@ -2551,15 +2570,10 @@ impl Interpreter {
                 if let Some(cf) = &compare_fn {
                     interp.gc_root_value(cf);
                 }
-                let mut items: Vec<JsValue> = Vec::with_capacity(len.min(1 << 16));
-                for i in 0..len {
-                    let v = match obj_get(interp, &o, &i.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    interp.gc_root_value(&v);
-                    items.push(v);
-                }
+                let mut items = match gather_rooted_elements(interp, &o, len, false) {
+                    Ok(items) => items,
+                    Err(c) => return c,
+                };
                 if let Err(e) = sort_values(interp, &mut items, compare_fn.as_ref()) {
                     return Completion::Throw(e);
                 }
