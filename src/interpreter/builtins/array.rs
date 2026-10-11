@@ -349,16 +349,7 @@ fn sort_values(
     items.retain(|v| !v.is_undefined());
     let undefined_count = before - items.len();
     if let Some(cf) = compare_fn {
-        merge_sort_by(items, |x, y| {
-            let v = match interp.call_function(cf, &JsValue::UNDEFINED, &[x.clone(), y.clone()]) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Ok(std::cmp::Ordering::Equal),
-            };
-            // NaN compares as +0 (step 4.c of CompareArrayElements).
-            let n = interp.to_number_value(&v)?;
-            Ok(n.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
-        })?;
+        sort_with_comparefn(interp, items, cf)?;
     } else if items.len() > 1 {
         let mut keyed: Vec<(JsString, JsValue)> = Vec::with_capacity(items.len());
         for v in items.drain(..) {
@@ -372,6 +363,27 @@ fn sort_values(
     }
     items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
     Ok(())
+}
+
+// Sorts `items` with a user comparefn (CompareArrayElements step 4, shared
+// with %TypedArray%.prototype.sort/toSorted): call it, ToNumber the result,
+// and treat NaN as +0. Uses `merge_sort_by`, so an inconsistent comparefn
+// cannot panic, and stops at the first abrupt completion.
+pub(crate) fn sort_with_comparefn(
+    interp: &mut Interpreter,
+    items: &mut Vec<JsValue>,
+    compare_fn: &JsValue,
+) -> Result<(), JsValue> {
+    merge_sort_by(items, |x, y| {
+        let v = match interp.call_function(compare_fn, &JsValue::UNDEFINED, &[x.clone(), y.clone()])
+        {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(std::cmp::Ordering::Equal),
+        };
+        let n = interp.to_number_value(&v)?;
+        Ok(n.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
+    })
 }
 
 // Stable bottom-up merge sort driven by a fallible comparator. A user

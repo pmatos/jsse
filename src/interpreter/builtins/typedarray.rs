@@ -2019,69 +2019,16 @@ impl Interpreter {
                     let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
                         .map(|i| typed_array_get_index(&ta, i))
                         .collect();
-                    // Sort with comparison
-                    let mut error: Option<JsValue> = None;
-                    elems.sort_by(|a, b| {
-                        if error.is_some() {
-                            return std::cmp::Ordering::Equal;
-                        }
-                        if let Some(ref cmp) = comparefn
-                            && !cmp.is_undefined()
-                        {
-                            match interp.call_function(
-                                cmp,
-                                &JsValue::UNDEFINED,
-                                &[a.clone(), b.clone()],
-                            ) {
-                                Completion::Normal(v) => match interp.to_number_value(&v) {
-                                    Ok(n) => {
-                                        if n.is_nan() {
-                                            return std::cmp::Ordering::Equal;
-                                        }
-                                        if n < 0.0 {
-                                            return std::cmp::Ordering::Less;
-                                        }
-                                        if n > 0.0 {
-                                            return std::cmp::Ordering::Greater;
-                                        }
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                    Err(e) => {
-                                        error = Some(e);
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                },
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    return std::cmp::Ordering::Equal;
-                                }
-                                _ => return std::cmp::Ordering::Equal,
+                    match comparefn.as_ref().filter(|cf| !cf.is_undefined()) {
+                        Some(cf) => {
+                            if let Err(e) =
+                                super::array::sort_with_comparefn(interp, &mut elems, cf)
+                            {
+                                return Completion::Throw(e);
                             }
                         }
-                        // Default sort: numeric for Number types, BigInt comparison for BigInt types
-                        match a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
-                            Some(ord) => ord,
-                            None => {
-                                let na = to_number(a);
-                                let nb = to_number(b);
-                                // Per spec: -0 < +0 is false, +0 < -0 is false
-                                if na.is_nan() && nb.is_nan() {
-                                    std::cmp::Ordering::Equal
-                                } else if na.is_nan() {
-                                    std::cmp::Ordering::Greater
-                                } else if nb.is_nan() {
-                                    std::cmp::Ordering::Less
-                                } else if na == 0.0 && nb == 0.0 {
-                                    // -0 comes before +0
-                                    na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse()
-                                } else {
-                                    na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
-                                }
-                            }
-                        }
-                    });
-                    if let Some(e) = error {
-                        return Completion::Throw(e);
+                        // The default numeric order is total, so `sort_by` cannot panic.
+                        None => elems.sort_by(typed_array_default_cmp),
                     }
                     for (i, val) in elems.iter().enumerate() {
                         if !is_valid_integer_index(&ta, i as f64) {
@@ -2309,66 +2256,16 @@ impl Interpreter {
                     let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
                         .map(|i| typed_array_get_index(&ta, i))
                         .collect();
-                    let mut error: Option<JsValue> = None;
-                    elems.sort_by(|a, b| {
-                        if error.is_some() {
-                            return std::cmp::Ordering::Equal;
-                        }
-                        if let Some(ref cmp) = comparefn
-                            && !cmp.is_undefined()
-                        {
-                            match interp.call_function(
-                                cmp,
-                                &JsValue::UNDEFINED,
-                                &[a.clone(), b.clone()],
-                            ) {
-                                Completion::Normal(v) => match interp.to_number_value(&v) {
-                                    Ok(n) => {
-                                        if n.is_nan() {
-                                            return std::cmp::Ordering::Equal;
-                                        }
-                                        if n < 0.0 {
-                                            return std::cmp::Ordering::Less;
-                                        }
-                                        if n > 0.0 {
-                                            return std::cmp::Ordering::Greater;
-                                        }
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                    Err(e) => {
-                                        error = Some(e);
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                },
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    return std::cmp::Ordering::Equal;
-                                }
-                                _ => return std::cmp::Ordering::Equal,
+                    match comparefn.as_ref().filter(|cf| !cf.is_undefined()) {
+                        Some(cf) => {
+                            if let Err(e) =
+                                super::array::sort_with_comparefn(interp, &mut elems, cf)
+                            {
+                                return Completion::Throw(e);
                             }
                         }
-                        // Default sort: numeric for Number types, BigInt comparison for BigInt types
-                        match a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
-                            Some(ord) => ord,
-                            None => {
-                                let na = to_number(a);
-                                let nb = to_number(b);
-                                if na.is_nan() && nb.is_nan() {
-                                    std::cmp::Ordering::Equal
-                                } else if na.is_nan() {
-                                    std::cmp::Ordering::Greater
-                                } else if nb.is_nan() {
-                                    std::cmp::Ordering::Less
-                                } else if na == 0.0 && nb == 0.0 {
-                                    na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse()
-                                } else {
-                                    na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
-                                }
-                            }
-                        }
-                    });
-                    if let Some(e) = error {
-                        return Completion::Throw(e);
+                        // The default numeric order is total, so `sort_by` cannot panic.
+                        None => elems.sort_by(typed_array_default_cmp),
                     }
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
@@ -6662,5 +6559,22 @@ mod require_array_buffer_tests {
         assert_eq!(num(&interp, "d_bl"), 0.0);
         assert_eq!(num(&interp, "d_mbl"), 0.0);
         assert!(interp.to_boolean_val(&global(&interp, "d_det")));
+    }
+}
+
+// §23.2.4.7 CompareTypedArrayElements without a comparefn: numeric (or BigInt)
+// order with NaN last and -0 before +0.
+fn typed_array_default_cmp(a: &JsValue, b: &JsValue) -> std::cmp::Ordering {
+    if let Some(ord) = a.with_bigint(|ba| b.with_bigint(|bb| ba.cmp(bb))).flatten() {
+        return ord;
+    }
+    let na = to_number(a);
+    let nb = to_number(b);
+    match (na.is_nan(), nb.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ if na == 0.0 && nb == 0.0 => na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse(),
+        _ => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
     }
 }
