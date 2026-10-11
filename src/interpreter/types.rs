@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::interpreter::PropertyMap;
+use crate::interpreter::binding_map::BindingMap;
 use crate::interpreter::generator_transform::{
     GeneratorStateMachine, LoopControlTarget, SentValueBinding,
 };
@@ -844,7 +845,7 @@ impl Realm {
 pub(crate) struct Environment {
     // Binding names come from script source. Keep randomized hashing here so
     // deterministic collision sets cannot flood declaration and lookup paths.
-    pub(crate) bindings: HashMap<String, Binding>,
+    pub(crate) bindings: BindingMap,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
@@ -952,7 +953,7 @@ impl Environment {
     pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: BindingMap::new(),
             parent,
             strict,
             is_function_scope: false,
@@ -978,7 +979,7 @@ impl Environment {
     pub(crate) fn new_with_object(parent: EnvRef, obj_id: u64) -> EnvRef {
         let strict = parent.borrow().strict;
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: BindingMap::new(),
             parent: Some(parent),
             strict,
             is_function_scope: false,
@@ -1009,7 +1010,7 @@ impl Environment {
     ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::with_capacity(binding_capacity),
+            bindings: BindingMap::with_capacity(binding_capacity),
             parent,
             strict,
             is_function_scope: true,
@@ -1077,7 +1078,7 @@ impl Environment {
 
     pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
-            name.to_string(),
+            name,
             Binding {
                 value: JsValue::UNDEFINED,
                 kind,
@@ -1145,7 +1146,7 @@ impl Environment {
 
     pub(crate) fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
-            name.to_string(),
+            name,
             Binding {
                 value: JsValue::UNDEFINED,
                 kind,
@@ -1222,7 +1223,7 @@ impl Environment {
             parent.borrow_mut().set(name, value)
         } else {
             self.bindings.insert(
-                name.to_string(),
+                name,
                 Binding::new(value, BindingKind::Var, true),
             );
             Ok(())

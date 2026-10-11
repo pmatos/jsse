@@ -27,6 +27,8 @@ pub(crate) use dispose::{
     AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
     GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
 };
+mod atom;
+mod binding_map;
 mod body_memo;
 mod env_helpers;
 mod eval;
@@ -679,7 +681,7 @@ impl Interpreter {
                 ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
-                    name.to_string(),
+                    name,
                     Binding {
                         value,
                         kind: BindingKind::ImmutableValue,
@@ -810,7 +812,7 @@ impl Interpreter {
                 ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
-                    name.to_string(),
+                    name,
                     Binding {
                         value,
                         kind: BindingKind::ImmutableValue,

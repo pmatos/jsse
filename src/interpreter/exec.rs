@@ -1455,7 +1455,7 @@ impl Interpreter {
                         };
                         if !target.borrow().bindings.contains_key(name) {
                             target.borrow_mut().bindings.insert(
-                                name.to_string(),
+                                name,
                                 Binding {
                                     value: JsValue::UNDEFINED,
                                     kind,
@@ -2381,7 +2381,7 @@ impl Interpreter {
             let tdz_env = Environment::new(Some(env.clone()));
             for name in &tdz_names {
                 tdz_env.borrow_mut().bindings.insert(
-                    name.clone(),
+                    name,
                     Binding {
                         value: JsValue::UNDEFINED,
                         kind: BindingKind::Let,

@@ -1375,12 +1375,12 @@ mod tests {
         // (a) child binds "a"=Object(30), parent binds "b"=Object(31) → {30,31}
         let parent = Environment::new(None);
         parent.borrow_mut().bindings.insert(
-            "b".to_string(),
+            "b",
             Binding::new(obj(31), BindingKind::Var, true),
         );
         let child = Environment::new(Some(parent.clone()));
         child.borrow_mut().bindings.insert(
-            "a".to_string(),
+            "a",
             Binding::new(obj(30), BindingKind::Var, true),
         );
 
@@ -1392,7 +1392,7 @@ mod tests {
         // → terminates without infinite loop, contains 32 exactly once.
         let cyclic = Environment::new(None);
         cyclic.borrow_mut().bindings.insert(
-            "c".to_string(),
+            "c",
             Binding::new(obj(32), BindingKind::Var, true),
         );
         cyclic.borrow_mut().parent = Some(cyclic.clone());
@@ -1406,7 +1406,7 @@ mod tests {
     fn environment_roots_are_scanned_once_per_collection() {
         let env = Environment::new(None);
         env.borrow_mut().bindings.insert(
-            "shared".to_string(),
+            "shared",
             Binding::new(obj(33), BindingKind::Var, true),
         );
         let mut worklist = Vec::new();
@@ -1721,7 +1721,7 @@ mod tests {
 
         let child = interp.alloc_object(JsObjectData::new());
         env.borrow_mut().bindings.insert(
-            "captured".to_string(),
+            "captured",
             Binding::new(obj(child), BindingKind::Var, true),
         );
         interp.gc.request_minor();

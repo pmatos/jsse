@@ -198,7 +198,7 @@ impl Interpreter {
         let mut e = env.borrow_mut();
         if e.bindings.contains_key("this") {
             e.bindings.insert(
-                "this".to_string(),
+                "this",
                 crate::interpreter::types::Binding {
                     value,
                     kind: crate::interpreter::types::BindingKind::Const,
@@ -264,7 +264,7 @@ impl Interpreter {
         let init_parent = ctor_closure.unwrap_or_else(|| env.clone());
         let init_env = Environment::new(Some(init_parent));
         init_env.borrow_mut().bindings.insert(
-            "this".to_string(),
+            "this",
             crate::interpreter::types::Binding {
                 value: this_val.clone(),
                 kind: crate::interpreter::types::BindingKind::Const,
@@ -283,7 +283,7 @@ impl Interpreter {
             let proto_val = self.get_property_on_id(o.id, "prototype");
             if proto_val.is_object() {
                 init_env.borrow_mut().bindings.insert(
-                    "__home_object__".to_string(),
+                    "__home_object__",
                     crate::interpreter::types::Binding {
                         value: proto_val,
                         kind: crate::interpreter::types::BindingKind::Const,
@@ -5005,7 +5005,7 @@ impl Interpreter {
                     unreachable!("simple parameter metadata must match the parameter list");
                 };
                 env.bindings.insert(
-                    name.clone(),
+                    name,
                     Binding {
                         value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
                         kind: BindingKind::Var,
@@ -5337,7 +5337,7 @@ impl Interpreter {
                             );
                             func_env.borrow_mut().strict = is_strict;
                             func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
+                                "this",
                                 Binding {
                                     value: _this_val.clone(),
                                     kind: BindingKind::Const,
@@ -5529,7 +5529,7 @@ impl Interpreter {
                                 _this_val.clone()
                             };
                             func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
+                                "this",
                                 Binding {
                                     value: effective_this,
                                     kind: BindingKind::Const,
@@ -5702,7 +5702,7 @@ impl Interpreter {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
                                 func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
+                                    "this",
                                     Binding {
                                         value: JsValue::UNDEFINED,
                                         kind: BindingKind::Const,
@@ -5732,7 +5732,7 @@ impl Interpreter {
                                     _this_val.clone()
                                 };
                                 func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
+                                    "this",
                                     Binding {
                                         value: effective_this,
                                         kind: BindingKind::Const,
@@ -6328,7 +6328,7 @@ impl Interpreter {
                         d.pattern.bound_names(&mut names);
                         for name in names {
                             lex_env.borrow_mut().bindings.insert(
-                                name,
+                                &name,
                                 Binding {
                                     value: JsValue::UNDEFINED,
                                     kind,
@@ -6341,7 +6341,7 @@ impl Interpreter {
                 }
                 Statement::ClassDeclaration(cls) => {
                     lex_env.borrow_mut().bindings.insert(
-                        cls.name.clone(),
+                        &cls.name,
                         Binding {
                             value: JsValue::UNDEFINED,
                             kind: BindingKind::Let,
@@ -6745,7 +6745,7 @@ impl Interpreter {
                     let proto_val = interp.get_property_on_id(func_obj_id, "prototype");
                     if proto_val.is_object() {
                         init_env.borrow_mut().bindings.insert(
-                            "__home_object__".to_string(),
+                            "__home_object__",
                             Binding {
                                 value: proto_val,
                                 kind: BindingKind::Const,
@@ -7109,7 +7109,7 @@ impl Interpreter {
                 init_env.borrow_mut().class_private_names = class_pn;
                 if proto_val.is_object() {
                     init_env.borrow_mut().bindings.insert(
-                        "__home_object__".to_string(),
+                        "__home_object__",
                         Binding {
                             value: proto_val,
                             kind: BindingKind::Const,
@@ -7988,7 +7988,7 @@ impl Interpreter {
                     this_val.clone()
                 };
                 func_env.borrow_mut().bindings.insert(
-                    "this".to_string(),
+                    "this",
                     Binding {
                         value: effective_this,
                         kind: BindingKind::Const,

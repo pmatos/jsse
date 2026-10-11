@@ -94,7 +94,7 @@ impl Interpreter {
         let env = self.realm().global_env.clone();
         let _ = self.env_set(&env, "globalThis", global_val.clone());
         self.realm().global_env.borrow_mut().bindings.insert(
-            "this".to_string(),
+            "this",
             Binding {
                 value: global_val,
                 kind: BindingKind::Const,

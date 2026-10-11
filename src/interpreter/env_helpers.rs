@@ -143,14 +143,14 @@ impl Interpreter {
                         return Ok(());
                     }
                     current.borrow_mut().bindings.insert(
-                        name.to_string(),
+                        name,
                         Binding::new(value, BindingKind::Var, true),
                     );
                     return Ok(());
                 }
                 EnvSetAction::CreateBinding => {
                     current.borrow_mut().bindings.insert(
-                        name.to_string(),
+                        name,
                         Binding::new(value, BindingKind::Var, true),
                     );
                     return Ok(());

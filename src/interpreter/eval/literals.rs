@@ -526,7 +526,7 @@ impl Interpreter {
         {
             let mut sfe = static_field_env.borrow_mut();
             sfe.bindings.insert(
-                "this".to_string(),
+                "this",
                 Binding {
                     value: ctor_val.clone(),
                     kind: BindingKind::Const,
@@ -539,7 +539,7 @@ impl Interpreter {
             // Set __home_object__ for super property access in static field initializers.
             // Static field HomeObject = constructor.
             sfe.bindings.insert(
-                "__home_object__".to_string(),
+                "__home_object__",
                 Binding {
                     value: ctor_val.clone(),
                     kind: BindingKind::Const,
@@ -1197,7 +1197,7 @@ impl Interpreter {
                         let mut be = block_env.borrow_mut();
                         be.strict = true; // class bodies are always strict
                         be.bindings.insert(
-                            "this".to_string(),
+                            "this",
                             Binding {
                                 value: ctor_val.clone(),
                                 kind: BindingKind::Const,
@@ -1206,7 +1206,7 @@ impl Interpreter {
                             },
                         );
                         be.bindings.insert(
-                            "__home_object__".to_string(),
+                            "__home_object__",
                             Binding {
                                 value: ctor_val.clone(),
                                 kind: BindingKind::Const,
