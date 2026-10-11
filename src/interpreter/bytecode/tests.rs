@@ -2674,3 +2674,112 @@ fn strict_member_call_in_tail_position_returns_through_trampoline() {
         7.0,
     );
 }
+
+/// Decodes a chunk into `(op, operands)` for the ops local-slot compilation
+/// touches; any other op fails the test so the table cannot drift silently.
+fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
+    let mut out = Vec::new();
+    let mut pc = 0;
+    while pc < chunk.code.len() {
+        let op = Op::from_u8(chunk.code[pc]).expect("valid opcode");
+        pc += 1;
+        let u16_at = |at: usize| u16::from(chunk.code[at]) | (u16::from(chunk.code[at + 1]) << 8);
+        let operands = match op {
+            Op::LoadLocal | Op::StoreLocal => vec![u16_at(pc), u16_at(pc + 2)],
+            Op::UpdateLocal => vec![u16_at(pc), u16_at(pc + 2), u16::from(chunk.code[pc + 4])],
+            Op::LoadName
+            | Op::ResolveName
+            | Op::LoadResolvedName
+            | Op::StoreResolvedName
+            | Op::LoadConst => vec![u16_at(pc)],
+            Op::Pop | Op::Add | Op::ReturnUndefined | Op::Safepoint => Vec::new(),
+            other => panic!("unexpected opcode {other:?} in decode_ops"),
+        };
+        pc += match op {
+            Op::LoadLocal | Op::StoreLocal => 4,
+            Op::UpdateLocal => 5,
+            Op::LoadName
+            | Op::ResolveName
+            | Op::LoadResolvedName
+            | Op::StoreResolvedName
+            | Op::LoadConst => 2,
+            _ => 0,
+        };
+        out.push((op, operands));
+    }
+    out
+}
+
+#[test]
+fn function_body_compiles_frame_names_to_local_slots_and_free_names_by_name() {
+    use super::compiler::{FrameShape, compile_function_body};
+    use crate::parser::Parser;
+
+    let mut parser = Parser::new("var c = a + g; g = c; c++; a = 1;").expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let params = vec!["a".to_string()];
+    let chunk = compile_function_body(
+        program.body.as_slice(),
+        &FrameShape {
+            arguments_slot: false,
+            simple_params: &params,
+        },
+    )
+    .expect("compile");
+    let name = |idx: u16| chunk.names[usize::from(idx)].as_str().to_string();
+    let ops: Vec<(Op, Vec<String>)> = decode_ops(&chunk)
+        .into_iter()
+        .filter(|(op, _)| !matches!(op, Op::Safepoint | Op::Pop))
+        .map(|(op, operands)| {
+            let shown = match op {
+                Op::LoadLocal | Op::StoreLocal => {
+                    vec![name(operands[0]), operands[1].to_string()]
+                }
+                Op::UpdateLocal => vec![name(operands[0]), operands[1].to_string()],
+                Op::LoadName | Op::ResolveName | Op::LoadResolvedName | Op::StoreResolvedName => {
+                    vec![name(operands[0])]
+                }
+                _ => Vec::new(),
+            };
+            (op, shown)
+        })
+        .collect();
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        ops,
+        vec![
+            (Op::LoadLocal, s(&["a", "0"])),
+            (Op::LoadName, s(&["g"])),
+            (Op::Add, vec![]),
+            (Op::StoreLocal, s(&["c", "1"])),
+            (Op::ResolveName, s(&["g"])),
+            (Op::LoadLocal, s(&["c", "1"])),
+            (Op::StoreResolvedName, s(&["g"])),
+            (Op::UpdateLocal, s(&["c", "1"])),
+            (Op::LoadConst, vec![]),
+            (Op::StoreLocal, s(&["a", "0"])),
+            (Op::ReturnUndefined, vec![]),
+        ]
+    );
+}
+
+#[test]
+fn function_body_without_frame_names_keeps_by_name_ops() {
+    use super::compiler::{FrameShape, compile_function_body};
+    use crate::parser::Parser;
+
+    let mut parser = Parser::new("g = h + 1;").expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let chunk = compile_function_body(
+        program.body.as_slice(),
+        &FrameShape {
+            arguments_slot: false,
+            simple_params: &[],
+        },
+    )
+    .expect("compile");
+    let ops: Vec<Op> = decode_ops(&chunk).into_iter().map(|(op, _)| op).collect();
+    assert!(ops.contains(&Op::ResolveName));
+    assert!(ops.contains(&Op::StoreResolvedName));
+    assert!(!ops.contains(&Op::StoreLocal));
+}

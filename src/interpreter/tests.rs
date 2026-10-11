@@ -171,6 +171,18 @@ fn function_environment_pool_reuses_and_resets_unescaped_storage() {
 }
 
 #[test]
+fn function_environment_pool_does_not_pin_the_previous_receiver() {
+    let mut interp = Interpreter::new();
+    let env = interp.acquire_function_environment(Environment::new(None), 1);
+    env.borrow_mut().set_this(JsValue::object(4242));
+    interp.recycle_function_environment(env);
+
+    let reused = interp.acquire_function_environment(Environment::new(None), 1);
+    assert!(reused.borrow().this_binding.is_none());
+    assert!(reused.borrow().get_this().is_none());
+}
+
+#[test]
 fn function_environment_pool_rejects_escaped_storage() {
     let mut interp = Interpreter::new();
     let env = interp.acquire_function_environment(Environment::new(None), 1);

@@ -30,7 +30,7 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
 /// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::LoadMethodElement as usize) < OP_SLOTS);
+const _: () = assert!((Op::UpdateLocal as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.
@@ -70,6 +70,10 @@ pub(crate) struct PerfCounters {
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
     pub(crate) gc_nanos: u128,
+    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`UpdateLocal`) whose slot hint
+    /// matched, and those that fell back to by-name resolution (#898).
+    pub(crate) local_slot_hits: u64,
+    pub(crate) local_slot_misses: u64,
     /// Per-body AST attribution. `invocation share` cannot localize cost — a
     /// single fallback body can wrap a whole loop — so bodies are ranked by
     /// the tree-walker work units they consume *exclusive* of nested bodies.
@@ -108,6 +112,8 @@ impl Default for PerfCounters {
             gc_minor: 0,
             gc_major: 0,
             gc_nanos: 0,
+            local_slot_hits: 0,
+            local_slot_misses: 0,
             ast_body_units: FxHashMap::default(),
             bail_by_name: FxHashMap::default(),
             ast_body_stack: Vec::new(),
@@ -220,6 +226,18 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tgc_minor\t{}", self.gc_minor);
         let _ = writeln!(out, "PERF\tgc_major\t{}", self.gc_major);
         let _ = writeln!(out, "PERF\tgc_ms\t{}", self.gc_nanos / 1_000_000);
+        let _ = writeln!(out, "PERF\tlocal_slot_hits\t{}", self.local_slot_hits);
+        let _ = writeln!(out, "PERF\tlocal_slot_misses\t{}", self.local_slot_misses);
+        let _ = writeln!(
+            out,
+            "PERF\tatom_intern_calls\t{}",
+            super::atom::intern_calls()
+        );
+        let _ = writeln!(
+            out,
+            "PERF\tatom_lookup_calls\t{}",
+            super::atom::lookup_calls()
+        );
 
         let mut bails: Vec<_> = self.compile_bail.iter().collect();
         bails.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));

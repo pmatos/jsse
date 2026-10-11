@@ -1761,7 +1761,7 @@ impl Interpreter {
                         }
                     };
                     func_env.borrow_mut().bindings.insert(
-                        iter_var.clone(),
+                        iter_var,
                         crate::interpreter::types::Binding {
                             value: iterator,
                             kind: crate::interpreter::types::BindingKind::Let,
@@ -2005,7 +2005,7 @@ impl Interpreter {
                                 }
                             };
                             func_env.borrow_mut().bindings.insert(
-                                iter_var.clone(),
+                                iter_var,
                                 crate::interpreter::types::Binding {
                                     value: iterator,
                                     kind: crate::interpreter::types::BindingKind::Let,
@@ -5251,7 +5251,7 @@ impl Interpreter {
                         }
                     };
                     func_env.borrow_mut().bindings.insert(
-                        iter_var.clone(),
+                        iter_var,
                         crate::interpreter::types::Binding {
                             value: iterator,
                             kind: crate::interpreter::types::BindingKind::Let,
@@ -5615,7 +5615,7 @@ impl Interpreter {
                                 }
                             };
                             func_env.borrow_mut().bindings.insert(
-                                iter_var.clone(),
+                                iter_var,
                                 crate::interpreter::types::Binding {
                                     value: iterator,
                                     kind: crate::interpreter::types::BindingKind::Let,

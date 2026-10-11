@@ -60,6 +60,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `iterators.rs` — setup_iterator_prototypes, setup_generator_prototype
     - `collections.rs` — setup_map/set/weakmap/weakset_prototype
     - `date.rs` — setup_date_builtin
+  - `atom.rs` — `Atom`: randomised-interner identifier atoms (pointer equality, precomputed hash)
+  - `binding_map.rs` — `BindingMap`: atom-keyed `Environment.bindings` storage and the `BindingKey`/`BindingName` lookup traits
 - `scripts/` — Test runners and utilities
 - `test262-pass.txt` — Regression baseline of currently passing test262 tests. **Not rewritten by default.** The runner reads the baseline from `origin/main:test262-pass.txt` (override with `--baseline-ref`) so feature branches don't conflict on it. Pass `--update-baseline` to rewrite the working-tree file — typically only done on `main` (or a branch targeting it) to roll the baseline forward.
 - `test262-extra/` — Custom spec-compliance tests not covered by test262
@@ -120,6 +122,12 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   `exec_statement`/`eval_expr` entries), not just by invocation — the two
   disagree by an order of magnitude on real code, see
   `docs/perf/2026-08-26/mandreel-bytecode-work-share.md`.
+- `local_slot_hits` / `local_slot_misses` count `LoadLocal`/`StoreLocal`/
+  `UpdateLocal` executions whose slot hint matched or fell back to by-name
+  resolution; `atom_intern_calls` / `atom_lookup_calls` count entries into the
+  hashing identifier interner. A call path that is free of identifier hashing
+  keeps the two atom counters flat as the call count grows
+  (`tests/perf_counters_env_hashing.rs`).
 - `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
   AST variant (`statement:Labeled`), `BODY` per-function tree-walker work units
   spent *exclusive* of nested bodies, plus GC collection counts and time.
@@ -192,6 +200,7 @@ harness. See `scripts/README.md` for the full recipe and how to add a library.
 - Built-in prototypes (e.g. `string_prototype`, `symbol_prototype`) are stored as fields on `Interpreter` and wired up in `setup_builtins()` / `setup_*_prototype()` methods.
 - GC is mark-and-sweep with ephemeron support for WeakMap/WeakSet. Realm prototype fields are still rooted in `gc_safepoint()`. Kind-specific roots are derived from `ObjectKind` via an exhaustive `match` in `gc::trace_object_fields` — adding a new variant fails to compile until the GC walker handles it.
 - `ObjectKind` (in `interpreter/types.rs`) is the canonical "what shape is this object?" discriminator. Each variant owns the kind-specific slot data (`ProxyData`, `ArrayBufferData`, `TypedArrayInfo`, `IteratorState`, `PromiseData`, `BoundFunctionData`, `IterHelperData`, `FinalizationRegistry`, `Map`, `Set`, `Arguments`, `Array`, `ModuleNamespace`, `DisposableStack`, `TemporalData`, `IntlData`, `WrappedFunctionData`, `ShadowRealm`, `RegExpData`, `DataView`, `Ordinary`, `PrimitiveWrapper`). The disjunction is type-enforced — an object cannot be e.g. both a Proxy and a TypedArray simultaneously. Cross-cutting aspects (`callable`, `constructor_kind`, `prototype_id`, `properties`) remain orthogonal fields on `JsObjectData`. Predicate methods (`is_proxy`, `is_class_constructor`, `arraybuffer_is_shared`, etc.) and accessor methods (`obj.bound()`, `obj.proxy()`, `obj.typed_array_info()`, etc.) pull from `kind` and are the supported read API; direct `obj.kind` matching is fine when destructuring is wanted.
+- `Environment.bindings` is a `BindingMap` (`binding_map.rs`) of interned `Atom`s (`atom.rs`): linear scan up to 16 entries, identity-hashed atom index above that, `this` held in `Environment.this_binding`, and the `arguments` binding declared only when the body can observe it. The interner is the only place identifier text is hashed (randomised, see `docs/specs/2026-07-25-environment-binding-hashing-design.md`). Compiled function bodies use `LoadLocal`/`StoreLocal`/`UpdateLocal` with slot hints verified by atom identity (ADR-2026-10-12-0900).
 - Generators are compiled by `generator_transform.rs` into a `GeneratorStateMachine` (`generator_runtime.rs`): each resume jumps straight to the stored state id and suspends via `StateTerminator::Yield`/`Await`, with no replay. A `self.generator_context`/`SentValueBindingKind::InlineYield` fallback still exists in `generator_runtime.rs` for any construct the transform's analysis doesn't (yet) decompose — it re-executes the current state's statement list and fast-forwards past already-fired yields — but it is a degraded-behavior backstop for undiscovered gaps, not the primary mechanism (see issue #625). In async generators an inline `yield`/`yield*` suspends through the same terminator machinery as a lowered one (no blocking `await_value`, see ADR-2026-09-21-2157); only the replay of the state's preceding statements remains.
 - The `Object()` constructor calls `to_object()` to wrap primitives (String, Number, Boolean, Symbol, BigInt).
 

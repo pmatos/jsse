@@ -27,6 +27,10 @@ pub(crate) use dispose::{
     AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
     GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
 };
+mod atom;
+mod binding_map;
+pub(crate) use atom::Atom;
+pub(crate) use binding_map::BindingName;
 mod body_memo;
 mod env_helpers;
 mod eval;
@@ -389,6 +393,9 @@ pub(crate) struct Interpreter {
     /// Per-body bytecode compile verdict shared by every closure of a function
     /// literal (#900). See `body_memo`.
     pub(crate) bytecode_memo: body_memo::BodyMemo<bytecode::BytecodeCacheState>,
+    /// Interned simple-parameter names per Body, so a call binds parameters
+    /// without hashing them (#898).
+    pub(crate) frame_layout_memo: body_memo::BodyMemo<Rc<Vec<Atom>>>,
     /// Per-body generator/async state machine, built once per function literal
     /// instead of on every call (#914). See `body_memo`.
     pub(crate) state_machine_memo: body_memo::BodyMemo<(
@@ -691,7 +698,7 @@ impl Interpreter {
                 ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
-                    name.to_string(),
+                    name,
                     Binding {
                         value,
                         kind: BindingKind::ImmutableValue,
@@ -791,6 +798,7 @@ impl Interpreter {
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
             bytecode_memo: body_memo::BodyMemo::new(),
+            frame_layout_memo: body_memo::BodyMemo::new(),
             state_machine_memo: body_memo::BodyMemo::new(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: None,
@@ -824,7 +832,7 @@ impl Interpreter {
                 ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
-                    name.to_string(),
+                    name,
                     Binding {
                         value,
                         kind: BindingKind::ImmutableValue,
@@ -2523,10 +2531,7 @@ impl Interpreter {
     ) -> Completion {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
-        {
-            let mut env = module_env.borrow_mut();
-            env.declare("this", BindingKind::Var);
-        }
+        module_env.borrow_mut().set_this(JsValue::UNDEFINED);
 
         // Register entry-point module in registry to handle self-imports
         let canon_path_entry = module_path
@@ -3241,7 +3246,7 @@ impl Interpreter {
             let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
             module_env.borrow_mut().strict = true;
             module_env.borrow_mut().module_path = Some(canon_path.clone());
-            module_env.borrow_mut().declare("this", BindingKind::Var);
+            module_env.borrow_mut().set_this(JsValue::UNDEFINED);
 
             // Register before traversing dependencies so circular imports see
             // the same Module Record identity.
