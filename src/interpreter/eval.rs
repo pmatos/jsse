@@ -161,8 +161,8 @@ impl Interpreter {
     /// Walks up the environment chain to find the `this` binding.
     fn this_is_in_tdz(env: &EnvRef) -> bool {
         let e = env.borrow();
-        if e.bindings.contains_key("this") {
-            return e.is_in_tdz("this");
+        if let Some(this) = &e.this_binding {
+            return !this.initialized;
         }
         if let Some(ref parent) = e.parent {
             return Self::this_is_in_tdz(parent);
@@ -178,7 +178,7 @@ impl Interpreter {
     /// the bytecode `Op::LoadThis` handler so both observe identical
     /// semantics, including the derived-constructor TDZ throw.
     pub(super) fn resolve_this_binding(&mut self, env: &EnvRef) -> Completion {
-        match env.borrow().get("this") {
+        match env.borrow().get_this() {
             Some(v) => Completion::Normal(v),
             None => {
                 if Self::this_is_in_tdz(env) {
@@ -196,16 +196,8 @@ impl Interpreter {
     /// Walks up to find the function scope's `this` binding and marks it initialized.
     fn initialize_this_binding(env: &EnvRef, value: JsValue) {
         let mut e = env.borrow_mut();
-        if e.bindings.contains_key("this") {
-            e.bindings.insert(
-                "this",
-                crate::interpreter::types::Binding {
-                    value,
-                    kind: crate::interpreter::types::BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
+        if e.this_binding.is_some() {
+            e.set_this(value);
             return;
         }
         if let Some(ref parent) = e.parent {
@@ -263,15 +255,7 @@ impl Interpreter {
         };
         let init_parent = ctor_closure.unwrap_or_else(|| env.clone());
         let init_env = Environment::new(Some(init_parent));
-        init_env.borrow_mut().bindings.insert(
-            "this",
-            crate::interpreter::types::Binding {
-                value: this_val.clone(),
-                kind: crate::interpreter::types::BindingKind::Const,
-                initialized: true,
-                deletable: false,
-            },
-        );
+        init_env.borrow_mut().set_this(this_val.clone());
         init_env.borrow_mut().class_private_names = class_pn;
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
@@ -579,6 +563,7 @@ impl Interpreter {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
                         bindings: Default::default(),
+                        this_binding: None,
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -2459,7 +2444,7 @@ impl Interpreter {
                         "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                     ));
                 }
-                let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
                 // Evaluate key expression (raw)
                 let raw_key = match prop {
@@ -2630,7 +2615,7 @@ impl Interpreter {
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let strict = env.borrow().strict;
                     return match super_base_id {
                         Some(base_id) => {
@@ -2851,7 +2836,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
                     // Evaluate key expression (raw, no ToPropertyKey yet)
                     let raw_key = match prop {
@@ -3366,7 +3351,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let raw_key = match prop {
                         MemberProperty::Dot(name) => {
                             JsValue::string(crate::types::JsString::from_str(name))
@@ -3810,7 +3795,7 @@ impl Interpreter {
                 }
             };
             let super_base_id = self.get_super_base_id(env);
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return match super_base_id {
                 Some(base_id) => {
@@ -4177,7 +4162,7 @@ impl Interpreter {
             let super_base_id = self
                 .get_super_base_id(env)
                 .ok_or_else(|| self.create_type_error("No super class"))?;
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return Ok(MemberLhsRef::Ref(Some(DestructLRef::Super(
                 super_base_id,
@@ -4709,7 +4694,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let home = env.borrow().get("__home_object__");
                     if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id) {
                         let proto_id = self
@@ -5336,15 +5321,7 @@ impl Interpreter {
                                 params.len().saturating_add(2),
                             );
                             func_env.borrow_mut().strict = is_strict;
-                            func_env.borrow_mut().bindings.insert(
-                                "this",
-                                Binding {
-                                    value: _this_val.clone(),
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
+                            func_env.borrow_mut().set_this(_this_val.clone());
                             let is_simple_ag = has_simple_params;
                             if uses_arguments {
                                 let env_strict_ag = func_env.borrow().strict;
@@ -5515,7 +5492,7 @@ impl Interpreter {
                                     self.realm()
                                         .global_env
                                         .borrow()
-                                        .get("this")
+                                        .get_this()
                                         .unwrap_or(_this_val.clone())
                                 } else if !(_this_val).is_object() {
                                     match self.to_object(_this_val) {
@@ -5528,15 +5505,7 @@ impl Interpreter {
                             } else {
                                 _this_val.clone()
                             };
-                            func_env.borrow_mut().bindings.insert(
-                                "this",
-                                Binding {
-                                    value: effective_this,
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
+                            func_env.borrow_mut().set_this(effective_this);
                             let is_simple_g = has_simple_params;
                             if uses_arguments {
                                 let env_strict_g = func_env.borrow().strict;
@@ -5701,15 +5670,7 @@ impl Interpreter {
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
-                                func_env.borrow_mut().bindings.insert(
-                                    "this",
-                                    Binding {
-                                        value: JsValue::UNDEFINED,
-                                        kind: BindingKind::Const,
-                                        initialized: false,
-                                        deletable: false,
-                                    },
-                                );
+                                func_env.borrow_mut().declare_this_uninit();
                                 func_env.borrow_mut().is_derived_constructor_scope = true;
                                 self.constructing_derived = false;
                             } else {
@@ -5718,7 +5679,7 @@ impl Interpreter {
                                         self.realm()
                                             .global_env
                                             .borrow()
-                                            .get("this")
+                                            .get_this()
                                             .unwrap_or(_this_val.clone())
                                     } else if !(_this_val).is_object() {
                                         match self.to_object(_this_val) {
@@ -5731,15 +5692,7 @@ impl Interpreter {
                                 } else {
                                     _this_val.clone()
                                 };
-                                func_env.borrow_mut().bindings.insert(
-                                    "this",
-                                    Binding {
-                                        value: effective_this,
-                                        kind: BindingKind::Const,
-                                        initialized: true,
-                                        deletable: false,
-                                    },
-                                );
+                                func_env.borrow_mut().set_this(effective_this);
                             }
                             let env_strict = func_env.borrow().strict;
                             if uses_arguments {
@@ -5844,7 +5797,7 @@ impl Interpreter {
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
-                        self.last_call_this_value = func_env.borrow().get("this");
+                        self.last_call_this_value = func_env.borrow().get_this();
                         self.current_realm_id = caller_realm;
                         drop(exec_env);
                         self.recycle_function_environment(func_env);
@@ -6724,10 +6677,7 @@ impl Interpreter {
                     env.clone()
                 };
                 let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().declare("this", BindingKind::Const);
-                init_env
-                    .borrow_mut()
-                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().set_this(this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 if let Some(o) = callee_val
                     .as_object_id()
@@ -7101,10 +7051,7 @@ impl Interpreter {
                 let init_parent =
                     outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
                 let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().declare("this", BindingKind::Const);
-                init_env
-                    .borrow_mut()
-                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().set_this(this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 init_env.borrow_mut().class_private_names = class_pn;
                 if proto_val.is_object() {
@@ -7974,7 +7921,7 @@ impl Interpreter {
                             .realm()
                             .global_env
                             .borrow()
-                            .get("this")
+                            .get_this()
                             .unwrap_or(this_val.clone())
                     } else if !(this_val).is_object() {
                         match interp.to_object(this_val) {
@@ -7987,15 +7934,7 @@ impl Interpreter {
                 } else {
                     this_val.clone()
                 };
-                func_env.borrow_mut().bindings.insert(
-                    "this",
-                    Binding {
-                        value: effective_this,
-                        kind: BindingKind::Const,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
+                func_env.borrow_mut().set_this(effective_this);
                 if uses_arguments {
                     let is_simple = has_simple_params;
                     let env_strict = func_env.borrow().strict;

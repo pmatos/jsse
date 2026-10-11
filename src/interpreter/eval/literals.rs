@@ -525,15 +525,7 @@ impl Interpreter {
         let static_field_env = Environment::new_function_scope(Some(class_env.clone()));
         {
             let mut sfe = static_field_env.borrow_mut();
-            sfe.bindings.insert(
-                "this",
-                Binding {
-                    value: ctor_val.clone(),
-                    kind: BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
+            sfe.set_this(ctor_val.clone());
             sfe.is_field_initializer = true;
             sfe.class_private_names = self.class_private_names.last().cloned();
             // Set __home_object__ for super property access in static field initializers.
@@ -1196,15 +1188,7 @@ impl Interpreter {
                     {
                         let mut be = block_env.borrow_mut();
                         be.strict = true; // class bodies are always strict
-                        be.bindings.insert(
-                            "this",
-                            Binding {
-                                value: ctor_val.clone(),
-                                kind: BindingKind::Const,
-                                initialized: true,
-                                deletable: false,
-                            },
-                        );
+                        be.set_this(ctor_val.clone());
                         be.bindings.insert(
                             "__home_object__",
                             Binding {

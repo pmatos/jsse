@@ -846,6 +846,10 @@ pub(crate) struct Environment {
     // Binding names come from script source. Keep randomized hashing here so
     // deterministic collision sets cannot flood declaration and lookup paths.
     pub(crate) bindings: BindingMap,
+    /// §9.1.1.3 [[ThisValue]]/[[ThisBindingStatus]] of a function (or the
+    /// global/module) scope. Kept out of `bindings` so a call binds `this`
+    /// without hashing or allocating a name.
+    pub(crate) this_binding: Option<ThisBinding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
@@ -906,6 +910,11 @@ impl std::fmt::Debug for Environment {
     }
 }
 
+pub(crate) struct ThisBinding {
+    pub(crate) value: JsValue,
+    pub(crate) initialized: bool,
+}
+
 pub(crate) struct WithObject {
     pub(crate) obj_id: u64,
 }
@@ -954,6 +963,7 @@ impl Environment {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
             bindings: BindingMap::new(),
+            this_binding: None,
             parent,
             strict,
             is_function_scope: false,
@@ -980,6 +990,7 @@ impl Environment {
         let strict = parent.borrow().strict;
         Rc::new(RefCell::new(Environment {
             bindings: BindingMap::new(),
+            this_binding: None,
             parent: Some(parent),
             strict,
             is_function_scope: false,
@@ -1011,6 +1022,7 @@ impl Environment {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
             bindings: BindingMap::with_capacity(binding_capacity),
+            this_binding: None,
             parent,
             strict,
             is_function_scope: true,
@@ -1035,6 +1047,7 @@ impl Environment {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         self.bindings.clear();
         self.bindings.reserve(binding_capacity);
+        self.this_binding = None;
         self.parent = parent;
         self.strict = strict;
         self.is_function_scope = true;
@@ -1074,6 +1087,32 @@ impl Environment {
             return Self::find_var_scope(parent);
         }
         env.clone()
+    }
+
+    /// Binds `this` to an initialized value (§9.1.1.3.1 BindThisValue).
+    pub(crate) fn set_this(&mut self, value: JsValue) {
+        self.this_binding = Some(ThisBinding {
+            value,
+            initialized: true,
+        });
+    }
+
+    /// Creates the `this` binding uninitialized: a derived constructor's TDZ
+    /// until `super()` returns.
+    pub(crate) fn declare_this_uninit(&mut self) {
+        self.this_binding = Some(ThisBinding {
+            value: JsValue::UNDEFINED,
+            initialized: false,
+        });
+    }
+
+    /// The value of the nearest `this` binding up the chain, or `None` when
+    /// that binding is uninitialized (or absent).
+    pub(crate) fn get_this(&self) -> Option<JsValue> {
+        if let Some(this) = &self.this_binding {
+            return this.initialized.then(|| this.value.clone());
+        }
+        self.parent.as_ref().and_then(|p| p.borrow().get_this())
     }
 
     pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {

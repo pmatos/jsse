@@ -2561,10 +2561,7 @@ impl Interpreter {
     ) -> Completion {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
-        {
-            let mut env = module_env.borrow_mut();
-            env.declare("this", BindingKind::Var);
-        }
+        module_env.borrow_mut().set_this(JsValue::UNDEFINED);
 
         // Register entry-point module in registry to handle self-imports
         let canon_path_entry = module_path
@@ -3279,7 +3276,7 @@ impl Interpreter {
             let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
             module_env.borrow_mut().strict = true;
             module_env.borrow_mut().module_path = Some(canon_path.clone());
-            module_env.borrow_mut().declare("this", BindingKind::Var);
+            module_env.borrow_mut().set_this(JsValue::UNDEFINED);
 
             // Register before traversing dependencies so circular imports see
             // the same Module Record identity.
