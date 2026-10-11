@@ -1,0 +1,14 @@
+# perf-counters build, JetStream --iterations 1 (cold). PERF counters + top BAIL reasons (reason:count)
+bench                  vm_ops  ast_work  disp_cmp disp_ast  comp_ok comp_bail user_call gc_min gc_maj
+Air                   1025082   2846906    175317   122998     9701      1948    298315     15     16 lexical declaration:811 | statement:FunctionDeclaration:680 | expression:Typeof:263 | expression:ArrowFunction:134 | statement:ForOf:30
+cdjs                 56730422  15255403   2778155    99925    36070      6024   2878080    103    104 expression:Array:6017 | statement:FunctionDeclaration:3 | expression:Object:2 | expression:Typeof:1 | lexical declaration:1
+delta-blue           25850867     19992   2260157     6309       76         7   2266466      4      4 lexical declaration:3 | expression:Typeof:1 | statement:FunctionDeclaration:1 | statement:Switch:1 | update target:1
+doxbee-promise         790051   1320431    260011    50009    40019     40009    310021     96     17 lexical declaration:20004 | expression:Object:20000 | statement:FunctionDeclaration:3 | expression:Typeof:2
+earley-boyer          5456274  16735178    398438   381187       46      4091    779625     26     10 binary op:2394 | expression:Function:1679 | nested tail call:9 | expression:Typeof:4 | lexical declaration:2
+hash-map             39144054  32100830   1890062  1440005       19        11   3330067      7      5 statement:Throw:4 | expression:Typeof:2 | update target:2 | lexical declaration:1 | statement:FunctionDeclaration:1
+js-tokens                  13   8917374         3        4        2         5       282     21     22 expression:Typeof:1 | lexical declaration:1 | literal:1 | statement:ForOf:1 | statement:Throw:1
+lazy-collections      2920967  10299442    596648    34889     7906      7991    641092     38     39 binary op:7899 | spread call argument:39 | lexical declaration:24 | call callee:12 | expression:Function:10
+pdfjs                19280971  29059856    154914   161899      317       293    316813     98     61 statement:FunctionDeclaration:83 | expression:Typeof:51 | expression:Array:50 | expression:Object:35 | binary op:31
+raytrace             29983479  17754299   1724405   306797       28        20   2031202     49     49 lexical declaration:14 | call callee:4 | expression:Object:1 | expression:Typeof:1
+richards             41379218   6662300   1788404   235953       30         9   2024357      0      0 update target:4 | lexical declaration:3 | expression:Typeof:1 | statement:Throw:1
+splay                21466004  16202971    280937   760004       16         7   1040941    112     48 lexical declaration:3 | statement:Throw:2 | expression:Object:1 | expression:Typeof:1
