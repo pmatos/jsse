@@ -1,3 +1,11 @@
+// Copyright (C) 2026 the JSSE project authors. All rights reserved.
+// This code is governed by the BSD license found in the LICENSE file.
+/*---
+esid: sec-applystringornumericbinaryoperator
+description: >
+  String + and += behave as immutable value concatenation even when the implementation extends a shared buffer in place.
+---*/
+
 // Tests that `+` / `+=` on strings behave as immutable value concatenation even
 // when the implementation extends a shared buffer in place (issue #922).
 // Spec: ECMAScript 2024, sec-applystringornumericbinaryoperator (string

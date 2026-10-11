@@ -93,6 +93,7 @@ unsafe impl Sync for StrView {}
 
 impl StrView {
     fn from_buf(buf: Arc<StrBuf>, len: usize) -> Self {
+        debug_assert!(len <= buf.tail.load(Ordering::Relaxed));
         Self {
             ptr: buf.ptr,
             len,
@@ -184,26 +185,6 @@ impl JsString {
         v.extend_from_slice(self.as_units());
         v.extend_from_slice(extra);
         Self::from_vec(v)
-    }
-
-    /// Take ownership of the inner Vec (clones if shared).
-    pub(crate) fn into_vec(self) -> Vec<u16> {
-        let view = match Arc::try_unwrap(self.view) {
-            Ok(view) => view,
-            Err(shared) => return shared.units().to_vec(),
-        };
-        let StrView { ptr, len, buf } = view;
-        match Arc::try_unwrap(buf) {
-            Ok(buf) if buf.tail.load(Ordering::Acquire) == len && std::ptr::eq(buf.ptr, ptr) => {
-                let buf = ManuallyDrop::new(buf);
-                // SAFETY: the only view and buffer owner is consumed, and
-                // `[0, len)` is the whole initialised extent of the Vec.
-                unsafe { Vec::from_raw_parts(buf.ptr, len, buf.cap) }
-            }
-            // SAFETY: `[0, len)` is initialised and the scrutinee, which owns
-            // or shares the buffer, lives to the end of the match.
-            _ => unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec(),
-        }
     }
 }
 
@@ -772,7 +753,7 @@ impl NanBoxedValue {
         Some(f(unsafe { &*ptr }))
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn into_string(self) -> Option<JsString> {
         if self.tag() != Some(NanTag::String) {
             return None;
@@ -1916,12 +1897,13 @@ mod js_string_buffer_tests {
         let a = JsString::from_vec(v);
         let slice = a.as_units();
         let b = a.concat_units(&[4, 5]);
-        let c = b.concat_units(&vec![6; 100]);
+        let c = b.concat_units(&[6; 100]);
         assert_eq!(slice, [1, 2, 3]);
         assert_eq!(c.len(), 105);
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)]
     fn equality_and_hash_ignore_buffer_identity() {
         use std::collections::HashSet;
         let mut v = Vec::with_capacity(8);
@@ -1932,19 +1914,6 @@ mod js_string_buffer_tests {
         let mut set = HashSet::new();
         set.insert(long);
         assert!(set.contains(&exact));
-    }
-
-    #[test]
-    fn into_vec_round_trips_unique_and_shared() {
-        let a = JsString::from_vec(vec![1, 2, 3]);
-        assert_eq!(a.clone().into_vec(), [1, 2, 3]);
-        assert_eq!(a.into_vec(), [1, 2, 3]);
-        let mut v = Vec::with_capacity(8);
-        v.push(1);
-        let b = JsString::from_vec(v);
-        let c = b.concat_units(&[2]);
-        assert_eq!(b.into_vec(), [1]);
-        assert_eq!(c.into_vec(), [1, 2]);
     }
 
     #[test]

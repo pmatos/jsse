@@ -1,3 +1,11 @@
+// Copyright (C) 2026 the JSSE project authors. All rights reserved.
+// This code is governed by the BSD license found in the LICENSE file.
+/*---
+esid: sec-applystringornumericbinaryoperator
+description: >
+  Left-associative string concatenation chains with mixed operand types evaluate each + separately and ToString the non-String operand.
+---*/
+
 // Tests mixed-operand string concatenation chains such as `t = t + "ab" + j`.
 // Spec: ECMAScript 2024, sec-applystringornumericbinaryoperator,
 //       sec-addition-operator-plus-runtime-semantics-evaluation

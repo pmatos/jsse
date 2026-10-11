@@ -588,11 +588,12 @@ impl Interpreter {
                 1,
                 Rc::new(|interp, this_val, args| {
                     let s = propagate!(this_js_string(interp, this_val));
-                    let mut units = s.into_vec();
+                    let mut result = s;
                     for arg in args {
-                        propagate!(interp.append_js_string(&mut units, arg));
+                        let piece = propagate!(interp.to_js_string(arg));
+                        result = result.concat_units(piece.as_units());
                     }
-                    Completion::Normal(JsValue::string(JsString::from_vec(units)))
+                    Completion::Normal(JsValue::string(result))
                 }),
             ),
             (
