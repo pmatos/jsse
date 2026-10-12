@@ -1,37 +1,71 @@
 use super::super::*;
 use crate::interpreter::key_intern::key_to_js_string;
 
-/// EnumerableOwnProperties (§7.3.23) values/entries over a snapshot of an
-/// ordinary object's own String keys. Each key's enumerability is re-read
-/// right before its [[Get]], since a getter may delete or hide later keys.
-fn enumerable_own_values_fast(
+/// EnumerableOwnProperties (§7.3.23) for kind value / key+value on `obj_id`.
+/// Ordinary objects walk their stored keys, re-reading each key's
+/// enumerability right before its [[Get]] (a getter may delete or hide later
+/// keys); everything else goes through the proxy-aware descriptor path.
+/// Fetched values and pair arrays stay rooted across later getters.
+fn enumerable_own_values(
     interp: &mut Interpreter,
     obj_id: u64,
     obj_val: &JsValue,
-    keys: &[JsPropertyKey],
     entries: bool,
 ) -> Completion {
+    let ordinary_keys = interp.get_object_cell(obj_id).and_then(|c| {
+        c.borrow()
+            .ordinary_own_property_keys(OwnKeyFilter::AllStrings)
+    });
+    let general_keys = if ordinary_keys.is_none() {
+        match interp.proxy_own_keys(obj_id) {
+            Ok(keys) => keys,
+            Err(e) => return Completion::Throw(e),
+        }
+    } else {
+        Vec::new()
+    };
     interp.with_gc_root_scope(|interp| {
-        let mut out: Vec<JsValue> = Vec::with_capacity(keys.len());
-        for k in keys {
-            let enumerable = interp
-                .get_object_cell(obj_id)
-                .and_then(|c| c.borrow().own_property_enumerable(k));
-            if enumerable != Some(true) {
-                continue;
-            }
-            let val = match interp.get_object_property(obj_id, k, obj_val) {
-                Completion::Normal(v) => v,
-                other => return other,
-            };
+        let mut out: Vec<JsValue> = Vec::with_capacity(ordinary_keys.as_ref().map_or(0, Vec::len));
+        let mut push = |interp: &mut Interpreter, key: JsValue, val: JsValue| {
             interp.gc_root_value(&val);
             if entries {
-                let key_val = JsValue::string(key_to_js_string(k));
-                let pair = interp.create_array(vec![key_val, val]);
+                let pair = interp.create_array(vec![key, val]);
                 interp.gc_root_value(&pair);
                 out.push(pair);
             } else {
                 out.push(val);
+            }
+        };
+        if let Some(keys) = &ordinary_keys {
+            for k in keys {
+                match interp.get_own_enumerable_value(obj_id, k, obj_val) {
+                    Ok(Some(val)) => push(interp, JsValue::string(key_to_js_string(k)), val),
+                    Ok(None) => {}
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
+        } else {
+            for key_val in general_keys {
+                let Some(key_string) = key_val.as_string() else {
+                    continue;
+                };
+                let k = JsPropertyKey::from_js_string(&key_string);
+                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                if desc_val.is_undefined() {
+                    continue;
+                }
+                match interp.to_property_descriptor(&desc_val) {
+                    Ok(desc) if desc.enumerable != Some(false) => {}
+                    _ => continue,
+                }
+                let val = match interp.get_object_property(obj_id, &k, obj_val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                push(interp, JsValue::string(key_string), val);
             }
         }
         Completion::Normal(interp.create_array(out))
@@ -69,16 +103,8 @@ fn assign_from_ordinary_source(
         }
     }
     for k in keys {
-        let enumerable = interp
-            .get_object_cell(source_id)
-            .and_then(|c| c.borrow().own_property_enumerable(k));
-        if enumerable != Some(true) {
+        let Some(val) = interp.get_own_enumerable_value(source_id, k, source)? else {
             continue;
-        }
-        let val = match interp.get_object_property(source_id, k, source) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
-            _ => JsValue::UNDEFINED,
         };
         if !interp.proxy_set(target_id, k, val, target)? {
             return Err(interp.create_type_error("Cannot assign to read only property"));
@@ -1429,50 +1455,7 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = obj_val.as_object_id() {
-                    if let Some(keys) = interp.get_object_cell(obj_id).and_then(|c| {
-                        c.borrow()
-                            .ordinary_own_property_keys(OwnKeyFilter::AllStrings)
-                    }) {
-                        return enumerable_own_values_fast(interp, obj_id, &obj_val, &keys, true);
-                    }
-                    // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
-                    let all_keys = match interp.proxy_own_keys(obj_id) {
-                        Ok(k) => k,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    return interp.with_gc_root_scope(|interp| {
-                        let mut pairs = Vec::new();
-                        for key_val in all_keys {
-                            let Some(key_string) = key_val.as_string() else {
-                                continue;
-                            };
-                            let k = JsPropertyKey::from_js_string(&key_string);
-                            let desc_val =
-                                match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                            if (desc_val).is_undefined() {
-                                continue;
-                            }
-                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                if desc.enumerable == Some(false) {
-                                    continue;
-                                }
-                            } else {
-                                continue;
-                            }
-                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            interp.gc_root_value(&val);
-                            let pair = interp.create_array(vec![JsValue::string(key_string), val]);
-                            interp.gc_root_value(&pair);
-                            pairs.push(pair);
-                        }
-                        Completion::Normal(interp.create_array(pairs))
-                    });
+                    return enumerable_own_values(interp, obj_id, &obj_val, true);
                 }
                 Completion::Normal(interp.create_array(Vec::new()))
             },
@@ -1492,48 +1475,7 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = obj_val.as_object_id() {
-                    if let Some(keys) = interp.get_object_cell(obj_id).and_then(|c| {
-                        c.borrow()
-                            .ordinary_own_property_keys(OwnKeyFilter::AllStrings)
-                    }) {
-                        return enumerable_own_values_fast(interp, obj_id, &obj_val, &keys, false);
-                    }
-                    // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
-                    let all_keys = match interp.proxy_own_keys(obj_id) {
-                        Ok(k) => k,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    return interp.with_gc_root_scope(|interp| {
-                        let mut values = Vec::new();
-                        for key_val in all_keys {
-                            let Some(key_string) = key_val.as_string() else {
-                                continue;
-                            };
-                            let k = JsPropertyKey::from_js_string(&key_string);
-                            let desc_val =
-                                match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                            if (desc_val).is_undefined() {
-                                continue;
-                            }
-                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                if desc.enumerable == Some(false) {
-                                    continue;
-                                }
-                            } else {
-                                continue;
-                            }
-                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            interp.gc_root_value(&val);
-                            values.push(val);
-                        }
-                        Completion::Normal(interp.create_array(values))
-                    });
+                    return enumerable_own_values(interp, obj_id, &obj_val, false);
                 }
                 Completion::Normal(interp.create_array(Vec::new()))
             },

@@ -1227,16 +1227,8 @@ impl Interpreter {
                     if !excluded.is_empty() && excluded.contains(&key) {
                         continue;
                     }
-                    let enumerable = interp
-                        .get_object_cell(src_id)
-                        .and_then(|c| c.borrow().own_property_enumerable(&key));
-                    if enumerable != Some(true) {
+                    let Some(val) = interp.get_own_enumerable_value(src_id, &key, src_val)? else {
                         continue;
-                    }
-                    let val = match interp.get_object_property(src_id, &key, src_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::UNDEFINED,
                     };
                     interp.gc_root_value(&val);
                     result.push((key, val));

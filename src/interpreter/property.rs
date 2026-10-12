@@ -1609,6 +1609,29 @@ impl Interpreter {
         }
     }
 
+    /// One step of EnumerableOwnProperties / CopyDataProperties over a key
+    /// snapshot of an ordinary object: re-reads `key`'s enumerability (an
+    /// earlier getter may have deleted or hidden it) and, if it is still an
+    /// enumerable own property, returns its [[Get]] value.
+    pub(crate) fn get_own_enumerable_value(
+        &mut self,
+        obj_id: u64,
+        key: &JsPropertyKey,
+        receiver: &JsValue,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let enumerable = self
+            .get_object_cell(obj_id)
+            .and_then(|c| c.borrow().own_property_enumerable(key));
+        if enumerable != Some(true) {
+            return Ok(None);
+        }
+        match self.get_object_property(obj_id, key, receiver) {
+            Completion::Normal(v) => Ok(Some(v)),
+            Completion::Throw(e) => Err(e),
+            _ => Ok(Some(JsValue::UNDEFINED)),
+        }
+    }
+
     /// `proxy_get_own_property_descriptor(..) !== undefined` without
     /// materialising a descriptor object for non-Proxy objects.
     pub(crate) fn proxy_has_own_property<K: PropertyKeyLike + ?Sized>(
