@@ -40,3 +40,14 @@ Object.defineProperty(shrinking, 1, { get: function () { shrinking.length = 2; r
 assert.sameValue(shrinking.join(), "1,9,,", "elements removed mid-join read as undefined");
 
 assert.sameValue(Array.prototype.join.call({ length: 3, 0: 5, 1: -6, 2: 7 }, ":"), "5:-6:7", "array-like receiver");
+
+assert.sameValue(Array.prototype.join.call(new Int8Array([1, -2, 3]), "-"), "1--2-3", "typed array receiver");
+assert.sameValue(Array.prototype.join.call(new Float64Array([-0, 0.5, 7]), ","), "0,0.5,7", "typed array receiver with non-integral and negative zero");
+assert.sameValue(
+  Array.prototype.join.call(new Proxy([1, 2, 3], { get: function (t, k) { return k === "length" ? 3 : Number(k) * 10; } }), ","),
+  "0,10,20",
+  "proxy receiver reads through the get trap"
+);
+assert.sameValue([1n, -2n].join(), "1,-2", "BigInt elements");
+assert.throws(TypeError, function () { [1, Symbol()].join(); }, "Symbol element throws");
+assert.sameValue(`${0}${-0}${-5}${999999999999999}${1e15}`, "00-59999999999999991000000000000000", "template literal uses the same Number::toString");
