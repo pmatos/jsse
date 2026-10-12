@@ -9819,7 +9819,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(iter_obj_id)
                         .borrow_mut()
-                        .class_name = "RegExp String Iterator".to_string();
+                        .class_name = "RegExp String Iterator".into();
                     if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
                         interp
                             .get_object_cell_expect(iter_obj_id)
@@ -9865,7 +9865,7 @@ impl Interpreter {
         let rsi_proto_id = self.create_object_id();
         self.get_object_cell_expect(rsi_proto_id)
             .borrow_mut()
-            .class_name = "RegExp String Iterator".to_string();
+            .class_name = "RegExp String Iterator".into();
         if let Some(ip_id) = self.realm().iterator_prototype {
             self.get_object_cell_expect(rsi_proto_id)
                 .borrow_mut()
@@ -10365,7 +10365,7 @@ impl Interpreter {
 
                 let mut obj = JsObjectData::new();
                 obj.prototype_id = proto.or(Some(regexp_proto_rc_id));
-                obj.class_name = "RegExp".to_string();
+                obj.class_name = "RegExp".into();
                 // Store internal slots ([[OriginalSource]], [[OriginalFlags]])
                 obj.kind = crate::interpreter::types::ObjectKind::RegExp(
                     crate::interpreter::types::RegExpData {

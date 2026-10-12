@@ -1387,19 +1387,19 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.primitive_value = Some(val.clone());
         if val.is_string() {
-            obj_data.class_name = "String".to_string();
+            obj_data.class_name = "String".into();
             obj_data.prototype_id = self.realm().string_prototype;
         } else if val.is_number() {
-            obj_data.class_name = "Number".to_string();
+            obj_data.class_name = "Number".into();
             obj_data.prototype_id = self.realm().number_prototype;
         } else if val.is_boolean() {
-            obj_data.class_name = "Boolean".to_string();
+            obj_data.class_name = "Boolean".into();
             obj_data.prototype_id = self.realm().boolean_prototype;
         } else if val.is_symbol() {
-            obj_data.class_name = "Symbol".to_string();
+            obj_data.class_name = "Symbol".into();
             obj_data.prototype_id = self.realm().symbol_prototype;
         } else if val.is_bigint() {
-            obj_data.class_name = "BigInt".to_string();
+            obj_data.class_name = "BigInt".into();
             obj_data.prototype_id = self.realm().bigint_prototype;
         } else {
             unreachable!();
@@ -5327,9 +5327,10 @@ impl Interpreter {
             if has_wrapped_target {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
+            let function_realm = obj.borrow().function_realm;
             if is_class_ctor && self.new_target.is_none() {
                 let caller_realm = self.current_realm_id;
-                if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                if let Some(fn_realm) = function_realm {
                     self.current_realm_id = fn_realm;
                 }
                 let err =
@@ -5397,7 +5398,7 @@ impl Interpreter {
                             self.perf.calls_to_native += 1;
                         }
                         let caller_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
                         let operands_base = self.gc_root_frame();
@@ -5438,7 +5439,7 @@ impl Interpreter {
                         }
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
                         let caller_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
 
@@ -5526,7 +5527,7 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "AsyncGenerator".to_string();
+                                .class_name = "AsyncGenerator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
@@ -5672,7 +5673,7 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "Generator".to_string();
+                                .class_name = "Generator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =

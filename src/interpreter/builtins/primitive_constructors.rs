@@ -169,7 +169,7 @@ impl Interpreter {
                         obj.borrow_mut().prototype_id = Some(proto_rc);
                     }
                     obj.borrow_mut().primitive_value = Some(JsValue::string(js_str.clone()));
-                    obj.borrow_mut().class_name = "String".to_string();
+                    obj.borrow_mut().class_name = "String".into();
                 }
                 Completion::Normal(JsValue::string(js_str))
             }),
@@ -287,7 +287,7 @@ impl Interpreter {
                     };
                     let mut b = obj.borrow_mut();
                     b.primitive_value = Some(JsValue::number(n));
-                    b.class_name = "Number".to_string();
+                    b.class_name = "Number".into();
                     if let Some(p) = proto {
                         b.prototype_id = Some(p);
                     }
@@ -427,7 +427,7 @@ impl Interpreter {
                     };
                     let mut bo = obj.borrow_mut();
                     bo.primitive_value = Some(JsValue::boolean(b));
-                    bo.class_name = "Boolean".to_string();
+                    bo.class_name = "Boolean".into();
                     if let Some(p) = proto {
                         bo.prototype_id = Some(p);
                     }

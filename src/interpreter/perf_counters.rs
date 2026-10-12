@@ -238,6 +238,11 @@ impl PerfCounters {
             "PERF\tatom_lookup_calls\t{}",
             super::atom::lookup_calls()
         );
+        let _ = writeln!(
+            out,
+            "PERF\tkey_intern_calls\t{}",
+            super::key_intern::key_intern_calls()
+        );
 
         let mut bails: Vec<_> = self.compile_bail.iter().collect();
         bails.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));

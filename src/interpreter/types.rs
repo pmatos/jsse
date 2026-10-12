@@ -9,6 +9,7 @@ use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -2058,7 +2059,10 @@ pub(crate) struct JsObjectData {
     pub property_order: Vec<JsPropertyKey>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
-    pub class_name: String,
+    pub class_name: Cow<'static, str>,
+    /// Realm the function object was created in; `None` when it was not
+    /// built by `create_function` (the call path then keeps the caller's realm).
+    pub function_realm: Option<usize>,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
@@ -2424,7 +2428,8 @@ impl JsObjectData {
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,
-            class_name: "Object".to_string(),
+            class_name: Cow::Borrowed("Object"),
+            function_realm: None,
             extensible: true,
             primitive_value: None,
             private_fields: HashMap::new(),
@@ -3504,6 +3509,16 @@ impl JsObjectData {
         }
         self.properties
             .insert(key, PropertyDescriptor::data(value, true, false, true));
+    }
+
+    /// Append an own property whose key the caller knows is absent and
+    /// already interned (a pre-built key from `FunctionKeys`). Skips the key
+    /// interning and duplicate scan of [`insert_property`]; only valid on
+    /// objects with no array exotic key tracking.
+    pub(crate) fn push_fresh_property(&mut self, key: &JsPropertyKey, desc: PropertyDescriptor) {
+        debug_assert!(self.array_data().is_none());
+        self.property_order.push(key.clone());
+        self.properties.push_fresh(key.clone(), desc);
     }
 
     pub(crate) fn insert_property<K: Into<JsPropertyKey>>(

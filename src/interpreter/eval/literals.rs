@@ -88,7 +88,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -134,7 +134,7 @@ impl Interpreter {
                     .realm()
                     .regexp_prototype
                     .or(self.realm().object_prototype);
-                obj.class_name = "RegExp".to_string();
+                obj.class_name = "RegExp".into();
                 let source_js = if pattern.is_empty() {
                     JsString::from_str("(?:)")
                 } else {
@@ -203,7 +203,7 @@ impl Interpreter {
             .realm()
             .regexp_prototype
             .or(self.realm().object_prototype);
-        obj.class_name = "RegExp".to_string();
+        obj.class_name = "RegExp".into();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
         obj.kind =
             crate::interpreter::types::ObjectKind::RegExp(crate::interpreter::types::RegExpData {
@@ -407,9 +407,9 @@ impl Interpreter {
             has_simple_params,
         };
 
-        let ctor_val = self.create_function(ctor_func);
+        let ctor_val = self.create_function_with(ctor_func, FunctionInit::ClassConstructor);
 
-        // Mark derived class constructors and make .prototype writable:false
+        // Mark derived class constructors
         if let Some(o) = (ctor_val)
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
@@ -424,13 +424,6 @@ impl Interpreter {
             } else {
                 crate::interpreter::types::ConstructorKind::Class
             };
-            // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
-            let func_obj_id = func_obj.borrow().id.unwrap();
-            let proto_val_for_desc = self.get_property_on_id(func_obj_id, "prototype");
-            func_obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val_for_desc, false, false, false),
-            );
         }
 
         // Store constructor func for dynamic GetSuperConstructor (§13.3.7.2)
@@ -1487,9 +1480,6 @@ impl Interpreter {
                                     *closure = wrapper;
                                 }
                             }
-                            // Methods must not have own caller/arguments (spec §15.4)
-                            func_obj.borrow_mut().remove_property("caller");
-                            func_obj.borrow_mut().remove_property("arguments");
                         }
                     }
                 }

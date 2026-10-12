@@ -119,6 +119,23 @@ fn is_canonical_array_index(s: &str) -> bool {
     }
 }
 
+/// Calls into the (hashing) property-key interner, for the `perf-counters`
+/// report: a path that interns keys per object shows up as a count that scales
+/// with the object count (#901).
+#[cfg(feature = "perf-counters")]
+static KEY_INTERN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(feature = "perf-counters")]
+pub(crate) fn key_intern_calls() -> u64 {
+    KEY_INTERN_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[inline(always)]
+fn count_key_intern() {
+    #[cfg(feature = "perf-counters")]
+    KEY_INTERN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Intern a property key into shared WTF-8 storage.
 ///
 /// Eligible ordinary names and tagged Symbol keys are cached so repeated uses
@@ -127,6 +144,7 @@ fn is_canonical_array_index(s: &str) -> bool {
 /// bounds are returned without being retained.
 #[inline]
 pub(crate) fn intern_key(s: &str) -> JsPropertyKey {
+    count_key_intern();
     if is_canonical_array_index(s) {
         return JsPropertyKey::from_str(s);
     }
@@ -135,6 +153,7 @@ pub(crate) fn intern_key(s: &str) -> JsPropertyKey {
 
 #[inline]
 pub(crate) fn intern_js_key(key: JsPropertyKey) -> JsPropertyKey {
+    count_key_intern();
     if key.as_str().is_some_and(is_canonical_array_index) {
         return key;
     }

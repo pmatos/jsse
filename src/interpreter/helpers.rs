@@ -679,9 +679,9 @@ fn json_stringify_internal(
         let class = if let Some(cell) = interp.get_object_cell(value_id) {
             cell.borrow().class_name.clone()
         } else {
-            String::new()
+            "".into()
         };
-        match class.as_str() {
+        match &*class {
             "Number" => {
                 let n = interp.to_number_value(&value)?;
                 value = JsValue::number(n)
