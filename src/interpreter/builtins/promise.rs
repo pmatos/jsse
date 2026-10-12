@@ -950,7 +950,8 @@ impl Interpreter {
         self.gc_unroot_frame(frame);
         match then_val {
             Completion::Normal(then_fn) if self.is_callable(&then_fn) => {
-                self.promise_resolve_thenable(promise_id, value, then_fn);
+                self.scheduler
+                    .enqueue_resolve_thenable_job(promise_id, value, then_fn);
             }
             Completion::Throw(e) => self.reject_promise(promise_id, e),
             _ => self.fulfill_promise(promise_id, value),
@@ -1011,16 +1012,9 @@ impl Interpreter {
         argument: JsValue,
     ) {
         for reaction in reactions {
-            self.enqueue_promise_reaction_job(reaction, argument.clone());
+            self.scheduler
+                .enqueue_reaction_job(reaction, argument.clone());
         }
-    }
-
-    pub(crate) fn enqueue_promise_reaction_job(
-        &mut self,
-        reaction: PromiseReaction,
-        argument: JsValue,
-    ) {
-        self.scheduler.enqueue_reaction_job(reaction, argument);
     }
 
     pub(crate) fn run_promise_reaction_job(
@@ -1086,17 +1080,6 @@ impl Interpreter {
             }
         }
         Completion::Normal(JsValue::UNDEFINED)
-    }
-
-    /// NewPromiseResolveThenableJob (ECMA-262 §27.2.2.2).
-    pub(crate) fn promise_resolve_thenable(
-        &mut self,
-        promise_id: u64,
-        thenable: JsValue,
-        then_fn: JsValue,
-    ) {
-        self.scheduler
-            .enqueue_resolve_thenable_job(promise_id, thenable, then_fn);
     }
 
     pub(crate) fn run_promise_resolve_thenable_job(
@@ -1262,7 +1245,7 @@ impl Interpreter {
             PromiseReactionType::Fulfill => fulfill_handler,
             PromiseReactionType::Reject => reject_handler,
         };
-        self.enqueue_promise_reaction_job(
+        self.scheduler.enqueue_reaction_job(
             PromiseReaction {
                 handler,
                 target,

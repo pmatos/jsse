@@ -264,11 +264,13 @@ impl JobScheduler {
             .push_back(Microtask::Closure { roots, job });
     }
 
+    /// NewPromiseReactionJob (ECMA-262 §27.2.2.1).
     pub(crate) fn enqueue_reaction_job(&mut self, reaction: PromiseReaction, argument: JsValue) {
         self.microtask_queue
             .push_back(Microtask::Reaction { reaction, argument });
     }
 
+    /// NewPromiseResolveThenableJob (ECMA-262 §27.2.2.2).
     pub(crate) fn enqueue_resolve_thenable_job(
         &mut self,
         promise_id: u64,
