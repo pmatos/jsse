@@ -41,7 +41,7 @@ var keys = Reflect.ownKeys(f).filter(function (k) { return k === "length" || k =
 assertKeys(keys, ["length", "prototype"], "keys after delete name");
 
 f = mk();
-assert(delete f.prototype === false, "prototype is non-configurable");
+assert(Reflect.deleteProperty(f, "prototype") === false, "prototype is non-configurable");
 assert(delete f.length, "delete f.length");
 assert(f.length === 0, "length falls back to Function.prototype.length");
 
@@ -75,8 +75,8 @@ assert(keys.indexOf("prototype") < keys.indexOf("extra"), "added key follows bui
 
 // Assignment to non-writable `name` / `length` fails; `prototype` is writable.
 f = mk();
-f.name = "x";
-assert(f.name === "target", "name is non-writable");
+assert(Reflect.set(f, "name", "x") === false, "name is non-writable");
+assert(f.name === "target", "name unchanged");
 f.prototype = {};
 assert(typeof f.prototype === "object", "prototype is writable");
 
@@ -164,6 +164,6 @@ assert(bf.name === "bound ", "bind name with non-string name: " + JSON.stringify
 class K { static s() {} }
 assert(delete K.name, "class name configurable");
 assert(K.hasOwnProperty("name") === false, "class name deleted");
-assert(delete K.prototype === false, "class prototype non-configurable");
+assert(Reflect.deleteProperty(K, "prototype") === false, "class prototype non-configurable");
 assert(Reflect.defineProperty(K, "prototype", { value: {} }) === false, "class prototype not redefinable");
 assertKeys(Reflect.ownKeys(K), ["length", "prototype", "s"], "class keys after delete name");
