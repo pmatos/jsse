@@ -1702,6 +1702,35 @@ fn intrinsic_promise_capabilities_create_no_resolving_functions() {
 }
 
 #[test]
+fn await_on_a_pending_promise_registers_typed_resume_reactions() {
+    // An `await` continuation is a typed reaction on the awaited promise: no
+    // handler function objects are created for it, and the saved state is
+    // what the reaction resumes.
+    let interp = run_script(
+        r#"
+        globalThis.gate = new Promise(function () {});
+        (async function () { await gate; })();
+        "#,
+    );
+    let id = interp
+        .get_global_var_ref("gate")
+        .and_then(|value| value.as_object_id())
+        .expect("global gate must be an object");
+    let cell = interp.get_object_cell(id).expect("gate must be live");
+    let obj = cell.borrow();
+    let data = obj.promise_data().expect("gate must be a promise");
+    assert!(matches!(data.state, PromiseState::Pending));
+    for reactions in [&data.fulfill_reactions, &data.reject_reactions] {
+        assert_eq!(reactions.len(), 1);
+        assert!(reactions[0].handler.is_none());
+        assert!(matches!(
+            reactions[0].target,
+            ReactionTarget::AsyncResume(_)
+        ));
+    }
+}
+
+#[test]
 fn internal_resolvers_ignore_settlement_after_the_first_claim() {
     let mut interp = Interpreter::new();
     let promise = interp.create_promise_object();

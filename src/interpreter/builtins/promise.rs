@@ -950,7 +950,8 @@ impl Interpreter {
         self.gc_unroot_frame(frame);
         match then_val {
             Completion::Normal(then_fn) if self.is_callable(&then_fn) => {
-                self.promise_resolve_thenable(promise_id, value, then_fn);
+                self.scheduler
+                    .enqueue_resolve_thenable_job(promise_id, value, then_fn);
             }
             Completion::Throw(e) => self.reject_promise(promise_id, e),
             _ => self.fulfill_promise(promise_id, value),
@@ -1011,104 +1012,77 @@ impl Interpreter {
         argument: JsValue,
     ) {
         for reaction in reactions {
-            self.enqueue_promise_reaction_job(reaction, argument.clone());
+            self.scheduler
+                .enqueue_reaction_job(reaction, argument.clone());
         }
     }
 
-    /// NewPromiseReactionJob (ECMA-262 §27.2.2.1) queued for `reaction`.
-    pub(crate) fn enqueue_promise_reaction_job(
+    pub(crate) fn run_promise_reaction_job(
         &mut self,
         reaction: PromiseReaction,
         argument: JsValue,
-    ) {
-        let mut roots = Vec::with_capacity(4);
-        roots.push(argument.clone());
-        if let Some(ref h) = reaction.handler {
-            roots.push(h.clone());
+    ) -> Completion {
+        let PromiseReaction {
+            handler,
+            target,
+            reaction_type,
+        } = reaction;
+        if let ReactionTarget::AsyncResume(async_id) = target {
+            // Return the resume completion so a `__host_exit` in the resumed
+            // body (issue #242) reaches the drain loop as `Completion::Exit`.
+            return self.async_function_resume(
+                async_id,
+                argument,
+                reaction_type == PromiseReactionType::Reject,
+            );
         }
-        // The resolving closures only capture a promise id, which the tracer
-        // cannot see, so the downstream promise is rooted explicitly.
-        reaction.target.for_each_value(|v| roots.push(v.clone()));
-        if let Some(pid) = reaction.target.promise_id() {
-            roots.push(JsValue::object(pid));
-        }
-        self.scheduler.enqueue_microtask((
-            roots,
-            Box::new(move |interp| {
-                let PromiseReaction {
+        let handler_result = match handler {
+            Some(ref handler) if self.is_callable(handler) => {
+                match self.call_function(
                     handler,
-                    target,
-                    reaction_type,
-                } = reaction;
-                let handler_result = match handler {
-                    Some(ref handler) if interp.is_callable(handler) => {
-                        match interp.call_function(
-                            handler,
-                            &JsValue::UNDEFINED,
-                            std::slice::from_ref(&argument),
-                        ) {
-                            Completion::Throw(e) => Err(e),
-                            Completion::Normal(v) => Ok(v),
-                            // A `__host_exit` inside the reaction handler
-                            // (issue #242) propagates out of the job as
-                            // `Completion::Exit` — the Promise reaction must
-                            // not consume it into a fulfillment/rejection.
-                            Completion::Exit(code) => return Completion::Exit(code),
-                            _ => Ok(JsValue::UNDEFINED),
-                        }
-                    }
-                    _ => match reaction_type {
-                        PromiseReactionType::Fulfill => Ok(argument),
-                        PromiseReactionType::Reject => Err(argument),
-                    },
-                };
-
-                match target {
-                    ReactionTarget::None => {}
-                    ReactionTarget::Internal(promise_id) => match handler_result {
-                        Ok(value) => interp.resolve_promise_internal(promise_id, value),
-                        Err(reason) => interp.reject_promise(promise_id, reason),
-                    },
-                    ReactionTarget::Capability {
-                        resolve, reject, ..
-                    } => {
-                        let (function, argument) = match handler_result {
-                            Ok(value) => (resolve, value),
-                            Err(reason) => (reject, reason),
-                        };
-                        if let Completion::Throw(e) =
-                            interp.call_function(&function, &JsValue::UNDEFINED, &[argument])
-                        {
-                            return Completion::Throw(e);
-                        }
-                    }
+                    &JsValue::UNDEFINED,
+                    std::slice::from_ref(&argument),
+                ) {
+                    Completion::Throw(e) => Err(e),
+                    Completion::Normal(v) => Ok(v),
+                    // A `__host_exit` inside the reaction handler
+                    // (issue #242) propagates out of the job as
+                    // `Completion::Exit` — the Promise reaction must
+                    // not consume it into a fulfillment/rejection.
+                    Completion::Exit(code) => return Completion::Exit(code),
+                    _ => Ok(JsValue::UNDEFINED),
                 }
-                Completion::Normal(JsValue::UNDEFINED)
-            }),
-        ));
+            }
+            _ => match reaction_type {
+                PromiseReactionType::Fulfill => Ok(argument),
+                PromiseReactionType::Reject => Err(argument),
+            },
+        };
+
+        match target {
+            ReactionTarget::None | ReactionTarget::AsyncResume(_) => {}
+            ReactionTarget::Internal(promise_id) => match handler_result {
+                Ok(value) => self.resolve_promise_internal(promise_id, value),
+                Err(reason) => self.reject_promise(promise_id, reason),
+            },
+            ReactionTarget::Capability {
+                resolve, reject, ..
+            } => {
+                let (function, argument) = match handler_result {
+                    Ok(value) => (resolve, value),
+                    Err(reason) => (reject, reason),
+                };
+                if let Completion::Throw(e) =
+                    self.call_function(&function, &JsValue::UNDEFINED, &[argument])
+                {
+                    return Completion::Throw(e);
+                }
+            }
+        }
+        Completion::Normal(JsValue::UNDEFINED)
     }
 
-    /// NewPromiseResolveThenableJob (ECMA-262 §27.2.2.2).
-    pub(crate) fn promise_resolve_thenable(
-        &mut self,
-        promise_id: u64,
-        thenable: JsValue,
-        then_fn: JsValue,
-    ) {
-        let roots = vec![
-            thenable.clone(),
-            then_fn.clone(),
-            JsValue::object(promise_id),
-        ];
-        self.scheduler.enqueue_microtask((
-            roots,
-            Box::new(move |interp| {
-                interp.run_promise_resolve_thenable_job(promise_id, thenable, then_fn)
-            }),
-        ));
-    }
-
-    fn run_promise_resolve_thenable_job(
+    pub(crate) fn run_promise_resolve_thenable_job(
         &mut self,
         promise_id: u64,
         thenable: JsValue,
@@ -1271,7 +1245,7 @@ impl Interpreter {
             PromiseReactionType::Fulfill => fulfill_handler,
             PromiseReactionType::Reject => reject_handler,
         };
-        self.enqueue_promise_reaction_job(
+        self.scheduler.enqueue_reaction_job(
             PromiseReaction {
                 handler,
                 target,
