@@ -6283,11 +6283,8 @@ fn closures_created_in_generator_and_async_bodies_share_params() {
     );
 }
 
-// Closures created while evaluating a state terminator's operand (`yield`,
-// `await`, `return`, a loop condition) must share their literal's parameter
-// patterns across steps and across activations: the drivers borrow the
-// terminator instead of deep-cloning it, which would reset the literal's
-// `FunctionLiteralInfo` cell on every step (#955).
+// Closures created in a terminator operand (`yield`, `await`, `return`) share
+// their literal's parameter patterns across steps and activations (#955).
 #[test]
 fn closures_in_generator_terminator_operands_share_params() {
     assert_literal_params_shared(

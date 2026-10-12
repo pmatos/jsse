@@ -43,12 +43,14 @@ impl Interpreter {
                 )
             });
             self.perf.enter_ast_body(name, id, false);
-            let result = self.exec_body_inner(body, env);
+            let result = if body.as_slice().is_empty() {
+                Completion::Empty
+            } else {
+                self.exec_body_inner(body, env)
+            };
             self.perf.leave_ast_body();
             result
         };
-        // A state that only carries a terminator (loop tests, bare `yield`s)
-        // has nothing to instantiate, install an IC store for, or execute.
         #[cfg(not(feature = "perf-counters"))]
         let result = if body.as_slice().is_empty() {
             Completion::Empty

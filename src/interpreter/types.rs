@@ -453,8 +453,6 @@ pub(crate) struct ScopeFrame {
 
 #[derive(Clone)]
 pub(crate) struct ForOfLoopState {
-    /// Shared so mirroring the driver's loop stack into the GC-visible side
-    /// table each step copies reference counts, not strings.
     pub(crate) iter_var: Rc<str>,
     /// The labels attached to this iteration statement. `LoopContinues` uses
     /// this set to decide whether a labelled continue begins its next iteration.
@@ -488,31 +486,44 @@ impl ForOfLoopState {
         target.is_none_or(|target| self.label_set.iter().any(|label| label == target))
     }
 
-    /// Whether mirroring `self` over `other` would change nothing observable.
-    /// Identity comparison on the shared fields keeps this O(1).
     pub(crate) fn same_as(&self, other: &ForOfLoopState) -> bool {
-        self.head_state == other.head_state
-            && self.after_state == other.after_state
-            && self.try_depth == other.try_depth
-            && self.is_await == other.is_await
-            && self.iterator_closed == other.iterator_closed
-            && Rc::ptr_eq(&self.outer_env, &other.outer_env)
-            && match (&self.iteration_env, &other.iteration_env) {
+        let ForOfLoopState {
+            iter_var,
+            label_set,
+            head_state,
+            after_state,
+            try_depth,
+            outer_env,
+            iteration_env,
+            is_await,
+            iterator_closed,
+        } = self;
+        *head_state == other.head_state
+            && *after_state == other.after_state
+            && *try_depth == other.try_depth
+            && *is_await == other.is_await
+            && *iterator_closed == other.iterator_closed
+            && Rc::ptr_eq(outer_env, &other.outer_env)
+            && match (iteration_env, &other.iteration_env) {
                 (Some(a), Some(b)) => Rc::ptr_eq(a, b),
                 (None, None) => true,
                 _ => false,
             }
-            && (Rc::ptr_eq(&self.iter_var, &other.iter_var) || self.iter_var == other.iter_var)
-            && (Rc::ptr_eq(&self.label_set, &other.label_set) || self.label_set == other.label_set)
+            && (Rc::ptr_eq(iter_var, &other.iter_var) || *iter_var == other.iter_var)
+            && (Rc::ptr_eq(label_set, &other.label_set) || *label_set == other.label_set)
     }
 }
 
 impl ScopeFrame {
-    /// See [`ForOfLoopState::same_as`].
     pub(crate) fn same_as(&self, other: &ScopeFrame) -> bool {
-        self.try_depth == other.try_depth
-            && self.for_of_depth == other.for_of_depth
-            && Rc::ptr_eq(&self.env, &other.env)
+        let ScopeFrame {
+            env,
+            try_depth,
+            for_of_depth,
+        } = self;
+        *try_depth == other.try_depth
+            && *for_of_depth == other.for_of_depth
+            && Rc::ptr_eq(env, &other.env)
     }
 }
 
@@ -3541,7 +3552,7 @@ impl JsObjectData {
     }
 
     /// Append an own property whose key the caller knows is absent and
-    /// already interned (a pre-built key from `FunctionKeys`). Skips the key
+    /// already interned (a pre-built key from `CommonKeys`). Skips the key
     /// interning and duplicate scan of [`insert_property`]; only valid on
     /// objects with no array exotic key tracking.
     pub(crate) fn push_fresh_property(&mut self, key: &JsPropertyKey, desc: PropertyDescriptor) {

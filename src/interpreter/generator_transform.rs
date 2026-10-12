@@ -17,9 +17,7 @@ pub(crate) enum StateMachineKind {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct GeneratorStateMachine {
-    /// Shared so cloning a machine (the counters build gives every function
-    /// object its own copy to carry a BODY key) never deep-copies the
-    /// terminators, whose function literals cache per-literal info (#955).
+    /// Shared so a machine clone never deep-copies terminators (#955).
     pub states: std::rc::Rc<[GeneratorState]>,
     pub local_vars: Vec<LocalVariable>,
     pub params: Vec<Pattern>,
@@ -307,8 +305,6 @@ pub(crate) struct LoopControlTarget {
     pub scope_depth: usize,
 }
 
-/// Interns a scope action's names once, at transform time, so the drivers
-/// declare each per-entry/per-iteration binding without hashing its text.
 fn intern_scope_decls(decls: Vec<(String, bool)>) -> Vec<(Atom, bool)> {
     decls
         .into_iter()
@@ -3174,7 +3170,7 @@ fn transform_for_statement(
     // the update runs). `test_state`/`body_state`/`update_state` all share
     // this *one* frame at a constant depth — mirrors `exec_for`'s
     // `per_iteration_bindings` (`exec.rs`).
-    let per_iteration_bindings: Vec<(String, bool)> = if let Some(ForInit::Variable(decl)) =
+    let per_iteration_bindings: Vec<(Atom, bool)> = if let Some(ForInit::Variable(decl)) =
         &for_stmt.init
         && matches!(decl.kind, VarKind::Let | VarKind::Const)
     {
@@ -3183,7 +3179,7 @@ fn transform_for_statement(
         for d in &decl.declarations {
             d.pattern.bound_names(&mut names);
         }
-        names.into_iter().map(|n| (n, is_const)).collect()
+        intern_scope_decls(names.into_iter().map(|n| (n, is_const)).collect())
     } else {
         Vec::new()
     };
@@ -3209,9 +3205,8 @@ fn transform_for_statement(
         // so there is no temp-var shortcut left here to shadow. Same names as
         // `per_iteration_bindings` above: `has_per_iteration_env` already
         // guarantees `for_stmt.init` is this exact `ForInit::Variable(decl)`.
-        ctx.states[init_state].scope_action = Some(ScopeAction::OpenBlock(intern_scope_decls(
-            per_iteration_bindings.clone(),
-        )));
+        ctx.states[init_state].scope_action =
+            Some(ScopeAction::OpenBlock(per_iteration_bindings.clone()));
     }
 
     if let Some(init) = &for_stmt.init {
@@ -3253,12 +3248,10 @@ fn transform_for_statement(
         ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     if has_per_iteration_env {
-        ctx.states[test_state].scope_action = Some(ScopeAction::CopyForward(intern_scope_decls(
-            per_iteration_bindings.clone(),
-        )));
-        ctx.states[update_state].scope_action = Some(ScopeAction::CopyForward(intern_scope_decls(
-            per_iteration_bindings,
-        )));
+        ctx.states[test_state].scope_action =
+            Some(ScopeAction::CopyForward(per_iteration_bindings.clone()));
+        ctx.states[update_state].scope_action =
+            Some(ScopeAction::CopyForward(per_iteration_bindings));
     }
 
     ctx.current_state_id = test_state;

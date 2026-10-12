@@ -245,10 +245,10 @@ impl std::fmt::Display for ModuleKey {
     }
 }
 
-/// Property keys written on every function object (and the two on every
-/// iterator result), interned once so object construction appends them without
-/// re-hashing (issue #901).
-struct FunctionKeys {
+/// Property keys written on every function object and every iterator result,
+/// interned once so object construction appends them without re-hashing
+/// (issue #901).
+struct CommonKeys {
     length: JsPropertyKey,
     name: JsPropertyKey,
     caller: JsPropertyKey,
@@ -261,7 +261,7 @@ struct FunctionKeys {
     empty_name: JsString,
 }
 
-impl FunctionKeys {
+impl CommonKeys {
     fn new() -> Self {
         use key_intern::intern_key;
         Self {
@@ -358,7 +358,7 @@ pub(crate) struct Interpreter {
     next_class_brand_id: u64,
     next_auto_accessor_id: u64,
     pub(crate) regexp_legacy: builtins::regexp::RegexpLegacyState,
-    function_keys: FunctionKeys,
+    common_keys: CommonKeys,
     pub(crate) in_tail_position: bool,
     pub(crate) in_state_machine: bool,
     pub(crate) next_function_is_method: bool,
@@ -802,7 +802,7 @@ impl Interpreter {
             next_class_brand_id: 0,
             next_auto_accessor_id: 0,
             regexp_legacy: Default::default(),
-            function_keys: FunctionKeys::new(),
+            common_keys: CommonKeys::new(),
             in_tail_position: false,
             in_state_machine: false,
             next_function_is_method: false,
@@ -1921,7 +1921,7 @@ impl Interpreter {
             JsFunction::Native(name, arity, _, _) => (name.as_str(), *arity),
         };
         let name_val = if name.is_empty() {
-            self.function_keys.empty_name.clone()
+            self.common_keys.empty_name.clone()
         } else {
             JsString::from_str(name)
         };
@@ -1978,11 +1978,11 @@ impl Interpreter {
         obj_data.callable = Some(func);
 
         obj_data.push_fresh_property(
-            &self.function_keys.length,
+            &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
         );
         obj_data.push_fresh_property(
-            &self.function_keys.name,
+            &self.common_keys.name,
             PropertyDescriptor::data(JsValue::string(name_val), false, false, true),
         );
         if has_restricted_props {
@@ -1994,8 +1994,8 @@ impl Interpreter {
             };
             let caller = restricted(&self.realm().sloppy_caller_getter);
             let arguments = restricted(&self.realm().sloppy_arguments_getter);
-            obj_data.push_fresh_property(&self.function_keys.caller, caller);
-            obj_data.push_fresh_property(&self.function_keys.arguments, arguments);
+            obj_data.push_fresh_property(&self.common_keys.caller, caller);
+            obj_data.push_fresh_property(&self.common_keys.arguments, arguments);
         }
         let mut prototype_id = None;
         if needs_prototype {
@@ -2010,7 +2010,7 @@ impl Interpreter {
             let proto_id = self.alloc_object(proto_data);
             prototype_id = Some(proto_id);
             obj_data.push_fresh_property(
-                &self.function_keys.prototype,
+                &self.common_keys.prototype,
                 PropertyDescriptor::data(
                     JsValue::object(proto_id),
                     matches!(init, FunctionInit::Default),
@@ -2028,7 +2028,7 @@ impl Interpreter {
             && let Some(proto_obj) = self.get_object_cell(proto_id)
         {
             proto_obj.borrow_mut().push_fresh_property(
-                &self.function_keys.constructor,
+                &self.common_keys.constructor,
                 PropertyDescriptor::data(func_val.clone(), true, false, true),
             );
         }

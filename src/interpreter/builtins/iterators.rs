@@ -4464,11 +4464,11 @@ impl Interpreter {
         data.prototype_id = self.realm().object_prototype;
         data.property_order.reserve_exact(2);
         data.push_fresh_property(
-            &self.function_keys.value,
+            &self.common_keys.value,
             PropertyDescriptor::data_default(value),
         );
         data.push_fresh_property(
-            &self.function_keys.done,
+            &self.common_keys.done,
             PropertyDescriptor::data_default(JsValue::boolean(done)),
         );
         JsValue::object(self.alloc_object(data))

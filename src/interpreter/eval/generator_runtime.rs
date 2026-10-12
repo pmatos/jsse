@@ -810,9 +810,6 @@ impl Interpreter {
             StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
         };
 
-        // The one-shot resume inputs now live in the locals above; the object
-        // keeps its machine, environment and try stack and just flips to
-        // `Executing`.
         if let Some(IteratorState::StateMachineGenerator {
             execution_state,
             _sent_value,
@@ -829,6 +826,8 @@ impl Interpreter {
             *delegated_iterator = None;
             *pending_exception = None;
             *pending_return = None;
+        } else {
+            debug_assert!(false, "resumed generator lost its state-machine state");
         }
 
         use crate::interpreter::generator_transform::SentValueBindingKind;
@@ -948,6 +947,7 @@ impl Interpreter {
             }};
         }
 
+        // Borrowed terminators must outlive the moves of `state_machine`.
         let machine = Rc::clone(&state_machine);
 
         loop {
@@ -4257,6 +4257,7 @@ impl Interpreter {
             }};
         }
 
+        // Borrowed terminators must outlive the moves of `state_machine`.
         let machine = Rc::clone(&state_machine);
 
         loop {
@@ -7198,9 +7199,7 @@ fn env_has_pending_dispose(env: &EnvRef) -> bool {
         .is_some_and(|stack| !stack.is_empty())
 }
 
-/// Makes `slot` equal to `src`, writing only the entries that differ. The
-/// drivers mirror their local stacks into the GC-visible side tables on every
-/// state transition, where nearly every entry is already identical.
+/// Makes `slot` equal to `src`, writing only the entries that differ.
 fn mirror_stack<T: Clone>(slot: &mut Vec<T>, src: &[T], same: fn(&T, &T) -> bool) {
     slot.truncate(src.len());
     for (dst, entry) in slot.iter_mut().zip(src) {
