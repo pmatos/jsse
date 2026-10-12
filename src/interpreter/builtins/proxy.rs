@@ -3,10 +3,8 @@ use super::super::*;
 impl Interpreter {
     pub(crate) fn setup_proxy(&mut self) {
         // Proxy constructor
-        let proxy_fn = self.create_function(JsFunction::constructor(
-            "Proxy".to_string(),
-            2,
-            |interp, _this, args| {
+        let proxy_fn = self.create_function_with(
+            JsFunction::constructor("Proxy".to_string(), 2, |interp, _this, args| {
                 // Must be called with new (we check new.target)
                 if interp.new_target.is_none() {
                     return Completion::Throw(
@@ -30,7 +28,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(proxy_obj_id)
                     .borrow_mut()
-                    .class_name = "Proxy".to_string();
+                    .class_name = "Proxy".into();
                 if let Some(target_id) = target.as_object_id()
                     && let Some(handler_id) = handler.as_object_id()
                     && let Some(target_rc) = interp.get_object_cell(target_id)
@@ -46,18 +44,12 @@ impl Interpreter {
                 }
                 let proxy_id = proxy_obj_id;
                 Completion::Normal(JsValue::object(proxy_id))
-            },
-        ));
+            }),
+            FunctionInit::NoPrototype,
+        );
 
         // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj
         // The proxy constructor already returns an Object, so eval_new will use it.
-
-        // Per spec §26.2.2: Proxy constructor has no prototype property
-        if let Some(proxy_fn_id) = proxy_fn.as_object_id()
-            && let Some(proxy_func_obj) = self.get_object_cell(proxy_fn_id)
-        {
-            proxy_func_obj.borrow_mut().remove_property("prototype");
-        }
 
         // Proxy.revocable(target, handler)
         if let Some(proxy_fn_id) = proxy_fn.as_object_id()
@@ -85,7 +77,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(proxy_obj_id)
                         .borrow_mut()
-                        .class_name = "Proxy".to_string();
+                        .class_name = "Proxy".into();
                     if let Some(target_id) = target.as_object_id()
                         && let Some(handler_id) = handler.as_object_id()
                         && let Some(target_rc) = interp.get_object_cell(target_id)

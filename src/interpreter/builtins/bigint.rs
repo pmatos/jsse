@@ -35,7 +35,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "BigInt".to_string();
+            .class_name = "BigInt".into();
 
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
             if let Some(bigint) = this.with_bigint(Clone::clone) {

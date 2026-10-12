@@ -797,7 +797,6 @@ impl Interpreter {
             }
         }
         self.objects.free(id);
-        self.function_realm_map.remove(&id);
         self.iterator_next_cache.remove(&id);
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);
@@ -1247,6 +1246,9 @@ impl Interpreter {
             for binding in borrowed.bindings.values() {
                 Self::collect_value_roots(&binding.value, worklist);
             }
+            if let Some(this) = &borrowed.this_binding {
+                Self::collect_value_roots(&this.value, worklist);
+            }
             // The with-target is interned (id-only) — root it explicitly so
             // identifier resolution inside `with(o) { ... }` keeps `o` alive
             // across GC.
@@ -1374,15 +1376,15 @@ mod tests {
     fn collect_env_roots_walks_parent_chain_and_terminates_on_cycle() {
         // (a) child binds "a"=Object(30), parent binds "b"=Object(31) → {30,31}
         let parent = Environment::new(None);
-        parent.borrow_mut().bindings.insert(
-            "b".to_string(),
-            Binding::new(obj(31), BindingKind::Var, true),
-        );
+        parent
+            .borrow_mut()
+            .bindings
+            .insert("b", Binding::new(obj(31), BindingKind::Var, true));
         let child = Environment::new(Some(parent.clone()));
-        child.borrow_mut().bindings.insert(
-            "a".to_string(),
-            Binding::new(obj(30), BindingKind::Var, true),
-        );
+        child
+            .borrow_mut()
+            .bindings
+            .insert("a", Binding::new(obj(30), BindingKind::Var, true));
 
         let mut worklist = Vec::new();
         Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
@@ -1391,10 +1393,10 @@ mod tests {
         // (b) self-referential env (parent points to itself) binds "c"=Object(32)
         // → terminates without infinite loop, contains 32 exactly once.
         let cyclic = Environment::new(None);
-        cyclic.borrow_mut().bindings.insert(
-            "c".to_string(),
-            Binding::new(obj(32), BindingKind::Var, true),
-        );
+        cyclic
+            .borrow_mut()
+            .bindings
+            .insert("c", Binding::new(obj(32), BindingKind::Var, true));
         cyclic.borrow_mut().parent = Some(cyclic.clone());
 
         let mut worklist = Vec::new();
@@ -1403,12 +1405,22 @@ mod tests {
     }
 
     #[test]
+    fn collect_env_roots_marks_the_this_binding() {
+        let env = Environment::new(None);
+        env.borrow_mut().set_this(obj(34));
+        let child = Environment::new(Some(env));
+
+        let mut worklist = Vec::new();
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
+        assert_eq!(worklist, vec![34]);
+    }
+
+    #[test]
     fn environment_roots_are_scanned_once_per_collection() {
         let env = Environment::new(None);
-        env.borrow_mut().bindings.insert(
-            "shared".to_string(),
-            Binding::new(obj(33), BindingKind::Var, true),
-        );
+        env.borrow_mut()
+            .bindings
+            .insert("shared", Binding::new(obj(33), BindingKind::Var, true));
         let mut worklist = Vec::new();
         let mut seen_envs = HashSet::new();
 
@@ -1720,10 +1732,9 @@ mod tests {
         assert!(interp.objects.get_cell_expect(owner).is_old());
 
         let child = interp.alloc_object(JsObjectData::new());
-        env.borrow_mut().bindings.insert(
-            "captured".to_string(),
-            Binding::new(obj(child), BindingKind::Var, true),
-        );
+        env.borrow_mut()
+            .bindings
+            .insert("captured", Binding::new(obj(child), BindingKind::Var, true));
         interp.gc.request_minor();
         interp.gc_safepoint();
 
@@ -1860,8 +1871,8 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_map_data = JsObjectData::new();
-        weak_map_data.class_name = "WeakMap".to_string();
-        weak_map_data.kind = ObjectKind::Map(Vec::new());
+        weak_map_data.class_name = "WeakMap".into();
+        weak_map_data.kind = ObjectKind::Map(KeyedEntries::default());
         let weak_map = interp.alloc_object(weak_map_data);
         interp.gc_root_id(weak_map);
         interp.gc.request();
@@ -1904,8 +1915,8 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_set_data = JsObjectData::new();
-        weak_set_data.class_name = "WeakSet".to_string();
-        weak_set_data.kind = ObjectKind::Set(Vec::new());
+        weak_set_data.class_name = "WeakSet".into();
+        weak_set_data.kind = ObjectKind::Set(KeyedEntries::default());
         let weak_set = interp.alloc_object(weak_set_data);
         interp.gc_root_id(weak_set);
         interp.gc.request();

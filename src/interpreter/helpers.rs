@@ -240,6 +240,25 @@ fn string_to_number(s: &JsString) -> f64 {
     trimmed.parse::<f64>().unwrap_or(f64::NAN)
 }
 
+/// The NumericValue of a BigInt literal's source text (12.9.3): decimal, or a
+/// `0x`/`0o`/`0b` prefixed radix form, with the trailing `n` already removed.
+pub(crate) fn parse_bigint_literal(text: &str) -> num_bigint::BigInt {
+    use num_bigint::BigInt;
+    let radix_digits = |lower: &str, upper: &str| {
+        text.strip_prefix(lower)
+            .or_else(|| text.strip_prefix(upper))
+    };
+    if let Some(hex) = radix_digits("0x", "0X") {
+        BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
+    } else if let Some(oct) = radix_digits("0o", "0O") {
+        BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
+    } else if let Some(bin) = radix_digits("0b", "0B") {
+        BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
+    } else {
+        text.parse::<BigInt>().unwrap_or_default()
+    }
+}
+
 // §7.1.14 StringToBigInt: the single canonical parse of a String value to a
 // BigInt, returning None when the string is not a valid StringIntegerLiteral.
 // Shared by the BigInt constructor, ToBigInt (typed-array/DataView writes,
@@ -295,6 +314,30 @@ pub(crate) fn string_to_bigint(s: &str) -> Option<num_bigint::BigInt> {
 pub(crate) fn to_js_string(val: &JsValue) -> String {
     val.with_bigint(|b| b.to_string())
         .unwrap_or_else(|| format!("{val}"))
+}
+
+/// `lval + rval` for primitives where at least one side is a String.
+/// A left string that owns its buffer's tail is extended in place.
+pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> JsValue {
+    if let Some(left) = lval.as_string() {
+        if rval.is_string() {
+            if left.is_empty() {
+                return rval.clone();
+            }
+            let joined = rval.with_string(|r| left.concat_units(r));
+            return JsValue::string(joined.expect("kind checked"));
+        }
+        let units = js_value_to_code_units(rval);
+        return JsValue::string(if left.is_empty() {
+            JsString::from_vec(units)
+        } else {
+            left.concat_units(&units)
+        });
+    }
+    debug_assert!(rval.is_string());
+    let mut units = js_value_to_code_units(lval);
+    rval.with_string(|r| units.extend_from_slice(r));
+    JsValue::string(JsString::from_vec(units))
 }
 
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
@@ -444,7 +487,7 @@ fn json_quote_units(units: &[u16]) -> String {
 }
 
 fn json_quote_js_string(s: &JsString) -> String {
-    json_quote_units(&s.code_units)
+    json_quote_units(s.as_units())
 }
 
 // Proxy-aware IsArray (§7.2.2)
@@ -655,9 +698,9 @@ fn json_stringify_internal(
         let class = if let Some(cell) = interp.get_object_cell(value_id) {
             cell.borrow().class_name.clone()
         } else {
-            String::new()
+            "".into()
         };
-        match class.as_str() {
+        match &*class {
             "Number" => {
                 let n = interp.to_number_value(&value)?;
                 value = JsValue::number(n)
@@ -1277,7 +1320,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                         }
                         // Source includes quotes, parse it to compare
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_js_string(inner).code_units.as_slice() == units
+                        json_unescape_js_string(inner).as_units() == units
                     })
                     .unwrap_or(false)
             };

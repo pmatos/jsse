@@ -171,6 +171,18 @@ fn function_environment_pool_reuses_and_resets_unescaped_storage() {
 }
 
 #[test]
+fn function_environment_pool_does_not_pin_the_previous_receiver() {
+    let mut interp = Interpreter::new();
+    let env = interp.acquire_function_environment(Environment::new(None), 1);
+    env.borrow_mut().set_this(JsValue::object(4242));
+    interp.recycle_function_environment(env);
+
+    let reused = interp.acquire_function_environment(Environment::new(None), 1);
+    assert!(reused.borrow().this_binding.is_none());
+    assert!(reused.borrow().get_this().is_none());
+}
+
+#[test]
 fn function_environment_pool_rejects_escaped_storage() {
     let mut interp = Interpreter::new();
     let env = interp.acquire_function_environment(Environment::new(None), 1);
@@ -224,6 +236,59 @@ fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
     );
 
     assert!(!interp.function_env_pool.is_empty());
+}
+
+#[test]
+fn non_construct_call_leaves_last_call_this_value_unset() {
+    for run in [run_script, run_script_tree_walker] {
+        let interp = run(r#"
+            function sloppy(a) { return a; }
+            function strict(a) { "use strict"; return this === undefined ? a : 0; }
+            var r = sloppy(1) + strict(2) + sloppy.call({}, 3);
+            if (r !== 6) throw new Error("unexpected result");
+            "#);
+        assert!(interp.last_call_this_value.is_none());
+    }
+}
+
+#[test]
+fn functions_that_never_mention_arguments_get_no_binding_and_inline_frame_args() {
+    let mut interp = Interpreter::new();
+    let global_id = interp.realm().global_object.expect("global object");
+    interp.define_method(global_id, "probe", 0, |interp, _this, _args| {
+        let has_binding = interp
+            .call_stack_envs
+            .last()
+            .expect("caller env")
+            .borrow()
+            .bindings
+            .contains_key("arguments");
+        let (deferred, spilled) = match interp.call_stack_frames.last().map(|f| &f.arguments) {
+            Some(CallFrameArguments::Deferred { args, .. }) => (true, args.is_spilled()),
+            _ => (false, false),
+        };
+        Completion::Normal(JsValue::from_str(&format!(
+            "{has_binding}:{deferred}:{spilled}"
+        )))
+    });
+    run_step(
+        &mut interp,
+        r#"
+        function plain(a, b) { return probe(); }
+        function mentions() { return probe() + typeof arguments; }
+        globalThis.noMention = plain(1, 2);
+        globalThis.withMention = mentions(1);
+        globalThis.fewArgs = plain(1, 2, 3, 4, 5, 6);
+        globalThis.manyArgs = plain(1, 2, 3, 4, 5, 6, 7, 8);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "noMention"), "false:true:false");
+    assert_eq!(
+        global_string(&interp, "withMention"),
+        "true:false:falseobject"
+    );
+    assert_eq!(global_string(&interp, "fewArgs"), "false:true:false");
+    assert_eq!(global_string(&interp, "manyArgs"), "false:true:true");
 }
 
 #[test]
@@ -6068,4 +6133,383 @@ mod root_stack_discipline {
         );
         assert!(interp.gc_temp_roots.is_empty());
     }
+}
+
+// Classes without an explicit constructor share one synthesized constructor
+// Body per shape (base or derived), so evaluating such classes in a loop must
+// not add a per-Body cache entry per evaluation. `new B()` takes the
+// default-derived fast path and never runs B's synthesized Body, so the derived
+// shape is exercised through `Reflect.construct`, which does.
+#[test]
+fn synthesized_default_constructors_share_one_body_per_shape() {
+    let interp = run_script(
+        r#"
+        class Base { constructor() { this.tag = "base"; } }
+        var made = 0;
+        for (var i = 0; i < 500; i++) {
+          class A {}
+          class B extends Base {}
+          var a = new A();
+          var b = new B();
+          var c = Reflect.construct(B, []);
+          if (a instanceof A && b instanceof Base && b.tag === "base" &&
+              c instanceof B && c.tag === "base") made++;
+        }
+        globalThis.__made = made;
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__made"), 500.0);
+    assert!(
+        interp.ic_store.len() < 20,
+        "expected one IC entry per constructor shape, got {}",
+        interp.ic_store.len()
+    );
+    assert!(
+        interp.bytecode_memo.len() < 20,
+        "expected one compile verdict per constructor shape, got {}",
+        interp.bytecode_memo.len()
+    );
+}
+
+fn user_function_params(
+    interp: &Interpreter,
+    name: &str,
+) -> (u64, *const Vec<crate::ast::Pattern>) {
+    let id = global_object_id(interp, name);
+    let obj = interp
+        .get_object_cell(id)
+        .expect("function object must be live")
+        .borrow();
+    match obj.callable.as_ref() {
+        Some(JsFunction::User { params, .. }) => (id, Rc::as_ptr(params)),
+        other => panic!("global {name} must be a user function, got {other:?}"),
+    }
+}
+
+fn assert_literal_params_shared(setup: &str) {
+    for bytecode in [true, false] {
+        let mut interp = Interpreter::new();
+        interp.bytecode_enabled = bytecode;
+        run_step(&mut interp, setup);
+        let (id_a, params_a) = user_function_params(&interp, "a");
+        let (id_b, params_b) = user_function_params(&interp, "b");
+        assert_ne!(id_a, id_b, "closures must be distinct objects: {setup}");
+        assert!(
+            std::ptr::eq(params_a, params_b),
+            "closures of one literal must share parameter patterns (bytecode={bytecode}): {setup}"
+        );
+    }
+}
+
+#[test]
+fn closures_of_one_function_expression_share_params() {
+    assert_literal_params_shared(
+        "function mk() { return function (x, y = 1) { return x + y; }; }
+         var a = mk(), b = mk();",
+    );
+}
+
+#[test]
+fn closures_of_one_arrow_share_params() {
+    assert_literal_params_shared(
+        "function mk() { return (x, [y]) => x + y; }
+         var a = mk(), b = mk();",
+    );
+}
+
+#[test]
+fn hoisted_function_declarations_share_params() {
+    assert_literal_params_shared(
+        "function outer() { function inner(p) { return p; } return inner; }
+         var a = outer(), b = outer();",
+    );
+}
+
+#[test]
+fn switch_case_function_declarations_share_params() {
+    assert_literal_params_shared(
+        "function outer() { switch (1) { case 1: function inner(p) { return p; } return inner; } }
+         var a = outer(), b = outer();",
+    );
+}
+
+#[test]
+fn object_literal_methods_and_accessors_share_params() {
+    let setup =
+        "function mk() { return { m(p) { return p; }, get g() { return 1; }, set s(v) {} }; }
+         var o1 = mk(), o2 = mk();";
+    assert_literal_params_shared(&format!("{setup} var a = o1.m, b = o2.m;"));
+    assert_literal_params_shared(&format!(
+        "{setup} var a = Object.getOwnPropertyDescriptor(o1, 'g').get,
+             b = Object.getOwnPropertyDescriptor(o2, 'g').get;"
+    ));
+    assert_literal_params_shared(&format!(
+        "{setup} var a = Object.getOwnPropertyDescriptor(o1, 's').set,
+             b = Object.getOwnPropertyDescriptor(o2, 's').set;"
+    ));
+}
+
+#[test]
+fn class_elements_share_params_across_evaluations() {
+    let setup = "function mk() {
+           return class { constructor(p) { this.p = p; } m(q) { return q; }
+             get g() { return 1; } static s(r) { return r; } };
+         }
+         var C1 = mk(), C2 = mk();";
+    for (a, b) in [
+        ("C1", "C2"),
+        ("C1.prototype.m", "C2.prototype.m"),
+        (
+            "Object.getOwnPropertyDescriptor(C1.prototype, 'g').get",
+            "Object.getOwnPropertyDescriptor(C2.prototype, 'g').get",
+        ),
+        ("C1.s", "C2.s"),
+    ] {
+        assert_literal_params_shared(&format!("{setup} var a = {a}, b = {b};"));
+    }
+}
+
+#[test]
+fn closures_created_in_generator_and_async_bodies_share_params() {
+    assert_literal_params_shared(
+        "function* gen() { var f = function (p) { return p; }; yield f; }
+         var a = gen().next().value, b = gen().next().value;",
+    );
+    assert_literal_params_shared(
+        "var made = [];
+         async function f() { made.push(function (p) { return p; }); }
+         f(); f();
+         var a = made[0], b = made[1];",
+    );
+}
+
+fn first_function_decl(program: &Program) -> &crate::ast::FunctionDecl {
+    program
+        .body
+        .as_slice()
+        .iter()
+        .find_map(|s| match s {
+            crate::ast::Statement::FunctionDeclaration(f) => Some(f),
+            _ => None,
+        })
+        .expect("function declaration")
+}
+
+#[test]
+fn literal_info_matches_direct_analysis() {
+    let cases = [
+        "function f() {}",
+        "function f(a, b) { return a; }",
+        "function f(a = 1) {}",
+        "function f(...rest) {}",
+        "function f({ a }, [b]) {}",
+        "function f(a = arguments[0]) {}",
+        "function f() { return () => arguments; }",
+        "function f() { return function () { return arguments; }; }",
+        "function f(a) { return arguments.length; }",
+    ];
+    for src in cases {
+        let program = parse_program(src);
+        let f = first_function_decl(&program);
+        let info = f.info();
+        assert_eq!(
+            info.uses_arguments,
+            crate::ast::func_uses_arguments(&f.params, &f.body),
+            "uses_arguments: {src}"
+        );
+        assert_eq!(
+            info.has_simple_params,
+            crate::ast::params_are_simple(&f.params),
+            "has_simple_params: {src}"
+        );
+        assert_eq!(info.params.len(), f.params.len(), "{src}");
+        assert!(Rc::ptr_eq(&info, &f.info()), "info must be cached: {src}");
+    }
+}
+
+#[test]
+fn literal_info_cell_resets_on_clone() {
+    let program = parse_program("function f(a) { return arguments; }");
+    let f = first_function_decl(&program);
+    let original = f.info();
+    let cloned = f.clone();
+    assert!(!Rc::ptr_eq(&original, &cloned.info()));
+}
+
+/// `FunctionLiteralInfo` is cached on the function AST nodes (#900); that must
+/// not grow `Expression`/`Statement`, which every AST walk copies and traverses.
+#[test]
+fn function_literal_cache_does_not_grow_ast_nodes() {
+    assert!(std::mem::size_of::<crate::ast::Expression>() <= 112);
+    assert!(std::mem::size_of::<crate::ast::Statement>() <= 344);
+}
+
+// -- Global data fast path (#905) ---------------------------------------------
+// `global_access.rs` decides whether a bare name that resolved to the global
+// object may be read or written with one own-property probe. It must answer
+// `None` / `false`, leaving the object untouched, for everything the generic
+// Object Environment Record path treats observably differently.
+
+fn realm_global_object(interp: &Interpreter) -> u64 {
+    interp.realm().global_object.expect("global object")
+}
+
+#[test]
+fn global_object_own_data_reads_data_properties_only() {
+    let interp = run_script(
+        r#"
+        var plain = 41;
+        Object.defineProperty(globalThis, "getterOnly", { get() { return 1; }, configurable: true });
+        Object.defineProperty(globalThis, "setterOnly", { set(v) {}, configurable: true });
+        Object.prototype.inherited = 7;
+        "#,
+    );
+    let gid = realm_global_object(&interp);
+    let hints: Vec<GlobalHint> = ["plain", "getterOnly", "setterOnly", "inherited", "missing"]
+        .into_iter()
+        .map(GlobalHint::new)
+        .collect();
+    for _ in 0..3 {
+        for with_hints in [false, true] {
+            let hint = |i: usize| if with_hints { Some(&hints[i]) } else { None };
+            let value = interp.global_object_own_data(gid, "plain", hint(0));
+            assert_eq!(value.and_then(|v| v.as_number()), Some(41.0));
+            assert!(
+                interp
+                    .global_object_own_data(gid, "getterOnly", hint(1))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "setterOnly", hint(2))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "inherited", hint(3))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "missing", hint(4))
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn global_object_own_data_hint_survives_property_churn() {
+    let interp = run_script("var keep = 1; var churn = 2;");
+    let gid = realm_global_object(&interp);
+    let hint = GlobalHint::new("churn");
+    assert!(
+        interp
+            .global_object_own_data(gid, "churn", Some(&hint))
+            .is_some()
+    );
+    {
+        let cell = interp.get_object_cell(gid).expect("global").clone();
+        let mut g = cell.borrow_mut();
+        g.remove_property("keep");
+        g.remove_property("churn");
+        g.insert_property(
+            "churn",
+            PropertyDescriptor::data(JsValue::number(9.0), true, true, true),
+        );
+    }
+    let value = interp.global_object_own_data(gid, "churn", Some(&hint));
+    assert_eq!(value.and_then(|v| v.as_number()), Some(9.0));
+    interp
+        .get_object_cell(gid)
+        .expect("global")
+        .borrow_mut()
+        .remove_property("churn");
+    assert!(
+        interp
+            .global_object_own_data(gid, "churn", Some(&hint))
+            .is_none()
+    );
+}
+
+#[test]
+fn global_object_store_own_data_refuses_everything_but_writable_data() {
+    let interp = run_script(
+        r#"
+        var writable = 1;
+        Object.defineProperty(globalThis, "frozen", { value: 1, writable: false, configurable: true });
+        Object.defineProperty(globalThis, "accessor", { get() { return 1; }, set(v) {}, configurable: true });
+        "#,
+    );
+    let gid = realm_global_object(&interp);
+    let hint = GlobalHint::new("writable");
+    let (frozen_hint, accessor_hint, absent_hint) = (
+        GlobalHint::new("frozen"),
+        GlobalHint::new("accessor"),
+        GlobalHint::new("absent"),
+    );
+    let new_value = JsValue::number(99.0);
+    for with_hints in [false, true] {
+        fn pick(on: bool, h: &GlobalHint) -> Option<&GlobalHint> {
+            on.then_some(h)
+        }
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "frozen",
+            &new_value,
+            pick(with_hints, &frozen_hint)
+        ));
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "accessor",
+            &new_value,
+            pick(with_hints, &accessor_hint)
+        ));
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "absent",
+            &new_value,
+            pick(with_hints, &absent_hint)
+        ));
+    }
+    assert_eq!(
+        interp
+            .global_object_own_data(gid, "frozen", None)
+            .and_then(|v| v.as_number()),
+        Some(1.0)
+    );
+    assert!(
+        interp
+            .get_object_cell(gid)
+            .expect("global")
+            .borrow()
+            .properties
+            .get("absent")
+            .is_none(),
+        "the helper must never create a property"
+    );
+    assert!(interp.global_object_store_own_data(gid, "writable", &new_value, Some(&hint)));
+    assert_eq!(
+        interp
+            .global_object_own_data(gid, "writable", None)
+            .and_then(|v| v.as_number()),
+        Some(99.0)
+    );
+}
+
+#[test]
+fn global_object_helpers_refuse_a_proxy_receiver() {
+    let interp = run_script("var target = { x: 1 }; var p = new Proxy(target, {});");
+    let proxy_id = global_object_id(&interp, "p");
+    let value = JsValue::number(2.0);
+    assert!(interp.global_object_own_data(proxy_id, "x", None).is_none());
+    assert!(!interp.global_object_store_own_data(proxy_id, "x", &value, None));
+    let target_id = global_object_id(&interp, "target");
+    let target_x = interp
+        .get_object_cell(target_id)
+        .expect("target")
+        .borrow()
+        .get_property_value("x")
+        .and_then(|v| v.as_number());
+    assert_eq!(target_x, Some(1.0));
 }

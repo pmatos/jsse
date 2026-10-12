@@ -27,11 +27,17 @@ pub(crate) use dispose::{
     AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
     GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
 };
+mod atom;
+mod binding_map;
+pub(crate) use atom::Atom;
+pub(crate) use binding_map::BindingName;
 mod body_memo;
 mod env_helpers;
 mod eval;
 mod exec;
 mod gc;
+pub(crate) mod global_access;
+pub(crate) use global_access::GlobalHint;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
 mod hoist_cache;
@@ -238,6 +244,47 @@ impl std::fmt::Display for ModuleKey {
     }
 }
 
+/// Property keys written on every function object, interned once so
+/// `create_function` appends them without re-hashing (issue #901).
+struct FunctionKeys {
+    length: JsPropertyKey,
+    name: JsPropertyKey,
+    caller: JsPropertyKey,
+    arguments: JsPropertyKey,
+    prototype: JsPropertyKey,
+    constructor: JsPropertyKey,
+    /// Shared `name` value of anonymous functions.
+    empty_name: JsString,
+}
+
+impl FunctionKeys {
+    fn new() -> Self {
+        use key_intern::intern_key;
+        Self {
+            length: intern_key("length"),
+            name: intern_key("name"),
+            caller: intern_key("caller"),
+            arguments: intern_key("arguments"),
+            prototype: intern_key("prototype"),
+            constructor: intern_key("constructor"),
+            empty_name: JsString::from_str(""),
+        }
+    }
+}
+
+/// Own `prototype` shape requested of `create_function_with`.
+#[derive(Clone, Copy)]
+enum FunctionInit {
+    /// Constructable functions get a writable own `prototype`.
+    Default,
+    /// Class constructors get a non-writable `prototype`
+    /// (sec-runtime-semantics-classdefinitionevaluation).
+    ClassConstructor,
+    /// Bound functions and `Proxy` have no own `prototype`
+    /// (sec-bound-function-exotic-objects).
+    NoPrototype,
+}
+
 pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
@@ -286,10 +333,16 @@ pub(crate) struct Interpreter {
     current_module_path: Option<ModuleKey>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
+    /// Set only by a `[[Construct]]` call of a user function (`was_construct`
+    /// in `call_function_inner_impl`); plain calls leave it untouched.
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     calling_as_construct: bool,
     function_env_pool: Vec<EnvRef>,
+    /// Recycled operand/reference stacks for bytecode chunk activations, so a
+    /// call does not allocate two `Vec`s (see `vm::run_chunk_with_var_prologue`).
+    vm_stack_pool: Vec<Vec<JsValue>>,
+    vm_ref_pool: Vec<Vec<crate::interpreter::eval::IdentifierRef>>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: root_stack::RootStack,
@@ -299,7 +352,7 @@ pub(crate) struct Interpreter {
     next_class_brand_id: u64,
     next_auto_accessor_id: u64,
     pub(crate) regexp_legacy: builtins::regexp::RegexpLegacyState,
-    pub(crate) function_realm_map: FxHashMap<u64, usize>,
+    function_keys: FunctionKeys,
     pub(crate) in_tail_position: bool,
     pub(crate) in_state_machine: bool,
     pub(crate) next_function_is_method: bool,
@@ -383,6 +436,9 @@ pub(crate) struct Interpreter {
     /// Per-body bytecode compile verdict shared by every closure of a function
     /// literal (#900). See `body_memo`.
     pub(crate) bytecode_memo: body_memo::BodyMemo<bytecode::BytecodeCacheState>,
+    /// Interned simple-parameter names per Body, so a call binds parameters
+    /// without hashing them (#898).
+    pub(crate) frame_layout_memo: body_memo::BodyMemo<Rc<Vec<Atom>>>,
     /// Per-body generator/async state machine, built once per function literal
     /// instead of on every call (#914). See `body_memo`.
     pub(crate) state_machine_memo: body_memo::BodyMemo<(
@@ -560,25 +616,31 @@ const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 /// registry key, so it never reaches a real file of the same name.
 pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 
+/// Arguments a sloppy frame keeps for the legacy `fn.arguments` accessor.
+/// Inline for the common arities so a call that never reads them does not
+/// allocate.
 pub(crate) struct DeferredCallArguments {
-    first: Option<JsValue>,
-    rest: Vec<JsValue>,
+    values: smallvec::SmallVec<[JsValue; 6]>,
 }
 
 impl DeferredCallArguments {
     pub(crate) fn new(args: &[JsValue]) -> Self {
         Self {
-            first: args.first().cloned(),
-            rest: args.get(1..).unwrap_or(&[]).to_vec(),
+            values: args.iter().cloned().collect(),
         }
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &JsValue> {
-        self.first.iter().chain(self.rest.iter())
+        self.values.iter()
     }
 
     fn to_vec(&self) -> Vec<JsValue> {
-        self.values().cloned().collect()
+        self.values.to_vec()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_spilled(&self) -> bool {
+        self.values.spilled()
     }
 }
 
@@ -679,7 +741,7 @@ impl Interpreter {
                 ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
-                    name.to_string(),
+                    name,
                     Binding {
                         value,
                         kind: BindingKind::ImmutableValue,
@@ -724,6 +786,8 @@ impl Interpreter {
             constructing_derived: false,
             calling_as_construct: false,
             function_env_pool: Vec::new(),
+            vm_stack_pool: Vec::new(),
+            vm_ref_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: root_stack::RootStack::default(),
@@ -732,7 +796,7 @@ impl Interpreter {
             next_class_brand_id: 0,
             next_auto_accessor_id: 0,
             regexp_legacy: Default::default(),
-            function_realm_map: FxHashMap::default(),
+            function_keys: FunctionKeys::new(),
             in_tail_position: false,
             in_state_machine: false,
             next_function_is_method: false,
@@ -777,6 +841,7 @@ impl Interpreter {
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
             bytecode_memo: body_memo::BodyMemo::new(),
+            frame_layout_memo: body_memo::BodyMemo::new(),
             state_machine_memo: body_memo::BodyMemo::new(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: None,
@@ -810,7 +875,7 @@ impl Interpreter {
                 ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
-                    name.to_string(),
+                    name,
                     Binding {
                         value,
                         kind: BindingKind::ImmutableValue,
@@ -890,7 +955,7 @@ impl Interpreter {
             move |interp, _this, args| {
                 let code_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let code = if let Some(s) = (code_val).as_string() {
-                    crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+                    crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
                 } else {
                     match interp.to_string_value(&code_val) {
                         Ok(s) => s,
@@ -1266,7 +1331,7 @@ impl Interpreter {
         {
             let mut obj = self.get_object_cell_expect(source_id).borrow_mut();
             obj.prototype_id = proto_id;
-            obj.class_name = "AbstractModuleSource".to_string();
+            obj.class_name = "AbstractModuleSource".into();
         }
         let source_val = JsValue::object(source_id);
 
@@ -1592,8 +1657,7 @@ impl Interpreter {
                 return self.get_function_realm(&JsValue::object(target_id));
             }
             drop(obj_ref);
-            // Check function_realm_map
-            if let Some(&realm_id) = self.function_realm_map.get(&o.id) {
+            if let Some(realm_id) = self.function_realm_of(o.id) {
                 return Ok(realm_id);
             }
         }
@@ -1808,169 +1872,153 @@ impl Interpreter {
         self.create_function(func)
     }
 
+    /// Realm a function object was created in, or `None` for objects that
+    /// are not function objects built by `create_function` (callers fall
+    /// back to the current realm, sec-getfunctionrealm).
+    #[inline]
+    pub(crate) fn function_realm_of(&self, id: u64) -> Option<usize> {
+        self.get_object_cell(id)
+            .and_then(|cell| cell.borrow().function_realm)
+    }
+
     fn create_function(&mut self, func: JsFunction) -> JsValue {
-        let is_gen = matches!(
-            &func,
+        self.create_function_with(func, FunctionInit::Default)
+    }
+
+    /// Build a function object. `init` lets callers that would otherwise
+    /// create-then-strip (bound functions, `Proxy`, class constructors) ask for
+    /// the final own-property shape directly.
+    fn create_function_with(&mut self, func: JsFunction, init: FunctionInit) -> JsValue {
+        let (is_gen, is_async) = match &func {
             JsFunction::User {
-                is_generator: true,
+                is_generator,
+                is_async,
                 ..
-            }
-        );
-        let is_async_gen = matches!(
-            &func,
-            JsFunction::User {
-                is_generator: true,
-                is_async: true,
-                ..
-            }
-        );
-        let is_async_non_gen = matches!(
-            &func,
-            JsFunction::User {
-                is_generator: false,
-                is_async: true,
-                ..
-            }
-        );
-        let (fn_name, fn_length) = match &func {
+            } => (*is_generator, *is_async),
+            JsFunction::Native(..) => (false, false),
+        };
+        let is_async_gen = is_gen && is_async;
+        let (name, fn_length) = match &func {
             JsFunction::User { name, params, .. } => {
-                let n = name.clone().unwrap_or_default();
                 let len = params
                     .iter()
                     .take_while(|p| !matches!(p, Pattern::Assign(..) | Pattern::Rest(_)))
                     .count();
-                (n, len)
+                (name.as_deref().unwrap_or(""), len)
             }
-            JsFunction::Native(name, arity, _, _) => (name.clone(), *arity),
+            JsFunction::Native(name, arity, _, _) => (name.as_str(), *arity),
+        };
+        let name_val = if name.is_empty() {
+            self.function_keys.empty_name.clone()
+        } else {
+            JsString::from_str(name)
+        };
+        let (proto_id, class_name) = if is_async_gen {
+            (
+                self.realm().async_generator_function_prototype,
+                "AsyncGeneratorFunction",
+            )
+        } else if is_gen {
+            (
+                self.realm().generator_function_prototype,
+                "GeneratorFunction",
+            )
+        } else if is_async {
+            (self.realm().async_function_prototype, "AsyncFunction")
+        } else {
+            (self.realm().function_prototype, "Function")
         };
         let mut obj_data = JsObjectData::new();
-        let proto_id = if is_async_gen {
-            self.realm()
-                .async_generator_function_prototype
-                .or(self.realm().object_prototype)
-        } else if is_gen {
-            self.realm()
-                .generator_function_prototype
-                .or(self.realm().object_prototype)
-        } else if is_async_non_gen {
-            self.realm()
-                .async_function_prototype
-                .or(self.realm().object_prototype)
-        } else {
-            self.realm()
-                .function_prototype
-                .or(self.realm().object_prototype)
-        };
-        obj_data.prototype_id = proto_id;
-        obj_data.callable = Some(func);
-        obj_data.class_name = if is_async_gen {
-            "AsyncGeneratorFunction".to_string()
-        } else if is_gen {
-            "GeneratorFunction".to_string()
-        } else if is_async_non_gen {
-            "AsyncFunction".to_string()
-        } else {
-            "Function".to_string()
-        };
-        obj_data.insert_property(
-            "length".to_string(),
-            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
-        );
-        obj_data.insert_property(
-            "name".to_string(),
-            PropertyDescriptor::data(
-                JsValue::string(JsString::from_str(&fn_name)),
-                false,
-                false,
-                true,
-            ),
-        );
-        // Annex B: sloppy non-arrow, non-generator, non-async functions get
-        // own caller/arguments to shadow the ThrowTypeError accessor.
-        if let Some(JsFunction::User {
-            is_strict,
-            is_arrow,
-            is_generator,
-            is_async,
-            ..
-        }) = &obj_data.callable
-            && !*is_strict
-            && !*is_arrow
-            && !*is_generator
-            && !*is_async
-        {
-            if let Some(ref getter) = self.realm().sloppy_caller_getter.clone() {
-                obj_data.insert_property(
-                    "caller".to_string(),
-                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
-                );
-            } else {
-                obj_data.insert_property(
-                    "caller".to_string(),
-                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
-                );
+        obj_data.prototype_id = proto_id.or(self.realm().object_prototype);
+        obj_data.class_name = class_name.into();
+        obj_data.function_realm = Some(self.current_realm_id);
+        // Annex B: sloppy non-arrow, non-generator, non-async, non-method
+        // functions get own caller/arguments to shadow the ThrowTypeError
+        // accessor.
+        let has_restricted_props = matches!(
+            &func,
+            JsFunction::User {
+                is_strict: false,
+                is_arrow: false,
+                is_generator: false,
+                is_async: false,
+                is_method: false,
+                ..
             }
-            if let Some(ref getter) = self.realm().sloppy_arguments_getter.clone() {
-                obj_data.insert_property(
-                    "arguments".to_string(),
-                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
-                );
-            } else {
-                obj_data.insert_property(
-                    "arguments".to_string(),
-                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
-                );
-            }
-        }
-        let is_constructable = match &obj_data.callable {
-            Some(JsFunction::User {
+        );
+        let is_constructable = match &func {
+            JsFunction::User {
                 is_arrow,
                 is_async,
                 is_generator,
                 is_method,
                 ..
-            }) => !is_arrow && !is_method && !*is_generator && !*is_async,
-            Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
-            None => false,
+            } => !is_arrow && !is_method && !*is_generator && !*is_async,
+            JsFunction::Native(_, _, _, is_ctor) => *is_ctor,
         };
         // Generators/async-generators always need .prototype (for generator prototype chain)
         // even when they are class methods (non-constructable)
-        let needs_prototype = is_constructable || is_gen || is_async_gen;
+        let needs_prototype =
+            !matches!(init, FunctionInit::NoPrototype) && (is_constructable || is_gen);
+        obj_data.property_order.reserve_exact(
+            2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype),
+        );
+        obj_data.callable = Some(func);
+
+        obj_data.push_fresh_property(
+            &self.function_keys.length,
+            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
+        );
+        obj_data.push_fresh_property(
+            &self.function_keys.name,
+            PropertyDescriptor::data(JsValue::string(name_val), false, false, true),
+        );
+        if has_restricted_props {
+            let restricted = |getter: &Option<JsValue>| match getter {
+                Some(getter) => {
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true)
+                }
+                None => PropertyDescriptor::data(JsValue::NULL, false, false, true),
+            };
+            let caller = restricted(&self.realm().sloppy_caller_getter);
+            let arguments = restricted(&self.realm().sloppy_arguments_getter);
+            obj_data.push_fresh_property(&self.function_keys.caller, caller);
+            obj_data.push_fresh_property(&self.function_keys.arguments, arguments);
+        }
+        let mut prototype_id = None;
         if needs_prototype {
-            let proto_id = self.create_object_id();
-            if is_async_gen {
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .prototype_id = self.realm().async_generator_prototype;
+            let mut proto_data = JsObjectData::new();
+            proto_data.prototype_id = if is_async_gen {
+                self.realm().async_generator_prototype
             } else if is_gen {
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .prototype_id = self.realm().generator_prototype;
-            }
-            let proto_val = JsValue::object(proto_id);
-            obj_data.insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), true, false, false),
+                self.realm().generator_prototype
+            } else {
+                self.realm().object_prototype
+            };
+            let proto_id = self.alloc_object(proto_data);
+            prototype_id = Some(proto_id);
+            obj_data.push_fresh_property(
+                &self.function_keys.prototype,
+                PropertyDescriptor::data(
+                    JsValue::object(proto_id),
+                    matches!(init, FunctionInit::Default),
+                    false,
+                    false,
+                ),
             );
         }
         let func_id = self.alloc_object(obj_data);
-        self.function_realm_map
-            .insert(func_id, self.current_realm_id);
         let func_val = JsValue::object(func_id);
         // Set prototype.constructor = func (not for generators)
         if is_constructable
             && !is_gen
-            && let Some(proto_id) = self
-                .get_object_cell_expect(func_id)
-                .borrow()
-                .get_property_value("prototype")
-                .as_ref()
-                .and_then(JsValue::as_object_id)
+            && let Some(proto_id) = prototype_id
             && let Some(proto_obj) = self.get_object_cell(proto_id)
         {
-            proto_obj
-                .borrow_mut()
-                .insert_builtin("constructor".to_string(), func_val.clone());
+            proto_obj.borrow_mut().push_fresh_property(
+                &self.function_keys.constructor,
+                PropertyDescriptor::data(func_val.clone(), true, false, true),
+            );
         }
         func_val
     }
@@ -2188,7 +2236,7 @@ impl Interpreter {
                 && let Some(ref v) = prop.value
             {
                 if let Some(s) = (v).as_string() {
-                    if !s.code_units.is_empty() {
+                    if !s.is_empty() {
                         return;
                     }
                 } else {
@@ -2246,26 +2294,14 @@ impl Interpreter {
             } => (args.to_vec(), func_env.clone(), *mapped, frame.func_obj_id),
         };
 
-        let param_names = if mapped {
+        let params = if mapped {
             self.get_object_cell(func_obj_id)
-                .and_then(|obj| {
-                    let obj = obj.borrow();
-                    match &obj.callable {
-                        Some(JsFunction::User { params, .. }) => Some(
-                            params
-                                .iter()
-                                .filter_map(|param| match param {
-                                    Pattern::Identifier(name) => Some(name.clone()),
-                                    _ => None,
-                                })
-                                .collect(),
-                        ),
-                        _ => None,
-                    }
+                .and_then(|obj| match &obj.borrow().callable {
+                    Some(JsFunction::User { params, .. }) => Some(params.clone()),
+                    _ => None,
                 })
-                .unwrap_or_default()
         } else {
-            Vec::new()
+            None
         };
         let callee = JsValue::object(func_obj_id);
         let arguments = self.create_arguments_object(
@@ -2273,136 +2309,98 @@ impl Interpreter {
             callee,
             false,
             mapped.then_some(&func_env),
-            &param_names,
+            params.as_deref().map_or(&[], |p| p.as_slice()),
         );
         self.call_stack_frames[frame_index].arguments =
             CallFrameArguments::Materialized(arguments.clone());
         arguments
     }
 
+    /// CreateMappedArgumentsObject (§10.4.4.7) when `func_env` is `Some`
+    /// (`params` are then all plain identifiers), CreateUnmappedArgumentsObject
+    /// (§10.4.4.6) otherwise. The object is fresh and extensible, so its
+    /// properties are installed directly, in the spec's creation order.
     fn create_arguments_object(
         &mut self,
         args: &[JsValue],
         callee: JsValue,
         _is_strict: bool,
         func_env: Option<&EnvRef>,
-        param_names: &[String],
+        params: &[Pattern],
     ) -> JsValue {
+        let thrower = if func_env.is_none() {
+            Some(
+                self.realm()
+                    .throw_type_error
+                    .clone()
+                    .unwrap_or_else(|| self.create_thrower_function()),
+            )
+        } else {
+            None
+        };
+        let array_values = self.realm().array_prototype_values.clone();
+        let iterator_key = self.get_symbol_iterator_key();
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "Arguments".to_string();
+            o.class_name = "Arguments".into();
+            o.property_order.reserve(args.len() + 3);
 
-            // length property: writable, not enumerable, configurable
-            o.define_own_property(
-                "length".to_string(),
-                PropertyDescriptor {
-                    value: Some(JsValue::number(args.len() as f64)),
-                    writable: Some(true),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
+            o.insert_property(
+                "length",
+                PropertyDescriptor::data(JsValue::number(args.len() as f64), true, false, true),
             );
-
-            // Index properties: writable, enumerable, configurable
             for (i, val) in args.iter().enumerate() {
-                o.define_own_property(
-                    i.to_string(),
-                    PropertyDescriptor {
-                        value: Some(val.clone()),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    },
+                o.insert_property(
+                    JsPropertyKey::from_index(i),
+                    PropertyDescriptor::data_default(val.clone()),
                 );
             }
 
             if let Some(env) = func_env {
-                // Mapped (sloppy + simple params): callee is a data property
-                o.define_own_property(
-                    "callee".to_string(),
-                    PropertyDescriptor {
-                        value: Some(callee),
-                        writable: Some(true),
-                        enumerable: Some(false),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    },
+                o.insert_property(
+                    "callee",
+                    PropertyDescriptor::data(callee, true, false, true),
                 );
-
-                let mut map = HashMap::new();
-                let mut mapped_names: HashSet<&str> = HashSet::new();
-                for i in (0..param_names.len()).rev() {
-                    let name = &param_names[i];
-                    if mapped_names.contains(name.as_str()) {
+                // Only the last occurrence of a duplicated parameter name
+                // stays mapped, and only indices that received an argument.
+                let mut map = HashMap::with_capacity(params.len().min(args.len()));
+                for (i, param) in params.iter().enumerate().take(args.len()) {
+                    let Pattern::Identifier(name) = param else {
                         continue;
-                    }
-                    mapped_names.insert(name.as_str());
-                    if i < args.len() {
+                    };
+                    let shadowed = params[i + 1..]
+                        .iter()
+                        .any(|later| matches!(later, Pattern::Identifier(n) if n == name));
+                    if !shadowed {
                         map.insert(i.to_string(), (env.clone(), name.clone()));
                     }
                 }
                 if !map.is_empty() {
                     o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
                 }
-            }
-        }
-
-        let result_id = obj_id;
-        let result = JsValue::object(result_id);
-
-        // Unmapped (strict OR non-simple params): callee is a throw accessor
-        if func_env.is_none() {
-            let thrower = self
-                .realm()
-                .throw_type_error
-                .clone()
-                .unwrap_or_else(|| self.create_thrower_function());
-            if let Some(o) = (result)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(obj_rc) = self.get_object_cell(o.id)
-            {
-                obj_rc.borrow_mut().define_own_property(
-                    "callee".to_string(),
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        get: Some(thrower.clone()),
-                        set: Some(thrower),
-                        enumerable: Some(false),
-                        configurable: Some(false),
-                    },
+            } else if let Some(thrower) = thrower {
+                o.insert_property(
+                    "callee",
+                    PropertyDescriptor::accessor(
+                        Some(thrower.clone()),
+                        Some(thrower),
+                        false,
+                        false,
+                    ),
                 );
             }
-        }
 
-        // Add Symbol.iterator = %Array.prototype.values% (spec §10.4.4.6 step 20 / §10.4.4.7 step 22)
-        // Must be the exact same function object as Array.prototype[@@iterator]
-        if let Some(key) = self.get_symbol_iterator_key() {
-            let array_iter_fn = self
-                .realm()
-                .array_prototype
-                .map(|id| self.get_property_on_id(id, &key));
-            if let Some(iter_fn) = array_iter_fn
-                && !(iter_fn).is_undefined()
-                && let Some(o) = (result)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                && let Some(obj_rc) = self.get_object_cell(o.id)
+            // @@iterator is %Array.prototype.values% (§10.4.4.6 step 20 /
+            // §10.4.4.7 step 22), the intrinsic captured at realm creation —
+            // not whatever Array.prototype[@@iterator] currently holds.
+            if let Some(key) = iterator_key
+                && let Some(values) = array_values
             {
-                obj_rc
-                    .borrow_mut()
-                    .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
+                o.insert_property(key, PropertyDescriptor::data(values, true, false, true));
             }
         }
-
-        result
+        JsValue::object(obj_id)
     }
 
     /// Convert an internal property key back to its ECMAScript String or Symbol value.
@@ -2559,10 +2557,7 @@ impl Interpreter {
     ) -> Completion {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
-        {
-            let mut env = module_env.borrow_mut();
-            env.declare("this", BindingKind::Var);
-        }
+        module_env.borrow_mut().set_this(JsValue::UNDEFINED);
 
         // Register entry-point module in registry to handle self-imports
         let canon_path_entry = module_path
@@ -3277,7 +3272,7 @@ impl Interpreter {
             let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
             module_env.borrow_mut().strict = true;
             module_env.borrow_mut().module_path = Some(canon_path.clone());
-            module_env.borrow_mut().declare("this", BindingKind::Var);
+            module_env.borrow_mut().set_this(JsValue::UNDEFINED);
 
             // Register before traversing dependencies so circular imports see
             // the same Module Record identity.
@@ -3563,7 +3558,7 @@ impl Interpreter {
         let ab_obj_id = self.create_object_id();
         {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
-            ab.class_name = "ArrayBuffer".to_string();
+            ab.class_name = "ArrayBuffer".into();
             ab.prototype_id = self.realm().arraybuffer_prototype;
             ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
                 crate::interpreter::types::ArrayBufferData {
@@ -4981,7 +4976,7 @@ impl Interpreter {
                 module_path,
                 deferred: false,
             });
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".into();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
@@ -5062,7 +5057,7 @@ impl Interpreter {
                 module_path,
                 deferred: true,
             });
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".into();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
@@ -5160,9 +5155,10 @@ impl Interpreter {
             }
             Statement::FunctionDeclaration(f) => {
                 env.borrow_mut().declare(&f.name, BindingKind::Var);
+                let info = f.info();
                 let func = JsFunction::User {
                     name: Some(f.name.clone()),
-                    params: Rc::new(f.params.clone()),
+                    params: info.params.clone(),
                     body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
@@ -5172,8 +5168,8 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&f.params, &f.body),
-                    has_simple_params: crate::ast::params_are_simple(&f.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let val = self.create_function(func);
                 let _ = self.env_set(env, &f.name, val);
@@ -5205,13 +5201,14 @@ impl Interpreter {
                     f.name.clone()
                 };
                 env.borrow_mut().declare(&name, BindingKind::Const);
+                let info = f.info();
                 let func = JsFunction::User {
                     name: Some(if f.name.is_empty() {
                         "default".to_string()
                     } else {
                         f.name.clone()
                     }),
-                    params: Rc::new(f.params.clone()),
+                    params: info.params.clone(),
                     body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
@@ -5221,8 +5218,8 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&f.params, &f.body),
-                    has_simple_params: crate::ast::params_are_simple(&f.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let val = self.create_function(func);
                 env.borrow_mut().initialize_binding(&name, val);
@@ -5390,9 +5387,10 @@ impl Interpreter {
                     func.name.clone()
                 };
                 let enclosing_strict = env.borrow().strict;
+                let info = func.info();
                 let js_func = JsFunction::User {
                     name: Some(name),
-                    params: Rc::new(func.params.clone()),
+                    params: info.params.clone(),
                     body: func.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
@@ -5402,8 +5400,8 @@ impl Interpreter {
                     is_method: false,
                     source_text: func.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&func.params, &func.body),
-                    has_simple_params: crate::ast::params_are_simple(&func.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
@@ -5807,7 +5805,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
-                        o.class_name = "SharedArrayBuffer".to_string();
+                        o.class_name = "SharedArrayBuffer".into();
                         o.prototype_id = sab_proto;
                         o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
                             crate::interpreter::types::ArrayBufferData {
