@@ -74,7 +74,8 @@ fn frame_locals_resolve_through_slots() {
     );
     assert_eq!(perf["local_slot_misses"], 0, "no hint should miss");
     assert!(ops.contains_key("LoadLocal"));
-    assert!(ops.contains_key("StoreLocal"));
+    assert!(ops.contains_key("StoreLocalPop"));
     assert!(!ops.contains_key("ResolveName"));
     assert!(!ops.contains_key("StoreResolvedName"));
+    assert!(!ops.contains_key("StoreResolvedNamePop"));
 }

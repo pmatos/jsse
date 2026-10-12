@@ -192,6 +192,14 @@ impl Compiler {
         self.pop_ref();
     }
 
+    /// `StoreResolvedName` plus popping the stored value (effect context).
+    fn emit_store_resolved_name_pop(&mut self, name_idx: u16) {
+        self.emit(Op::StoreResolvedNamePop);
+        self.emit_u16(name_idx);
+        self.pop_ref();
+        self.pop_n(1);
+    }
+
     fn emit_dup_n(&mut self, count: u8) {
         self.emit(Op::DupN);
         self.code.push(count);
@@ -228,6 +236,14 @@ impl Compiler {
         self.emit(Op::StoreLocal);
         self.emit_u16(name_idx);
         self.emit_u16(slot);
+    }
+
+    /// `StoreLocal` plus popping the stored value (effect context).
+    fn emit_store_local_pop(&mut self, name_idx: u16, slot: u16) {
+        self.emit(Op::StoreLocalPop);
+        self.emit_u16(name_idx);
+        self.emit_u16(slot);
+        self.pop_n(1);
     }
 
     fn reset_script_completion(&mut self) {
@@ -307,53 +323,17 @@ impl Compiler {
                 }
                 let last = exprs.len() - 1;
                 for (i, e) in exprs.iter().enumerate() {
-                    self.compile_expr(e)?;
-                    if i != last {
-                        self.emit(Op::Pop);
-                        self.pop_n(1);
+                    if i == last {
+                        self.compile_expr(e)?;
+                    } else {
+                        self.compile_effect(e)?;
                     }
                 }
                 Ok(())
             }
             Expression::Assign(op, target, value) => match target.as_ref() {
-                Expression::Identifier(name) if self.local_slot(name).is_some() => {
-                    // A local of this frame: no `with`, closure or direct eval
-                    // can change what the name resolves to while the
-                    // right-hand side runs, so the reference needs no early
-                    // resolution.
-                    let idx = self.add_name(name)?;
-                    let slot = self.local_slot(name).expect("checked by the guard");
-                    if *op != AssignOp::Assign {
-                        self.emit(Op::LoadLocal);
-                        self.emit_u16(idx);
-                        self.emit_u16(slot);
-                        self.push_n(1);
-                    }
-                    self.compile_expr(value)?;
-                    if *op != AssignOp::Assign {
-                        self.emit(Self::compound_binary_op(*op)?);
-                        self.pop_n(2);
-                        self.push_n(1);
-                    }
-                    self.emit_store_local(idx, slot);
-                    Ok(())
-                }
                 Expression::Identifier(name) => {
-                    let idx = self.add_name(name)?;
-                    self.emit_resolve_name(idx);
-                    if *op == AssignOp::Assign {
-                        self.compile_expr(value)?;
-                    } else {
-                        self.emit(Op::LoadResolvedName);
-                        self.emit_u16(idx);
-                        self.push_n(1);
-                        self.compile_expr(value)?;
-                        self.emit(Self::compound_binary_op(*op)?);
-                        self.pop_n(2);
-                        self.push_n(1);
-                    }
-                    self.emit_store_resolved_name(idx);
-                    Ok(())
+                    self.compile_identifier_assign(*op, name, value, false)
                 }
                 Expression::Member(obj, prop, _) => match prop {
                     MemberProperty::Dot(name) => {
@@ -418,27 +398,7 @@ impl Compiler {
                 _ => Err(CompileError::Unsupported("assign target")),
             },
             Expression::Update(op, prefix, target) => {
-                let Expression::Identifier(name) = target.as_ref() else {
-                    return Err(CompileError::Unsupported("update target"));
-                };
-                let idx = self.add_name(name)?;
-                if let Some(slot) = self.local_slot(name) {
-                    self.emit(Op::UpdateLocal);
-                    self.emit_u16(idx);
-                    self.emit_u16(slot);
-                } else {
-                    self.emit(Op::UpdateName);
-                    self.emit_u16(idx);
-                }
-                let mode = match (op, prefix) {
-                    (UpdateOp::Increment, false) => 0,
-                    (UpdateOp::Increment, true) => 1,
-                    (UpdateOp::Decrement, false) => 2,
-                    (UpdateOp::Decrement, true) => 3,
-                };
-                self.code.push(mode);
-                self.push_n(1);
-                Ok(())
+                self.compile_identifier_update(*op, *prefix, target, false)
             }
             Expression::Logical(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
@@ -459,9 +419,7 @@ impl Compiler {
                 Ok(())
             }
             Expression::Conditional(test, then_e, else_e) => {
-                self.compile_expr(test)?;
-                self.pop_n(1);
-                let to_else = self.emit_jump(Op::JumpIfFalse);
+                let to_else = self.compile_cond_jump(test)?;
                 self.compile_expr(then_e)?;
                 self.pop_n(1); // value will be re-pushed at the merge point
                 let to_end = self.emit_jump(Op::Jump);
@@ -474,17 +432,39 @@ impl Compiler {
             }
             Expression::Void(operand) => {
                 // Evaluate for side effects, discard, push undefined.
-                self.compile_expr(operand)?;
-                self.emit(Op::Pop);
-                self.pop_n(1);
+                self.compile_effect(operand)?;
                 self.emit(Op::LoadUndefined);
                 self.push_n(1);
                 Ok(())
             }
             Expression::Binary(op, lhs, rhs) => {
+                let bop = Self::binary_op(*op)?;
+                if let Expression::Literal(Literal::Number(k)) = rhs.as_ref() {
+                    // The literal folds into the op: no `LoadConst` dispatch.
+                    // The left operand is still evaluated first and the
+                    // constant has no effects, so evaluation order holds.
+                    let k_idx = self.add_constant(Constant::Number(*k))?;
+                    if let Expression::Identifier(name) = lhs.as_ref()
+                        && let Some(slot) = self.local_slot(name)
+                    {
+                        let idx = self.add_name(name)?;
+                        self.emit(Op::LocalBinConst);
+                        self.emit_u16(idx);
+                        self.emit_u16(slot);
+                        self.code.push(bop as u8);
+                        self.emit_u16(k_idx);
+                        self.push_n(1);
+                    } else {
+                        self.compile_expr(lhs)?;
+                        self.emit(Op::BinConst);
+                        self.code.push(bop as u8);
+                        self.emit_u16(k_idx);
+                    }
+                    return Ok(());
+                }
                 self.compile_expr(lhs)?;
                 self.compile_expr(rhs)?;
-                self.emit(Self::binary_op(*op)?);
+                self.emit(bop);
                 self.pop_n(2);
                 self.push_n(1);
                 Ok(())
@@ -536,6 +516,162 @@ impl Compiler {
             }
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
+    }
+
+    /// Compiles `expr` for its effects only: the operand stack is unchanged
+    /// afterwards. Assignments and updates of identifiers fold the discard
+    /// into the store/update op instead of a trailing `Pop`.
+    fn compile_effect(&mut self, expr: &Expression) -> Result<(), CompileError> {
+        match expr {
+            Expression::Assign(op, target, value) => {
+                if let Expression::Identifier(name) = target.as_ref() {
+                    return self.compile_identifier_assign(*op, name, value, true);
+                }
+            }
+            Expression::Update(op, prefix, target) => {
+                return self.compile_identifier_update(*op, *prefix, target, true);
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) if !exprs.is_empty() => {
+                for e in exprs {
+                    self.compile_effect(e)?;
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+        self.compile_expr(expr)?;
+        self.emit(Op::Pop);
+        self.pop_n(1);
+        Ok(())
+    }
+
+    /// `name = value` / `name op= value`. Leaves the assigned value on the
+    /// operand stack, or nothing when `discard`.
+    fn compile_identifier_assign(
+        &mut self,
+        op: AssignOp,
+        name: &str,
+        value: &Expression,
+        discard: bool,
+    ) -> Result<(), CompileError> {
+        let idx = self.add_name(name)?;
+        if let Some(slot) = self.local_slot(name) {
+            // A local of this frame: no `with`, closure or direct eval can
+            // change what the name resolves to while the right-hand side
+            // runs, so the reference needs no early resolution.
+            if op != AssignOp::Assign {
+                self.emit(Op::LoadLocal);
+                self.emit_u16(idx);
+                self.emit_u16(slot);
+                self.push_n(1);
+            }
+            self.compile_expr(value)?;
+            if op != AssignOp::Assign {
+                self.emit(Self::compound_binary_op(op)?);
+                self.pop_n(2);
+                self.push_n(1);
+            }
+            if discard {
+                self.emit_store_local_pop(idx, slot);
+            } else {
+                self.emit_store_local(idx, slot);
+            }
+        } else {
+            self.emit_resolve_name(idx);
+            if op == AssignOp::Assign {
+                self.compile_expr(value)?;
+            } else {
+                self.emit(Op::LoadResolvedName);
+                self.emit_u16(idx);
+                self.push_n(1);
+                self.compile_expr(value)?;
+                self.emit(Self::compound_binary_op(op)?);
+                self.pop_n(2);
+                self.push_n(1);
+            }
+            if discard {
+                self.emit_store_resolved_name_pop(idx);
+            } else {
+                self.emit_store_resolved_name(idx);
+            }
+        }
+        Ok(())
+    }
+
+    /// `x++` and friends. The mode byte's bit 2 means "do not push the
+    /// result", which effect context sets: the discarded value is unobservable.
+    fn compile_identifier_update(
+        &mut self,
+        op: UpdateOp,
+        prefix: bool,
+        target: &Expression,
+        discard: bool,
+    ) -> Result<(), CompileError> {
+        let Expression::Identifier(name) = target else {
+            return Err(CompileError::Unsupported("update target"));
+        };
+        let idx = self.add_name(name)?;
+        if let Some(slot) = self.local_slot(name) {
+            self.emit(Op::UpdateLocal);
+            self.emit_u16(idx);
+            self.emit_u16(slot);
+        } else {
+            self.emit(Op::UpdateName);
+            self.emit_u16(idx);
+        }
+        let mode = match (op, prefix) {
+            (UpdateOp::Increment, false) => 0,
+            (UpdateOp::Increment, true) => 1,
+            (UpdateOp::Decrement, false) => 2,
+            (UpdateOp::Decrement, true) => 3,
+        };
+        self.code.push(if discard { mode | 0b100 } else { mode });
+        if !discard {
+            self.push_n(1);
+        }
+        Ok(())
+    }
+
+    fn is_comparison(op: BinaryOp) -> bool {
+        matches!(
+            op,
+            BinaryOp::Lt
+                | BinaryOp::Gt
+                | BinaryOp::LtEq
+                | BinaryOp::GtEq
+                | BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::StrictEq
+                | BinaryOp::StrictNotEq
+        )
+    }
+
+    /// Compiles `test` and a forward jump taken when it is falsy; returns the
+    /// patch site. A comparison fuses into `CmpJumpIfFalse` (its result is
+    /// always a Boolean, so ToBoolean is the identity). `local < literal`
+    /// keeps `LocalBinConst` + `JumpIfFalse`, which is already two dispatches.
+    fn compile_cond_jump(&mut self, test: &Expression) -> Result<usize, CompileError> {
+        if let Expression::Binary(op, lhs, rhs) = test
+            && Self::is_comparison(*op)
+        {
+            let local_lhs =
+                matches!(lhs.as_ref(), Expression::Identifier(n) if self.local_slot(n).is_some());
+            let literal_rhs = matches!(rhs.as_ref(), Expression::Literal(Literal::Number(_)));
+            if !(local_lhs && literal_rhs) {
+                let cmp = Self::binary_op(*op)?;
+                self.compile_expr(lhs)?;
+                self.compile_expr(rhs)?;
+                self.pop_n(2);
+                self.emit(Op::CmpJumpIfFalse);
+                self.code.push(cmp as u8);
+                let patch = self.code.len();
+                self.emit_u16(0);
+                return Ok(patch);
+            }
+        }
+        self.compile_expr(test)?;
+        self.pop_n(1);
+        Ok(self.emit_jump(Op::JumpIfFalse))
     }
 
     fn compile_call(
@@ -611,14 +747,12 @@ impl Compiler {
             if let Some(init) = &declarator.init {
                 if let Some(slot) = self.local_slot(name) {
                     self.compile_expr(init)?;
-                    self.emit_store_local(idx, slot);
+                    self.emit_store_local_pop(idx, slot);
                 } else {
                     self.emit_resolve_name(idx);
                     self.compile_expr(init)?;
-                    self.emit_store_resolved_name(idx);
+                    self.emit_store_resolved_name_pop(idx);
                 }
-                self.emit(Op::Pop);
-                self.pop_n(1);
             }
         }
         Ok(())
@@ -685,14 +819,15 @@ impl Compiler {
         match stmt {
             Statement::Empty => Ok(()),
             Statement::Expression(expr) => {
-                self.compile_expr(expr)?;
-                self.emit(if self.goal == CompileGoal::Script {
-                    Op::SetCompletion
+                if self.goal == CompileGoal::Script {
+                    // The value is the statement's completion value.
+                    self.compile_expr(expr)?;
+                    self.emit(Op::SetCompletion);
+                    self.pop_n(1);
+                    Ok(())
                 } else {
-                    Op::Pop
-                });
-                self.pop_n(1);
-                Ok(())
+                    self.compile_effect(expr)
+                }
             }
             Statement::Block(body) => {
                 // A block is statement-level and net-zero on the stack; each
@@ -716,9 +851,7 @@ impl Compiler {
                 // end_target:
                 // Branches are statements (net-zero on the stack), so unlike
                 // the ternary expression nothing is re-pushed at the merge.
-                self.compile_expr(&if_stmt.test)?;
-                self.pop_n(1); // JumpIfFalse consumes the test value
-                let else_target = self.emit_jump(Op::JumpIfFalse);
+                let else_target = self.compile_cond_jump(&if_stmt.test)?;
                 self.compile_statement(&if_stmt.consequent)?;
                 if let Some(alternate) = &if_stmt.alternate {
                     let end_target = self.emit_jump(Op::Jump);
@@ -854,9 +987,7 @@ impl Compiler {
         let exit = if Self::test_always_true(Some(&while_stmt.test)) {
             None
         } else {
-            self.compile_expr(&while_stmt.test)?;
-            self.pop_n(1);
-            Some(self.emit_jump(Op::JumpIfFalse))
+            Some(self.compile_cond_jump(&while_stmt.test)?)
         };
         self.compile_statement(&while_stmt.body)?;
         debug_assert_eq!(self.current_stack, 0);
@@ -905,9 +1036,7 @@ impl Compiler {
         if Self::test_always_true(Some(&do_while_stmt.test)) {
             self.emit_jump_to(Op::Jump, loop_start)?;
         } else {
-            self.compile_expr(&do_while_stmt.test)?;
-            self.pop_n(1);
-            let exit = self.emit_jump(Op::JumpIfFalse);
+            let exit = self.compile_cond_jump(&do_while_stmt.test)?;
             self.emit_jump_to(Op::Jump, loop_start)?;
             self.patch_jump(exit)?;
         }
@@ -929,11 +1058,7 @@ impl Compiler {
         if let Some(init) = &for_stmt.init {
             match init {
                 ForInit::Variable(decl) => self.compile_var_declaration(decl)?,
-                ForInit::Expression(expr) => {
-                    self.compile_expr(expr)?;
-                    self.emit(Op::Pop);
-                    self.pop_n(1);
-                }
+                ForInit::Expression(expr) => self.compile_effect(expr)?,
             }
         }
         let loop_start = self.code.len();
@@ -944,9 +1069,7 @@ impl Compiler {
                 .test
                 .as_ref()
                 .expect("test_always_true(None) is true");
-            self.compile_expr(test)?;
-            self.pop_n(1);
-            Some(self.emit_jump(Op::JumpIfFalse))
+            Some(self.compile_cond_jump(test)?)
         };
         self.loop_frames.push(LoopFrame {
             labels,
@@ -963,9 +1086,7 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         if let Some(update) = &for_stmt.update {
-            self.compile_expr(update)?;
-            self.emit(Op::Pop);
-            self.pop_n(1);
+            self.compile_effect(update)?;
         }
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);

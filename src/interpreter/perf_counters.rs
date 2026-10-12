@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 /// Widest opcode discriminant plus one. The assertion below fails to compile
 /// if a new opcode outgrows the histogram.
-const OP_SLOTS: usize = 64;
+const OP_SLOTS: usize = 128;
 
 /// Identity of an attributed body: its display name plus the function object it
 /// came from. Two distinct functions can share a name, and keying on the name
@@ -30,7 +30,7 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
 /// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::UpdateLocal as usize) < OP_SLOTS);
+const _: () = assert!((Op::LocalBinConst as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.

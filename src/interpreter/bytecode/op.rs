@@ -77,6 +77,24 @@ pub(crate) enum Op {
     /// `++`/`--` on a function-local name. Operands: name (u16), slot hint
     /// (u16), mode (u8, as `UpdateName`).
     UpdateLocal = 61,
+    /// `StoreLocal` in effect context: the stored value is popped afterwards
+    /// (it stays rooted on the operand stack through the store, which can
+    /// reach a setter and a safepoint). Same operands as `StoreLocal`.
+    StoreLocalPop = 62,
+    /// `StoreResolvedName` in effect context: pops the reference, stores, then
+    /// pops the value. `ResolveName` is still emitted before the right-hand
+    /// side, so the reference is created first (spec order).
+    StoreResolvedNamePop = 63,
+    /// `[..., l]` → `[..., l op K]` for a number literal `K`. Operands: binary
+    /// op (u8, the `Op` byte of one of the 20 binary ops), constant (u16).
+    BinConst = 64,
+    /// `[..., l, r]` → `[...]`, jumping when `l cmp r` is false. Operands:
+    /// comparison (u8, the `Op` byte of `Eq`..`GtEq`), offset (i16, last so
+    /// `patch_jump` applies unchanged).
+    CmpJumpIfFalse = 65,
+    /// Exactly `LoadLocal` followed by `BinConst`. Operands: name (u16), slot
+    /// hint (u16), binary op (u8), constant (u16).
+    LocalBinConst = 66,
 }
 
 impl Op {
@@ -144,6 +162,11 @@ impl Op {
             59 => Some(Op::LoadLocal),
             60 => Some(Op::StoreLocal),
             61 => Some(Op::UpdateLocal),
+            62 => Some(Op::StoreLocalPop),
+            63 => Some(Op::StoreResolvedNamePop),
+            64 => Some(Op::BinConst),
+            65 => Some(Op::CmpJumpIfFalse),
+            66 => Some(Op::LocalBinConst),
             _ => None,
         }
     }
