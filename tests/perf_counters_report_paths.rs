@@ -31,14 +31,16 @@ impl AsRef<Path> for Scratch {
 }
 
 impl Drop for Scratch {
+    /// A failing test keeps its directory so the fixture can be rerun by hand.
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if !std::thread::panicking() {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 }
 
 fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("jsse-perf-report-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
     Scratch(dir)
 }
@@ -144,42 +146,17 @@ fn failing_prelude_paths_still_emit_exactly_one_report() {
 /// their own their work units are credited to the calling function — the
 /// `BODY` ranking's whole purpose is defeated (#537 review). Measured before
 /// the fix, `caller` reported 16,020 exclusive units; its real total is 13.
-/// `BODY` rows count tree-walker work only, so this runs with `--no-bytecode`
-/// and stays about attribution whatever the compiler learns to accept.
 #[test]
 fn generator_and_eval_work_is_not_credited_to_the_caller() {
-    let dir = scratch("attribution");
-    fs::write(
-        dir.join("main.js"),
+    let stderr = run_tree_walked(
+        "attribution",
+        "main.js",
         "function* gen(n) { var s = 0; for (var i = 0; i < n; i++) { s += i; } yield s; }\n\
          function caller() { var t = 0; for (var g of gen(2000)) { t += g; } return t; }\n\
          function evalCaller() { var r = 0; for (var i = 0; i < 200; i++) { r += eval(\"i + 1\"); } return r; }\n\
          caller(); evalCaller();\n",
-    )
-    .expect("write main");
-    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
-        .current_dir(&dir)
-        .args(["--no-bytecode", "main.js"])
-        .output()
-        .expect("run jsse");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-
-    let row = |name: &str| -> Option<u64> {
-        stderr
-            .lines()
-            .find(|l| l.starts_with(&format!("BODY\t{name}\t")))
-            .and_then(|l| l.split('\t').nth(2))
-            .and_then(|n| n.parse().ok())
-    };
-
-    let perf = |key: &str| -> u64 {
-        stderr
-            .lines()
-            .find(|l| l.starts_with(&format!("PERF\t{key}\t")))
-            .and_then(|l| l.split('\t').nth(2))
-            .and_then(|n| n.parse().ok())
-            .unwrap_or_else(|| panic!("no PERF {key} row; stderr:\n{stderr}"))
-    };
+    );
+    let row = |name: &str| body_row(&stderr, name);
 
     let generator =
         row("gen").unwrap_or_else(|| panic!("no named generator BODY row; stderr:\n{stderr}"));
@@ -198,41 +175,25 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
         caller < 100,
         "caller must not absorb the generator's work, got {caller}"
     );
-    // `caller`'s `for-of` runs as a tree-walker node inside its compiled
-    // body; those units are reported as fallback work, not as an AST-body
-    // invocation, so the two together cover both rows.
+    // Every function body is an AST-body invocation on the tree-walker, so the
+    // two function rows account for all of `ast_units_in_functions`.
     assert_eq!(
-        perf("ast_units_in_functions") + perf("ast_units_in_fallbacks"),
+        perf_value(&stderr, "ast_units_in_functions"),
         caller + eval_caller,
         "generator state-machine steps must stay out of the function-invocation metric"
     );
 }
 
-/// Runs with `--no-bytecode` for the same reason as the generator/eval test.
 #[test]
 fn named_async_function_gets_its_own_body_row() {
-    let dir = scratch("async-attribution");
-    fs::write(
-        dir.join("main.js"),
+    let stderr = run_tree_walked(
+        "async-attribution",
+        "main.js",
         "async function asyncWork(n) { var s = 0; for (var i = 0; i < n; i++) { s += i; } return s; }\n\
          async function asyncCaller() { return await asyncWork(2000); }\n\
          asyncCaller();\n",
-    )
-    .expect("write main");
-    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
-        .current_dir(&dir)
-        .args(["--no-bytecode", "main.js"])
-        .output()
-        .expect("run jsse");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-
-    let row = |name: &str| -> Option<u64> {
-        stderr
-            .lines()
-            .find(|l| l.starts_with(&format!("BODY\t{name}\t")))
-            .and_then(|l| l.split('\t').nth(2))
-            .and_then(|n| n.parse().ok())
-    };
+    );
+    let row = |name: &str| body_row(&stderr, name);
 
     let async_work = row("asyncWork")
         .unwrap_or_else(|| panic!("no named async function BODY row; stderr:\n{stderr}"));
@@ -360,18 +321,11 @@ fn script_body_records_its_compile_outcome_but_not_a_function_invocation() {
 /// third pass).
 #[test]
 fn module_body_gets_its_own_attribution_row() {
-    let dir = scratch("module-attribution");
-    fs::write(
-        dir.join("m.mjs"),
+    let stderr = run_tree_walked(
+        "module-attribution",
+        "m.mjs",
         "var t = 0;\nfor (var i = 0; i < 3; i++) { t += i; }\nexport const v = t;\n",
-    )
-    .expect("write module");
-    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
-        .current_dir(&dir)
-        .args(["m.mjs"])
-        .output()
-        .expect("run jsse");
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    );
     assert!(
         stderr
             .lines()
@@ -382,24 +336,16 @@ fn module_body_gets_its_own_attribution_row() {
 
 /// Two distinct functions sharing a name merged into one `BODY` row with
 /// combined work, so the ranking could identify neither (#537 review, third
-/// pass). The id disambiguates them; unique names must stay bare. `BODY` rows
-/// count tree-walker work only, so this runs with `--no-bytecode`.
+/// pass). The id disambiguates them; unique names must stay bare.
 #[test]
 fn same_named_functions_get_separate_body_rows() {
-    let dir = scratch("same-name");
-    fs::write(
-        dir.join("main.js"),
+    let stderr = run_tree_walked(
+        "same-name",
+        "main.js",
         "function outer1() { function same() { var s = 0; for (var i = 0; i < 900; i++) { s += i; } return s; } return same(); }\n\
          function outer2() { function same() { var s = 0; for (var i = 0; i < 30; i++) { s += i; } return s; } return same(); }\n\
          outer1(); outer2();\n",
-    )
-    .expect("write main");
-    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
-        .current_dir(&dir)
-        .args(["--no-bytecode", "main.js"])
-        .output()
-        .expect("run jsse");
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    );
 
     let same_rows: Vec<&str> = stderr
         .lines()
@@ -474,16 +420,39 @@ fn every_closure_of_an_ineligible_literal_names_its_bail_reason() {
     }
 }
 
-/// Runs `source` as `main.js` in a fresh scratch dir and returns stderr.
-fn run_counted(name: &str, source: &str) -> String {
+/// Runs `source` as `file` in a fresh scratch dir, with `flags` before the
+/// file name, and returns stderr.
+fn run_in_scratch(name: &str, file: &str, flags: &[&str], source: &str) -> String {
     let dir = scratch(name);
-    fs::write(dir.join("main.js"), source).expect("write main");
+    fs::write(dir.join(file), source).expect("write source");
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .current_dir(&dir)
-        .args(["main.js"])
+        .args(flags)
+        .arg(file)
         .output()
         .expect("run jsse");
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Runs `source` as `main.js` in the default (bytecode) mode.
+fn run_counted(name: &str, source: &str) -> String {
+    run_in_scratch(name, "main.js", &[], source)
+}
+
+/// `BODY` rows count tree-walker work only: a compiled body gets none. The
+/// attribution tests therefore run with `--no-bytecode`, so they stay about
+/// attribution whatever the compiler learns to accept.
+fn run_tree_walked(name: &str, file: &str, source: &str) -> String {
+    run_in_scratch(name, file, &["--no-bytecode"], source)
+}
+
+/// The work units of the `BODY` row named exactly `name`, if there is one.
+fn body_row(stderr: &str, name: &str) -> Option<u64> {
+    stderr
+        .lines()
+        .find(|l| l.starts_with(&format!("BODY\t{name}\t")))
+        .and_then(|l| l.split('\t').nth(2))
+        .and_then(|n| n.parse().ok())
 }
 
 fn perf_value(stderr: &str, key: &str) -> u64 {
@@ -539,20 +508,29 @@ fn class_evaluation_does_not_compile_per_evaluation() {
     );
 }
 
-/// An ineligible literal instantiated many times bails once (#900).
+/// An ineligible literal instantiated many times bails once (#900), so the
+/// bail count must not move with the number of closures. `BAIL` rows are keyed
+/// by reason, not by function, so the test compares totals and then checks
+/// that `inner` really is one of the bodies that bailed.
 #[test]
 fn ineligible_literal_bails_once_across_many_closures() {
-    let stderr = run_counted(
-        "bail-once",
-        "function make(k) { return function inner(n) { var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
-         for (var j = 0; j < 40; j++) { make(j)(3); }\n",
+    let program = |n: u32| {
+        format!(
+            "function make(k) {{ return function inner(n) {{ with ({{}}) {{}} var s = 0; \
+               for (var i = 0; i < n; i++) {{ s += k; }} return s; }}; }}\n\
+             for (var j = 0; j < {n}; j++) {{ make(j)(3); }}\n"
+        )
+    };
+    let one = run_counted("bail-one", &program(1));
+    let many = run_counted("bail-many", &program(40));
+    assert_eq!(
+        perf_value(&one, "compile_bail"),
+        perf_value(&many, "compile_bail"),
+        "compile_bail must not scale with closure count; stderr:\n{many}"
     );
-    let inner_bails = stderr
-        .lines()
-        .filter(|l| l.starts_with("BAIL\t") && l.contains("\tinner"))
-        .count();
     assert!(
-        inner_bails <= 1,
-        "one BAIL row per literal; stderr:\n{stderr}"
+        many.lines()
+            .any(|l| l.starts_with("BODY\tinner#") && !l.ends_with("\t-")),
+        "`inner` must be among the bodies that bailed; stderr:\n{many}"
     );
 }
