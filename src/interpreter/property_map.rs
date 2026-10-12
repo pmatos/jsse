@@ -5,17 +5,24 @@ use smallvec::SmallVec;
 use super::types::PropertyDescriptor;
 use crate::types::{JsPropertyKey, PropertyKeyLike};
 
-// Inline up to this many properties before spilling to a HashMap. 8 was the
-// threshold proposed in issue #68; measurement showed it pushes JsObjectData
-// past 3.5 KB, so we use 4 — covers the splay-node case (4 fields) without
-// blowing up per-object size.
+// Inline up to this many properties before spilling to an indexed entry list.
+// 8 was the threshold proposed in issue #68; measurement showed it pushes
+// JsObjectData past 3.5 KB, so we use 4 — covers the splay-node case (4 fields)
+// without blowing up per-object size.
 const INLINE_CAP: usize = 4;
 
 // Hybrid storage for `JsObjectData.properties`: inline up to `INLINE_CAP`
-// entries (linear scan, no heap alloc), then spill to a randomised `HashMap`
-// once the inline buffer overflows. Spill is one-way; deletes never collapse
-// back to inline. Iteration order is unspecified — ordered iteration must
-// continue to go through `JsObjectData.property_order`.
+// entries (linear scan, no heap alloc), then spill to a dense entry list plus
+// a randomised key→slot index once the inline buffer overflows. Spill is
+// one-way; deletes never collapse back to inline. Iteration order is
+// unspecified — ordered iteration must continue to go through
+// `JsObjectData.property_order`.
+//
+// Entries are addressable by slot (`slot_of` / `entry_at`) so a hot site can
+// remember where a key lived and skip the hash. A slot is only ever a *hint*:
+// `remove` swap-moves the last entry into the hole (and inline `remove`
+// shifts), so a remembered slot must be re-verified by key before it is
+// trusted. `entry_at` returns the key for exactly that purpose.
 pub(crate) struct PropertyMap {
     inner: PropertyMapInner,
 }
@@ -30,7 +37,10 @@ pub(crate) struct PropertyMap {
 #[allow(clippy::large_enum_variant)]
 enum PropertyMapInner {
     Inline(SmallVec<[(JsPropertyKey, PropertyDescriptor); INLINE_CAP]>),
-    Spilled(HashMap<JsPropertyKey, PropertyDescriptor>),
+    Spilled {
+        entries: Vec<(JsPropertyKey, PropertyDescriptor)>,
+        index: HashMap<JsPropertyKey, u32>,
+    },
 }
 
 impl PropertyMap {
@@ -41,35 +51,55 @@ impl PropertyMap {
     }
 
     pub(crate) fn contains_key<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
+        self.slot_of(key).is_some()
+    }
+
+    /// Slot currently holding `key`. Valid only until the next `insert` of a
+    /// new key or any `remove`.
+    #[inline]
+    pub(crate) fn slot_of<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<usize> {
         match &self.inner {
             PropertyMapInner::Inline(v) => v
                 .iter()
-                .any(|(k, _)| k.as_bytes() == key.as_property_key_bytes()),
-            PropertyMapInner::Spilled(m) => m.contains_key(key.as_property_key_bytes()),
+                .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes()),
+            PropertyMapInner::Spilled { index, .. } => index
+                .get(key.as_property_key_bytes())
+                .map(|&slot| slot as usize),
         }
     }
 
+    /// The entry at `slot`, if any. A remembered slot must be checked against
+    /// the returned key before use.
+    #[inline]
+    pub(crate) fn entry_at(&self, slot: usize) -> Option<(&JsPropertyKey, &PropertyDescriptor)> {
+        let entry = match &self.inner {
+            PropertyMapInner::Inline(v) => v.get(slot),
+            PropertyMapInner::Spilled { entries, .. } => entries.get(slot),
+        };
+        entry.map(|(k, d)| (k, d))
+    }
+
+    #[inline]
+    pub(crate) fn entry_at_mut(&mut self, slot: usize) -> Option<&mut PropertyDescriptor> {
+        let entry = match &mut self.inner {
+            PropertyMapInner::Inline(v) => v.get_mut(slot),
+            PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot),
+        };
+        entry.map(|(_, d)| d)
+    }
+
     pub(crate) fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyDescriptor> {
-        match &self.inner {
-            PropertyMapInner::Inline(v) => v
-                .iter()
-                .find(|(k, _)| k.as_bytes() == key.as_property_key_bytes())
-                .map(|(_, d)| d),
-            PropertyMapInner::Spilled(m) => m.get(key.as_property_key_bytes()),
-        }
+        self.slot_of(key)
+            .and_then(|slot| self.entry_at(slot))
+            .map(|(_, d)| d)
     }
 
     pub(crate) fn get_mut<K: PropertyKeyLike + ?Sized>(
         &mut self,
         key: &K,
     ) -> Option<&mut PropertyDescriptor> {
-        match &mut self.inner {
-            PropertyMapInner::Inline(v) => v
-                .iter_mut()
-                .find(|(k, _)| k.as_bytes() == key.as_property_key_bytes())
-                .map(|(_, d)| d),
-            PropertyMapInner::Spilled(m) => m.get_mut(key.as_property_key_bytes()),
-        }
+        let slot = self.slot_of(key)?;
+        self.entry_at_mut(slot)
     }
 
     pub(crate) fn insert(
@@ -86,19 +116,30 @@ impl PropertyMap {
                     v.push((key, value));
                     None
                 } else {
-                    // Spill: drain inline entries into a fresh randomised HashMap,
+                    // Spill: move inline entries into a fresh randomised index,
                     // then add the new entry.
-                    let mut map: HashMap<JsPropertyKey, PropertyDescriptor> =
+                    let mut entries: Vec<(JsPropertyKey, PropertyDescriptor)> =
+                        Vec::with_capacity(INLINE_CAP + 1);
+                    let mut index: HashMap<JsPropertyKey, u32> =
                         HashMap::with_capacity(INLINE_CAP + 1);
                     for (k, d) in v.drain(..) {
-                        map.insert(k, d);
+                        index.insert(k.clone(), entries.len() as u32);
+                        entries.push((k, d));
                     }
-                    map.insert(key, value);
-                    self.inner = PropertyMapInner::Spilled(map);
+                    index.insert(key.clone(), entries.len() as u32);
+                    entries.push((key, value));
+                    self.inner = PropertyMapInner::Spilled { entries, index };
                     None
                 }
             }
-            PropertyMapInner::Spilled(m) => m.insert(key, value),
+            PropertyMapInner::Spilled { entries, index } => {
+                if let Some(&slot) = index.get(key.as_bytes()) {
+                    return Some(std::mem::replace(&mut entries[slot as usize].1, value));
+                }
+                index.insert(key.clone(), entries.len() as u32);
+                entries.push((key, value));
+                None
+            }
         }
     }
 
@@ -113,14 +154,23 @@ impl PropertyMap {
                     .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes())?;
                 Some(v.remove(pos).1)
             }
-            PropertyMapInner::Spilled(m) => m.remove(key.as_property_key_bytes()),
+            PropertyMapInner::Spilled { entries, index } => {
+                let slot = index.remove(key.as_property_key_bytes())? as usize;
+                let (_, removed) = entries.swap_remove(slot);
+                if let Some((moved_key, _)) = entries.get(slot)
+                    && let Some(moved_slot) = index.get_mut(moved_key.as_bytes())
+                {
+                    *moved_slot = slot as u32;
+                }
+                Some(removed)
+            }
         }
     }
 
     pub(crate) fn iter(&self) -> PropertyMapIter<'_> {
         let inner = match &self.inner {
-            PropertyMapInner::Inline(v) => PropertyMapIterInner::Inline(v.iter()),
-            PropertyMapInner::Spilled(m) => PropertyMapIterInner::Spilled(m.iter()),
+            PropertyMapInner::Inline(v) => v.iter(),
+            PropertyMapInner::Spilled { entries, .. } => entries.iter(),
         };
         PropertyMapIter { inner }
     }
@@ -141,22 +191,14 @@ impl Default for PropertyMap {
 }
 
 pub(crate) struct PropertyMapIter<'a> {
-    inner: PropertyMapIterInner<'a>,
-}
-
-enum PropertyMapIterInner<'a> {
-    Inline(std::slice::Iter<'a, (JsPropertyKey, PropertyDescriptor)>),
-    Spilled(std::collections::hash_map::Iter<'a, JsPropertyKey, PropertyDescriptor>),
+    inner: std::slice::Iter<'a, (JsPropertyKey, PropertyDescriptor)>,
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
     type Item = (&'a JsPropertyKey, &'a PropertyDescriptor);
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.inner {
-            PropertyMapIterInner::Inline(it) => it.next().map(|(k, v)| (k, v)),
-            PropertyMapIterInner::Spilled(it) => it.next(),
-        }
+        self.inner.next().map(|(k, v)| (k, v))
     }
 }
 
@@ -343,5 +385,67 @@ mod tests {
         // catch regressions but loose enough to absorb routine field adds.
         let size = std::mem::size_of::<JsObjectData>();
         assert!(size <= 3072, "JsObjectData grew to {size} bytes (cap 3072)");
+    }
+
+    #[test]
+    fn slot_round_trips_in_both_modes() {
+        let mut m = PropertyMap::new();
+        for i in 0..(INLINE_CAP + 3) {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+            let name = format!("k{i}");
+            let slot = m.slot_of(&name).expect("slot");
+            let (k, d) = m.entry_at(slot).expect("entry");
+            assert_eq!(k.as_bytes(), name.as_bytes());
+            assert_eq!(num(d), i as f64);
+        }
+        assert!(!is_inline(&m));
+        assert!(m.slot_of("missing").is_none());
+        assert!(m.entry_at(10_000).is_none());
+        let slot = m.slot_of("k1").unwrap();
+        m.entry_at_mut(slot).unwrap().value = Some(JsValue::number(99.0));
+        assert_eq!(num(m.get("k1").unwrap()), 99.0);
+    }
+
+    #[test]
+    fn remembered_slot_is_detectable_after_remove_and_reinsert() {
+        let mut m = PropertyMap::new();
+        let total = INLINE_CAP + 4;
+        for i in 0..total {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        let stale = m.slot_of("k2").unwrap();
+        m.remove("k2").expect("removed");
+        // The last entry was swap-moved into the hole: the stale slot now
+        // holds a different key, which a verifying caller must notice.
+        let (k, _) = m.entry_at(stale).expect("slot reused by moved entry");
+        assert_ne!(k.as_bytes(), b"k2");
+        assert!(m.get("k2").is_none());
+        assert!(m.slot_of("k2").is_none());
+        // Every survivor is still reachable and its slot verifies.
+        for i in (0..total).filter(|&i| i != 2) {
+            let name = format!("k{i}");
+            let slot = m.slot_of(&name).expect("survivor");
+            assert_eq!(m.entry_at(slot).unwrap().0.as_bytes(), name.as_bytes());
+            assert_eq!(num(m.get(&name).unwrap()), i as f64);
+        }
+        m.insert(key("k2"), desc(2.0));
+        assert_eq!(num(m.get("k2").unwrap()), 2.0);
+        assert_eq!(m.iter().count(), total);
+    }
+
+    #[test]
+    fn removing_the_last_entry_leaves_index_consistent() {
+        let mut m = PropertyMap::new();
+        let total = INLINE_CAP + 2;
+        for i in 0..total {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        let last = format!("k{}", total - 1);
+        assert!(m.remove(&last).is_some());
+        assert!(m.get(&last).is_none());
+        assert_eq!(m.iter().count(), total - 1);
+        for i in 0..total - 1 {
+            assert!(m.get(&format!("k{i}")).is_some());
+        }
     }
 }

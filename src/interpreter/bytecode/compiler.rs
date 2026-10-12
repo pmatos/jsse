@@ -5,6 +5,7 @@ use crate::ast::{
     LogicalOp, MemberProperty, Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
     WhileStatement,
 };
+use crate::interpreter::GlobalHint;
 use crate::types::JsString;
 
 #[derive(Debug)]
@@ -995,10 +996,12 @@ impl Compiler {
                 self.emit(Op::ReturnUndefined);
             }
         }
+        let global_hints = self.names.iter().map(|_| GlobalHint::new(0)).collect();
         Chunk {
             code: self.code,
             constants: self.constants,
             names: self.names,
+            global_hints,
             var_names: self.var_names,
             max_stack: self.max_stack,
             max_refs: self.max_refs,
