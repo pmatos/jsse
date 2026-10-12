@@ -4214,9 +4214,7 @@ impl Interpreter {
             |interp, this, _args| {
                 // 1. Let O be the this value.
                 // 2. Let promiseCapability be ! NewPromiseCapability(%Promise%).
-                let promise_ctor = interp
-                    .get_global_var("Promise")
-                    .unwrap_or(JsValue::UNDEFINED);
+                let promise_ctor = interp.intrinsic_promise_constructor();
                 let cap = match interp.new_promise_capability(&promise_ctor) {
                     Ok(c) => c,
                     Err(e) => return Completion::Throw(e),
@@ -4303,16 +4301,20 @@ impl Interpreter {
                     let wrapper_id = result_wrapper.as_object_id().unwrap_or(0);
                     let fulfill_reaction = crate::interpreter::types::PromiseReaction {
                         handler: Some(on_fulfilled),
-                        promise_id: Some(cap_promise_id),
-                        resolve: cap.resolve.clone(),
-                        reject: cap.reject.clone(),
+                        target: crate::interpreter::types::ReactionTarget::Capability {
+                            promise_id: cap_promise_id,
+                            resolve: cap.resolve.clone(),
+                            reject: cap.reject.clone(),
+                        },
                         reaction_type: crate::interpreter::types::PromiseReactionType::Fulfill,
                     };
                     let reject_reaction = crate::interpreter::types::PromiseReaction {
                         handler: None,
-                        promise_id: Some(cap_promise_id),
-                        resolve: cap.resolve.clone(),
-                        reject: cap.reject.clone(),
+                        target: crate::interpreter::types::ReactionTarget::Capability {
+                            promise_id: cap_promise_id,
+                            resolve: cap.resolve.clone(),
+                            reject: cap.reject.clone(),
+                        },
                         reaction_type: crate::interpreter::types::PromiseReactionType::Reject,
                     };
 
@@ -4758,7 +4760,7 @@ impl Interpreter {
         let done_bool = done.as_boolean() == Some(true);
 
         // Step 5: valueWrapper = PromiseResolve(%Promise%, value)
-        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::UNDEFINED);
+        let promise_ctor = self.intrinsic_promise_constructor();
         let value_wrapper = match self.promise_resolve_with_constructor(&promise_ctor, &value) {
             Ok(w) => w,
             Err(e) => {

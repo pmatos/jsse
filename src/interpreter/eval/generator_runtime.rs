@@ -4842,16 +4842,12 @@ impl Interpreter {
                                 pd.is_handled = true;
                                 pd.fulfill_reactions.push(PromiseReaction {
                                     handler: Some(fulfill_handler),
-                                    promise_id: None,
-                                    resolve: JsValue::UNDEFINED,
-                                    reject: JsValue::UNDEFINED,
+                                    target: ReactionTarget::None,
                                     reaction_type: PromiseReactionType::Fulfill,
                                 });
                                 pd.reject_reactions.push(PromiseReaction {
                                     handler: Some(reject_handler),
-                                    promise_id: None,
-                                    resolve: JsValue::UNDEFINED,
-                                    reject: JsValue::UNDEFINED,
+                                    target: ReactionTarget::None,
                                     reaction_type: PromiseReactionType::Reject,
                                 });
                             }
@@ -6427,9 +6423,7 @@ impl Interpreter {
             // PromiseResolve reads `value.constructor`, which can run user
             // code and collect.
             interp.gc_root_value(&value);
-            let promise_ctor = interp
-                .get_global_var("Promise")
-                .unwrap_or(JsValue::UNDEFINED);
+            let promise_ctor = interp.intrinsic_promise_constructor();
             interp.promise_resolve_with_constructor(&promise_ctor, &value)
         });
         let promise = match promise {
@@ -6574,7 +6568,7 @@ impl Interpreter {
         // For Promise values, check if PromiseResolve would throw (e.g. broken .constructor)
         // Skip for non-promise values to avoid spurious "then" getter access
         if self.is_promise(&value) {
-            let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::UNDEFINED);
+            let promise_ctor = self.intrinsic_promise_constructor();
             if let Err(e) = self.promise_resolve_with_constructor(&promise_ctor, &value) {
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineAsyncGenerator {

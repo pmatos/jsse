@@ -16,6 +16,66 @@ impl Interpreter {
         Completion::Normal(cap.promise.clone())
     }
 
+    /// %Promise% of the running realm.
+    pub(crate) fn intrinsic_promise_constructor(&self) -> JsValue {
+        self.realm()
+            .promise_constructor
+            .clone()
+            .unwrap_or(JsValue::UNDEFINED)
+    }
+
+    /// True when `value` is the running realm's %Promise%.
+    pub(crate) fn is_intrinsic_promise_constructor(&self, value: &JsValue) -> bool {
+        match (
+            value.as_object_id(),
+            self.realm()
+                .promise_constructor
+                .as_ref()
+                .and_then(JsValue::as_object_id),
+        ) {
+            (Some(id), Some(intrinsic)) => id == intrinsic,
+            _ => false,
+        }
+    }
+
+    /// True when `value` is the running realm's original
+    /// %Promise.prototype.then%.
+    fn is_intrinsic_promise_then(&self, value: &JsValue) -> bool {
+        match (
+            value.as_object_id(),
+            self.realm()
+                .promise_then
+                .as_ref()
+                .and_then(JsValue::as_object_id),
+        ) {
+            (Some(id), Some(intrinsic)) => id == intrinsic,
+            _ => false,
+        }
+    }
+
+    /// True while `Promise[@@species]` is still the original getter, which
+    /// returns its `this` value and has no other effect.
+    fn promise_species_getter_is_original(&self, ctor_id: u64) -> bool {
+        let Some(getter_id) = self
+            .realm()
+            .promise_species_getter
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        else {
+            return false;
+        };
+        let Some(ctor) = self.get_object_cell(ctor_id) else {
+            return false;
+        };
+        let key = JsPropertyKey::well_known_symbol("species");
+        ctor.borrow()
+            .properties
+            .get(&key)
+            .and_then(|desc| desc.get.as_ref())
+            .and_then(JsValue::as_object_id)
+            == Some(getter_id)
+    }
+
     /// NewPromiseCapability(C) - spec 27.2.1.5
     pub(crate) fn new_promise_capability(
         &mut self,
@@ -27,11 +87,8 @@ impl Interpreter {
             );
         }
 
-        // Check if C is the built-in Promise constructor - fast path
-        let promise_ctor = self.get_global_var("Promise");
-        if let Some(ref ctor_val) = promise_ctor
-            && same_value(constructor, ctor_val)
-        {
+        // C is %Promise% itself: no user code can observe the construction.
+        if self.is_intrinsic_promise_constructor(constructor) {
             let promise = self.create_promise_object();
             let promise_id = promise.as_object_id().unwrap_or_default();
             let (resolve, reject) = self.create_resolving_functions(promise_id);
@@ -133,6 +190,13 @@ impl Interpreter {
         } else {
             return Ok(default_ctor.clone());
         };
+        // `Promise[@@species]` is `get [Symbol.species]() { return this; }`;
+        // skip the call while it is still the original accessor.
+        if self.is_intrinsic_promise_constructor(&ctor)
+            && self.promise_species_getter_is_original(ctor_id)
+        {
+            return Ok(ctor);
+        }
         let species = match self.get_object_property(
             ctor_id,
             &JsPropertyKey::well_known_symbol("species"),
@@ -176,6 +240,13 @@ impl Interpreter {
             }
         }
 
+        if self.is_intrinsic_promise_constructor(constructor) {
+            let promise = self.create_promise_object();
+            let promise_id = promise.as_object_id().unwrap_or_default();
+            self.resolve_promise_internal(promise_id, value.clone());
+            return Ok(promise);
+        }
+
         let cap = self.new_promise_capability(constructor)?;
         if let Completion::Throw(e) = self.call_function(
             &cap.resolve,
@@ -192,11 +263,12 @@ impl Interpreter {
         self.realm_mut().promise_prototype = Some(proto_id);
 
         // Promise.prototype.then
-        self.define_method(proto_id, "then", 2, |interp, this, args| {
+        let then_fn = self.define_method(proto_id, "then", 2, |interp, this, args| {
             let on_fulfilled = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let on_rejected = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             interp.promise_then(this, &on_fulfilled, &on_rejected)
         });
+        self.realm_mut().promise_then = Some(then_fn);
 
         // Promise.prototype.catch — spec 27.2.5.1
         self.define_method(proto_id, "catch", 1, |interp, this, args| {
@@ -227,9 +299,7 @@ impl Interpreter {
             };
 
             // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
-            let promise_ctor = interp
-                .get_global_var("Promise")
-                .unwrap_or(JsValue::UNDEFINED);
+            let promise_ctor = interp.intrinsic_promise_constructor();
             let c = match interp.species_constructor(this, &promise_ctor) {
                 Ok(c) => c,
                 Err(e) => return Completion::Throw(e),
@@ -409,6 +479,8 @@ impl Interpreter {
             func_obj.borrow_mut().deferred_construct = true;
         }
 
+        self.realm_mut().promise_constructor = Some(ctor.clone());
+
         // Set Promise.prototype on constructor
         if let Some(o) = ctor.as_object_id()
             && self.get_object_cell(o).is_some()
@@ -434,12 +506,13 @@ impl Interpreter {
                     PropertyDescriptor {
                         value: None,
                         writable: None,
-                        get: Some(species_getter),
+                        get: Some(species_getter.clone()),
                         set: None,
                         enumerable: Some(false),
                         configurable: Some(true),
                     },
                 );
+            self.realm_mut().promise_species_getter = Some(species_getter);
         }
 
         // Set constructor on prototype
@@ -486,6 +559,9 @@ impl Interpreter {
                     );
                 }
                 let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if interp.is_intrinsic_promise_constructor(this) {
+                    return interp.create_rejected_promise(reason);
+                }
                 match interp.new_promise_capability(this) {
                     Ok(cap) => {
                         if let Completion::Throw(e) =
@@ -894,125 +970,268 @@ impl Interpreter {
         self.trigger_promise_reactions(reactions, reason);
     }
 
+    /// The Promise Resolve Functions steps (ECMA-262 §27.2.1.3.2) for a promise
+    /// whose resolving functions are not exposed. The caller supplies the
+    /// `[[AlreadyResolved]]` discipline; this never throws.
+    pub(crate) fn resolve_promise_internal(&mut self, promise_id: u64, value: JsValue) {
+        let Some(value_id) = value.as_object_id() else {
+            self.fulfill_promise(promise_id, value);
+            return;
+        };
+        if value_id == promise_id {
+            let err = self.create_type_error("A promise cannot be resolved with itself.");
+            self.reject_promise(promise_id, err);
+            return;
+        }
+        // `Get(resolution, "then")` runs user code, so both the promise and
+        // the resolution must be reachable meanwhile.
+        let frame = self.gc_root_frame();
+        self.gc_root_value(&JsValue::object(promise_id));
+        self.gc_root_value(&value);
+        let then_val = self.get_object_property(value_id, "then", &value);
+        self.gc_unroot_frame(frame);
+        match then_val {
+            Completion::Normal(then_fn) if self.is_callable(&then_fn) => {
+                self.promise_resolve_thenable(promise_id, value, then_fn);
+            }
+            Completion::Throw(e) => self.reject_promise(promise_id, e),
+            _ => self.fulfill_promise(promise_id, value),
+        }
+    }
+
+    /// Claims the engine-owned `[[AlreadyResolved]]` flag of `promise_id`.
+    /// Returns false when it was already claimed.
+    fn claim_internal_resolution(&mut self, promise_id: u64) -> bool {
+        let Some(cell) = self.get_object_cell(promise_id) else {
+            return false;
+        };
+        let mut obj = cell.borrow_mut();
+        match obj.promise_data_mut() {
+            Some(pd) if !pd.already_resolved => {
+                pd.already_resolved = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Calls the `resolve` half of `resolvers`, ignoring its completion as the
+    /// resolving functions themselves never throw.
+    pub(crate) fn promise_resolvers_resolve(
+        &mut self,
+        resolvers: &PromiseResolvers,
+        value: JsValue,
+    ) {
+        match resolvers {
+            PromiseResolvers::Internal(promise_id) => {
+                if self.claim_internal_resolution(*promise_id) {
+                    self.resolve_promise_internal(*promise_id, value);
+                }
+            }
+            PromiseResolvers::Functions { resolve, .. } => {
+                let _ = self.call_function(resolve, &JsValue::UNDEFINED, &[value]);
+            }
+        }
+    }
+
+    /// Calls the `reject` half of `resolvers`.
+    pub(crate) fn promise_resolvers_reject(
+        &mut self,
+        resolvers: &PromiseResolvers,
+        reason: JsValue,
+    ) {
+        match resolvers {
+            PromiseResolvers::Internal(promise_id) => {
+                if self.claim_internal_resolution(*promise_id) {
+                    self.reject_promise(*promise_id, reason);
+                }
+            }
+            PromiseResolvers::Functions { reject, .. } => {
+                let _ = self.call_function(reject, &JsValue::UNDEFINED, &[reason]);
+            }
+        }
+    }
+
     pub(crate) fn trigger_promise_reactions(
         &mut self,
         reactions: Vec<PromiseReaction>,
         argument: JsValue,
     ) {
         for reaction in reactions {
-            let arg = argument.clone();
-            let mut roots = vec![
-                arg.clone(),
-                reaction.resolve.clone(),
-                reaction.reject.clone(),
-            ];
-            if let Some(ref h) = reaction.handler {
-                roots.push(h.clone());
-            }
-            // Root the downstream promise so GC can trace it from the microtask queue.
-            // The resolve/reject closures only capture promise_id as a u64, which is
-            // invisible to the GC tracer.
-            if let Some(pid) = reaction.promise_id {
-                roots.push(JsValue::object(pid));
-            }
-            self.scheduler.enqueue_microtask((
-                roots,
-                Box::new(move |interp| {
-                    let handler_result = if let Some(ref handler) = reaction.handler {
-                        if interp.is_callable(handler) {
-                            match interp.call_function(
-                                handler,
-                                &JsValue::UNDEFINED,
-                                std::slice::from_ref(&arg),
-                            ) {
-                                Completion::Throw(e) => Err(e),
-                                Completion::Normal(v) => Ok(v),
-                                // A `__host_exit` inside the reaction handler
-                                // (issue #242) propagates out of the job as
-                                // `Completion::Exit` — the Promise reaction must
-                                // not consume it into a fulfillment/rejection.
-                                Completion::Exit(code) => return Completion::Exit(code),
-                                _ => Ok(JsValue::UNDEFINED),
-                            }
-                        } else {
-                            match reaction.reaction_type {
-                                PromiseReactionType::Fulfill => Ok(arg.clone()),
-                                PromiseReactionType::Reject => Err(arg.clone()),
-                            }
-                        }
-                    } else {
-                        match reaction.reaction_type {
-                            PromiseReactionType::Fulfill => Ok(arg.clone()),
-                            PromiseReactionType::Reject => Err(arg.clone()),
-                        }
-                    };
-
-                    if let Some(_pid) = reaction.promise_id {
-                        match handler_result {
-                            Ok(value) => {
-                                if let Completion::Throw(e) = interp.call_function(
-                                    &reaction.resolve,
-                                    &JsValue::UNDEFINED,
-                                    &[value],
-                                ) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Err(reason) => {
-                                if let Completion::Throw(e) = interp.call_function(
-                                    &reaction.reject,
-                                    &JsValue::UNDEFINED,
-                                    &[reason],
-                                ) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                        }
-                    }
-                    Completion::Normal(JsValue::UNDEFINED)
-                }),
-            ));
+            self.enqueue_promise_reaction_job(reaction, argument.clone());
         }
     }
 
-    pub(crate) fn promise_resolve_thenable(
+    /// NewPromiseReactionJob (ECMA-262 §27.2.2.1) queued for `reaction`.
+    pub(crate) fn enqueue_promise_reaction_job(
         &mut self,
-        promise_id: u64,
-        thenable: JsValue,
-        then_fn: JsValue,
+        reaction: PromiseReaction,
+        argument: JsValue,
     ) {
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        let roots = vec![
-            thenable.clone(),
-            then_fn.clone(),
-            resolve_fn.clone(),
-            reject_fn.clone(),
-            JsValue::object(promise_id),
-        ];
+        let mut roots = Vec::with_capacity(4);
+        roots.push(argument.clone());
+        if let Some(ref h) = reaction.handler {
+            roots.push(h.clone());
+        }
+        // The resolving closures only capture a promise id, which the tracer
+        // cannot see, so the downstream promise is rooted explicitly.
+        reaction.target.for_each_value(|v| roots.push(v.clone()));
+        if let Some(pid) = reaction.target.promise_id() {
+            roots.push(JsValue::object(pid));
+        }
         self.scheduler.enqueue_microtask((
             roots,
             Box::new(move |interp| {
-                let result =
-                    interp.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
-                // A `__host_exit` inside the user `then` (issue #242) propagates
-                // out of the job as `Completion::Exit` rather than being turned
-                // into a rejection.
-                if let Completion::Exit(code) = result {
-                    return Completion::Exit(code);
-                }
-                if let Completion::Throw(e) = result
-                    && let Completion::Throw(e2) =
-                        interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[e])
-                {
-                    return Completion::Throw(e2);
+                let PromiseReaction {
+                    handler,
+                    target,
+                    reaction_type,
+                } = reaction;
+                let arg = argument;
+                let handler_result = match handler {
+                    Some(ref handler) if interp.is_callable(handler) => {
+                        match interp.call_function(
+                            handler,
+                            &JsValue::UNDEFINED,
+                            std::slice::from_ref(&arg),
+                        ) {
+                            Completion::Throw(e) => Err(e),
+                            Completion::Normal(v) => Ok(v),
+                            // A `__host_exit` inside the reaction handler
+                            // (issue #242) propagates out of the job as
+                            // `Completion::Exit` — the Promise reaction must
+                            // not consume it into a fulfillment/rejection.
+                            Completion::Exit(code) => return Completion::Exit(code),
+                            _ => Ok(JsValue::UNDEFINED),
+                        }
+                    }
+                    _ => match reaction_type {
+                        PromiseReactionType::Fulfill => Ok(arg),
+                        PromiseReactionType::Reject => Err(arg),
+                    },
+                };
+
+                match target {
+                    ReactionTarget::None => {}
+                    ReactionTarget::Internal(promise_id) => match handler_result {
+                        Ok(value) => interp.resolve_promise_internal(promise_id, value),
+                        Err(reason) => interp.reject_promise(promise_id, reason),
+                    },
+                    ReactionTarget::Capability {
+                        resolve, reject, ..
+                    } => {
+                        let (function, argument) = match handler_result {
+                            Ok(value) => (resolve, value),
+                            Err(reason) => (reject, reason),
+                        };
+                        if let Completion::Throw(e) =
+                            interp.call_function(&function, &JsValue::UNDEFINED, &[argument])
+                        {
+                            return Completion::Throw(e);
+                        }
+                    }
                 }
                 Completion::Normal(JsValue::UNDEFINED)
             }),
         ));
     }
 
+    /// NewPromiseResolveThenableJob (ECMA-262 §27.2.2.2).
+    pub(crate) fn promise_resolve_thenable(
+        &mut self,
+        promise_id: u64,
+        thenable: JsValue,
+        then_fn: JsValue,
+    ) {
+        let roots = vec![
+            thenable.clone(),
+            then_fn.clone(),
+            JsValue::object(promise_id),
+        ];
+        self.scheduler.enqueue_microtask((
+            roots,
+            Box::new(move |interp| {
+                interp.run_promise_resolve_thenable_job(promise_id, thenable, then_fn)
+            }),
+        ));
+    }
+
+    fn run_promise_resolve_thenable_job(
+        &mut self,
+        promise_id: u64,
+        thenable: JsValue,
+        then_fn: JsValue,
+    ) -> Completion {
+        // A native promise whose `then` is the original: perform the steps of
+        // `thenable.then(resolve, reject)` directly. `SpeciesConstructor` stays
+        // observable; only the unobservable resolving-function objects and the
+        // dropped derived promise are skipped.
+        if self.is_intrinsic_promise_then(&then_fn)
+            && let Some(thenable_id) = thenable.as_object_id()
+            && self
+                .get_object_cell(thenable_id)
+                .is_some_and(|obj| obj.borrow().promise_data().is_some())
+        {
+            let default_ctor = self.intrinsic_promise_constructor();
+            match self.species_constructor(&thenable, &default_ctor) {
+                Err(e) => {
+                    self.reject_promise(promise_id, e);
+                }
+                Ok(c) if self.is_intrinsic_promise_constructor(&c) => {
+                    self.perform_promise_then_internal(
+                        thenable_id,
+                        None,
+                        None,
+                        ReactionTarget::Internal(promise_id),
+                    );
+                }
+                Ok(c) => {
+                    let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+                    match self.new_promise_capability(&c) {
+                        Ok(cap) => {
+                            self.perform_promise_then(
+                                &thenable,
+                                &resolve_fn,
+                                &reject_fn,
+                                cap.promise,
+                                cap.resolve,
+                                cap.reject,
+                            );
+                        }
+                        Err(e) => {
+                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                        }
+                    }
+                }
+            }
+            return Completion::Normal(JsValue::UNDEFINED);
+        }
+
+        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+        let frame = self.gc_root_frame();
+        self.gc_root_value(&resolve_fn);
+        self.gc_root_value(&reject_fn);
+        let result = self.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
+        // A `__host_exit` inside the user `then` (issue #242) propagates out
+        // of the job as `Completion::Exit` rather than being turned into a
+        // rejection.
+        let outcome = match result {
+            Completion::Exit(code) => Completion::Exit(code),
+            Completion::Throw(e) => {
+                match self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]) {
+                    Completion::Throw(e2) => Completion::Throw(e2),
+                    _ => Completion::Normal(JsValue::UNDEFINED),
+                }
+            }
+            _ => Completion::Normal(JsValue::UNDEFINED),
+        };
+        self.gc_unroot_frame(frame);
+        outcome
+    }
+
     /// §27.2.5.4.1 PerformPromiseThen with a pre-created result capability.
     /// Skips SpeciesConstructor — uses the provided promise/resolve/reject directly.
+    /// A non-object `result_promise` means there is no result capability.
     pub(crate) fn perform_promise_then(
         &mut self,
         promise_val: &JsValue,
@@ -1022,72 +1241,74 @@ impl Interpreter {
         result_resolve: JsValue,
         result_reject: JsValue,
     ) -> Completion {
-        let promise_id = if let Some(o) = promise_val.as_object_id() {
-            o
-        } else {
+        let Some(promise_id) = promise_val.as_object_id() else {
             return Completion::Throw(
                 self.create_type_error("PerformPromiseThen called on non-promise"),
             );
         };
-        let derived_id = result_promise.as_object_id().unwrap_or_default();
-
-        let fulfill_handler = if self.is_callable(on_fulfilled) {
-            Some(on_fulfilled.clone())
-        } else {
-            None
+        let target = match result_promise.as_object_id() {
+            Some(derived_id) => ReactionTarget::Capability {
+                promise_id: derived_id,
+                resolve: result_resolve,
+                reject: result_reject,
+            },
+            None => ReactionTarget::None,
         };
-        let reject_handler = if self.is_callable(on_rejected) {
-            Some(on_rejected.clone())
-        } else {
-            None
-        };
-
-        let fulfill_reaction = PromiseReaction {
-            handler: fulfill_handler,
-            promise_id: Some(derived_id),
-            resolve: result_resolve.clone(),
-            reject: result_reject.clone(),
-            reaction_type: PromiseReactionType::Fulfill,
-        };
-        let reject_reaction = PromiseReaction {
-            handler: reject_handler,
-            promise_id: Some(derived_id),
-            resolve: result_resolve,
-            reject: result_reject,
-            reaction_type: PromiseReactionType::Reject,
-        };
-
-        let fulfill_reaction2 = fulfill_reaction.clone();
-        let reject_reaction2 = reject_reaction.clone();
-        let state = if let Some(obj) = self.get_object_cell(promise_id) {
-            let mut o = obj.borrow_mut();
-            if let Some(pd) = o.promise_data_mut() {
-                pd.is_handled = true;
-                match &pd.state {
-                    PromiseState::Pending => {
-                        pd.fulfill_reactions.push(fulfill_reaction);
-                        pd.reject_reactions.push(reject_reaction);
-                        None
-                    }
-                    PromiseState::Fulfilled(v) => Some((true, v.clone())),
-                    PromiseState::Rejected(r) => Some((false, r.clone())),
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some((is_fulfilled, value)) = state {
-            if is_fulfilled {
-                self.trigger_promise_reactions(vec![fulfill_reaction2], value);
-            } else {
-                self.trigger_promise_reactions(vec![reject_reaction2], value);
-            }
-        }
-
+        let fulfill_handler = self.is_callable(on_fulfilled).then(|| on_fulfilled.clone());
+        let reject_handler = self.is_callable(on_rejected).then(|| on_rejected.clone());
+        self.perform_promise_then_internal(promise_id, fulfill_handler, reject_handler, target);
         Completion::Normal(result_promise)
+    }
+
+    /// PerformPromiseThen steps 9-13 for pre-validated handlers: register the
+    /// reactions on a pending promise or queue the matching job at once.
+    pub(crate) fn perform_promise_then_internal(
+        &mut self,
+        promise_id: u64,
+        fulfill_handler: Option<JsValue>,
+        reject_handler: Option<JsValue>,
+        target: ReactionTarget,
+    ) {
+        let settled = {
+            let Some(cell) = self.get_object_cell(promise_id) else {
+                return;
+            };
+            let mut obj = cell.borrow_mut();
+            let Some(pd) = obj.promise_data_mut() else {
+                return;
+            };
+            pd.is_handled = true;
+            match &pd.state {
+                PromiseState::Pending => {
+                    pd.fulfill_reactions.push(PromiseReaction {
+                        handler: fulfill_handler,
+                        target: target.clone(),
+                        reaction_type: PromiseReactionType::Fulfill,
+                    });
+                    pd.reject_reactions.push(PromiseReaction {
+                        handler: reject_handler,
+                        target,
+                        reaction_type: PromiseReactionType::Reject,
+                    });
+                    return;
+                }
+                PromiseState::Fulfilled(v) => (PromiseReactionType::Fulfill, v.clone()),
+                PromiseState::Rejected(r) => (PromiseReactionType::Reject, r.clone()),
+            }
+        };
+        let (reaction_type, argument) = settled;
+        let handler = match reaction_type {
+            PromiseReactionType::Fulfill => fulfill_handler,
+            PromiseReactionType::Reject => reject_handler,
+        };
+        self.enqueue_promise_reaction_job(
+            PromiseReaction {
+                handler,
+                target,
+                reaction_type,
+            },
+            argument,
+        );
     }
 
     /// §6.2.3.1 Await steps 5-6: PerformPromiseThen with no result capability.
@@ -1102,39 +1323,12 @@ impl Interpreter {
         let Some(promise_id) = promise_val.as_object_id() else {
             return;
         };
-        let fulfill_reaction = PromiseReaction {
-            handler: Some(on_fulfilled),
-            promise_id: None,
-            resolve: JsValue::UNDEFINED,
-            reject: JsValue::UNDEFINED,
-            reaction_type: PromiseReactionType::Fulfill,
-        };
-        let reject_reaction = PromiseReaction {
-            handler: Some(on_rejected),
-            promise_id: None,
-            resolve: JsValue::UNDEFINED,
-            reject: JsValue::UNDEFINED,
-            reaction_type: PromiseReactionType::Reject,
-        };
-        let settled = self.get_object_cell(promise_id).and_then(|obj| {
-            let mut o = obj.borrow_mut();
-            let pd = o.promise_data_mut()?;
-            pd.is_handled = true;
-            match &pd.state {
-                PromiseState::Pending => {
-                    pd.fulfill_reactions.push(fulfill_reaction.clone());
-                    pd.reject_reactions.push(reject_reaction.clone());
-                    None
-                }
-                PromiseState::Fulfilled(v) => Some((true, v.clone())),
-                PromiseState::Rejected(r) => Some((false, r.clone())),
-            }
-        });
-        match settled {
-            Some((true, value)) => self.trigger_promise_reactions(vec![fulfill_reaction], value),
-            Some((false, reason)) => self.trigger_promise_reactions(vec![reject_reaction], reason),
-            None => {}
-        }
+        self.perform_promise_then_internal(
+            promise_id,
+            Some(on_fulfilled),
+            Some(on_rejected),
+            ReactionTarget::None,
+        );
     }
 
     pub(crate) fn promise_then(
@@ -1143,96 +1337,49 @@ impl Interpreter {
         on_fulfilled: &JsValue,
         on_rejected: &JsValue,
     ) -> Completion {
-        let promise_id = if let Some(o) = promise_val.as_object_id() {
-            if let Some(obj) = self.get_object_cell(o) {
-                if obj.borrow().promise_data().is_some() {
-                    o
-                } else {
-                    let err =
-                        self.create_type_error("Promise.prototype.then called on non-promise");
-                    return Completion::Throw(err);
-                }
-            } else {
+        let promise_id = match promise_val.as_object_id() {
+            Some(o)
+                if self
+                    .get_object_cell(o)
+                    .is_some_and(|obj| obj.borrow().promise_data().is_some()) =>
+            {
+                o
+            }
+            _ => {
                 let err = self.create_type_error("Promise.prototype.then called on non-promise");
                 return Completion::Throw(err);
             }
-        } else {
-            let err = self.create_type_error("Promise.prototype.then called on non-promise");
-            return Completion::Throw(err);
         };
 
         // SpeciesConstructor(promise, %Promise%)
-        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::UNDEFINED);
-        let c = match self.species_constructor(promise_val, &promise_ctor) {
+        let default_ctor = self.intrinsic_promise_constructor();
+        let c = match self.species_constructor(promise_val, &default_ctor) {
             Ok(c) => c,
             Err(e) => return Completion::Throw(e),
         };
 
-        let cap = match self.new_promise_capability(&c) {
-            Ok(cap) => cap,
-            Err(e) => return Completion::Throw(e),
-        };
-        let derived = cap.promise;
-        let derived_id = derived.as_object_id().unwrap_or_default();
-        let resolve_fn = cap.resolve;
-        let reject_fn = cap.reject;
-
-        let fulfill_handler = if self.is_callable(on_fulfilled) {
-            Some(on_fulfilled.clone())
+        // NewPromiseCapability(C): for %Promise% the resolving functions can
+        // never be observed, so the derived promise is settled directly.
+        let (derived, target) = if self.is_intrinsic_promise_constructor(&c) {
+            let derived = self.create_promise_object();
+            let derived_id = derived.as_object_id().unwrap_or_default();
+            (derived, ReactionTarget::Internal(derived_id))
         } else {
-            None
-        };
-        let reject_handler = if self.is_callable(on_rejected) {
-            Some(on_rejected.clone())
-        } else {
-            None
-        };
-
-        let fulfill_reaction = PromiseReaction {
-            handler: fulfill_handler,
-            promise_id: Some(derived_id),
-            resolve: resolve_fn.clone(),
-            reject: reject_fn.clone(),
-            reaction_type: PromiseReactionType::Fulfill,
-        };
-        let reject_reaction = PromiseReaction {
-            handler: reject_handler,
-            promise_id: Some(derived_id),
-            resolve: resolve_fn,
-            reject: reject_fn,
-            reaction_type: PromiseReactionType::Reject,
+            let cap = match self.new_promise_capability(&c) {
+                Ok(cap) => cap,
+                Err(e) => return Completion::Throw(e),
+            };
+            let target = ReactionTarget::Capability {
+                promise_id: cap.promise.as_object_id().unwrap_or_default(),
+                resolve: cap.resolve,
+                reject: cap.reject,
+            };
+            (cap.promise, target)
         };
 
-        let fulfill_reaction2 = fulfill_reaction.clone();
-        let reject_reaction2 = reject_reaction.clone();
-        let state = if let Some(obj) = self.get_object_cell(promise_id) {
-            let mut o = obj.borrow_mut();
-            if let Some(pd) = o.promise_data_mut() {
-                pd.is_handled = true;
-                match &pd.state {
-                    PromiseState::Pending => {
-                        pd.fulfill_reactions.push(fulfill_reaction);
-                        pd.reject_reactions.push(reject_reaction);
-                        None
-                    }
-                    PromiseState::Fulfilled(v) => Some((true, v.clone())),
-                    PromiseState::Rejected(r) => Some((false, r.clone())),
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some((is_fulfilled, value)) = state {
-            if is_fulfilled {
-                self.trigger_promise_reactions(vec![fulfill_reaction2], value);
-            } else {
-                self.trigger_promise_reactions(vec![reject_reaction2], value);
-            }
-        }
-
+        let fulfill_handler = self.is_callable(on_fulfilled).then(|| on_fulfilled.clone());
+        let reject_handler = self.is_callable(on_rejected).then(|| on_rejected.clone());
+        self.perform_promise_then_internal(promise_id, fulfill_handler, reject_handler, target);
         Completion::Normal(derived)
     }
 
@@ -1244,10 +1391,7 @@ impl Interpreter {
         {
             match self.get_object_property(o, "constructor", value) {
                 Completion::Normal(ctor) => {
-                    let promise_ctor = self.get_global_var("Promise");
-                    if let Some(ref pc) = promise_ctor
-                        && strict_equality(&ctor, pc)
-                    {
+                    if self.is_intrinsic_promise_constructor(&ctor) {
                         return value.clone();
                     }
                 }

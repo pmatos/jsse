@@ -639,16 +639,12 @@ fn from_async_attach_await(
                     pd.is_handled = true;
                     pd.fulfill_reactions.push(PromiseReaction {
                         handler: Some(fulfill_handler),
-                        promise_id: None,
-                        resolve: JsValue::UNDEFINED,
-                        reject: JsValue::UNDEFINED,
+                        target: ReactionTarget::None,
                         reaction_type: PromiseReactionType::Fulfill,
                     });
                     pd.reject_reactions.push(PromiseReaction {
                         handler: Some(reject_handler),
-                        promise_id: None,
-                        resolve: JsValue::UNDEFINED,
-                        reject: JsValue::UNDEFINED,
+                        target: ReactionTarget::None,
                         reaction_type: PromiseReactionType::Reject,
                     });
                 }

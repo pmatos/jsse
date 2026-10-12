@@ -422,8 +422,7 @@ pub(crate) struct AsyncFunctionState {
     pub try_stack: Vec<TryContextInfo>,
     pub pending_binding: Option<SentValueBinding>,
     pub pending_for_of_unwind: Option<PendingForOfUnwind>,
-    pub resolve_fn: JsValue,
-    pub reject_fn: JsValue,
+    pub resolvers: PromiseResolvers,
     pub for_of_stack: Vec<ForOfLoopState>,
     pub module_path: Option<super::ModuleKey>,
     /// Set while the function-level disposal is parked at an `Await`; the
@@ -547,6 +546,13 @@ pub(crate) struct Realm {
     /// %Array.prototype.values%, captured when the realm's Array prototype is
     /// built; the `@@iterator` value of every arguments object.
     pub(crate) array_prototype_values: Option<JsValue>,
+    /// %Promise%, %Promise.prototype.then% and the original
+    /// `get Promise[@@species]`: the identities that decide whether a promise
+    /// operation can skip the observable (but, for these, behaviourless)
+    /// function-object round trip.
+    pub(crate) promise_constructor: Option<JsValue>,
+    pub(crate) promise_then: Option<JsValue>,
+    pub(crate) promise_species_getter: Option<JsValue>,
     pub(crate) template_cache: FxHashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
     pub(crate) object_prototype: Option<u64>,
@@ -653,6 +659,9 @@ impl Realm {
             global_object: None,
             throw_type_error: None,
             array_prototype_values: None,
+            promise_constructor: None,
+            promise_then: None,
+            promise_species_getter: None,
             template_cache: FxHashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
@@ -868,6 +877,15 @@ impl Realm {
             .and_then(JsValue::as_object_id)
         {
             worklist.push(id);
+        }
+        for intrinsic in [
+            &self.promise_constructor,
+            &self.promise_then,
+            &self.promise_species_getter,
+        ] {
+            if let Some(id) = intrinsic.as_ref().and_then(JsValue::as_object_id) {
+                worklist.push(id);
+            }
         }
         if let Some(id) = self
             .object_prototype_tostring
@@ -4175,13 +4193,72 @@ pub(crate) enum PromiseReactionType {
     Reject,
 }
 
+/// What a reaction job does with its handler's outcome.
+#[derive(Debug, Clone)]
+pub(crate) enum ReactionTarget {
+    /// No result capability (Await, internal consumers).
+    None,
+    /// A result capability built from a non-intrinsic constructor, whose
+    /// resolving functions are observable and are called as functions.
+    Capability {
+        promise_id: u64,
+        resolve: JsValue,
+        reject: JsValue,
+    },
+    /// The result capability of `%Promise%`: its resolving functions can never
+    /// be observed, so the reaction settles the promise directly.
+    Internal(u64),
+}
+
+impl ReactionTarget {
+    pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&JsValue)) {
+        match self {
+            ReactionTarget::None => {}
+            ReactionTarget::Capability {
+                resolve, reject, ..
+            } => {
+                visit(resolve);
+                visit(reject);
+            }
+            ReactionTarget::Internal(_) => {}
+        }
+    }
+
+    pub(crate) fn promise_id(&self) -> Option<u64> {
+        match self {
+            ReactionTarget::None => None,
+            ReactionTarget::Capability { promise_id, .. } => Some(*promise_id),
+            ReactionTarget::Internal(id) => Some(*id),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PromiseReaction {
     pub handler: Option<JsValue>,
-    pub promise_id: Option<u64>,
-    pub resolve: JsValue,
-    pub reject: JsValue,
+    pub target: ReactionTarget,
     pub reaction_type: PromiseReactionType,
+}
+
+/// The resolving functions of a promise whose capability is owned by the
+/// engine. `Internal` settles through the promise itself and allocates no
+/// function objects; it is only valid for a promise built from `%Promise%`.
+#[derive(Debug, Clone)]
+pub(crate) enum PromiseResolvers {
+    Internal(u64),
+    Functions { resolve: JsValue, reject: JsValue },
+}
+
+impl PromiseResolvers {
+    pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&JsValue)) {
+        match self {
+            PromiseResolvers::Internal(id) => visit(&JsValue::object(*id)),
+            PromiseResolvers::Functions { resolve, reject } => {
+                visit(resolve);
+                visit(reject);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4194,6 +4271,9 @@ pub(crate) struct PromiseData {
     pub fulfill_reactions: Vec<PromiseReaction>,
     pub reject_reactions: Vec<PromiseReaction>,
     pub is_handled: bool,
+    /// The `[[AlreadyResolved]]` flag of the engine-owned (`Internal`)
+    /// resolving functions. Exposed resolving functions keep their own flag.
+    pub already_resolved: bool,
 }
 
 impl PromiseData {
@@ -4204,6 +4284,7 @@ impl PromiseData {
             fulfill_reactions: Vec::new(),
             reject_reactions: Vec::new(),
             is_handled: false,
+            already_resolved: false,
         }
     }
 }
