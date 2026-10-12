@@ -228,7 +228,15 @@ fn locale_case_map(
             cm.lowercase_to_string(run, &langid)
         }
     });
-    Completion::Normal(JsValue::string(JsString::from_vec(mapped)))
+    case_mapped_string(interp, mapped)
+}
+
+// Case mapping can lengthen a string (e.g. U+00DF to "SS").
+fn case_mapped_string(interp: &mut Interpreter, units: Vec<u16>) -> Completion {
+    if units.len() > MAX_STRING_LENGTH {
+        return Completion::Throw(interp.invalid_string_length_error());
+    }
+    Completion::Normal(JsValue::string(JsString::from_vec(units)))
 }
 
 // Annex B CreateHTML: `<tag attribute="value">s</tag>`, with `"` in the value
@@ -518,7 +526,7 @@ impl Interpreter {
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let lower = map_well_formed(s.as_units(), |run| Cow::Owned(run.to_lowercase()));
-                    Completion::Normal(JsValue::string(JsString::from_vec(lower)))
+                    case_mapped_string(interp, lower)
                 }),
             ),
             (
@@ -527,7 +535,7 @@ impl Interpreter {
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let upper = map_well_formed(s.as_units(), |run| Cow::Owned(run.to_uppercase()));
-                    Completion::Normal(JsValue::string(JsString::from_vec(upper)))
+                    case_mapped_string(interp, upper)
                 }),
             ),
             (
@@ -734,7 +742,7 @@ impl Interpreter {
                         pos,
                         end
                     ));
-                    result.extend_from_slice(&s_units[end..]);
+                    propagate!(interp.append_code_units(&mut result, &s_units[end..]));
                     Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
@@ -837,7 +845,9 @@ impl Interpreter {
                         ));
                         end_of_last_match = end;
                     }
-                    result.extend_from_slice(&s_units[end_of_last_match..]);
+                    propagate!(
+                        interp.append_code_units(&mut result, &s_units[end_of_last_match..])
+                    );
                     Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),

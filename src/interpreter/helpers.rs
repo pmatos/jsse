@@ -345,16 +345,12 @@ pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> Option<JsV
     }
     debug_assert!(rval.is_string());
     let mut units = js_value_to_code_units(lval);
-    let fits = rval
-        .with_string(|r| {
-            let fits = units.len().saturating_add(r.len()) <= MAX_STRING_LENGTH;
-            if fits {
-                units.extend_from_slice(r);
-            }
-            fits
-        })
-        .expect("kind checked");
-    fits.then(|| JsValue::string(JsString::from_vec(units)))
+    let right_len = rval.with_string(|r| r.len()).expect("kind checked");
+    if units.len().saturating_add(right_len) > MAX_STRING_LENGTH {
+        return None;
+    }
+    rval.with_string(|r| units.extend_from_slice(r));
+    Some(JsValue::string(JsString::from_vec(units)))
 }
 
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
