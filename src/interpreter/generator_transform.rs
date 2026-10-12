@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::interpreter::atom::Atom;
 use crate::interpreter::generator_analysis::*;
 use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
@@ -70,7 +71,7 @@ pub(crate) enum ScopeAction {
     /// block's *entire* set of lexical names must enter TDZ together at
     /// block entry, not just the subset appearing in whichever fragment a
     /// suspension point happens to split off first.
-    OpenBlock(Vec<(String, bool)>),
+    OpenBlock(Vec<(Atom, bool)>),
     /// `CreatePerIterationEnvironment` (`sec-createperiterationenvironment`):
     /// push a fresh frame copying the named bindings' current values forward,
     /// replacing the frame already at this depth if one is there (the `for`
@@ -79,7 +80,7 @@ pub(crate) enum ScopeAction {
     /// rely on a depth change to know when to fire). `bool` is whether the
     /// binding is `const` (spec still runs this for `const` heads; see
     /// `exec_for`, which this generalizes).
-    CopyForward(Vec<(String, bool)>),
+    CopyForward(Vec<(Atom, bool)>),
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +97,7 @@ impl GeneratorState {
     pub(crate) fn inline_jump_terminator(
         &self,
         completion: &crate::interpreter::types::Completion,
-    ) -> Option<StateTerminator> {
+    ) -> Option<&StateTerminator> {
         use crate::interpreter::types::Completion;
         if self.inline_jumps.is_empty() {
             return None;
@@ -109,7 +110,7 @@ impl GeneratorState {
         self.inline_jumps
             .iter()
             .find(|jump| jump.kind == kind && jump.label == *label)
-            .map(|jump| jump.terminator.clone())
+            .map(|jump| &jump.terminator)
     }
 }
 
@@ -301,6 +302,15 @@ pub(crate) struct LoopControlTarget {
     /// dropped scope frame at the next state transition instead, so their
     /// routing does not consume this field.
     pub scope_depth: usize,
+}
+
+/// Interns a scope action's names once, at transform time, so the drivers
+/// declare each per-entry/per-iteration binding without hashing its text.
+fn intern_scope_decls(decls: Vec<(String, bool)>) -> Vec<(Atom, bool)> {
+    decls
+        .into_iter()
+        .map(|(name, is_const)| (Atom::intern(&name), is_const))
+        .collect()
 }
 
 /// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
@@ -1139,7 +1149,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.current_state_id = entry_state;
                 ctx.scope_depth += 1;
                 ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(stmts.iter()),
+                    intern_scope_decls(collect_block_lexical_decls(stmts.iter())),
                 ));
                 let with_chain = ctx.claim_with_chain(entry_state);
 
@@ -3196,8 +3206,9 @@ fn transform_for_statement(
         // so there is no temp-var shortcut left here to shadow. Same names as
         // `per_iteration_bindings` above: `has_per_iteration_env` already
         // guarantees `for_stmt.init` is this exact `ForInit::Variable(decl)`.
-        ctx.states[init_state].scope_action =
-            Some(ScopeAction::OpenBlock(per_iteration_bindings.clone()));
+        ctx.states[init_state].scope_action = Some(ScopeAction::OpenBlock(intern_scope_decls(
+            per_iteration_bindings.clone(),
+        )));
     }
 
     if let Some(init) = &for_stmt.init {
@@ -3239,10 +3250,12 @@ fn transform_for_statement(
         ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
     if has_per_iteration_env {
-        ctx.states[test_state].scope_action =
-            Some(ScopeAction::CopyForward(per_iteration_bindings.clone()));
-        ctx.states[update_state].scope_action =
-            Some(ScopeAction::CopyForward(per_iteration_bindings));
+        ctx.states[test_state].scope_action = Some(ScopeAction::CopyForward(intern_scope_decls(
+            per_iteration_bindings.clone(),
+        )));
+        ctx.states[update_state].scope_action = Some(ScopeAction::CopyForward(intern_scope_decls(
+            per_iteration_bindings,
+        )));
     }
 
     ctx.current_state_id = test_state;
@@ -3590,9 +3603,9 @@ fn transform_try_statement(
     if ctx.scopes_disposables(&try_stmt.block) {
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
-        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
+        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(intern_scope_decls(
             collect_block_lexical_decls(try_stmt.block.iter()),
-        ));
+        )));
         ctx.scope_depth += 1;
         let with_chain = ctx.claim_with_chain(try_body_state);
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
@@ -3654,7 +3667,7 @@ fn transform_try_statement(
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(finalizer.iter()),
+                    intern_scope_decls(collect_block_lexical_decls(finalizer.iter())),
                 ));
                 ctx.scope_depth += 1;
                 let with_chain = ctx.claim_with_chain(finally_body_state);
@@ -3706,7 +3719,8 @@ fn open_case_block_scope(
     ctx.finalize_current_state(StateTerminator::Goto(bridge_state));
     ctx.current_state_id = bridge_state;
     ctx.scope_depth += 1;
-    ctx.states[bridge_state].scope_action = Some(ScopeAction::OpenBlock(case_block_decls));
+    ctx.states[bridge_state].scope_action =
+        Some(ScopeAction::OpenBlock(intern_scope_decls(case_block_decls)));
     bridge_state
 }
 
@@ -5291,7 +5305,7 @@ mod tests {
             matches!(
                 &s.scope_action,
                 Some(ScopeAction::OpenBlock(decls))
-                    if decls.iter().any(|(name, is_const)| name == "x" && *is_const)
+                    if decls.iter().any(|(name, is_const)| name.as_str() == "x" && *is_const)
             )
         });
         assert!(
@@ -5331,7 +5345,7 @@ mod tests {
         // `let`s must land in a single, shared OpenBlock scope_action, not
         // per-case ones.
         let sm = async_machine("switch (1) { case 1: let y = 1; await 0; case 2: let z = 2; } ");
-        let open_block_decls: Vec<&Vec<(String, bool)>> = sm
+        let open_block_decls: Vec<&Vec<(Atom, bool)>> = sm
             .states
             .iter()
             .filter_map(|s| match &s.scope_action {
@@ -5347,7 +5361,7 @@ mod tests {
         );
         let decls = open_block_decls[0];
         assert!(
-            decls.iter().any(|(name, _)| name == "y"),
+            decls.iter().any(|(name, _)| name.as_str() == "y"),
             "expected `y` in the shared CaseBlock scope, got {decls:?}"
         );
         assert!(

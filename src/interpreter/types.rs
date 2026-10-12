@@ -453,10 +453,12 @@ pub(crate) struct ScopeFrame {
 
 #[derive(Clone)]
 pub(crate) struct ForOfLoopState {
-    pub(crate) iter_var: String,
+    /// Shared so mirroring the driver's loop stack into the GC-visible side
+    /// table each step copies reference counts, not strings.
+    pub(crate) iter_var: Rc<str>,
     /// The labels attached to this iteration statement. `LoopContinues` uses
     /// this set to decide whether a labelled continue begins its next iteration.
-    pub(crate) label_set: Vec<String>,
+    pub(crate) label_set: Rc<[String]>,
     pub(crate) head_state: usize,
     pub(crate) after_state: usize,
     /// Depth of the driver's try stack when the loop began, so an abrupt
@@ -484,6 +486,33 @@ impl ForOfLoopState {
 
     pub(crate) fn matches_continue_target(&self, target: Option<&str>) -> bool {
         target.is_none_or(|target| self.label_set.iter().any(|label| label == target))
+    }
+
+    /// Whether mirroring `self` over `other` would change nothing observable.
+    /// Identity comparison on the shared fields keeps this O(1).
+    pub(crate) fn same_as(&self, other: &ForOfLoopState) -> bool {
+        self.head_state == other.head_state
+            && self.after_state == other.after_state
+            && self.try_depth == other.try_depth
+            && self.is_await == other.is_await
+            && self.iterator_closed == other.iterator_closed
+            && Rc::ptr_eq(&self.outer_env, &other.outer_env)
+            && match (&self.iteration_env, &other.iteration_env) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && (Rc::ptr_eq(&self.iter_var, &other.iter_var) || self.iter_var == other.iter_var)
+            && (Rc::ptr_eq(&self.label_set, &other.label_set) || self.label_set == other.label_set)
+    }
+}
+
+impl ScopeFrame {
+    /// See [`ForOfLoopState::same_as`].
+    pub(crate) fn same_as(&self, other: &ScopeFrame) -> bool {
+        self.try_depth == other.try_depth
+            && self.for_of_depth == other.for_of_depth
+            && Rc::ptr_eq(&self.env, &other.env)
     }
 }
 
