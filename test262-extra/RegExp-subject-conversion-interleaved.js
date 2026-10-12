@@ -47,11 +47,11 @@ for (var round = 0; round < 4; round++) {
       re.lastIndex = pos;
       var m = re.exec(s);
       var got = m === null ? null : m[0] + "@" + m.index;
-      assert.sameValue(got, expected(s, re, pos), "subject " + i + " round " + round + " " + re.source);
       if (m !== null) {
         assert.sameValue(RegExp.input, s, "RegExp.input is the subject of the successful match");
         assert.sameValue(RegExp.lastMatch, m[0], "RegExp.lastMatch is the successful match");
       }
+      assert.sameValue(got, expected(s, re, pos), "subject " + i + " round " + round + " " + re.source);
       checked++;
     });
   }

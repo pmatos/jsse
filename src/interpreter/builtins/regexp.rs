@@ -677,6 +677,10 @@ pub(crate) struct SubjectCache {
 
 const SUBJECT_CACHE_MIN_UNITS: usize = 256;
 const SUBJECT_CACHE_LARGE_ENTRIES: usize = 4;
+/// Most code units the large entries may retain together (the newest entry is
+/// kept regardless), so a few huge subjects cannot pin several multiplied-size
+/// converted copies at once.
+const SUBJECT_CACHE_LARGE_UNIT_BUDGET: usize = 8 * 1024 * 1024;
 
 impl SubjectCache {
     fn lookup_or_insert(&mut self, subject: JsString) -> Rc<RegexInput> {
@@ -703,6 +707,12 @@ impl SubjectCache {
             self.large.pop();
         }
         self.large.insert(0, Rc::clone(&input));
+        let mut units: usize = self.large.iter().map(|cached| cached.subject.len()).sum();
+        while self.large.len() > 1 && units > SUBJECT_CACHE_LARGE_UNIT_BUDGET {
+            if let Some(evicted) = self.large.pop() {
+                units -= evicted.subject.len();
+            }
+        }
         input
     }
 }
@@ -5235,19 +5245,19 @@ pub(crate) struct CachedRegex {
     /// they are derived once per compiled regex rather than rescanned on every
     /// successful match.
     quantifier_resets: std::cell::OnceCell<QuantifierResets>,
+    source: String,
 }
 
 impl CachedRegex {
-    fn quantifier_resets(&self, source: &str) -> &QuantifierResets {
+    fn quantifier_resets(&self) -> &QuantifierResets {
         self.quantifier_resets
-            .get_or_init(|| build_quantified_parent_map(source))
+            .get_or_init(|| build_quantified_parent_map(&self.source))
     }
 }
 
 /// What a match is run with: the compiled matcher plus everything `exec` would
 /// otherwise decode from the slot's source and flags strings on every call.
 pub(crate) struct ExecPlan {
-    pattern: String,
     cached: Rc<CachedRegex>,
     global: bool,
     sticky: bool,
@@ -5302,6 +5312,7 @@ fn build_regex_cached(
         name_order,
         total_groups: count_capture_groups(source),
         quantifier_resets: std::cell::OnceCell::new(),
+        source: source.to_string(),
     });
     interp
         .regexp_legacy
@@ -5333,7 +5344,6 @@ fn exec_plan_for(interp: &mut Interpreter, obj_id: u64) -> Option<Rc<ExecPlan>> 
         sticky: flags.contains('y'),
         has_indices: flags.contains('d'),
         unicode: flags.contains('u') || flags.contains('v'),
-        pattern,
         cached,
     });
     if let Some(r) = obj.borrow().regexp() {
@@ -7525,7 +7535,8 @@ fn build_regex_ex_with_nullable_state(
 
     if tr.needs_bytes_mode {
         return build_meta_regex(&tr.pattern, true)
-            .map(|r| (CompiledRegex::Bytes(r), dup_map, name_order));
+            .map(|r| (CompiledRegex::Bytes(r), dup_map, name_order))
+            .ok_or_else(|| meta_build_error(&tr.pattern, true));
     }
 
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
@@ -7536,7 +7547,7 @@ fn build_regex_ex_with_nullable_state(
         return Ok(result);
     }
 
-    if let Ok(r) = build_meta_regex(&tr.pattern, false) {
+    if let Some(r) = build_meta_regex(&tr.pattern, false) {
         return Ok((CompiledRegex::Standard(r), dup_map, name_order));
     }
 
@@ -7566,6 +7577,7 @@ fn build_regex_ex_with_nullable_state(
             }
             build_meta_regex(&tr.pattern, false)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
+                .ok_or_else(|| meta_build_error(&tr.pattern, false))
         }
     }
 }
@@ -7781,18 +7793,9 @@ fn search_captures_at(
             Some(RegexCaptures { groups, names })
         }
         CompiledRegex::Bytes(_) => {
-            unreachable!("Bytes regex should use bytes_regex_captures_at")
+            unreachable!("Bytes regex is matched through meta_captures_at")
         }
     }
-}
-
-fn bytes_regex_captures_at(
-    re: &regex_automata::meta::Regex,
-    input: &[u8],
-    pos: usize,
-    anchored: bool,
-) -> Option<RegexCaptures> {
-    meta_captures_at(re, input, pos, anchored)
 }
 
 fn meta_captures_at(
@@ -7829,7 +7832,7 @@ fn meta_captures_at(
 
 /// Build with the `regex` crate's default limits and leftmost-first semantics.
 /// `bytes` selects its byte-oriented flavour, where a match need not be UTF-8.
-fn build_meta_regex(pattern: &str, bytes: bool) -> Result<regex_automata::meta::Regex, String> {
+fn build_meta_regex(pattern: &str, bytes: bool) -> Option<regex_automata::meta::Regex> {
     use regex_automata::{MatchKind, meta, util::syntax};
     let metac = meta::Config::new()
         .nfa_size_limit(Some(10 * (1 << 20)))
@@ -7841,18 +7844,22 @@ fn build_meta_regex(pattern: &str, bytes: bool) -> Result<regex_automata::meta::
         .configure(metac)
         .syntax(syntaxc)
         .build(pattern)
-        .map_err(|meta_err| {
-            // Keep the `regex` crate's diagnostics: they surface verbatim in
-            // the SyntaxError message.
-            let regex_err = if bytes {
-                regex::bytes::Regex::new(pattern)
-                    .err()
-                    .map(|e| e.to_string())
-            } else {
-                regex::Regex::new(pattern).err().map(|e| e.to_string())
-            };
-            regex_err.unwrap_or_else(|| meta_err.to_string())
-        })
+        .ok()
+}
+
+/// The message for a pattern the meta engine rejected, taken from the `regex`
+/// crate (same configuration, so it rejects the same patterns) because its
+/// diagnostics surface verbatim in the SyntaxError message. Only built on the
+/// error paths that report it.
+fn meta_build_error(pattern: &str, bytes: bool) -> String {
+    let regex_err = if bytes {
+        regex::bytes::Regex::new(pattern)
+            .err()
+            .map(|e| e.to_string())
+    } else {
+        regex::Regex::new(pattern).err().map(|e| e.to_string())
+    };
+    regex_err.unwrap_or_else(|| "invalid regular expression".to_string())
 }
 
 fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
@@ -8266,7 +8273,7 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
 
     let mut caps = if is_bytes_mode {
         if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-            match bytes_regex_captures_at(bytes_re, regex_input.wtf8(), last_index_byte, sticky) {
+            match meta_captures_at(bytes_re, regex_input.wtf8(), last_index_byte, sticky) {
                 Some(c) => c,
                 None => {
                     if (global || sticky)
@@ -8301,7 +8308,7 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
 
     clear_stale_dup_captures(&mut caps, &cached.dup_map);
     strip_renamed_qi_captures(&mut caps);
-    reset_quantifier_inner_captures(&mut caps, cached.quantifier_resets(&plan.pattern));
+    reset_quantifier_inner_captures(&mut caps, cached.quantifier_resets());
     ensure_capture_slots(&mut caps, cached.total_groups);
     let dup_map = &cached.dup_map;
     let name_order = &cached.name_order;
@@ -8836,7 +8843,7 @@ impl Interpreter {
                             regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                bytes_regex_captures_at(
+                                meta_captures_at(
                                     bytes_re,
                                     regex_input.wtf8(),
                                     last_index_byte,
@@ -9120,7 +9127,6 @@ impl Interpreter {
                         return Completion::Normal(JsValue::string(regex_input.subject.clone()));
                     };
                     let cached = &plan.cached;
-                    let source = &plan.pattern;
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = plan.sticky;
                     let unicode = plan.unicode;
@@ -9139,7 +9145,7 @@ impl Interpreter {
                             regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let mut caps = if is_bytes_mode {
                             if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                match bytes_regex_captures_at(
+                                match meta_captures_at(
                                     bytes_re,
                                     regex_input.wtf8(),
                                     last_index_byte,
@@ -9164,10 +9170,7 @@ impl Interpreter {
                         };
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
-                        reset_quantifier_inner_captures(
-                            &mut caps,
-                            cached.quantifier_resets(source),
-                        );
+                        reset_quantifier_inner_captures(&mut caps, cached.quantifier_resets());
                         ensure_capture_slots(&mut caps, cached.total_groups);
 
                         let full_match = caps.get(0).unwrap();
@@ -10930,6 +10933,20 @@ mod regex_input_cache_tests {
         assert!(Rc::ptr_eq(&first, &kept), "recently used entry kept");
         let kept = regex_input_for_value(&mut interp, &others[2]).unwrap();
         assert!(Rc::ptr_eq(&converted[2], &kept));
+    }
+
+    #[test]
+    fn large_entries_are_bounded_by_the_unit_budget() {
+        let mut interp = Interpreter::new();
+        let first_subject = JsValue::string(JsString::from_str(&"a".repeat(5 * 1024 * 1024)));
+        let second_subject = JsValue::string(JsString::from_str(&"b".repeat(5 * 1024 * 1024)));
+        let first = regex_input_for_value(&mut interp, &first_subject).unwrap();
+        regex_input_for_value(&mut interp, &second_subject).unwrap();
+        let again = regex_input_for_value(&mut interp, &first_subject).unwrap();
+        assert!(
+            !Rc::ptr_eq(&first, &again),
+            "the budget evicts the older entry"
+        );
     }
 
     #[test]
