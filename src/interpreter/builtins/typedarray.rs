@@ -4042,7 +4042,7 @@ impl Interpreter {
         }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = info.kind.name().to_string().into();
+            o.class_name = info.kind.name().into();
             o.prototype_id = proto;
             o.kind = crate::interpreter::types::ObjectKind::TypedArray(info);
         }
@@ -4061,7 +4061,7 @@ impl Interpreter {
         }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = info.kind.name().to_string().into();
+            o.class_name = info.kind.name().into();
             o.prototype_id = Some(proto_id);
             o.kind = crate::interpreter::types::ObjectKind::TypedArray(info);
         }
@@ -4163,7 +4163,7 @@ impl Interpreter {
                     let result_id = self.create_object_id();
                     {
                         let mut r = self.get_object_cell_expect(result_id).borrow_mut();
-                        r.class_name = kind.name().to_string().into();
+                        r.class_name = kind.name().into();
                         r.prototype_id = proto;
                         r.kind = crate::interpreter::types::ObjectKind::TypedArray(ta);
                     }

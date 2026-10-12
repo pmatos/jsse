@@ -51,9 +51,6 @@ impl Interpreter {
         // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj
         // The proxy constructor already returns an Object, so eval_new will use it.
 
-        // Per spec §26.2.2: Proxy constructor has no prototype property, so
-        // `FunctionInit::NO_PROTOTYPE` above never creates one.
-
         // Proxy.revocable(target, handler)
         if let Some(proxy_fn_id) = proxy_fn.as_object_id()
             && let Some(proxy_func_obj) = self.get_object(proxy_fn_id)

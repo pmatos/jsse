@@ -11,7 +11,8 @@ SipHash `KEY_CACHE`, spills the `PropertyMap` into a `HashMap`, allocates a
   (`FunctionKeys`) and appended with `JsObjectData::push_fresh_property`.
 - `PropertyMap` keeps up to `LINEAR_MAX = 8` entries in its linear `SmallVec`
   (heap-backed past `INLINE_CAP = 4`), so a sloppy constructable function's five
-  properties never hash. `INLINE_CAP` and `size_of::<JsObjectData>()` are unchanged.
+  properties never hash. `INLINE_CAP` is unchanged; `function_realm` adds one
+  `Option<usize>` to `JsObjectData` (still under the 3 KB tripwire).
 - `class_name` is `Cow<'static, str>`: every object, not just functions, stops
   allocating a `String` for its class tag.
 - Anonymous functions share one empty `JsString`.

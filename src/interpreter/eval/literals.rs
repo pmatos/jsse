@@ -1480,9 +1480,6 @@ impl Interpreter {
                                     *closure = wrapper;
                                 }
                             }
-                            // Methods must not have own caller/arguments (spec §15.4)
-                            func_obj.borrow_mut().remove_property("caller");
-                            func_obj.borrow_mut().remove_property("arguments");
                         }
                     }
                 }
