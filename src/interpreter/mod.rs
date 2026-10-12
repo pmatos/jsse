@@ -387,7 +387,6 @@ pub(crate) struct Interpreter {
     pub(crate) parked_block_dispose: Option<DisposeCursor>,
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
-    module_async_info: FxHashMap<u64, ModuleKey>,
     pub(crate) with_scope_depth: u32,
     pub(crate) has_ever_entered_with: bool,
     /// IC hit counter for Phase-2 telemetry/tests. Issue #71. Cell so the
@@ -827,7 +826,6 @@ impl Interpreter {
             parked_block_dispose: None,
             static_module_load_depth: 0,
             module_async_evaluation_count: 0,
-            module_async_info: FxHashMap::default(),
             with_scope_depth: 0,
             has_ever_entered_with: false,
             ic_hit_count: std::cell::Cell::new(0),
@@ -3818,7 +3816,6 @@ impl Interpreter {
             },
         ));
         let async_id = self.scheduler.alloc_async_function_id();
-        self.module_async_info.insert(async_id, module_path.clone());
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
@@ -3837,6 +3834,7 @@ impl Interpreter {
                 for_of_stack: vec![],
                 module_path: Some(module_path.clone()),
                 scope_stack: vec![],
+                realm_id: self.current_realm_id,
             },
         );
         self.with_module_key(Some(module_path.clone()), |interp| {

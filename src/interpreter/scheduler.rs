@@ -31,12 +31,10 @@ pub(crate) enum Microtask {
         roots: Vec<JsValue>,
         job: MicrotaskJob,
     },
-    /// NewPromiseReactionJob (ECMA-262 §27.2.2.1).
     Reaction {
         reaction: PromiseReaction,
         argument: JsValue,
     },
-    /// NewPromiseResolveThenableJob (ECMA-262 §27.2.2.2).
     ResolveThenable {
         promise_id: u64,
         thenable: JsValue,
@@ -45,7 +43,6 @@ pub(crate) enum Microtask {
 }
 
 impl Microtask {
-    /// Every value the job keeps alive while it is queued or running.
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
         match self {
             Microtask::Closure { roots, .. } => roots.iter().for_each(visit),

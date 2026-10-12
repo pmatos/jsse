@@ -20,10 +20,16 @@ Builds on #915 (intrinsic-promise reactions).
 - An `await` of a non-object skips `PromiseResolve` entirely: the only promise
   it could produce is already fulfilled with the value, so the single
   continuation job is queued with the value itself.
-- `async_function_resume` keeps the `AsyncFunctionState` in the scheduler map
-  instead of remove + re-insert with clones, and `async_fn_suspend_at_await`
+- `async_function_resume` leaves the `AsyncFunctionState` in the scheduler map
+  instead of remove + re-insert of a full clone, and `async_fn_suspend_at_await`
   moves the driver's `try_stack`/`for_of_stack`/`scope_stack` into the entry in
-  place instead of `to_vec()` copies.
+  place instead of `to_vec()` copies. The resume still clones the entry's
+  stacks into driver locals (the collector traces the entry, not the locals),
+  so a resume inside nested loops or `try` blocks still allocates them.
+- The state records its `realm_id`; `async_function_resume` installs it around
+  the resumption. The removed handler functions did this implicitly (a native
+  call runs in its function's realm), and the already-settled path never did,
+  so this also fixes an await continuation running in the draining realm.
 - The three drain loops (`drain_microtasks`, `drain_microtasks_blocking`, the
   nested loop in `await_value`) share `run_microtask`, which owns the root
   frame and the `gc_assert_root_depth` check.
@@ -57,3 +63,6 @@ promise carry no handler function.
 - `await_value` (the blocking inline await used outside the state machine)
   still creates its `awaitFulfill`/`awaitReject` pair for a pending promise.
 - `SentValueBindingKind::Variable(String)` is still cloned per await.
+- An abrupt `Get(x, "constructor")` on an awaited promise still becomes a
+  rejected promise (one extra tick) instead of throwing at the await point;
+  unchanged by this work.

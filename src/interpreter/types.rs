@@ -433,6 +433,9 @@ pub(crate) struct AsyncFunctionState {
     /// `EnterScope` additionally own `await using` resources and are disposed
     /// when control crosses them.
     pub scope_stack: Vec<ScopeFrame>,
+    /// Realm of the function, restored around every resumption: a reaction job
+    /// runs in whichever realm drained the queue.
+    pub realm_id: usize,
 }
 
 /// One lowered lexical environment, innermost last. `EnterScope`/`ExitScope`

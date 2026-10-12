@@ -1015,7 +1015,6 @@ impl Interpreter {
         }
     }
 
-    /// NewPromiseReactionJob (ECMA-262 §27.2.2.1) queued for `reaction`.
     pub(crate) fn enqueue_promise_reaction_job(
         &mut self,
         reaction: PromiseReaction,
@@ -1024,7 +1023,6 @@ impl Interpreter {
         self.scheduler.enqueue_reaction_job(reaction, argument);
     }
 
-    /// The body of a queued reaction job.
     pub(crate) fn run_promise_reaction_job(
         &mut self,
         reaction: PromiseReaction,

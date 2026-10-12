@@ -7805,6 +7805,7 @@ impl Interpreter {
                     for_of_stack: vec![],
                     module_path: None,
                     scope_stack: vec![],
+                    realm_id: interp.current_realm_id,
                 },
             );
 
@@ -7827,6 +7828,25 @@ impl Interpreter {
     /// `Completion::Normal(undefined)` otherwise (the promise was settled or
     /// the machine suspended at an await).
     pub(crate) fn async_function_resume(
+        &mut self,
+        async_id: u64,
+        sent_value: JsValue,
+        is_error: bool,
+    ) -> Completion {
+        let Some(realm_id) = self
+            .scheduler
+            .async_function_state_mut(async_id)
+            .map(|state| state.realm_id)
+        else {
+            return Completion::Normal(JsValue::UNDEFINED);
+        };
+        let saved_realm = std::mem::replace(&mut self.current_realm_id, realm_id);
+        let completion = self.async_function_resume_in_realm(async_id, sent_value, is_error);
+        self.current_realm_id = saved_realm;
+        completion
+    }
+
+    fn async_function_resume_in_realm(
         &mut self,
         async_id: u64,
         sent_value: JsValue,
@@ -7935,14 +7955,10 @@ impl Interpreter {
                 self.gc_root_value(&$value);
                 self.async_fn_suspend_at_await(
                     async_id,
-                    &state_machine,
-                    &func_env,
-                    is_strict,
                     current_id,
                     &mut try_stack,
                     None,
                     pending_for_of_unwind.take(),
-                    &resolvers,
                     &$value,
                     &mut for_of_stack,
                     &mut scope_stack,
@@ -8741,14 +8757,10 @@ impl Interpreter {
                 let yield_val = yield_val.clone();
                 self.async_fn_suspend_at_await(
                     async_id,
-                    &state_machine,
-                    &func_env,
-                    is_strict,
                     current_id,
                     &mut try_stack,
                     None,
                     pending_for_of_unwind.take(),
-                    &resolvers,
                     &yield_val,
                     &mut for_of_stack,
                     &mut scope_stack,
@@ -8776,14 +8788,10 @@ impl Interpreter {
                         Operand::Suspend(v) => {
                             self.async_fn_suspend_at_await(
                                 async_id,
-                                &state_machine,
-                                &func_env,
-                                is_strict,
                                 current_id,
                                 &mut try_stack,
                                 sent_value_binding.clone(),
                                 pending_for_of_unwind.take(),
-                                &resolvers,
                                 &v,
                                 &mut for_of_stack,
                                 &mut scope_stack,
@@ -8800,14 +8808,10 @@ impl Interpreter {
 
                     self.async_fn_suspend_at_await(
                         async_id,
-                        &state_machine,
-                        &func_env,
-                        is_strict,
                         resume_state,
                         &mut try_stack,
                         sent_value_binding.clone(),
                         pending_for_of_unwind.take(),
-                        &resolvers,
                         &await_val,
                         &mut for_of_stack,
                         &mut scope_stack,
@@ -9151,14 +9155,10 @@ impl Interpreter {
                             });
                             self.async_fn_suspend_at_await(
                                 async_id,
-                                &state_machine,
-                                &func_env,
-                                is_strict,
                                 current_id, // resume to same ForOfHead state
                                 &mut try_stack,
                                 binding,
                                 pending_for_of_unwind.take(),
-                                &resolvers,
                                 &raw_result,
                                 &mut for_of_stack,
                                 &mut scope_stack,
@@ -9748,80 +9748,52 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
-    /// Parks the async function at an `await` of `await_val`, to resume at
-    /// `resume_state`, and registers the continuation. The caller returns
-    /// straight after, so the driver's `try_stack`/`for_of_stack`/`scope_stack`
-    /// are moved into the saved state rather than copied.
+    /// Parks the async function at an `await` of `await_val` and registers the
+    /// continuation as a typed reaction. The caller returns straight after, so
+    /// the driver's stacks are moved into the saved state rather than copied.
     fn async_fn_suspend_at_await(
         &mut self,
         async_id: u64,
-        state_machine: &Rc<crate::interpreter::generator_transform::GeneratorStateMachine>,
-        func_env: &EnvRef,
-        is_strict: bool,
         resume_state: usize,
         try_stack: &mut Vec<TryContextInfo>,
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
-        resolvers: &PromiseResolvers,
         await_val: &JsValue,
         for_of_stack: &mut Vec<ForOfLoopState>,
         scope_stack: &mut Vec<ScopeFrame>,
     ) {
-        // §6.2.3.1 Await step 2: `PromiseResolve(%Promise%, value)`. A
-        // non-object can only produce a promise that is already fulfilled with
-        // it, so its continuation is queued with the value itself; objects go
-        // through `PromiseResolve` (an observable `Get(x, "constructor")` for
-        // a promise, a thenable job otherwise).
-        let awaited = if await_val.is_object() {
-            let promise = self.promise_resolve_value(await_val);
-            promise.as_object_id().unwrap_or(0)
+        // §6.2.3.1 Await step 2. A non-object can only produce a promise that
+        // is already fulfilled with it, so its job is queued without one.
+        let awaited_promise = if await_val.is_object() {
+            self.promise_resolve_value(await_val).as_object_id()
         } else {
-            0
+            None
         };
 
-        // Save state for resumption
-        if let Some(state) = self.scheduler.async_function_state_mut(async_id) {
-            state.current_state = resume_state;
-            state.try_stack = std::mem::take(try_stack);
-            state.pending_binding = sent_value_binding;
-            state.pending_for_of_unwind = pending_for_of_unwind;
-            state.for_of_stack = std::mem::take(for_of_stack);
-            state.scope_stack = std::mem::take(scope_stack);
-        } else {
-            self.scheduler.insert_async_function_state(
-                async_id,
-                AsyncFunctionState {
-                    pending_dispose: None,
-                    state_machine: state_machine.clone(),
-                    func_env: func_env.clone(),
-                    is_strict,
-                    current_state: resume_state,
-                    try_stack: std::mem::take(try_stack),
-                    pending_binding: sent_value_binding,
-                    pending_for_of_unwind,
-                    resolvers: resolvers.clone(),
-                    for_of_stack: std::mem::take(for_of_stack),
-                    module_path: self.module_async_info.get(&async_id).cloned(),
-                    scope_stack: std::mem::take(scope_stack),
-                },
-            );
-        }
+        let state = self
+            .scheduler
+            .async_function_state_mut(async_id)
+            .expect("a running async function keeps its state in the scheduler");
+        state.current_state = resume_state;
+        state.try_stack = std::mem::take(try_stack);
+        state.pending_binding = sent_value_binding;
+        state.pending_for_of_unwind = pending_for_of_unwind;
+        state.for_of_stack = std::mem::take(for_of_stack);
+        state.scope_stack = std::mem::take(scope_stack);
 
-        // PerformPromiseThen(promise, onFulfilled, onRejected) with the
-        // continuation as a typed reaction: no handler function objects, and a
-        // settled promise queues its single job at once.
         let target = ReactionTarget::AsyncResume(async_id);
-        if awaited == 0 {
-            self.scheduler.enqueue_reaction_job(
+        match awaited_promise {
+            Some(promise_id) => {
+                self.perform_promise_then_internal(promise_id, None, None, target);
+            }
+            None => self.scheduler.enqueue_reaction_job(
                 PromiseReaction {
                     handler: None,
                     target,
                     reaction_type: PromiseReactionType::Fulfill,
                 },
                 await_val.clone(),
-            );
-        } else {
-            self.perform_promise_then_internal(awaited, None, None, target);
+            ),
         }
     }
 
