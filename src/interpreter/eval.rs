@@ -7595,11 +7595,16 @@ impl Interpreter {
         {
             return Ok(IdentifierRef::WithObject(obj_id));
         }
-        if let global_access::NameWalk::Global(gid, Some(global_env)) =
-            global_access::walk_scope_chain(env, key, true, 0)
-            && self.global_object_has_own_entry(gid, name, hint)
-        {
-            return Ok(IdentifierRef::SpecificEnv(global_env));
+        match global_access::walk_scope_chain(env, key, true, 0) {
+            global_access::NameWalk::Bound(bound_env) => {
+                return Ok(IdentifierRef::SpecificEnv(bound_env));
+            }
+            global_access::NameWalk::Global(gid, Some(global_env))
+                if self.global_object_has_own_entry(gid, name, hint) =>
+            {
+                return Ok(IdentifierRef::SpecificEnv(global_env));
+            }
+            _ => {}
         }
         if let Some(specific_env) = Environment::find_binding_env(env, key) {
             let (has_binding, global_obj_id) = {
@@ -7752,7 +7757,7 @@ impl Interpreter {
                             let receiver = JsValue::object(gid);
                             match self.proxy_set(gid, name, value.clone(), &receiver) {
                                 Ok(true) => Completion::Normal(value),
-                                Ok(false) if !strict => Completion::Normal(value),
+                                Ok(false) if !env.borrow().strict => Completion::Normal(value),
                                 Ok(false) => Completion::Throw(self.create_type_error(&format!(
                                     "Cannot assign to read only property '{name}' of object"
                                 ))),
@@ -7791,9 +7796,7 @@ impl Interpreter {
                                 let receiver = JsValue::object(gid);
                                 match self.proxy_set(gid, name, value.clone(), &receiver) {
                                     Ok(succeeded) => {
-                                        if !succeeded
-                                            && (env.borrow().strict || specific_env.borrow().strict)
-                                        {
+                                        if !succeeded && env.borrow().strict {
                                             return Completion::Throw(self.create_type_error(
                                                 &format!(
                                                     "Cannot assign to read only property '{name}' of object"
@@ -7850,7 +7853,7 @@ impl Interpreter {
                 }
                 Some(value)
             }
-            global_access::NameWalk::Slow => None,
+            global_access::NameWalk::Bound(_) | global_access::NameWalk::Slow => None,
         }
     }
 

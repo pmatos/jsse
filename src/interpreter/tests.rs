@@ -6400,7 +6400,7 @@ fn global_object_own_data_reads_data_properties_only() {
 
 #[test]
 fn global_object_own_data_hint_survives_property_churn() {
-    let mut interp = run_script("var keep = 1; var churn = 2;");
+    let interp = run_script("var keep = 1; var churn = 2;");
     let gid = realm_global_object(&interp);
     let hint = GlobalHint::new("churn");
     assert!(

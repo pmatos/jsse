@@ -4,7 +4,7 @@ use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{BindingKind, Completion, Environment};
-use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
+use crate::interpreter::{EnvRef, Interpreter};
 use crate::types::JsValue;
 
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
@@ -22,19 +22,6 @@ fn update_mode(mode: u8) -> (UpdateOp, bool) {
         3 => (UpdateOp::Decrement, true),
         _ => panic!("invalid update mode"),
     }
-}
-
-/// `LoadName` and the miss path of `LoadLocal`: full identifier resolution,
-/// whose clone-free scope walk covers the frame's own binding and the global
-/// object fast path.
-#[inline]
-fn load_name_value(
-    interp: &mut Interpreter,
-    name: &Atom,
-    env: &EnvRef,
-    hint: Option<&GlobalHint>,
-) -> Completion {
-    interp.resolve_name_hinted(name, env, hint)
 }
 
 fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
@@ -325,7 +312,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                match load_name_value(interp, name, env, chunk.global_hint(idx)) {
+                match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
                     Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
@@ -362,7 +349,7 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_misses += 1;
                         }
-                        match load_name_value(interp, name, env, chunk.global_hint(idx)) {
+                        match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
                             Completion::Normal(v) => push_value(interp, stack, v),
                             abrupt => return abrupt,
                         }
@@ -403,12 +390,13 @@ fn run_chunk_inner(
                     {
                         interp.perf.local_slot_misses += 1;
                     }
-                    let id_ref = match interp.resolve_identifier_ref(name, env) {
+                    let hint = chunk.global_hint(idx);
+                    let id_ref = match interp.resolve_identifier_ref_hinted(name, env, hint) {
                         Ok(id_ref) => id_ref,
                         Err(e) => return Completion::Throw(e),
                     };
                     if let Completion::Throw(e) =
-                        interp.put_value_by_ref(name, value.clone(), &id_ref, env)
+                        interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint)
                     {
                         return Completion::Throw(e);
                     }
@@ -572,7 +560,13 @@ fn run_chunk_inner(
                 pc += 3;
                 let (op, prefix) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
-                match interp.eval_identifier_update(op, prefix, name, env) {
+                match interp.eval_identifier_update_hinted(
+                    op,
+                    prefix,
+                    name,
+                    env,
+                    chunk.global_hint(idx),
+                ) {
                     Completion::Normal(value) => push_value(interp, stack, value),
                     abrupt => return abrupt,
                 }

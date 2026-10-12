@@ -15,10 +15,10 @@ use crate::types::JsPropertyKey;
 use std::cell::Cell;
 
 /// A remembered property-map slot for one name site, with the interned key it
-/// belongs to; it must only ever be used with that name. Only a hint: it is re-verified on every use, so a stale slot
-/// (property deleted, object spilled or compacted, a different realm's global
-/// object) costs one failed key comparison and is retrained from a fresh
-/// probe.
+/// belongs to; it must only ever be used with that name. Only a hint: it is
+/// re-verified on every use, so a stale slot (property deleted, object spilled
+/// or compacted, a different realm's global object) costs one failed key
+/// comparison and is retrained from a fresh probe.
 #[derive(Debug)]
 pub(crate) struct GlobalHint {
     slot: Cell<u32>,
@@ -62,6 +62,9 @@ pub(super) enum NameWalk {
     /// environment, whose binding object is `gid`. Carries the global
     /// environment itself when the caller asked for it.
     Global(u64, Option<EnvRef>),
+    /// Only produced when the caller asked for environments: the scope that
+    /// binds the name, initialised or not.
+    Bound(EnvRef),
     /// A `with` scope, an import binding, a TDZ binding or an over-deep chain:
     /// run the generic resolution from the start.
     Slow,
@@ -78,7 +81,7 @@ const MAX_WALK_DEPTH: u32 = 64;
 pub(super) fn walk_scope_chain<N: BindingName + ?Sized>(
     env: &EnvRef,
     key: &N,
-    want_global_env: bool,
+    want_env: bool,
     depth: u32,
 ) -> NameWalk {
     let scope = env.borrow();
@@ -86,6 +89,9 @@ pub(super) fn walk_scope_chain<N: BindingName + ?Sized>(
         return NameWalk::Slow;
     }
     if let Some(binding) = scope.bindings.get(key) {
+        if want_env {
+            return NameWalk::Bound(env.clone());
+        }
         return if binding.initialized {
             NameWalk::Value(binding.value.clone())
         } else {
@@ -93,11 +99,11 @@ pub(super) fn walk_scope_chain<N: BindingName + ?Sized>(
         };
     }
     if let Some(gid) = scope.global_object_id {
-        return NameWalk::Global(gid, want_global_env.then(|| env.clone()));
+        return NameWalk::Global(gid, want_env.then(|| env.clone()));
     }
     match &scope.parent {
         Some(parent) if depth < MAX_WALK_DEPTH => {
-            walk_scope_chain(parent, key, want_global_env, depth + 1)
+            walk_scope_chain(parent, key, want_env, depth + 1)
         }
         _ => NameWalk::Slow,
     }
